@@ -17,3 +17,7 @@ publish = ["crates-io"]
 [lib]
 name = "orbit_te"
 path = "src/lib.rs"
+
+[[example]]
+name = "cpu_trace"
+path = "tests/reference/rust_driver.rs"

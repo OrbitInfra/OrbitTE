@@ -1,0 +1,33 @@
+# Shared host/TCP trace. Each engine owns its buffers until successful cleanup.
+ORBITTE_CPU_TRACE 1
+BUFFER source 64 pattern
+BUFFER local 64 238
+REGISTER source rw
+REGISTER source r
+REGISTER local local
+DESCRIBE initial
+READ read-batch 8:16:16,40:0:8 ~ -
+BYTES read-bytes local 0 64
+FILL local 0 8 167
+WRITE write-batch 0:32:8 done write
+TAKE after-write
+TAKE after-write-empty
+READ read-attached 24:32:8 done read
+TAKE after-read
+BYTES attached-read-bytes local 24 8
+READ empty-batch - done empty
+TAKE after-empty
+NOTIFY self local scope local
+TAKE self
+NOTIFY remote remote scope first
+NOTIFY duplicate remote scope first
+NOTIFY empty-message remote - -
+TAKE remote
+TAKE remote-empty
+UNREGISTER source
+DESCRIBE still-exported
+WRITE duplicate-first-permission 0:56:8 ~ -
+BYTES final-source source 0 64
+UNREGISTER source
+DESCRIBE retired
+UNREGISTER local

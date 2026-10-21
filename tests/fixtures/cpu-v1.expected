@@ -1,0 +1,24 @@
+OBS	VERSION	1
+OBS	DESCRIBE	initial	1	64
+OBS	RESULT	read-batch	completed	2	24
+OBS	BYTES	read-bytes	eeeeeeeeeeeeeeee101112131415161718191a1b1c1d1e1feeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0001020304050607eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+OBS	RESULT	write-batch	completed	1	8
+OBS	TAKE	after-write	1	646f6e65:7772697465
+OBS	TAKE	after-write-empty	0	-
+OBS	RESULT	read-attached	completed	1	8
+OBS	TAKE	after-read	1	646f6e65:72656164
+OBS	BYTES	attached-read-bytes	a7a7a7a7a7a7a7a7
+OBS	RESULT	empty-batch	completed	0	0
+OBS	TAKE	after-empty	0	-
+OBS	NOTIFY	self	ok
+OBS	TAKE	self	1	73636f7065:6c6f63616c
+OBS	NOTIFY	remote	ok
+OBS	NOTIFY	duplicate	ok
+OBS	NOTIFY	empty-message	ok
+OBS	TAKE	remote	3	73636f7065:6669727374,73636f7065:6669727374,-:-
+OBS	TAKE	remote-empty	0	-
+OBS	DESCRIBE	still-exported	1	64
+OBS	RESULT	duplicate-first-permission	completed	1	8
+OBS	BYTES	final-source	000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa7a7a7a7a7a7a7a728292a2b2c2d2e2f3031323334353637a7a7a7a7a7a7a7a7
+OBS	DESCRIBE	retired	0	0
+OBS	CLEANUP	ok

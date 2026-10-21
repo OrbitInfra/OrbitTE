@@ -258,9 +258,13 @@ concurrent senders/pollers and data completion despite notification failure.
 Wire controls cover reserved-body ownership during drain/close, malformed UTF-8,
 empty/incomplete bodies and unknown final receipts without replay.
 
+The [frozen CPU comparison](cpu-oracle.md) adds one shared valid-input trace
+against unmodified native TENT. It verifies selected registration, byte movement,
+completion and notification behavior; it does not establish wire interoperability.
+
 CI runs the same CPU checks on stable Rust and the declared 1.85 MSRV. This is
 source-level CPU evidence. Physical two-host, installed release, frozen C++
-oracle, mixed-peer, RDMA and NVIDIA hardware gates remain unqualified.
+full oracle, mixed-peer, RDMA and NVIDIA hardware gates remain unqualified.
 
 ## Remaining OrbitKV integration boundary
 
