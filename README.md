@@ -44,6 +44,9 @@ it and uses absolute addresses to build the transfer. It does not pin pages.
 The notification example verifies READ bytes and a single completion message.
 Data completion and notification delivery have separate outcomes; a lost
 notification receipt does not authorize replaying completed data or the message.
+The [frozen CPU comparison](docs/cpu-oracle.md) runs one shared byte/registration/
+notification trace against unmodified native TENT in a separate test build.
+It adds selected behavioral evidence while full API/wire compatibility remains open.
 
 ## Implementation plan
 

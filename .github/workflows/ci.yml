@@ -29,5 +29,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test CPU TCP and ownership
         run: cargo test --locked
+      - name: CPU trace fixture and comparator controls
+        run: python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbitte-cpu-trace-${{ matrix.toolchain }}"
       - name: Package
         run: cargo publish --dry-run --locked

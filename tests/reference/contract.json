@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "profile": "Linux CPU host memory, two engines per process, standard loopback TCP",
+  "tent_repository": "https://github.com/OrbitInfra/Mooncake.git",
+  "tent_revision": "e2d6e8e0f2df113d84f9e39379f98c4b67b199ab",
+  "pybind11_revision": "58c382a8e3d7081364d2f5c62e7f429f0412743b",
+  "ylt_revision": "7801bc9ad9021781f15217552214e325a1cf7373",
+  "ylt_archive_sha256": "2a4b93c256c09fa84e1507bf4d5b33571ee47a4e2c65316ca255680ad3cdfc1e",
+  "trace": "tests/fixtures/cpu-v1.trace",
+  "expected": "tests/fixtures/cpu-v1.expected",
+  "cmake_options": {
+    "CMAKE_BUILD_TYPE": "Release",
+    "BUILD_SHARED_LIBS": "ON",
+    "BUILD_UNIT_TESTS": "OFF",
+    "BUILD_EXAMPLES": "OFF",
+    "BUILD_BENCHMARK": "OFF",
+    "WITH_RUST_EXAMPLE": "OFF",
+    "USE_CUDA": "OFF",
+    "USE_HIP": "OFF",
+    "USE_HTTP": "OFF",
+    "USE_ETCD": "OFF",
+    "USE_REDIS": "OFF",
+    "USE_TENT": "ON",
+    "WITH_METRICS": "OFF",
+    "TENT_METRICS_ENABLED": "OFF",
+    "YLT_ENABLE_IBV": "OFF",
+    "ENABLE_DEBUG_SYMBOLS": "OFF"
+  }
+}

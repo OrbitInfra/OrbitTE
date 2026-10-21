@@ -33,10 +33,11 @@ Use these states for each substage and each claimed hardware profile:
 | Unqualified / Failed | Required hardware/evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
 P1.1/P2.1 were merged in #2 after passing stable/MSRV CI and local CPU checks.
-P1.2 adds externally owned host ranges and absolute-address descriptors. These
-and P2.2's bounded notifications have local Linux loopback/process evidence;
+P1.2's external host ranges and P2.2's bounded notifications were merged in
+#3/#4 after passing the same source gates. They have local Linux loopback/process evidence;
 independent acceptance is still open. No complete numbered stage is qualified.
-P0's TENT oracle and compatibility fixtures remain open. Missing hardware leaves
+P0.1 adds a [scoped native CPU comparison](cpu-oracle.md); the complete P0 oracle
+and compatibility inventory remain open. Missing hardware leaves
 a profile unqualified and visible in the full target.
 
 ## OrbitKV delivery priority
@@ -53,8 +54,8 @@ duplicate registration references, shared alias locking and address lookup.
 P2.2 adds bounded local/remote notifications and separate attached-delivery
 outcomes. OrbitKV already owns generation scopes and matching counts in its
 notification mailbox (verified at `3f4d65709e86a060f323da7e0d1b59975f6939bc`);
-those remain consumer policy. Next close the consumer gaps in P1/P2/P9: a frozen
-CPU comparison trace and the concrete allocator/native adapter surface.
+those remain consumer policy. P0.1 adds a frozen valid-input CPU comparison
+trace. Next close the concrete allocator/native adapter gaps in P1/P2/P9.
 Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
 (P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
@@ -65,7 +66,7 @@ does not turn incomplete rows into completed features.
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
-| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | Planned; source baseline recorded |
+| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping/oracle open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
@@ -109,6 +110,15 @@ selected profiles while the other rows remain open.
 
 Requirements: all F/B IDs in [the parity contract](tent-parity.md).
 
+- [x] **P0.1 — shared CPU comparison trace (Implemented, not Accepted).**
+  Unmodified frozen TENT and public Rust drivers execute one deterministic
+  registration/READ/WRITE/notification trace over actual host memory and TCP.
+  Both must match 24 independent expected observations. Reference/dependency
+  revisions, library paths and hashes are checked; six comparator controls must
+  reject broken results. Native notification free/reuse is exercised. A separate
+  native CI gate preserves external evidence; the fast Rust fixture gate does
+  not claim native execution. This covers selected valid-input CPU behavior,
+  not the complete P0 mapping, native faults, wire compatibility or hardware.
 - [ ] Freeze the reference source, compiler/build options, optional providers
   and external dependency revisions for an isolated C++ oracle. It is a test
   dependency outside the normal OrbitTE build and published package.
@@ -496,9 +506,9 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Review P1.2/P2.2 and rerun the [CPU gates](cpu-tcp.md#verification), including the
-external-host and notification recipes. Next deliver the frozen TENT CPU
-comparison trace, then the concrete OrbitKV allocator/native adapter. Reuse
+Review P0.1 and rerun the [native CPU comparison](cpu-oracle.md#run-the-gates)
+alongside the [CPU gates](cpu-tcp.md#verification). Next deliver the concrete
+OrbitKV allocator/native adapter. Reuse
 OrbitKV's existing generation mailbox rather than implementing cache scopes
 inside the transfer engine.
 Keep the larger 33-symbol/native-schema oracle,

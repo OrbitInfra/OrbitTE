@@ -1,0 +1,44 @@
+name: Frozen TENT CPU comparison
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/reference/**'
+      - 'tests/fixtures/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/native-cpu.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install reference build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev
+          rustup toolchain install stable --profile minimal
+      - name: Compare frozen native TENT and OrbitTE
+        run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbitte-native-cpu"
+      - name: Preserve comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: frozen-tent-cpu
+          path: |
+            ${{ runner.temp }}/orbitte-native-cpu/manifest.json
+            ${{ runner.temp }}/orbitte-native-cpu/*.stdout
+            ${{ runner.temp }}/orbitte-native-cpu/*.stderr
+            ${{ runner.temp }}/orbitte-native-cpu/tent-build/CMakeCache.txt
+            ${{ runner.temp }}/orbitte-native-cpu/tent-driver
+            ${{ runner.temp }}/orbitte-native-cpu/tent-build/**/*.so*
+            ${{ runner.temp }}/orbitte-native-cpu/cargo/debug/examples/cpu_trace
