@@ -29,6 +29,10 @@ staging, retained NVIDIA device/pinned allocations and synchronized CUDA copies.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
+An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
+retains real CUDA-pinned allocator slots across cancellation and detached batches;
+its two H20 TCP ownership controls passed. Manager adoption and independent
+acceptance remain open. Track this consumer candidate as P1.5 in the plan.
 The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
 coverage, GPUDirect, NVLink and SSD remain open. These source substages await
 independent acceptance and complete hardware/installed qualification.
