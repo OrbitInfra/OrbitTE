@@ -16,8 +16,10 @@ performance have not been established.
 
 ## Implementation plan
 
-The target is complete functional parity with the frozen latest Mooncake TENT
-baseline, including every selectable transport and its platform dependencies.
+The target is functional parity with the frozen latest Mooncake TENT baseline
+for CPU DRAM and NVIDIA GPUs. Network and memory movement form the core;
+local file/SSD movement through io_uring and cuFile/GDS is optional. Other
+accelerator platforms are outside the implementation scope.
 
 - [Completion plan](docs/completion-plan.md): delivery order, dependencies and
   acceptance gates; the project's only execution queue.

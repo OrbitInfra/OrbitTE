@@ -1,9 +1,20 @@
-# TENT parity contract
+# NVIDIA TENT parity contract
 
 This document defines what OrbitTE must reproduce. Delivery is tracked only in
 [the completion plan](completion-plan.md). Every OrbitTE runtime capability below
 is currently unimplemented. The published `orbit-te 0.1.0-alpha.1` establishes
 package identity and provides no transfer API.
+
+The selected purpose is a network and memory transfer engine for CPU DRAM and
+NVIDIA GPUs, with optional local file/SSD movement. CPU and CUDA are the two
+implementation platforms. GPU vendor selection does not restrict ordinary
+CPUs, SSDs or compatible network devices to NVIDIA products. CPU-only operation
+remains supported. Each NVIDIA GPU model/topology needs its own qualification.
+
+The upstream inventory below makes this selection explicit: 11 transport types
+apply to CPU/NVIDIA; seven require excluded accelerator platforms. Optional
+means opt-in build/runtime dependencies, not permission to leave an in-scope
+requirement unfinished. This target does not claim every upstream platform.
 
 ## Frozen reference
 
@@ -46,9 +57,9 @@ behavior again. Do not silently follow a moving `main` during implementation.
 
 | Surface | Required result |
 | --- | --- |
-| Functional behavior | Reproduce implemented operations, routing, status/error semantics, notifications, resource behavior and supported backend combinations at the frozen revision |
-| Rust API | Provide native Rust interfaces for the full implemented TENT capability set, including features absent from its C API |
-| TENT C ABI | Cover all 33 functions, constants, enum values, struct sizes/alignment, buffer ownership and output/free conventions; verify from C callers |
+| Functional behavior | Reproduce implemented operations, routing, status/error semantics, notifications, resource behavior and backend combinations in the selected CPU/NVIDIA scope |
+| Rust API | Provide native Rust interfaces for the selected implemented TENT capability set, including features absent from its C API |
+| TENT C ABI | Cover all 33 functions, constants, enum values, struct sizes/alignment, buffer ownership and output/free conventions; excluded transports remain recognized but explicitly unavailable |
 | TENT C++ API | Supply source-level adapters for native TENT and the TENT-backed classic-TE surface; rebuild callers against those adapters |
 | Python API | Cover the frozen TENT binding's classes, fields, overloads, errors and context managers through thin native bindings |
 | Wire interoperability | Qualify OrbitTE-to-OrbitTE, TENT-to-OrbitTE and OrbitTE-to-TENT for each applicable backend/control protocol; API parity alone does not establish this |
@@ -63,10 +74,10 @@ versioned native FFI path; the existing C request struct lacks `policy_name`,
 Keep compatibility entrypoints at the binding boundary and one Rust behavior
 owner underneath. OrbitTE's runtime must not call the C++ TENT engine, legacy
 TE engine, Mooncake Store, PG, EP or resharding components. External device and
-OS interfaces such as verbs, CUDA, HIP, cuFile, URMA, PJRT and provider SDKs
-remain explicit optional dependencies. A small vendor ABI bridge is allowed
-where a provider exposes only C++ interfaces, such as the frozen XPU SYCL path;
-transport state machines and policy remain in Rust.
+OS interfaces such as verbs, CUDA, cuFile, URMA, MPComm and libfabric remain
+explicit optional dependencies for their selected modules. HIP, Ascend, Sunrise,
+PJRT/TPU, XPU/SYCL and MLU SDKs are outside this build and implementation scope.
+Transport state machines and policy remain in Rust.
 
 Safety defects are recorded as deliberate compatibility differences with
 reproductions, rather than copied into Rust. Unknown physical completion may
@@ -85,8 +96,8 @@ that every branch or provider has already been qualified upstream.
 | ID | Required behavior | Reference source/test families | Delivery |
 | --- | --- | --- | --- |
 | F01 | Default/config-file/config-object construction; `MC_TENT_CONF` file or inline JSON; legacy environment mappings and precedence; typed parsing; invalid-root/path diagnostics; immutable per-engine snapshots | `common/config*`, `config_lifecycle*`, `transfer_engine_config_override_test` | P1 |
-| F02 | CPU/NUMA, PCI and device discovery; RDMA allow/deny lists; custom topology and priority matrices; `cpu:`, `cuda:`, `hip:` and accepted aliases; strict locality | `runtime/topology*`, `platform/*`, `topology_priority_matrix_test`, `strict_local_numa_test` | P1/P4/P5/P8 |
-| F03 | Platform allocation/free, location and pointer probing, synchronous copy and device/context/stream ownership; device-plugin C ABI | `runtime/platform*`, `memory_prober*`, `platform/*`, `device_plugin.h`, `plugins/*` | P1/P5/P8 |
+| F02 | CPU/NUMA, PCI and device discovery; RDMA allow/deny lists; custom topology and priority matrices; `cpu:`/`cuda:`; strict locality; unavailable accelerator locations are rejected | `runtime/topology*`, `platform/*`, `topology_priority_matrix_test`, `strict_local_numa_test` | P1/P4/P5/P8 |
+| F03 | Platform allocation/free, location and pointer probing, synchronous copy and device/context/stream ownership; CUDA device-plugin C ABI | `runtime/platform*`, `memory_prober*`, `platform/*`, `device_plugin.h`, `plugins/*` | P1/P5/P8 |
 | F04 | Single/batch memory allocation and registration; permissions/options; duplicate references, range geometry, warmup/prefault, unregister and partial-failure ownership | `transfer_engine_impl.cpp`, `segment_registry*`, `local_memory_lifecycle_test`, `coalesce_regions_test`, backend buffer tests | P1/P4/P5/P8 |
 | F05 | Memory/file segments, `file://` addressing, open/close/info, descriptor caching/refresh, update subscription/invalidation and retry coalescing | `segment*`, `control_plane*`, `segment_manager_test`, `segment_desc_retry_test` | P2/P7 |
 | F06 | P2P metadata plus etcd, Redis and HTTP stores; Redis username/password/DB behavior; publication and lookup failure handling | `runtime/metastore.cpp`, `metastore/*`, `control_plane*`, `redis_metastore_test` | P2/P9 |
@@ -115,42 +126,44 @@ The deadline-feasibility code's `MLU` term and the Cambricon MLU device backend
 are separate concepts. The former does not establish framework-level local
 recompute: the frozen engine installs an empty local-decode suggestion hook.
 
-## Complete transport and platform matrix
+## Upstream transport inventory and selected scope
 
-All 18 types stay in the completion target, including types not currently used
-by OrbitKV. Capability bits and compiled providers constrain supported transfer
-directions. Do not infer GPU support for a transport from another transport's
-platform support. Each row requires normal bytes, negative cases, teardown,
-installed-artifact and applicable mixed-peer interoperability gates.
+All 18 upstream types are accounted for; only the 11 marked core or optional
+are implementation targets. Capability bits and compiled providers constrain
+supported transfer directions. Do not infer GPU support for a transport from
+another transport's platform support. Every selected row requires normal bytes,
+negative cases, teardown, installed-artifact and applicable mixed-peer gates.
 
-| ID / type | Frozen capability and special obligations | Required hardware/provider | Delivery |
+| ID / type | Frozen capability and special obligations | Required hardware/provider | Scope / delivery |
 | --- | --- | --- | --- |
-| B01 `TCP` | RPC data path; host/device copies through the selected platform; retries and explicit copy failures | Two processes/hosts; additional platform hardware for device copies | P2/P5/P8 |
-| B02 `HP_TCP` | CPU DRAM only; persistent worker-owned lanes, request/registration IDs, bounds and permissions, remote WRITE ACK, cancellation/drain, IPv4 static rails and large READ slicing | Two TCP hosts; multiple routed interfaces for rail gates | P3 |
-| B03 `SHM` | Host shared mappings, offset/path and permissions, concurrent registration and retirement; CXL mount configuration and locality/default behavior | Same-host processes and actual shared backing; CXL-backed profile separately | P3 |
-| B04 `RDMA` | Host and supported device memory; MR/PD/CQ/QP lifecycle, bootstrap, retries, multirail, notifications, quota, GDR capability and physical drain | Two RNIC hosts; IB/RoCE profiles, multiple rails; CUDA/HIP combinations separately | P4/P5/P6/P8 |
-| B05 `NVLINK` | Device/host directions actually advertised, CUDA IPC handle sharing and stream completion; no stale mapping reuse | Two local GPU processes with supported CUDA peer access | P5 |
-| B06 `MNNVL` | CUDA fabric memory/export/import; opt-in selection, EGM option and supported directions | Supported CUDA fabric/NVLink topology, plus EGM profile where applicable | P5 |
-| B07 `IOURING` | File segments, read/write offsets and completion/error bytes; staging where selected; short/partial/error I/O | Linux io_uring and real local files/storage | P7 |
-| B08 `GDS` | Host/device-to-file directions, cuFile registration and completion/status ownership, explicit fallback behavior | NVIDIA GPU, cuFile/GDS-capable filesystem and storage | P7 |
-| B09 `UB` | Host URMA transport, endpoint/device capability negotiation, jetty/JFC lifecycle, slicing/quota, retries, notifications when enabled, cancellation and quarantine | Supported URMA devices/provider on two hosts; bonding profile separately | P8.2 |
-| B10 `AscendDirect` | Host/device registration and copy, HIXL/local-copy paths, fabric memory, timeout, resource configuration and agent mode | Ascend runtime and supported HIXL topology | P8.3 |
-| B11 `SUNRISE_LINK` | Advertised host/device directions, registration, provider endpoint and completion lifecycle | Sunrise runtime and link devices | P8.5 |
-| B12 `TPU` | Host-device staging through PJRT ABI and provider bridge; ownership of pending device work | Actual supported TPU/PJRT adapter | P8.6 |
-| B13 `XPU` | Host-device copy and staging with native SYCL allocations/context | Intel XPU, DPC++/SYCL runtime | P8.7 |
-| B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | P8.8 |
-| B15 `MPCOMM` | Peer registry, endpoint parsing, memory registration, request/completion mapping and explicit unavailable-provider behavior | Compatible MPComm provider and endpoints | P8.9 |
-| B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | P8.1 |
-| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | P8.10 |
-| B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | P8.4 |
+| B01 `TCP` | RPC data path; host/CUDA copies, retries and explicit copy failures | Two processes/hosts; NVIDIA GPU for CUDA copies | Core, P2/P5 |
+| B02 `HP_TCP` | CPU DRAM only; persistent worker-owned lanes, request/registration IDs, bounds and permissions, remote WRITE ACK, cancellation/drain, IPv4 static rails and large READ slicing | Two TCP hosts; multiple routed interfaces for rail gates | Core, P3 |
+| B03 `SHM` | Host shared mappings, offset/path and permissions, concurrent registration and retirement; CXL mount configuration and locality/default behavior | Same-host processes and actual shared backing; CXL-backed profile separately | Core, P3 |
+| B04 `RDMA` | Host and CUDA device memory; MR/PD/CQ/QP lifecycle, bootstrap, retries, multirail, notifications, quota, GDR capability and physical drain | Two RNIC hosts; IB/RoCE profiles, multiple rails; CUDA combinations separately | Core, P4/P5/P6 |
+| B05 `NVLINK` | Device/host directions actually advertised, CUDA IPC handle sharing and stream completion; no stale mapping reuse | Two local GPU processes with supported CUDA peer access | Core, P5 |
+| B06 `MNNVL` | CUDA fabric memory/export/import; opt-in selection, EGM option and supported directions | Supported CUDA fabric/NVLink topology, plus EGM profile where applicable | Core, P5 |
+| B07 `IOURING` | File segments, read/write offsets and completion/error bytes; staging where selected; short/partial/error I/O | Linux io_uring and real local files/storage | Optional storage, P7 |
+| B08 `GDS` | Host/device-to-file directions, cuFile registration and completion/status ownership, explicit fallback behavior | NVIDIA GPU, cuFile/GDS-capable filesystem and storage | Optional storage, P7 |
+| B09 `UB` | Host URMA transport, endpoint/device capability negotiation, jetty/JFC lifecycle, slicing/quota, retries, notifications when enabled, cancellation and quarantine | Supported URMA devices/provider on two hosts; bonding profile separately | Optional network, P8.1 |
+| B10 `AscendDirect` | Host/device registration and copy, HIXL/local-copy paths, fabric memory, timeout, resource configuration and agent mode | Ascend runtime and supported HIXL topology | Excluded accelerator |
+| B11 `SUNRISE_LINK` | Advertised host/device directions, registration, provider endpoint and completion lifecycle | Sunrise runtime and link devices | Excluded accelerator |
+| B12 `TPU` | Host-device staging through PJRT ABI and provider bridge; ownership of pending device work | Actual supported TPU/PJRT adapter | Excluded accelerator |
+| B13 `XPU` | Host-device copy and staging with native SYCL allocations/context | Intel XPU, DPC++/SYCL runtime | Excluded accelerator |
+| B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
+| B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.2 |
+| B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
+| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Optional network, P8.3 |
+| B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
 
 Source authority: [transport types][types], [runtime loader][loader],
 [transport implementations][transports] and [platform implementations][platforms].
 
-The eight platform families are CPU, CUDA, ROCm/HIP, Ascend, Sunrise, TPU, XPU
-and MLU. CUDA/ROCm device plugins have their own exported plugin ABI and are
-also in scope. A provider stub can qualify unavailable/error handling and
-state-machine controls only; it cannot qualify real transfers.
+The upstream's eight platform families are CPU, CUDA, ROCm/HIP, Ascend, Sunrise,
+TPU, XPU and MLU. OrbitTE implements CPU, CUDA and the CUDA device-plugin ABI.
+The other six platforms and ROCm plugin are excluded by project scope, rather
+than classified as missing hardware qualification. In-scope provider stubs
+qualify unavailable/error handling and state-machine controls only; they cannot
+qualify real transfers.
 
 `BufIoTransport` has source and a build target but no frozen public transport
 enum/loader registration. Audit and retain its actual reachable behavior or
@@ -161,6 +174,31 @@ HP-TCP's frozen scope excludes GPU memory, TLS, per-WRITE striping, dynamic rail
 scheduling, rail failover and transparent replay of ambiguous WRITEs. Its large
 READ slicing is not dynamic RDMA-style spraying. These omissions are explicit
 reference boundaries, not missing parity work disguised as implemented support.
+
+## Local SSD paths and module boundary
+
+The frozen TENT source implements both READ and WRITE for local file segments:
+
+| User-visible movement | Actual implementation path | Meaning |
+| --- | --- | --- |
+| DRAM to/from SSD | `io_uring_prep_writev` / `io_uring_prep_readv` | Host file I/O; aligned host staging when needed |
+| NVIDIA GPU to/from SSD through host memory | CUDA copy to/from host staging plus io_uring | A device-file route that uses DRAM |
+| NVIDIA GPU to/from SSD through cuFile | `CUFILE_WRITE` / `CUFILE_READ`, `cuFileBatchIOSubmit` and completion polling | GDS API path; native direct movement requires separate evidence |
+
+See [io_uring source][uring] and [GDS source][gds]. These are reference
+implementations, not OrbitTE hardware qualification. Successful cuFile calls
+alone do not establish the native storage-to-GPU path; filesystem, device,
+topology, configuration and actual route observations matter. The NVIDIA
+[API guide](https://docs.nvidia.com/gpudirect-storage/api-reference-guide/index.html)
+describes compatibility mode and supported memory/configuration rules.
+
+File segments, io_uring and cuFile/GDS are optional modules. The network/memory
+core must build and run without enabling them or loading storage libraries.
+These modules own byte I/O and its resources; OrbitKV retains KV indexing,
+placement, eviction, extents, cache policy and recovery semantics. Enabling a
+file module does not require migrating OrbitKV's own SSD implementation. A
+compatibility profile enables the modules needed to compare with TENT's
+effective configuration.
 
 ## C and language binding inventory
 
@@ -237,3 +275,5 @@ the engine until separately integrated and qualified.
 [transports]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport
 [platforms]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/platform
 [rpc]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/rpc/rpc.h
+[uring]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp
+[gds]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/gds/gds_transport.cpp

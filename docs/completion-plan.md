@@ -1,10 +1,16 @@
 # OrbitTE completion plan
 
-Build an independently maintained Rust engine with complete functional parity
-to the [frozen latest TENT contract](tent-parity.md). All 18 selectable transport
-types, their platform dependencies, runtime policy and language surfaces are in
-scope. A working TCP/RDMA subset is an intermediate delivery, not completion of
-this objective.
+Build an independently maintained Rust network and memory transfer engine for
+CPU DRAM and NVIDIA GPUs against the [frozen latest TENT contract](tent-parity.md).
+Local file/SSD movement is optional. CPU and CUDA are the selected platforms;
+other accelerator vendors are outside scope. Preserve the applicable runtime,
+language and operational behavior and all 11 selected transport types. A working
+TCP/RDMA subset is an intermediate delivery within this NVIDIA target.
+
+The core must build and run without file/SSD modules or cuFile dependencies.
+Optional storage and network-provider modules are opt-in builds, but remain
+requirements of the selected complete target. This selection does not restrict
+CPU or network-device vendors. No non-NVIDIA accelerator SDK is a dependency.
 
 This is OrbitTE's only execution queue. The parity document defines requirements;
 it is not another roadmap. OrbitKV keeps its own existing cache delivery queue.
@@ -42,7 +48,7 @@ unqualified and visible in the full target.
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Planned |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
-| P8 | Remaining platforms and provider transports | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
+| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
 | P9 | Complete C/C++/Python and operational compatibility | P0/P2/P6; backend claims require their stages | Planned |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3-P9 deliveries | Planned |
 | P11 | Consumer integration, matched performance and installable release | Relevant accepted P2-P10 profiles | Planned |
@@ -87,8 +93,10 @@ Requirements: all F/B IDs in [the parity contract](tent-parity.md).
   stubs, inactive source and narrative/code disagreements explicitly.
 - [ ] Map the 84 reference C++ test sources to retained behavioral cases and
   their CPU, service, GPU, RNIC, filesystem or vendor-hardware triggers. Map
-  Python guards, parent compatibility tests and tebench byte checks too. Merge
-  overlapping cases; do not mechanically port low-value implementation tests.
+  Python guards, parent compatibility tests and tebench byte checks too. Mark
+  excluded-accelerator cases as outside scope and require explicit unavailable
+  behavior for their ABI values. Merge overlapping cases; do not mechanically
+  port low-value implementation tests.
 - [ ] Define a common request trace and runner contract for C++ and Rust:
   initial bytes, registrations, operations, faults, observations and cleanup.
   Compare byte integrity and allowed status/state transitions, not incidental
@@ -255,8 +263,14 @@ Requirements: B07/B08 and F05 file-segment behavior.
   short/error I/O and their owning completion state.
 - [ ] Implement io_uring queue/registered-buffer lifecycle, partial submission,
   cancellation and actual completion drain before releasing file or memory.
-- [ ] Implement cuFile/GDS registration and supported host/device directions,
+- [ ] Implement cuFile/GDS registration and both host/device READ and WRITE,
   status/error propagation and explicit direct-versus-staged behavior.
+- [ ] Qualify three distinct bidirectional profiles: DRAM/file io_uring,
+  CUDA/DRAM/file staging and CUDA/file native GDS. Disable compatibility for the
+  native-only profile and record actual route evidence. A staged or
+  compatibility-mode pass cannot qualify native GDS.
+- [ ] Keep file modules opt-in and prove the network/memory-only build neither
+  loads storage SDKs nor starts storage resources.
 - [ ] Audit BufIo source reachability. Preserve any actually consumed behavior;
   document unselected reference code without inventing a public transport.
 
@@ -264,30 +278,25 @@ Exit: real files with full-byte checks, truncation/short/error controls,
 concurrent unregister/close and cancellation. GDS requires supported hardware,
 filesystem and a recorded direct path; an io_uring fallback is a different gate.
 
-## P8 — Remaining platforms and transports
+## P8 — Additional network providers
 
-These are required completion work. Each row is a separate coherent delivery;
-split platform and transport PRs further where needed. Carry P1 ownership,
-P2 control-plane and P6 policy/status contracts into every provider.
+These providers fit the selected host/NVIDIA purpose and remain optional
+modules in the target. Each is a separate delivery. Non-NVIDIA accelerator
+platforms and dependent transports are excluded in the parity matrix; their
+ABI constants must return unavailable rather than instantiate device stubs.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
-| P8.1 | ROCm/HIP platform/plugins, HIP RDMA/copy combinations and Hylink | F02-F04, B01/B04/B16 | HIP devices, supported RNIC and Hylink topology |
-| P8.2 | Native URMA adapter, UB buffers/endpoints/jetty/JFC, quota, cancellation, recovery and teardown | B09, F15/F18 | Two URMA hosts; actual provider errors and bonding separately |
-| P8.3 | Ascend platform, HIXL/AscendDirect and local copy/resource modes | B10 | Ascend devices and supported HIXL peer path |
-| P8.4 | MemFabric provider ABI, allocator and transfer ownership | B18 | ACL and real MemFabric provider |
-| P8.5 | Sunrise platform and SunriseLink | B11 | Sunrise devices and link provider |
-| P8.6 | TPU platform/PJRT ABI and staging | B12 | Actual supported PJRT adapter and TPU |
-| P8.7 | XPU native SYCL platform and local transport/staging | B13 | Intel XPU and SYCL runtime |
-| P8.8 | MLU platform and local transport/staging | B14 | Cambricon MLU devices/runtime |
-| P8.9 | MPComm provider adapter, peer registry and task/completion mapping | B15 | Compatible MPComm endpoints |
-| P8.10 | Libfabric provider attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA claims require EFA hosts |
+| P8.1 | Native URMA, host UB buffers/endpoints/jetty/JFC, quota, cancellation, recovery and teardown | B09, F15/F18 | Two URMA hosts; provider errors and bonding separately; no GPU capability inferred |
+| P8.2 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
+| P8.3 | Libfabric attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA on EFA hosts |
 
 Exit per row: build without provider, explicit unavailable result, fake-provider
 contract tests, then actual installed bytes, permissions, faults, drain and
-applicable mixed-peer interoperability. Classify a fake/stub-only implementation
-as implemented but hardware-unqualified. Complete functional parity remains open
-until every supported reference profile in the agreed matrix is accepted.
+applicable mixed-peer interoperability. Fake/stub-only implementations remain
+hardware-unqualified. Complete NVIDIA-scope parity requires acceptance of every
+in-scope requirement. Excluded accelerator rows require no implementation or
+hardware qualification.
 
 ## P9 — External APIs and operational compatibility
 
@@ -307,7 +316,7 @@ Requirements: F01/F06/F20-F22 and the complete language inventory.
   endpoints, config precedence and disabled-mode behavior. Avoid secret-bearing
   config/error diagnostics.
 - [ ] Exercise plugin ABI registration, bad/missing plugin behavior and actual
-  CUDA/ROCm plugin loading, not just static platform compilation.
+  CUDA plugin loading, not just static platform compilation.
 
 Exit: independent Rust, C, C++ and Python consumers run the parity cases against
 installed artifacts. Test optional-feature/provider matrices explicitly;
@@ -368,9 +377,10 @@ Requirements: F22 and applicable accepted backend/compatibility profiles.
   for translated source and any retained fixtures.
 
 CPU/TCP or NVIDIA/RDMA releases may ship earlier with explicit scoped support.
-The label **complete TENT functional parity** requires all implemented reference
-capabilities in this plan to be accepted; narrower releases do not remove P8 or
-other remaining obligations. A feature being slower or unqualified is recorded
+The label **complete NVIDIA-scope TENT parity** requires all in-scope reference
+capabilities to be accepted; narrower releases do not remove remaining selected
+obligations. It does not claim the excluded accelerator platforms. A feature
+being slower or unqualified is recorded
 as such rather than described as a performance advantage.
 
 ## Code ownership and repository layout
