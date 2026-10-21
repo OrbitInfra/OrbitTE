@@ -1,7 +1,7 @@
 use std::net::Shutdown;
 
 use super::*;
-use crate::TransferEngine;
+use crate::{TransferEngine, TransferRequest};
 
 use crate::test_support as common;
 
@@ -202,12 +202,11 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
 
 fn fault_request(engine: &TransferEngine, peer: &RemoteSegment) -> TransferRequest {
     TransferRequest {
-        local: engine
+        local_address: engine
             .register_memory(vec![7; 8].into_boxed_slice(), Permission::LocalOnly)
-            .unwrap(),
-        local_offset: 0,
-        remote: peer.regions[0],
-        remote_offset: 0,
+            .unwrap()
+            .base_address(),
+        remote_address: peer.regions[0].base_address(),
         length: 8,
     }
 }
@@ -277,7 +276,12 @@ fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
             }
         );
         let mut bytes = [0; 8];
-        request.local.read(0, &mut bytes).unwrap();
+        engine
+            .resolve_local_address(request.local_address, 8)
+            .unwrap()
+            .0
+            .read(0, &mut bytes)
+            .unwrap();
         assert_eq!(bytes, [7; 8]);
         let listener = handler.join().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -330,7 +334,12 @@ fn a_trickling_response_cannot_extend_the_absolute_deadline() {
         .unwrap();
     assert!(matches!(report.failure.unwrap().error, Error::Timeout));
     let mut bytes = [0; 8];
-    request.local.read(0, &mut bytes).unwrap();
+    engine
+        .resolve_local_address(request.local_address, 8)
+        .unwrap()
+        .0
+        .read(0, &mut bytes)
+        .unwrap();
     assert_eq!(bytes, [7; 8]);
     handler.join().unwrap();
 }
@@ -626,7 +635,12 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
                 (1, 8)
             );
             let mut bytes = [0; 8];
-            request.local.read(0, &mut bytes).unwrap();
+            engine
+                .resolve_local_address(request.local_address, 8)
+                .unwrap()
+                .0
+                .read(0, &mut bytes)
+                .unwrap();
             assert_eq!(bytes, [0xa7; 8]);
             match report.notification {
                 crate::NotificationStatus::Failed(failure) => failure,
@@ -646,4 +660,86 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
         );
         assert_eq!(engine.stats().unwrap().inflight_batches, 0);
     }
+}
+
+#[test]
+fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_close() {
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+
+    let (listener, peer) = fault_peer();
+    let epoch = peer.epoch;
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut channel = Channel {
+            stream,
+            deadline: deadline(TIMEOUT).unwrap(),
+            stopping: None,
+        };
+        channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+        admitted_tx.send(()).unwrap();
+        release_rx.recv_timeout(TIMEOUT).unwrap();
+        channel
+            .write_all(
+                &Reply {
+                    status: 0,
+                    epoch,
+                    length: 8,
+                }
+                .encode(),
+            )
+            .unwrap();
+        channel.write_all(&[0xa7; 8]).unwrap();
+    });
+    let engine = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+    let fixture = common::external_memory(&[0; 8]);
+    let local = engine
+        .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
+        .unwrap();
+    let request = TransferRequest {
+        local_address: local.base_address(),
+        remote_address: peer.regions[0].base_address(),
+        length: 8,
+    };
+    let requester = {
+        let engine = Arc::clone(&engine);
+        let peer = peer.clone();
+        let request = request.clone();
+        thread::spawn(move || {
+            engine
+                .submit_and_wait(TransferOp::Read, &peer, &[request], TIMEOUT)
+                .unwrap()
+        })
+    };
+    admitted_rx.recv_timeout(TIMEOUT).unwrap();
+    engine.unregister_memory(&local).unwrap();
+    drop(local);
+    drop(fixture.memory);
+    engine.close_source(Duration::ZERO).unwrap();
+    assert!(fixture.owner.upgrade().is_some());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 0);
+    assert_eq!(engine.stats().unwrap().retained_bytes, 8);
+    assert!(matches!(
+        engine.submit_and_wait(TransferOp::Read, &peer, &[request], TIMEOUT),
+        Err(Error::RegionNotFound)
+    ));
+    release_tx.send(()).unwrap();
+    let report = requester.join().unwrap();
+    assert!(report.is_complete());
+    assert_eq!(report.transferred_bytes, 8);
+    handler.join().unwrap();
+    assert!(fixture.owner.upgrade().is_none());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+    let stats = engine.stats().unwrap();
+    assert_eq!(
+        (
+            stats.retained_regions,
+            stats.retained_bytes,
+            stats.inflight_batches,
+            stats.inflight_bytes
+        ),
+        (0, 0, 0, 0)
+    );
 }

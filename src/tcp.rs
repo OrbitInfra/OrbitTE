@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::engine::{Source, deadline, remaining};
+use crate::engine::{PreparedTransfer, Source, deadline, remaining};
 use crate::memory::checked_range;
 use crate::{
     EngineConfig, Error, Notification, NotificationEffect, NotificationFailure, Permission,
-    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp, TransferRequest,
+    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
@@ -273,7 +273,7 @@ pub(crate) fn notify(
 pub(crate) fn transfer(
     operation: TransferOp,
     peer: &RemoteSegment,
-    request: &TransferRequest,
+    request: &PreparedTransfer,
     deadline: Instant,
 ) -> std::result::Result<(), (Error, RemoteEffect)> {
     let mut effect = RemoteEffect::None;

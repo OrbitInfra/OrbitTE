@@ -18,7 +18,9 @@ the original identity-only package; this implementation has not been released.
 
 External host backing retains its actual allocation owner. Duplicate ranges
 share registration references; overlapping views share one allocation lock.
-Local and remote absolute-address lookup follows TENT's containing-buffer order.
+Host registration batches preflight every range before publishing changes.
+Transfers accept absolute addresses and retain the resolved backing during I/O;
+local and remote lookup follows TENT's containing-buffer order.
 
 The first protocol is OrbitTE-only. TENT API/wire compatibility, RDMA, NVIDIA
 GPU paths and SSD transports remain open. This is an initial
@@ -39,8 +41,8 @@ cargo test --locked
 The example prints `18 bytes: hello from OrbitTE`. The test suite includes a
 source in a separate OS process, verifies READ/WRITE bytes, restarts it on the
 same address and rejects requests carrying its old source epoch.
-The external-host example registers a pre-existing allocation without copying
-it and uses absolute addresses to build the transfer. It does not pin pages.
+The external-host example batch-registers ranges of a pre-existing allocation
+without copying it and submits an absolute-address transfer. It does not pin pages.
 The notification example verifies READ bytes and a single completion message.
 Data completion and notification delivery have separate outcomes; a lost
 notification receipt does not authorize replaying completed data or the message.

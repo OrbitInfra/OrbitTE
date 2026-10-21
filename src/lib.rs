@@ -18,8 +18,8 @@
 //! let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(1))?;
 //! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbit_te::Error::RegionNotFound)?;
 //! let request = TransferRequest {
-//!     local: destination.clone(), local_offset: 0,
-//!     remote: *remote, remote_offset: 0, length: 5,
+//!     local_address: destination.base_address(),
+//!     remote_address: remote.base_address(), length: 5,
 //! };
 //! let report = requester.submit_and_wait(TransferOp::Read, &peer, &[request], Duration::from_secs(1))?;
 //! assert!(report.is_complete());

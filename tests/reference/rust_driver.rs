@@ -104,6 +104,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                 buffer.registration = Some(registered);
                 buffer.references += 1;
             }
+            ["REGISTER_BATCH", name, "r", count] => {
+                let count = count.parse::<usize>()?;
+                if count == 0 || count > 1024 {
+                    return Err("invalid registration batch size".into());
+                }
+                let buffer = buffers.get_mut(*name).ok_or("unknown buffer")?;
+                let engine = if *name == "source" {
+                    &source
+                } else {
+                    &requester
+                };
+                let previous = buffer
+                    .registration
+                    .as_ref()
+                    .ok_or("register before batch duplicates")?;
+                let ranges = vec![(Arc::clone(&buffer.memory), 0, buffer.memory.len()); count];
+                let registered =
+                    engine.register_host_memory_batch(&ranges, Permission::RemoteRead)?;
+                if registered.len() != count
+                    || registered.iter().any(|memory| memory.id() != previous.id())
+                {
+                    return Err("batch duplicates changed identity".into());
+                }
+                buffer.references += count;
+                println!("OBS\tREGISTER_BATCH\t{name}\t{count}");
+            }
             ["UNREGISTER", name] => {
                 let buffer = buffers.get_mut(*name).ok_or("unknown buffer")?;
                 let engine = if *name == "source" {
@@ -172,19 +198,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let [local_offset, remote_offset, length] = parts.as_slice() else {
                             return Err("invalid slice".into());
                         };
-                        let (local, local_offset) = requester.resolve_local_address(
-                            buffers["local"].memory.base_address() + *local_offset as u64,
-                            *length,
-                        )?;
-                        let (remote, remote_offset) = peer.resolve_address(
-                            buffers["source"].memory.base_address() + *remote_offset as u64,
-                            *length,
-                        )?;
                         requests.push(TransferRequest {
-                            local,
-                            local_offset,
-                            remote,
-                            remote_offset,
+                            local_address: buffers["local"].memory.base_address()
+                                + *local_offset as u64,
+                            remote_address: buffers["source"].memory.base_address()
+                                + *remote_offset as u64,
                             length: *length,
                         });
                     }

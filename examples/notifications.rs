@@ -25,10 +25,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         TransferOp::Read,
         &peer,
         &[TransferRequest {
-            local: local.clone(),
-            local_offset: 0,
-            remote: peer.regions()[0],
-            remote_offset: 0,
+            local_address: local.base_address(),
+            remote_address: peer.regions()[0].base_address(),
             length: 32,
         }],
         &notification,

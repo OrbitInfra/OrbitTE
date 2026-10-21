@@ -39,7 +39,7 @@ outputs is insufficient.
 
 | Contract | Trace coverage | Remaining boundary |
 | --- | --- | --- |
-| F04 host registration | Existing backing, exact duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
+| F04 host registration | Existing backing, single and batch duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation, failover and mixed peers |
 | F08 terminal completion | Native batch polled repeatedly before free; notifications must not be redelivered | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
@@ -48,6 +48,9 @@ outputs is insufficient.
 The text format starts with `ORBITTE_CPU_TRACE 1`. `BUFFER` selects a named
 source/local backing with length and `pattern` (index modulo 251) or one fill
 byte. `REGISTER`, `UNREGISTER` and `DESCRIBE` change or inspect registration.
+`REGISTER_BATCH name r count` adds `count` references to an already registered
+range via one real batch call; later single unregister calls must release every
+reference. New duplicate descriptors in one native batch are outside this trace.
 `FILL` and `BYTES` specify offsets/lengths. `READ`/`WRITE` take a label,
 comma-separated `local_offset:remote_offset:length` slices, notification name
 and message. `~` disables the attached notification; `-` means empty strings
@@ -97,7 +100,7 @@ python3 tests/reference/run.py \
 ```
 
 The full run reports `passed-cpu-trace` only after both real runners exit
-successfully and all 24 observations match. Its manifest preserves exact inputs,
+successfully and all 25 observations match. Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,
 observations, comparator controls and provenance. Failures keep their logs and
 mark the manifest failed. Timeout kills are failures, never drain receipts.

@@ -1,6 +1,6 @@
 # CPU TCP foundation
 
-This covers the implemented P1.1/P1.2/P2.1/P2.2 substages in the
+This covers the implemented P1.1/P1.2/P1.3/P2.1/P2.2 substages in the
 [completion plan](completion-plan.md), pending independent acceptance. It
 provides original Rust code with no dependencies and no C++ TENT runtime.
 The source changes have not been published; crates.io `0.1.0-alpha.1` still
@@ -43,6 +43,14 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
   engines. Overlapping wrappers with different locks are rejected while an old
   registration remains active or retained. The retired-range index uses weak
   references and does not call user-owned destructors under its registry lock.
+- `register_host_memory_batch(&[(Arc<HostMemory>, offset, length)], permission)`
+  returns handles in input order. It preflights the whole batch under the registry
+  lock, then publishes new ranges and duplicate reference increments together.
+  Failure leaves existing references, IDs, exports and retained charges intact.
+  Empty batches succeed while source admission is open. The per-call descriptor
+  limit is `max_batch_requests`; retained limits count distinct ranges. New
+  duplicates within one Rust batch are coalesced too; see the native distinction
+  below. This CPU metadata transaction does not qualify provider rollback/free.
 - Exact duplicate registrations share one ID and charge one retained range.
   As in TENT's `SegmentTracker`, the first descriptor/permission wins; another
   registration does not upgrade it. Each registration call adds one explicit
@@ -62,6 +70,15 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
   epoch from the authoritative source owner. It cannot learn replacement
   authority from a new process at the same address. Every operation checks
   that epoch again at the source. Refresh by calling open with the same epoch.
+- `TransferRequest { local_address, remote_address, length }` accepts the absolute
+  addresses used by TENT and OrbitKV transfer slices. These integers carry no
+  ownership or authority. Submission resolves active local ranges and the
+  supplied peer snapshot, retaining every local registration before I/O.
+  Concurrent unregister after resolution cannot free admitted backing; a later
+  submission must resolve an active registration again. Caller handoff still
+  governs address reuse. Remote requests carry the resolved registration ID and
+  the supplied peer's authoritative epoch. The previous public handle/offset
+  request fields were removed before release; no compatibility alias is kept.
 - `submit_and_wait` validates every slice before network effects. It then runs
   requests in order and stops at the first execution failure. Reports contain
   the completed prefix, exact completed bytes and the failed index; later
@@ -143,7 +160,7 @@ uncertain receipt rather than retaining a hook that retries it on later polls.
 | --- | --- | --- |
 | Bind | `127.0.0.1:0` | OS selects a loopback port; an explicit routable bind is required for other hosts |
 | Retained registrations | 1,024 / 1 GiB | Counts retained registration ranges, including unregistered handles/handlers; exact duplicates charge once, distinct overlapping ranges each charge; protocol limit 4,096 regions |
-| Batch descriptors | 1,024 | Whole batch rejected before I/O if exceeded |
+| Batch descriptors | 1,024 | Transfer or host-registration batch rejected before effects if exceeded |
 | In-flight requester batches | 32 | Includes descriptor-open and explicit notification calls |
 | In-flight requester bytes | 64 MiB | Admitted slice lengths plus notification name/message bytes until the call exits |
 | One payload | 8 MiB | Configurable up to 64 MiB; each source independently enforces its limit |
@@ -165,6 +182,37 @@ atomic snapshot. Full TENT metrics and NIC-load observations remain open.
 These counters bound registered/retained ranges, not the footprint of an
 arbitrary external allocator owner or caller-held `HostMemory`. OrbitKV retains
 responsibility for its pool's allocation/recycling budget and source grants.
+
+## Native batch inputs and the OrbitKV boundary
+
+Frozen TENT's `registerLocalMemory(vector, vector, options)` constructs buffer
+records and calls [`SegmentTracker::addInBatch`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/segment_tracker.cpp).
+Duplicates already in the published snapshot increment references and keep the
+first descriptor; callback failure rolls those increments back. The shared
+[CPU trace](cpu-oracle.md) executes its C `tent_register_memory_batch` on such
+existing ranges and verifies partial/final unregister and first-permission WRITE.
+Rust instead preflights its CPU-only metadata changes before committing them.
+Frozen `addInBatch` can publish duplicate new descriptors from one input list;
+Rust coalesces those into one ID with multiple references. That case has Rust
+contract tests, not a native differential parity claim. Provider cleanup failure,
+NUMA probing and location/transport options remain open.
+
+At OrbitKV `3f4d65709e86a060f323da7e0d1b59975f6939bc`,
+`MooncakeTransport` retains its actual `Arc<PinnedAllocator>` before registering
+`memory_regions()`, and submits `TransferSlice { local, remote_address, length }`.
+The Rust input boundary now supports that shape: wrap each disjoint host region
+with `HostMemory::from_raw_parts` retaining that actual allocator, batch-register
+its ranges, and pass addresses at submission. Overlaps must share one wrapper.
+The external-host example demonstrates this boundary with a stable host box;
+it does not instantiate OrbitKV's private CUDA-pinned allocator.
+
+OrbitKV's native pin `12cbf549b6351c800de0f94a480276d216b9a43b` appends
+`expected_source_epoch[33]` to the C request and adds source-epoch/close functions.
+The frozen vanilla C request lacks that field. This Rust struct is neither C
+layout, and linking either native ABI requires an explicit audited profile.
+OrbitTE's synchronous calls and source-only close also do not yet replace
+OrbitKV's asynchronous batch/cancellation ownership or its combined local
+requester/source admission close. These remain adapter gates before migration.
 
 ## Native TENT correspondence for P1.2
 
@@ -249,6 +297,9 @@ source process, verifies actual source bytes and replaces it at the same port.
 Source and destination now use externally owned backing and absolute-address
 resolution. Additional controls prove actual owner release only after handler
 exit, duplicate references, alias serialization and invalid address metadata.
+P1.3 adds atomic batch-failure controls (range, bytes, count, ID/reference
+exhaustion and alias locks), real multi-allocation batch READs and a blocked
+requester READ whose owner must survive unregister/source close until return.
 The ignored `peer_process_fixture` is invoked by that parent gate; it is not a
 skipped runtime qualification case.
 The same process gate now verifies attached READ/WRITE messages, explicit

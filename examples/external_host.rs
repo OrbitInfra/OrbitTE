@@ -20,8 +20,10 @@ fn main() -> orbit_te::Result<()> {
     let memory = Arc::new(unsafe { HostMemory::from_raw_parts(address, 64, owner)? });
     memory.write(16, b"orbit")?;
     let source = TransferEngine::new(EngineConfig::default())?;
-    let exported =
-        source.register_host_memory(Arc::clone(&memory), 8, 32, Permission::RemoteRead)?;
+    let exported = source.register_host_memory_batch(
+        &[(Arc::clone(&memory), 0, 32), (Arc::clone(&memory), 32, 32)],
+        Permission::RemoteRead,
+    )?;
     let requester = TransferEngine::new(EngineConfig::default())?;
     let destination =
         requester.register_memory(vec![0; 5].into_boxed_slice(), Permission::LocalOnly)?;
@@ -30,13 +32,9 @@ fn main() -> orbit_te::Result<()> {
         source.source_epoch(),
         Duration::from_secs(1),
     )?;
-    let (local, local_offset) = requester.resolve_local_address(destination.base_address(), 5)?;
-    let (remote, remote_offset) = peer.resolve_address(memory.base_address() + 16, 5)?;
     let transfer = TransferRequest {
-        local,
-        local_offset,
-        remote,
-        remote_offset,
+        local_address: destination.base_address(),
+        remote_address: memory.base_address() + 16,
         length: 5,
     };
     let report =
@@ -48,7 +46,9 @@ fn main() -> orbit_te::Result<()> {
     destination.read(0, &mut observed)?;
     assert_eq!(&observed, b"orbit");
     source.close_source(Duration::from_secs(1))?;
-    source.unregister_memory(&exported)?;
+    for registration in &exported {
+        source.unregister_memory(registration)?;
+    }
     drop(exported);
     drop(memory);
     let bytes = allocation
