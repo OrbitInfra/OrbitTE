@@ -3,6 +3,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::CString;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -121,17 +122,13 @@ impl Runtime {
                 length,
             }
         };
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|_| Error::ResourceExhausted)?;
-        bytes.resize(length, 0);
+        let bytes = Staging::new(length)?;
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         let mut endpoint = Endpoint {
             resources: Some(Box::new(Resources {
                 handles: sys::Handles::default(),
-                bytes: bytes.into_boxed_slice(),
+                bytes,
                 lease,
             })),
             local: Descriptor::default(),
@@ -153,7 +150,7 @@ impl Runtime {
                 name.as_ptr(),
                 self.config.port,
                 self.config.gid_index,
-                resources.bytes.as_mut_ptr().cast(),
+                resources.bytes.address.as_ptr().cast(),
                 length,
                 permission,
                 psn,
@@ -186,9 +183,51 @@ impl Drop for Lease {
     }
 }
 
+struct Staging {
+    address: NonNull<u8>,
+    length: usize,
+}
+impl Staging {
+    fn new(length: usize) -> Result<Self> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| Error::ResourceExhausted)?;
+        bytes.resize(length, 0);
+        // No Rust reference/Box to DMA bytes remains while the RNIC owns them.
+        let address = NonNull::new(Box::into_raw(bytes.into_boxed_slice()).cast::<u8>())
+            .ok_or(Error::ResourceExhausted)?;
+        Ok(Self { address, length })
+    }
+    fn len(&self) -> usize {
+        self.length
+    }
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: only Init endpoints before descriptor exposure call this;
+        // native DMA has not started and the allocation is exclusively owned.
+        unsafe { std::slice::from_raw_parts_mut(self.address.as_ptr(), self.length) }
+    }
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: only Closed endpoints expose a slice, after QP/MR destruction.
+        unsafe { std::slice::from_raw_parts(self.address.as_ptr(), self.length) }
+    }
+}
+impl Drop for Staging {
+    fn drop(&mut self) {
+        // SAFETY: successful native close precedes release. Failed close retains
+        // the entire Resources owner without running this deallocator.
+        unsafe {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                self.address.as_ptr(),
+                self.length,
+            )));
+        }
+    }
+}
+
 struct Resources {
     handles: sys::Handles,
-    bytes: Box<[u8]>,
+    bytes: Staging,
     lease: Lease,
 }
 
@@ -291,18 +330,19 @@ impl Endpoint {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA staging"))?;
-        memory.read(offset, &mut resources.bytes)
+        memory.read(offset, resources.bytes.bytes_mut())
     }
 
     pub(crate) fn bytes(&self) -> Result<&[u8]> {
         if self.phase != Phase::Closed {
             return Err(Error::Internal("RDMA staging is not physically quiescent"));
         }
-        Ok(&self
+        Ok(self
             .resources
             .as_ref()
             .ok_or(Error::Internal("missing RDMA staging"))?
-            .bytes)
+            .bytes
+            .bytes())
     }
 
     pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
