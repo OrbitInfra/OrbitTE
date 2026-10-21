@@ -92,6 +92,12 @@ profile. Rust blocked-socket tests exercise queue deadline, cancel, wait timeout
 concurrent unregister, requester close and detached engine/allocator release.
 They do not qualify native fault behavior or device DMA.
 
-Request merging/alias mappings, task-specific transport choices, explicit
+[RDMA/CUDA](rdma-cuda.md) now consume these owners with explicit per-request
+transport selection. Their `Unquiesced` failures retain native owners and
+admission/capacity: the logical result is terminal while `locally_drained` is
+false, `free` remains busy and close cannot report drain. No reclaim proof is
+implemented for this quarantine yet.
+
+Request merging/alias mappings, full transport selection policy, explicit
 progress, priority/EDF, provider abort/reclaim and language/wire compatibility
 remain open. No hardware backend inherits this CPU profile's drain proof.

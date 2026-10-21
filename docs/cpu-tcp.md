@@ -240,16 +240,16 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 3**, not TENT's YLT RPC framing or HP-TCP.
+This is **OrbitTE protocol version 4**, not TENT's YLT RPC framing or HP-TCP.
 It makes this first Rust CPU slice executable while TENT wire compatibility
 remains an explicit P0/P9 gate. Future wire changes require a version change
 and corresponding decoder rejection tests.
 Version 2 added base addresses; version 3 adds reserved notification admission,
-body submission and final receipts. Versions 1 and 2 are explicitly rejected.
+body submission and final receipts. Version 4 adds staged RDMA bootstrap/commit operations. Versions 1–3 are explicitly rejected.
 There is no legacy-protocol fallback.
 
 Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`3`), a
+Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`4`), a
 one-byte operation/status and one zero reserved byte.
 
 | Frame | Remaining fields |
@@ -258,7 +258,7 @@ one-byte operation/status and one zero reserved byte.
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
 | Descriptor payload | Region count (4), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1) and zero reserved bytes (7) |
 
-Operations: `0` describe, `1` READ, `2` WRITE, `3` notify. Describe requires zero
+Operations: `0` describe, `1` READ, `2` WRITE, `3` notify, `4` staged RDMA READ, `5` staged RDMA WRITE. See the [RDMA/CUDA contract](rdma-cuda.md) for bootstrap/commit sequencing. Describe requires zero
 ID/range. Notify requires ID zero; offset is name length and length is message
 length, both in UTF-8 bytes. Its body is name bytes, message bytes and a zero
 commit marker. Even two empty strings require that marker before enqueue.
@@ -266,7 +266,8 @@ Permissions: `0` local-only (omitted from exported descriptors), `1` remote
 read, `2` remote write, `3` remote read/write. Errors carry no payload.
 Statuses: `0` success, `1` epoch mismatch, `2` unknown region, `3` permission
 denied, `4` invalid range, `5` source closed, `6` exhausted, `7` protocol error,
-`8` internal error, `9` WRITE/notification ready. Unknown versions, flags, IDs, enum values,
+`8` internal error, `9` WRITE/notification ready, `10` backend unavailable,
+`11` remote native backend error. Unknown versions, flags, IDs, enum values,
 overflowing/out-of-bounds ranges and oversized payloads are rejected.
 
 READ: request → success header and exactly the requested bytes. WRITE:

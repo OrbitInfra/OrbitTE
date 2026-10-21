@@ -226,9 +226,71 @@ impl RegisteredMemory {
     }
 }
 
+#[derive(Clone)]
+enum Allocation {
+    Host(Arc<HostMemory>),
+    #[cfg(feature = "cuda")]
+    Cuda(Arc<crate::cuda::CudaMemory>),
+}
+
+impl Allocation {
+    fn base_address(&self) -> u64 {
+        match self {
+            Self::Host(memory) => memory.base_address(),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => memory.base_address(),
+        }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Host(memory) => memory.len(),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => memory.len(),
+        }
+    }
+    fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
+        match self {
+            Self::Host(memory) => memory.read(offset, destination),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => memory.read(offset, destination),
+        }
+    }
+    fn write(&self, offset: usize, source: &[u8]) -> Result<()> {
+        match self {
+            Self::Host(memory) => memory.write(offset, source),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => memory.write(offset, source),
+        }
+    }
+    fn weak(&self) -> AllocationRef {
+        match self {
+            Self::Host(memory) => AllocationRef::Host(Arc::downgrade(memory)),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => AllocationRef::Cuda(Arc::downgrade(memory)),
+        }
+    }
+}
+
+enum AllocationRef {
+    Host(Weak<HostMemory>),
+    #[cfg(feature = "cuda")]
+    Cuda(Weak<crate::cuda::CudaMemory>),
+}
+impl AllocationRef {
+    fn ptr_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Host(a), Self::Host(b)) => Weak::ptr_eq(a, b),
+            #[cfg(feature = "cuda")]
+            (Self::Cuda(a), Self::Cuda(b)) => Weak::ptr_eq(a, b),
+            #[cfg(feature = "cuda")]
+            _ => false,
+        }
+    }
+}
+
 pub(crate) struct Registration {
     pub(crate) descriptor: RemoteRegion,
-    allocation: Arc<HostMemory>,
+    allocation: Allocation,
     allocation_offset: usize,
     budget: Arc<Mutex<MemoryUsage>>,
 }
@@ -266,7 +328,7 @@ struct RegistryEntries {
 
 struct RetainedRange {
     registration: Weak<Registration>,
-    allocation: Weak<HostMemory>,
+    allocation: AllocationRef,
     address: u64,
     end: u64,
 }
@@ -325,6 +387,37 @@ impl MemoryRegistry {
         ranges: &[(Arc<HostMemory>, usize, usize)],
         permission: Permission,
     ) -> Result<Vec<RegisteredMemory>> {
+        let mut allocations = Vec::new();
+        allocations
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        for (allocation, offset, length) in ranges {
+            allocations.push((Allocation::Host(Arc::clone(allocation)), *offset, *length));
+        }
+        self.register_batch(&allocations, permission)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn register_cuda_batch(
+        &self,
+        ranges: &[(Arc<crate::cuda::CudaMemory>, usize, usize)],
+        permission: Permission,
+    ) -> Result<Vec<RegisteredMemory>> {
+        let mut allocations = Vec::new();
+        allocations
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        for (allocation, offset, length) in ranges {
+            allocations.push((Allocation::Cuda(Arc::clone(allocation)), *offset, *length));
+        }
+        self.register_batch(&allocations, permission)
+    }
+
+    fn register_batch(
+        &self,
+        ranges: &[(Allocation, usize, usize)],
+        permission: Permission,
+    ) -> Result<Vec<RegisteredMemory>> {
         let mut plans: Vec<RegistrationPlan> = Vec::new();
         let mut selections = Vec::new();
         let mut registered: Vec<RegisteredMemory> = Vec::new();
@@ -360,15 +453,15 @@ impl MemoryRegistry {
             let end = address
                 .checked_add(*length as u64)
                 .ok_or(Error::InvalidRange)?;
-            let allocation_ref = Arc::downgrade(allocation);
+            let allocation_ref = allocation.weak();
             if entries.retained.iter().any(|previous| {
                 address < previous.end
                     && previous.address < end
-                    && !Weak::ptr_eq(&previous.allocation, &allocation_ref)
+                    && !previous.allocation.ptr_eq(&allocation_ref)
             }) || plans.iter().any(|previous| {
                 address < previous.end
                     && previous.address < end
-                    && !Arc::ptr_eq(&ranges[previous.input].0, allocation)
+                    && !ranges[previous.input].0.weak().ptr_eq(&allocation_ref)
             }) {
                 return Err(Error::RegistrationConflict);
             }
@@ -450,13 +543,13 @@ impl MemoryRegistry {
                         length: *length,
                         permission,
                     },
-                    allocation: Arc::clone(allocation),
+                    allocation: allocation.clone(),
                     allocation_offset: *offset,
                     budget: Arc::clone(&self.budget),
                 }));
                 entries.retained.push(RetainedRange {
                     registration: Arc::downgrade(&memory.0),
-                    allocation: Arc::downgrade(allocation),
+                    allocation: allocation.weak(),
                     address: plan.address,
                     end: plan.end,
                 });

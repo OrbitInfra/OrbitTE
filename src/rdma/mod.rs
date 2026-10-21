@@ -1,0 +1,477 @@
+//! Opt-in single-rail RC verbs transport with bounded, owned host staging.
+
+#![allow(unsafe_code)]
+
+use std::ffi::CString;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::engine::remaining;
+use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
+
+mod sys;
+
+pub(crate) const DESCRIPTOR_SIZE: usize = 40;
+
+/// Explicit RNIC selection. This first profile creates an RC endpoint per slice.
+#[derive(Clone, Debug)]
+pub struct RdmaConfig {
+    pub device: String,
+    pub port: u8,
+    pub gid_index: u8,
+    pub traffic_class: u8,
+    pub hop_limit: u8,
+    pub max_endpoints: usize,
+    pub max_staging_bytes: usize,
+}
+
+impl RdmaConfig {
+    pub fn new(device: impl Into<String>) -> Self {
+        Self {
+            device: device.into(),
+            port: 1,
+            gid_index: 0,
+            traffic_class: 0,
+            hop_limit: 1,
+            max_endpoints: 64,
+            max_staging_bytes: 64 << 20,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.device.is_empty()
+            || self.device.len() > 128
+            || self.device.contains('\0')
+            || self.port == 0
+            || self.hop_limit == 0
+            || self.max_endpoints == 0
+            || self.max_staging_bytes == 0
+        {
+            return Err(Error::InvalidConfig(
+                "RDMA needs an explicit device, port, hop limit and positive budgets",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A retained endpoint is charged and blocks further RDMA admission. It can
+/// still own pinned pages or RNIC resources after native teardown failed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RdmaStats {
+    pub active_endpoints: usize,
+    pub staging_bytes: usize,
+    pub retained_endpoints: usize,
+    pub retained_bytes: usize,
+    pub completed_reads: u64,
+    pub completed_writes: u64,
+}
+
+pub(crate) struct Runtime {
+    config: RdmaConfig,
+    usage: Arc<Mutex<RdmaStats>>,
+    verbs: &'static sys::Verbs,
+}
+
+impl Runtime {
+    pub(crate) fn new(config: RdmaConfig) -> Result<Arc<Self>> {
+        config.validate()?;
+        Ok(Arc::new(Self {
+            config,
+            usage: Arc::default(),
+            verbs: &sys::REAL,
+        }))
+    }
+
+    pub(crate) fn stats(&self) -> Result<RdmaStats> {
+        self.usage
+            .lock()
+            .map(|usage| *usage)
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))
+    }
+
+    pub(crate) fn endpoint(&self, length: usize, permission: u32) -> Result<Endpoint> {
+        if length == 0 || length > u32::MAX as usize {
+            return Err(Error::InvalidRange);
+        }
+        let lease = {
+            let mut usage = self
+                .usage
+                .lock()
+                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+            let bytes = usage
+                .staging_bytes
+                .checked_add(length)
+                .ok_or(Error::ResourceExhausted)?;
+            if usage.retained_endpoints != 0 {
+                return Err(Error::Unavailable(
+                    "RDMA admission is poisoned by retained native resources",
+                ));
+            }
+            if usage.active_endpoints >= self.config.max_endpoints
+                || bytes > self.config.max_staging_bytes
+            {
+                return Err(Error::ResourceExhausted);
+            }
+            usage.active_endpoints += 1;
+            usage.staging_bytes = bytes;
+            Lease {
+                usage: Arc::clone(&self.usage),
+                length,
+            }
+        };
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| Error::ResourceExhausted)?;
+        bytes.resize(length, 0);
+        let epoch = SourceEpoch::generate()?;
+        let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
+        let mut endpoint = Endpoint {
+            resources: Some(Box::new(Resources {
+                handles: sys::Handles::default(),
+                bytes: bytes.into_boxed_slice(),
+                lease,
+            })),
+            local: Descriptor::default(),
+            config: self.config.clone(),
+            verbs: self.verbs,
+            phase: Phase::Init,
+        };
+        let name = CString::new(self.config.device.as_str())
+            .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
+        let resources = endpoint
+            .resources
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA resources"))?;
+        // SAFETY: the initialized descriptor/handles and stable owned bytes
+        // outlive every native operation, including partially constructed ones.
+        let code = unsafe {
+            (endpoint.verbs.open)(
+                &mut resources.handles,
+                name.as_ptr(),
+                self.config.port,
+                self.config.gid_index,
+                resources.bytes.as_mut_ptr().cast(),
+                length,
+                permission,
+                psn,
+                &mut endpoint.local,
+            )
+        };
+        if let Err(error) =
+            check("ibverbs endpoint construction", code).and_then(|()| endpoint.local.validate())
+        {
+            endpoint.close()?;
+            return Err(error);
+        }
+        Ok(endpoint)
+    }
+}
+
+struct Lease {
+    usage: Arc<Mutex<RdmaStats>>,
+    length: usize,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let mut usage = self
+            .usage
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        usage.active_endpoints -= 1;
+        usage.staging_bytes -= self.length;
+    }
+}
+
+struct Resources {
+    handles: sys::Handles,
+    bytes: Box<[u8]>,
+    lease: Lease,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+#[repr(C)]
+pub(crate) struct Descriptor {
+    address: u64,
+    rkey: u32,
+    qpn: u32,
+    psn: u32,
+    lid: u16,
+    mtu: u8,
+    link_layer: u8,
+    gid: [u8; 16],
+}
+
+impl Descriptor {
+    fn validate(&self) -> Result<()> {
+        if self.address == 0
+            || self.qpn == 0
+            || self.qpn > 0xffffff
+            || self.psn > 0xffffff
+            || !(1..=5).contains(&self.mtu)
+            || !matches!(self.link_layer, 1 | 2)
+            || (self.link_layer == 2 && self.gid == [0; 16])
+        {
+            return Err(Error::Protocol("invalid RDMA endpoint descriptor"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn encode(self) -> [u8; DESCRIPTOR_SIZE] {
+        let mut bytes = [0; DESCRIPTOR_SIZE];
+        bytes[..8].copy_from_slice(&self.address.to_be_bytes());
+        bytes[8..12].copy_from_slice(&self.rkey.to_be_bytes());
+        bytes[12..16].copy_from_slice(&self.qpn.to_be_bytes());
+        bytes[16..20].copy_from_slice(&self.psn.to_be_bytes());
+        bytes[20..22].copy_from_slice(&self.lid.to_be_bytes());
+        bytes[22] = self.mtu;
+        bytes[23] = self.link_layer;
+        bytes[24..].copy_from_slice(&self.gid);
+        bytes
+    }
+
+    pub(crate) fn decode(bytes: &[u8; DESCRIPTOR_SIZE]) -> Result<Self> {
+        let mut address = [0; 8];
+        address.copy_from_slice(&bytes[..8]);
+        let value = |offset| {
+            let mut field = [0; 4];
+            field.copy_from_slice(&bytes[offset..offset + 4]);
+            u32::from_be_bytes(field)
+        };
+        let mut gid = [0; 16];
+        gid.copy_from_slice(&bytes[24..]);
+        let descriptor = Self {
+            address: u64::from_be_bytes(address),
+            rkey: value(8),
+            qpn: value(12),
+            psn: value(16),
+            lid: u16::from_be_bytes([bytes[20], bytes[21]]),
+            mtu: bytes[22],
+            link_layer: bytes[23],
+            gid,
+        };
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Phase {
+    Init,
+    Connected,
+    Posted,
+    Closed,
+}
+
+pub(crate) struct Endpoint {
+    resources: Option<Box<Resources>>,
+    local: Descriptor,
+    config: RdmaConfig,
+    verbs: &'static sys::Verbs,
+    phase: Phase,
+}
+
+impl Endpoint {
+    pub(crate) fn has_resources(&self) -> bool {
+        self.resources.is_some()
+    }
+
+    pub(crate) fn descriptor(&self) -> Descriptor {
+        self.local
+    }
+
+    pub(crate) fn fill(&mut self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
+        if self.phase != Phase::Init {
+            return Err(Error::Internal("RDMA staging already exposed"));
+        }
+        let resources = self
+            .resources
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA staging"))?;
+        memory.read(offset, &mut resources.bytes)
+    }
+
+    pub(crate) fn bytes(&self) -> Result<&[u8]> {
+        if self.phase != Phase::Closed {
+            return Err(Error::Internal("RDMA staging is not physically quiescent"));
+        }
+        Ok(&self
+            .resources
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA staging"))?
+            .bytes)
+    }
+
+    pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
+        remote.validate()?;
+        if self.phase != Phase::Init || remote.link_layer != self.local.link_layer {
+            return Err(Error::Protocol("RDMA state or link layer mismatch"));
+        }
+        let resources = self
+            .resources
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA endpoint"))?;
+        // SAFETY: native handles remain exclusively owned; descriptor fields
+        // are validated and both descriptors live across the call.
+        let code = unsafe {
+            (self.verbs.connect)(
+                &mut resources.handles,
+                &self.local,
+                remote,
+                self.config.port,
+                self.config.gid_index,
+                self.config.traffic_class,
+                self.config.hop_limit,
+            )
+        };
+        check("ibv_modify_qp RTR/RTS", code)?;
+        self.phase = Phase::Connected;
+        Ok(())
+    }
+
+    pub(crate) fn transfer(
+        &mut self,
+        remote: &Descriptor,
+        operation: TransferOp,
+        deadline: Instant,
+    ) -> Result<()> {
+        if self.phase != Phase::Connected {
+            return Err(Error::Internal("RDMA QP is not ready"));
+        }
+        remaining(deadline)?;
+        let resources = self
+            .resources
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA endpoint"))?;
+        if remote
+            .address
+            .checked_add(resources.bytes.len() as u64)
+            .is_none()
+        {
+            return Err(Error::InvalidRange);
+        }
+        // SAFETY: the MR, QP and bytes remain owned until successful destruction,
+        // including errors or timeout after this one signaled WR is attempted.
+        let code = unsafe {
+            (self.verbs.post)(
+                &mut resources.handles,
+                remote.address,
+                remote.rkey,
+                resources.bytes.len() as u32,
+                i32::from(operation == TransferOp::Write),
+            )
+        };
+        self.phase = Phase::Posted;
+        check("ibv_post_send", code)?;
+        loop {
+            remaining(deadline)?;
+            let mut completion = sys::Completion::default();
+            // SAFETY: the CQ is live and only this thread polls this endpoint.
+            let count = unsafe { (self.verbs.poll)(&mut resources.handles, &mut completion) };
+            if count < 0 {
+                return Err(Error::Backend {
+                    operation: "ibv_poll_cq",
+                    code: count,
+                });
+            }
+            if count == 1 {
+                if completion.status != 0 {
+                    return Err(Error::Backend {
+                        operation: "RDMA work completion",
+                        code: completion.status as i32,
+                    });
+                }
+                let expected_opcode = if operation == TransferOp::Write { 1 } else { 2 };
+                if completion.id != 1
+                    || completion.opcode != expected_opcode
+                    || (operation == TransferOp::Read
+                        && completion.length as usize != resources.bytes.len())
+                {
+                    return Err(Error::Protocol("RDMA completion identity/opcode/length"));
+                }
+                let mut usage = resources
+                    .lease
+                    .usage
+                    .lock()
+                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+                if operation == TransferOp::Read {
+                    usage.completed_reads += 1;
+                } else {
+                    usage.completed_writes += 1;
+                }
+                return Ok(());
+            }
+            thread::sleep(remaining(deadline)?.min(Duration::from_micros(50)));
+        }
+    }
+
+    pub(crate) fn close(&mut self) -> Result<()> {
+        let resources = self
+            .resources
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA endpoint"))?;
+        if let Err(Error::Backend { operation, code }) =
+            close_handles(self.verbs, &mut resources.handles)
+        {
+            self.retain();
+            return Err(Error::Unquiesced { operation, code });
+        }
+        self.phase = Phase::Closed;
+        Ok(())
+    }
+}
+
+fn close_handles(verbs: &sys::Verbs, handles: &mut sys::Handles) -> Result<()> {
+    for (operation, close) in [
+        ("ibv_destroy_qp", verbs.destroy_qp),
+        ("ibv_dereg_mr", verbs.deregister),
+        ("ibv_destroy_cq", verbs.destroy_cq),
+        ("ibv_dealloc_pd", verbs.dealloc_pd),
+        ("ibv_close_device", verbs.close_device),
+    ] {
+        // SAFETY: each bridge checks for a null handle and clears only on native
+        // success. Stop on error so dependent resources cannot be freed early.
+        check(operation, unsafe { close(handles) })?;
+    }
+    Ok(())
+}
+
+impl Endpoint {
+    fn retain(&mut self) {
+        if let Some(resources) = self.resources.take() {
+            {
+                let mut usage = resources
+                    .lease
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                usage.retained_endpoints += 1;
+                usage.retained_bytes += resources.bytes.len();
+            }
+            std::mem::forget(resources);
+        }
+    }
+}
+
+impl Drop for Endpoint {
+    fn drop(&mut self) {
+        if self.resources.is_some() {
+            let _ = self.close();
+        }
+    }
+}
+
+fn check(operation: &'static str, code: i32) -> Result<()> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(Error::Backend { operation, code })
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/rdma/mod.rs"]
+mod tests;

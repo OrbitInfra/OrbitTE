@@ -39,13 +39,13 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x03\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x04\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 3]);
     assert_eq!(request.encode().as_slice(), expected);
-    for (index, value) in [(0, 0), (9, 1), (9, 2), (9, 4), (10, 255), (11, 1)] {
+    for (index, value) in [(0, 0), (9, 1), (9, 2), (9, 3), (9, 5), (10, 255), (11, 1)] {
         let mut malformed = request.encode();
         malformed[index] = value;
         assert!(Request::decode(&malformed).is_err());
@@ -69,6 +69,8 @@ fn source_validates_untrusted_ranges_permissions_epochs_and_budgets() {
         (Operation::Read, memory.id(), 0, 0, 4),
         (Operation::Read, memory.id(), 0, 9, 6),
         (Operation::Read, 999, 0, 4, 2),
+        (Operation::RdmaRead, memory.id(), 0, 4, 10),
+        (Operation::RdmaWrite, memory.id(), 0, 4, 3),
     ] {
         let mut channel = wire_request(&engine, operation, id, offset, length);
         let mut bytes = [0; REPLY_SIZE];
@@ -202,6 +204,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
 
 fn fault_request(engine: &TransferEngine, peer: &RemoteSegment) -> TransferRequest {
     TransferRequest {
+        transport: crate::Transport::Tcp,
         local_address: engine
             .register_memory(vec![7; 8].into_boxed_slice(), Permission::LocalOnly)
             .unwrap()
@@ -699,6 +702,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
     let request = TransferRequest {
+        transport: crate::Transport::Tcp,
         local_address: local.base_address(),
         remote_address: peer.regions[0].base_address(),
         length: 8,
@@ -790,6 +794,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
             .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
             .unwrap();
         let request = TransferRequest {
+            transport: crate::Transport::Tcp,
             local_address: local.base_address(),
             remote_address: peer.regions[0].base_address(),
             length: 8,
@@ -938,6 +943,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
     let request = TransferRequest {
+        transport: crate::Transport::Tcp,
         local_address: local.base_address(),
         remote_address: peer.regions[0].base_address(),
         length: 8,

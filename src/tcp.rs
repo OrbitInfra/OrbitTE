@@ -9,11 +9,11 @@ use crate::engine::{PreparedTransfer, Source, deadline, remaining};
 use crate::memory::checked_range;
 use crate::{
     EngineConfig, Error, Notification, NotificationEffect, NotificationFailure, Permission,
-    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp,
+    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp, Transport,
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -27,6 +27,8 @@ enum Operation {
     Read = 1,
     Write = 2,
     Notify = 3,
+    RdmaRead = 4,
+    RdmaWrite = 5,
 }
 
 struct Request {
@@ -57,6 +59,8 @@ impl Request {
             1 => Operation::Read,
             2 => Operation::Write,
             3 => Operation::Notify,
+            4 => Operation::RdmaRead,
+            5 => Operation::RdmaWrite,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -142,6 +146,11 @@ impl Reply {
             6 => Err(Error::ResourceExhausted),
             7 => Err(Error::Protocol("request rejected by source")),
             8 => Err(Error::Internal("source handler failed")),
+            10 => Err(Error::Unavailable("remote RDMA is not configured/compiled")),
+            11 => Err(Error::Backend {
+                operation: "remote backend",
+                code: -1,
+            }),
             _ => Err(Error::Protocol("unknown reply status")),
         }
     }
@@ -156,6 +165,8 @@ fn error_status(error: &Error) -> u8 {
         Error::SourceClosed => 5,
         Error::ResourceExhausted => 6,
         Error::Protocol(_) => 7,
+        Error::Unavailable(_) => 10,
+        Error::Backend { .. } | Error::Unquiesced { .. } => 11,
         _ => 8,
     }
 }
@@ -274,8 +285,19 @@ pub(crate) fn transfer(
     operation: TransferOp,
     peer: &RemoteSegment,
     request: &PreparedTransfer,
+    source: &Source,
     deadline: Instant,
 ) -> std::result::Result<(), (Error, RemoteEffect)> {
+    if request.transport == Transport::Rdma {
+        #[cfg(feature = "rdma")]
+        return rdma_transfer(operation, peer, request, source, deadline);
+        #[cfg(not(feature = "rdma"))]
+        return Err((
+            Error::Unavailable("build with --features rdma"),
+            RemoteEffect::None,
+        ));
+    }
+    let _ = source;
     let mut effect = RemoteEffect::None;
     let result = (|| {
         let mut bytes = buffer(request.length)?;
@@ -320,6 +342,125 @@ pub(crate) fn transfer(
         Ok(())
     })();
     result.map_err(|error| (error, effect))
+}
+
+#[cfg(feature = "rdma")]
+fn rdma_transfer(
+    operation: TransferOp,
+    peer: &RemoteSegment,
+    request: &PreparedTransfer,
+    source: &Source,
+    deadline: Instant,
+) -> std::result::Result<(), (Error, RemoteEffect)> {
+    use crate::rdma::{DESCRIPTOR_SIZE, Descriptor};
+    let mut effect = RemoteEffect::None;
+    let result = (|| {
+        let runtime = source
+            .rdma
+            .as_ref()
+            .ok_or(Error::Unavailable("RDMA is not configured"))?;
+        let mut endpoint = runtime.endpoint(request.length, 0)?;
+        let transfer = (|| {
+            if operation == TransferOp::Write {
+                endpoint.fill(&request.local, request.local_offset)?;
+            }
+            let mut channel = Channel::connect(peer.endpoint, deadline)?;
+            channel.write_all(
+                &Request {
+                    operation: if operation == TransferOp::Read {
+                        Operation::RdmaRead
+                    } else {
+                        Operation::RdmaWrite
+                    },
+                    epoch: peer.epoch,
+                    region: request.remote.id,
+                    offset: request.remote_offset as u64,
+                    length: request.length as u64,
+                }
+                .encode(),
+            )?;
+            let reply = Reply::read(&mut channel, peer.epoch)?;
+            if reply.status != 0 || reply.length != DESCRIPTOR_SIZE as u64 {
+                return Err(Error::Protocol("RDMA bootstrap length/status"));
+            }
+            let mut descriptor = [0; DESCRIPTOR_SIZE];
+            channel.read_exact(&mut descriptor)?;
+            let remote = Descriptor::decode(&descriptor)?;
+            channel.write_all(&endpoint.descriptor().encode())?;
+            endpoint.connect(&remote)?;
+            let ready = Reply::read(&mut channel, peer.epoch)?;
+            if ready.status != 9 {
+                return Err(Error::Protocol("RDMA missing ready response"));
+            }
+            endpoint.transfer(&remote, operation, deadline)?;
+            // Source never commits staging until requester has completed and
+            // closed its QP/MR. No application backing is exposed to the RNIC.
+            endpoint.close()?;
+            if operation == TransferOp::Write {
+                effect = RemoteEffect::Unknown;
+            }
+            channel.write_all(&[1])?;
+            let receipt = Reply::read(&mut channel, peer.epoch)?;
+            if receipt.status != 0 || receipt.length != 0 {
+                return Err(Error::Protocol("RDMA completion acknowledgement"));
+            }
+            Ok(())
+        })();
+        if endpoint.has_resources() {
+            endpoint.close()?;
+        }
+        transfer?;
+        if operation == TransferOp::Read {
+            remaining(deadline)?;
+            request
+                .local
+                .write(request.local_offset, endpoint.bytes()?)?;
+        }
+        Ok(())
+    })();
+    result.map_err(|error| (error, effect))
+}
+
+#[cfg(feature = "rdma")]
+fn rdma_serve(
+    channel: &mut Channel<'_>,
+    source: &Source,
+    request: &Request,
+    memory: &crate::RegisteredMemory,
+    offset: usize,
+    length: usize,
+) -> Result<()> {
+    use crate::rdma::{DESCRIPTOR_SIZE, Descriptor};
+    let runtime = source
+        .rdma
+        .as_ref()
+        .ok_or(Error::Unavailable("RDMA is not configured"))?;
+    let writing = request.operation == Operation::RdmaWrite;
+    let mut endpoint = runtime.endpoint(length, if writing { 2 } else { 1 })?;
+    let transfer = (|| {
+        if !writing {
+            endpoint.fill(memory, offset)?;
+        }
+        channel.reply(source, 0, DESCRIPTOR_SIZE as u64)?;
+        channel.write_all(&endpoint.descriptor().encode())?;
+        let mut bytes = [0; DESCRIPTOR_SIZE];
+        channel.read_exact(&mut bytes)?;
+        endpoint.connect(&Descriptor::decode(&bytes)?)?;
+        channel.reply(source, 9, 0)?;
+        let mut done = [0];
+        channel.read_exact(&mut done)?;
+        if done != [1] {
+            return Err(Error::Protocol("RDMA completion marker"));
+        }
+        Ok(())
+    })();
+    endpoint.close()?;
+    transfer?;
+    if writing {
+        remaining(channel.deadline)?;
+        memory.write(offset, endpoint.bytes()?)?;
+    }
+    channel.reply(source, 0, 0)
 }
 
 struct Channel<'a> {
@@ -489,7 +630,7 @@ impl Drop for TcpTransport {
     }
 }
 
-fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result<()> {
+fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> Result<()> {
     let mut bytes = [0; REQUEST_SIZE];
     channel.read_exact(&mut bytes)?;
     let request = match Request::decode(&bytes) {
@@ -503,13 +644,14 @@ fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result
         channel.reply(source, 1, 0)?;
         return Ok(());
     }
-    let _admission = match source.admit() {
+    let admission = match source.admit() {
         Ok(admission) => admission,
         Err(error) => {
             channel.reply(source, error_status(&error), 0)?;
             return Ok(());
         }
     };
+    let mut retained_memory = None;
     let prepared = (|| {
         if request.operation == Operation::Describe {
             let regions = source.registry.descriptors()?;
@@ -560,13 +702,24 @@ fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result
         }
         let memory = source.registry.get(request.region)?;
         checked_range(offset, length, memory.len())?;
-        if !memory
-            .0
-            .descriptor
-            .permission
-            .allows(request.operation == Operation::Write)
-        {
+        if !memory.0.descriptor.permission.allows(matches!(
+            request.operation,
+            Operation::Write | Operation::RdmaWrite
+        )) {
             return Err(Error::PermissionDenied);
+        }
+        retained_memory = Some(memory);
+        let memory = retained_memory
+            .as_ref()
+            .ok_or(Error::Internal("missing source memory"))?;
+        if matches!(
+            request.operation,
+            Operation::RdmaRead | Operation::RdmaWrite
+        ) {
+            #[cfg(feature = "rdma")]
+            return rdma_serve(channel, source, &request, memory, offset, length);
+            #[cfg(not(feature = "rdma"))]
+            return Err(Error::Unavailable("build with --features rdma"));
         }
         let mut payload = buffer(length)?;
         if request.operation == Operation::Read {
@@ -583,6 +736,11 @@ fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result
         Ok(())
     })();
     if let Err(error) = prepared {
+        if matches!(error, Error::Unquiesced { .. }) {
+            // A native failure cannot release source admission or its actual
+            // registered backing. Source close remains pending, even after EOF.
+            std::mem::forget((retained_memory, Arc::clone(source), admission));
+        }
         // After an I/O error the connection cannot safely carry another frame.
         if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
             channel.reply(source, error_status(&error), 0)?;

@@ -17,16 +17,25 @@ pub enum TransferOp {
     Write,
 }
 
-/// Absolute host addresses within active local and epoch-fenced peer ranges.
+/// Explicit byte transport; unsupported hints fail before batch I/O.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Transport {
+    Tcp,
+    Rdma,
+}
+
+/// Absolute host/device addresses within active local and epoch-fenced peer ranges.
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 pub struct TransferRequest {
+    pub transport: Transport,
     pub local_address: u64,
     pub remote_address: u64,
     pub length: usize,
 }
 
 pub(crate) struct PreparedTransfer {
+    pub(crate) transport: Transport,
     pub(crate) local: RegisteredMemory,
     pub(crate) local_offset: usize,
     pub(crate) remote: RemoteRegion,
@@ -58,6 +67,8 @@ pub struct BatchReport {
     pub transferred_bytes: usize,
     pub failure: Option<TransferFailure>,
     pub notification: NotificationStatus,
+    /// False means native work/resources are retained and free/drain must wait.
+    pub locally_drained: bool,
 }
 
 impl BatchReport {
@@ -74,6 +85,8 @@ pub struct EngineStats {
     pub allocated_batches: usize,
     pub allocated_requests: usize,
     pub requester_workers: usize,
+    #[cfg(feature = "rdma")]
+    pub rdma: Option<crate::rdma::RdmaStats>,
     pub retained_regions: usize,
     pub retained_bytes: usize,
     pub active_source_operations: usize,
@@ -98,8 +111,16 @@ impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
         let epoch = SourceEpoch::generate()?;
+        #[cfg(feature = "rdma")]
+        let rdma = config
+            .rdma
+            .clone()
+            .map(crate::rdma::Runtime::new)
+            .transpose()?;
         let source = Arc::new(Source {
             epoch,
+            #[cfg(feature = "rdma")]
+            rdma,
             registry: MemoryRegistry::new(
                 epoch,
                 config.max_registered_regions,
@@ -153,6 +174,13 @@ impl TransferEngine {
             allocated_batches: allocated.0,
             allocated_requests: allocated.1,
             requester_workers: allocated.2,
+            #[cfg(feature = "rdma")]
+            rdma: self
+                .source
+                .rdma
+                .as_ref()
+                .map(|runtime| runtime.stats())
+                .transpose()?,
             retained_regions,
             retained_bytes,
             active_source_operations,
@@ -203,6 +231,22 @@ impl TransferEngine {
         }
         let _admission = self.source.admit()?;
         self.source.registry.register_host_batch(ranges, permission)
+    }
+
+    /// Registers retained CUDA device ranges, using the same transactional
+    /// registry and address lookup as host memory. Producers must hand off ready
+    /// bytes; this profile synchronizes copies and restores the calling context.
+    #[cfg(feature = "cuda")]
+    pub fn register_cuda_memory_batch(
+        &self,
+        ranges: &[(Arc<crate::cuda::CudaMemory>, usize, usize)],
+        permission: Permission,
+    ) -> Result<Vec<RegisteredMemory>> {
+        if ranges.len() > self.config.max_batch_requests {
+            return Err(Error::ResourceExhausted);
+        }
+        let _admission = self.source.admit()?;
+        self.source.registry.register_cuda_batch(ranges, permission)
     }
 
     /// Resolves an absolute local address to an owned registered range and offset.
@@ -285,6 +329,21 @@ impl TransferEngine {
             .try_reserve_exact(requests.len())
             .map_err(|_| Error::ResourceExhausted)?;
         for request in requests {
+            if request.transport == Transport::Rdma {
+                #[cfg(feature = "rdma")]
+                {
+                    let runtime = self
+                        .source
+                        .rdma
+                        .as_ref()
+                        .ok_or(Error::Unavailable("RDMA is not configured"))?;
+                    if runtime.stats()?.retained_endpoints != 0 {
+                        return Err(Error::Unavailable("RDMA retained native resources"));
+                    }
+                }
+                #[cfg(not(feature = "rdma"))]
+                return Err(Error::Unavailable("build with --features rdma"));
+            }
             if request.length > self.config.max_transfer_bytes {
                 return Err(Error::ResourceExhausted);
             }
@@ -301,6 +360,7 @@ impl TransferEngine {
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
             prepared.push(PreparedTransfer {
+                transport: request.transport,
                 local,
                 local_offset,
                 remote,
@@ -328,7 +388,12 @@ impl TransferEngine {
         timeout: Duration,
     ) -> Result<BatchReport> {
         let prepared = self.prepare(operation, peer, requests, notification, timeout)?;
-        Ok(self.execute(&prepared, None))
+        let report = self.execute(&prepared, None);
+        if !report.locally_drained {
+            // Preserve actual registrations and admission, not a pointer surrogate.
+            std::mem::forget((prepared, Arc::clone(&self.source)));
+        }
+        Ok(report)
     }
 
     pub(crate) fn execute(
@@ -349,6 +414,7 @@ impl TransferEngine {
             completed_requests: 0,
             transferred_bytes: 0,
             failure: None,
+            locally_drained: true,
             notification: if notification.is_some() {
                 NotificationStatus::Skipped
             } else {
@@ -366,8 +432,10 @@ impl TransferEngine {
                     break;
                 }
             }
-            if let Err((error, remote_effect)) = tcp::transfer(*operation, peer, request, *deadline)
+            if let Err((error, remote_effect)) =
+                tcp::transfer(*operation, peer, request, &self.source, *deadline)
             {
+                report.locally_drained = !matches!(error, Error::Unquiesced { .. });
                 report.failure = Some(TransferFailure {
                     request_index: index,
                     error,
@@ -572,6 +640,8 @@ pub(crate) struct Source {
     pub(crate) epoch: SourceEpoch,
     pub(crate) registry: MemoryRegistry,
     pub(crate) notifications: NotificationInbox,
+    #[cfg(feature = "rdma")]
+    pub(crate) rdma: Option<Arc<crate::rdma::Runtime>>,
     admission: Mutex<SourceAdmission>,
     drained: Condvar,
 }

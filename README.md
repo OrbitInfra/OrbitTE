@@ -24,9 +24,13 @@ Host registration batches preflight every range before publishing changes.
 Transfers accept absolute addresses and retain the resolved backing during I/O;
 local and remote lookup follows TENT's containing-buffer order.
 
-The first protocol is OrbitTE-only. TENT API/wire compatibility, RDMA, NVIDIA
-GPU paths and SSD transports remain open. This is an initial
-CPU substage, pending independent review and hardware/installed qualification.
+Opt-in `rdma` and `cuda` features add single-rail RC verbs with owned host
+staging, retained NVIDIA device/pinned allocations and synchronized CUDA copies.
+They share batch owners and conservatively retain unquiesced failures.
+See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
+The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
+coverage, GPUDirect, NVLink and SSD remain open. These source substages await
+independent acceptance and complete hardware/installed qualification.
 See the [CPU TCP contract and recipe](docs/cpu-tcp.md) for behavior and limits.
 
 ## Try the source

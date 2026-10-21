@@ -6,6 +6,8 @@ use crate::{Error, Result};
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    #[cfg(feature = "rdma")]
+    pub rdma: Option<crate::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
     pub max_registered_regions: usize,
     pub max_registered_bytes: usize,
@@ -28,6 +30,8 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "rdma")]
+            rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,
@@ -48,6 +52,10 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        #[cfg(feature = "rdma")]
+        if let Some(config) = &self.rdma {
+            config.validate()?;
+        }
         if self.max_registered_regions == 0 || self.max_registered_regions > 4096 {
             return Err(Error::InvalidConfig(
                 "registered regions must be in 1..=4096",

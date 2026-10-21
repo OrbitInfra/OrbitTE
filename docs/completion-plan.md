@@ -77,8 +77,8 @@ does not turn incomplete rows into completed features.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2/P1.3/P1.4 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Planned |
-| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Planned |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging implemented; full P4 open |
+| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
@@ -240,7 +240,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   leaves queued messages readable. Data results remain intact if notification
   delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
   malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. This uses OrbitTE wire v3; native C allocation/free, asynchronous
+  pass. The original substage used OrbitTE wire v3 (now v4); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [ ] Implement peer identity, memory descriptors and P2P open/refresh/update
   behavior, owned RPC dispatch and handler isolation/reconnect semantics.
@@ -282,6 +282,14 @@ one loopback route.
 
 Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
+- [x] **P4.1 — owned staging RC verbs (Implemented, not Accepted).** Explicit
+  single device/port/GID, bounded per-slice PD/CQ/QP/MR, real READ/WRITE WR/CQ,
+  fenced control bootstrap and commit/ACK, exact teardown ordering and retained
+  native resources on failure. Explicit request hints reject unavailable RDMA.
+  CPU ABI fault controls pass; physical profiles remain subject to the
+  [RDMA/CUDA gates](rdma-cuda.md). This does not register application/GPU memory
+  directly, cache endpoints, implement multirail or close full P4.
+
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -303,6 +311,15 @@ Fake verbs tests complement these gates and never replace them.
 ## P5 — CUDA, GPUDirect and staged transfers
 
 Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
+
+- [x] **P5.1 — NVIDIA allocation and synchronized staging (Implemented, not
+  Accepted).** Driver API device/pinned host owners; probed external device
+  ranges; shared transactional registration; private pinned copy staging,
+  context restore/synchronize, and retained unquiesced task/source/requester
+  owners with budgets. CUDA can feed TCP or the P4.1 host-MR path. CPU shim
+  gates cover copy/restore/sync/unpin and logical failure versus physical drain.
+  Hardware qualification is separate. GDR, IPC/NVLink/MNNVL, streams/events,
+  producer lifecycle integration and reclaim proofs remain open.
 
 - [ ] Implement CUDA location/pointer classification, allocation, exact context
   restoration and retained streams/events/export/import mappings. Unexpected
@@ -538,7 +555,7 @@ and independent acceptance remain separate states.
 Review P0.1/P1.3/P1.4 and rerun the [native CPU comparison](cpu-oracle.md#run-the-gates)
 alongside the [CPU gates](cpu-tcp.md#verification). Next close the concrete
 OrbitKV allocator/native adapter using its existing generation mailbox and
-source grants, and develop the first host RDMA/NVIDIA paths on P1.4's owners.
+source grants, and review P4.1/P5.1 staging on P1.4's owners.
 RDMA and CUDA source work may proceed before the physical test setup is ready;
 compile/shim checks leave those hardware profiles unqualified. Use the supplied
 execution-node instructions to verify live attempts, then run profile-specific
@@ -546,7 +563,7 @@ byte and physical-owner gates before making a backend claim. Keep source/build
 and raw run evidence outside both source checkouts.
 Audit vanilla TENT and OrbitKV-extended C layouts separately. Keep the larger
 33-symbol/native-schema oracle, wire interoperability, full F08 and other parity
-work visible in P0/P6/P9. Actual CUDA-pinned allocator, RDMA/CUDA and installed
+work visible in P0/P6/P9. Actual OrbitKV CUDA-pinned allocator adaptation, full RDMA/CUDA and installed
 consumer qualification remain required before adopting those profiles.
 
 Calendar estimates require measured progress on this first slice and confirmed

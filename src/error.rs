@@ -12,6 +12,16 @@ pub enum Error {
     RequesterClosed,
     InvalidTask,
     Cancelled,
+    /// Native work or teardown has no proven quiescence; owners stay charged.
+    Unquiesced {
+        operation: &'static str,
+        code: i32,
+    },
+    Unavailable(&'static str),
+    Backend {
+        operation: &'static str,
+        code: i32,
+    },
     InvalidRange,
     PermissionDenied,
     RegionNotFound,
@@ -38,6 +48,14 @@ impl fmt::Display for Error {
             Self::RequesterClosed => f.write_str("requester admission is closed"),
             Self::InvalidTask => f.write_str("task is outside the submitted batch"),
             Self::Cancelled => f.write_str("task cancelled before physical submission"),
+            Self::Unquiesced { operation, code } => write!(
+                f,
+                "{operation} has unproven quiescence (status {code}); resources retained"
+            ),
+            Self::Unavailable(backend) => write!(f, "backend unavailable: {backend}"),
+            Self::Backend { operation, code } => {
+                write!(f, "{operation} failed with backend status {code}")
+            }
             Self::InvalidRange => {
                 f.write_str("transfer range is empty, overflowing or outside its registration")
             }
