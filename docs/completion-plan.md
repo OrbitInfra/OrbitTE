@@ -276,7 +276,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   pass. The original substage used OrbitTE wire v3 (now v4); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
-  installed qualification open).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
+  scoped source/H20 pilot independently reviewed; installed qualification open).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
   at `5a50d092c651d28ff3f79f6de661c9da8120b2b3` pins OrbitTE `02d64e55`.
   An explicit `orbitte-tcp` provider shares Manager discovery, source admission,
   planning and gRPC generation completion. The standalone build excludes
@@ -294,7 +294,10 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   then real Manager services, etcd/inventory, multi-grant READ, GPU Save/Restore
   byte comparison, membership fencing and worker/service drain. The run verifies
   private libraries, no mapped TENT, owned child/supervisor/etcd reaping and GPU
-  lease release. The failed first cleanup-assertion attempt is retained with
+  lease release. An independent reviewer accepted the limited source/H20
+  evidence after rerunning the source/CPU gates and both frozen hardware tests;
+  the report is `independent-review.json` under the evidence root below.
+  The failed first cleanup-assertion attempt is retained with
   the passing corrected run in the external evidence root
   `/root/orbitte-artifacts/peer-read-20261021/`.
   This does not qualify an installed Manager/wheel, serving, CUDA 13 runtime,
@@ -617,8 +620,8 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Review the P2.3 consumer candidate and its retained source/H20 evidence before
-accepting dependent work. Next connect the host-RDMA consumer path to these same
+P2.3's source/H20 TCP pilot has independent review and rerun evidence; installed
+consumer qualification remains open. Next connect the host-RDMA consumer path to these same
 allocation, source-grant and completion owners, including real fault/drain gates;
 review P4.1/P5.1 staging on P1.4's owners before extending its hardware claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the

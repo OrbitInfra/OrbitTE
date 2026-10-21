@@ -35,8 +35,8 @@ its two H20 TCP ownership controls passed. The subsequent opt-in
 [OrbitKV TCP peer candidate](https://github.com/OrbitInfra/OrbitKV/pull/304)
 connects source grants, epochs and generation-scoped gRPC completion to actual
 Manager GPU Save/Restore. Two H20 source/grant and GPU byte gates passed with
-a private CUDA 12.2 runtime; installed Manager/serving qualification remains
-open. Track these consumer candidates as P1.5/P2.3 in the plan.
+a private CUDA 12.2 runtime and were independently rerun; installed
+Manager/serving qualification remains open. Track these consumer candidates as P1.5/P2.3 in the plan.
 The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
 coverage, GPUDirect, NVLink and SSD remain open. These source substages await
 independent acceptance and complete hardware/installed qualification.
