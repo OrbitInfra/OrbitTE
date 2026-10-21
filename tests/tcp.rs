@@ -6,11 +6,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::{
-    EngineConfig, Error, Permission, RemoteEffect, RemoteSegment, SourceEpoch, TransferEngine,
-    TransferOp, TransferRequest,
+    EngineConfig, Error, HostMemory, Permission, RemoteEffect, RemoteSegment, SourceEpoch,
+    TransferEngine, TransferOp, TransferRequest,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+mod common;
 
 fn request(
     local: &orbit_te::RegisteredMemory,
@@ -34,6 +36,24 @@ fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
         .iter()
         .find(|region| region.id() == id)
         .expect("exported registration")
+}
+
+fn request_addresses(
+    engine: &TransferEngine,
+    peer: &RemoteSegment,
+    local_address: u64,
+    remote_address: u64,
+    length: usize,
+) -> TransferRequest {
+    let (local, local_offset) = engine.resolve_local_address(local_address, length).unwrap();
+    let (remote, remote_offset) = peer.resolve_address(remote_address, length).unwrap();
+    TransferRequest {
+        local,
+        local_offset,
+        remote,
+        remote_offset,
+        length,
+    }
 }
 
 #[test]
@@ -231,14 +251,16 @@ fn peer_process_fixture() {
     let data = (0..65536)
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
+    let fixture = common::external_memory(&data);
     let memory = source
-        .register_memory(data.into_boxed_slice(), Permission::RemoteReadWrite)
+        .register_host_memory(fixture.memory, 0, data.len(), Permission::RemoteReadWrite)
         .unwrap();
     println!(
-        "ORBITTE_PEER {} {} {}",
+        "ORBITTE_PEER {} {} {} {}",
         source.endpoint(),
         source.source_epoch(),
-        memory.id()
+        memory.id(),
+        memory.base_address()
     );
     std::io::stdout().flush().unwrap();
     let mut command = [0];
@@ -252,6 +274,10 @@ fn peer_process_fixture() {
         );
     }
     source.close_source(TIMEOUT).unwrap();
+    source.unregister_memory(&memory).unwrap();
+    drop(memory);
+    assert!(fixture.owner.upgrade().is_none());
+    assert_eq!(fixture.drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 struct PeerProcess {
@@ -260,6 +286,7 @@ struct PeerProcess {
     endpoint: SocketAddr,
     epoch: SourceEpoch,
     region: u64,
+    address: u64,
 }
 
 impl PeerProcess {
@@ -297,12 +324,14 @@ impl PeerProcess {
             endpoint: bind,
             epoch: "00000000000000000000000000000000".parse().unwrap(),
             region: 0,
+            address: 0,
         };
         let line = wait_marker(&receiver);
         let mut fields = line.split_whitespace();
         peer.endpoint = fields.next().unwrap().parse().unwrap();
         peer.epoch = fields.next().unwrap().parse().unwrap();
         peer.region = fields.next().unwrap().parse().unwrap();
+        peer.address = fields.next().unwrap().parse().unwrap();
         peer
     }
 
@@ -345,16 +374,30 @@ fn wait_marker(receiver: &Receiver<String>) -> String {
 fn two_process_restart_fences_old_authority() {
     let mut process = PeerProcess::start("127.0.0.1:0".parse().unwrap());
     let requester = TransferEngine::new(EngineConfig::default()).unwrap();
+    let destination = common::external_memory(&[0; 1024]);
     let local = requester
-        .register_memory(vec![0; 1024].into_boxed_slice(), Permission::LocalOnly)
+        .register_host_memory(destination.memory, 0, 1024, Permission::LocalOnly)
         .unwrap();
     let peer = requester
         .open_segment(process.endpoint, process.epoch, TIMEOUT)
         .unwrap();
     let remote = region(&peer, process.region);
+    assert_eq!(remote.base_address(), process.address);
     let requests = [
-        request(&local, remote, 0, 8192, 512),
-        request(&local, remote, 512, 16384, 512),
+        request_addresses(
+            &requester,
+            &peer,
+            local.base_address(),
+            process.address + 8192,
+            512,
+        ),
+        request_addresses(
+            &requester,
+            &peer,
+            local.base_address() + 512,
+            process.address + 16384,
+            512,
+        ),
     ];
     let report = requester
         .submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
@@ -380,7 +423,13 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_wait(
                 TransferOp::Write,
                 &peer,
-                &[request(&local, remote, 0, 128, 256)],
+                &[request_addresses(
+                    &requester,
+                    &peer,
+                    local.base_address(),
+                    process.address + 128,
+                    256
+                )],
                 TIMEOUT
             )
             .unwrap()
@@ -408,11 +457,11 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_wait(
                 TransferOp::Read,
                 &refreshed,
-                &[request(
-                    &local,
-                    region(&refreshed, replacement.region),
-                    0,
-                    0,
+                &[request_addresses(
+                    &requester,
+                    &refreshed,
+                    local.base_address(),
+                    replacement.address,
                     256
                 )],
                 TIMEOUT

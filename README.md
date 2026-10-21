@@ -9,11 +9,15 @@ ownership with those consumers.
 
 ## Status
 
-**Early development.** The source tree implements owned CPU memory registration,
+**Early development.** The source tree implements owned/external CPU memory registration,
 epoch-fenced P2P descriptors, bounded synchronous TCP READ/WRITE batches and
 source close/drain. Real loopback and independent-process tests cover bytes,
 restart fencing and failure ownership. The published `0.1.0-alpha.1` is still
 the original identity-only package; this implementation has not been released.
+
+External host backing retains its actual allocation owner. Duplicate ranges
+share registration references; overlapping views share one allocation lock.
+Local and remote absolute-address lookup follows TENT's containing-buffer order.
 
 The first protocol is OrbitTE-only. TENT API/wire compatibility, RDMA, NVIDIA
 GPU paths, notifications and SSD transports remain open. This is an initial
@@ -26,12 +30,15 @@ On Linux with Rust 1.85+ and permission to bind loopback sockets:
 
 ```sh
 cargo run --locked --example tcp_roundtrip
+cargo run --locked --example external_host
 cargo test --locked
 ```
 
 The example prints `18 bytes: hello from OrbitTE`. The test suite includes a
 source in a separate OS process, verifies READ/WRITE bytes, restarts it on the
 same address and rejects requests carrying its old source epoch.
+The external-host example registers a pre-existing allocation without copying
+it and uses absolute addresses to build the transfer. It does not pin pages.
 
 ## Implementation plan
 

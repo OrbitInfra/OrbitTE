@@ -13,11 +13,11 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
-const REGION_SIZE: usize = 24;
+const REGION_SIZE: usize = 32;
 const IO_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -200,16 +200,23 @@ pub(crate) fn open_segment(
     let mut previous = 0;
     for entry in bytes[4..].chunks_exact(REGION_SIZE) {
         let id = u64_at(entry, 0);
-        let length = usize::try_from(u64_at(entry, 8))
+        let address = u64_at(entry, 8);
+        let length = usize::try_from(u64_at(entry, 16))
             .map_err(|_| Error::Protocol("region length overflows host"))?;
-        if id <= previous || length == 0 || entry[17..].iter().any(|b| *b != 0) {
+        if id <= previous
+            || address == 0
+            || length == 0
+            || address.checked_add(length as u64).is_none()
+            || entry[25..].iter().any(|b| *b != 0)
+        {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
         }
         regions.push(RemoteRegion {
             epoch,
             id,
+            address,
             length,
-            permission: Permission::decode(entry[16])?,
+            permission: Permission::decode(entry[24])?,
         });
         previous = id;
     }
@@ -470,8 +477,9 @@ fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result
                 .zip(payload[4..].chunks_exact_mut(REGION_SIZE))
             {
                 entry[..8].copy_from_slice(&region.id.to_be_bytes());
-                entry[8..16].copy_from_slice(&(region.length as u64).to_be_bytes());
-                entry[16] = region.permission as u8;
+                entry[8..16].copy_from_slice(&region.address.to_be_bytes());
+                entry[16..24].copy_from_slice(&(region.length as u64).to_be_bytes());
+                entry[24] = region.permission as u8;
             }
             channel.reply(source, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;

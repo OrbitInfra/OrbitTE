@@ -10,6 +10,7 @@ pub enum Error {
     PermissionDenied,
     RegionNotFound,
     ForeignRegistration,
+    RegistrationConflict,
     SourceClosed,
     EpochMismatch,
     ResourceExhausted,
@@ -32,6 +33,9 @@ impl fmt::Display for Error {
             Self::RegionNotFound => f.write_str("registration is no longer exported"),
             Self::ForeignRegistration => {
                 f.write_str("registration belongs to another engine or segment")
+            }
+            Self::RegistrationConflict => {
+                f.write_str("overlapping registrations must share the same HostMemory owner")
             }
             Self::SourceClosed => f.write_str("source admission is closed"),
             Self::EpochMismatch => {

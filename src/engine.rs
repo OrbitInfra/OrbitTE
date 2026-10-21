@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use crate::memory::{MemoryRegistry, checked_range};
 use crate::tcp::{self, TcpTransport};
 use crate::{
-    EngineConfig, Error, Permission, RegisteredMemory, RemoteRegion, RemoteSegment, Result,
-    SourceEpoch,
+    EngineConfig, Error, HostMemory, Permission, RegisteredMemory, RemoteRegion, RemoteSegment,
+    Result, SourceEpoch,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,7 +138,34 @@ impl TransferEngine {
         self.source.registry.register(bytes, permission)
     }
 
-    /// Removes visibility for new remote requests. Already admitted requests and
+    /// Registers an existing host allocation range. Exact duplicate ranges share
+    /// a registration reference and retain the first permission, as in TENT.
+    /// Overlapping ranges must share the same HostMemory access lock.
+    pub fn register_host_memory(
+        &self,
+        allocation: Arc<HostMemory>,
+        offset: usize,
+        length: usize,
+        permission: Permission,
+    ) -> Result<RegisteredMemory> {
+        let _admission = self.source.admit()?;
+        self.source
+            .registry
+            .register_host(allocation, offset, length, permission)
+    }
+
+    /// Resolves an absolute local address to an owned registered range and offset.
+    /// Matches TENT's address order, preferring the longer range at equal bases.
+    pub fn resolve_local_address(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> Result<(RegisteredMemory, usize)> {
+        self.source.registry.resolve_address(address, length)
+    }
+
+    /// Removes one explicit registration reference; the final reference removes
+    /// visibility for new remote requests. Already admitted requests and
     /// local handles keep the allocation and its budget charge until last use.
     /// Call `close_source` to establish source-handler quiescence first.
     pub fn unregister_memory(&self, memory: &RegisteredMemory) -> Result<()> {
