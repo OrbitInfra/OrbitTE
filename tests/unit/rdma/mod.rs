@@ -159,13 +159,8 @@ fn runtime(mode: &str) -> Runtime {
 }
 
 #[test]
-fn descriptor_abi_and_untrusted_fields_are_checked_before_native_use() {
+fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
     assert_eq!(std::mem::size_of::<Descriptor>(), 40);
-    assert_eq!(
-        std::mem::size_of::<sys::Handles>(),
-        5 * std::mem::size_of::<usize>()
-    );
-    assert_eq!(std::mem::size_of::<sys::Completion>(), 24);
     let descriptor = Descriptor {
         address: 0x1020304050607080,
         rkey: 0,

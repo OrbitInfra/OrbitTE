@@ -8,12 +8,31 @@ it does not establish full B04/B01 or native TENT compatibility.
 ## Build and select a path
 
 The default crate still needs no CUDA/RDMA SDK or native dependency.
-`--features rdma` builds a small C bridge to system libibverbs (including its
-inline ABI); install Linux libibverbs development headers, a C compiler and `ar`.
-Engine, protocol, progress, admission and owners are Rust. Cross-compiling this
-bridge is currently rejected. `--features cuda` loads `libcuda.so.1` and versioned
-Driver API symbols at runtime; it does not link libcudart or require nvcc.
+`--features rdma` uses [`rdma-mummy-sys 0.2.6`](https://docs.rs/rdma-mummy-sys/0.2.6/rdma_mummy_sys/),
+the low-level Rust bindings also used by Sideway. Building them needs a C
+compiler, CMake and libclang. Their bundled C helpers load the system
+`libibverbs.so.1`; OrbitTE no longer carries its own C bridge or build script.
+Install the runtime library and the actual RNIC provider on each RDMA host.
+Engine, protocol, RC setup, progress, admission and backing owners remain Rust.
+Only the Linux native-build profile is tested; cross compilation remains
+unqualified.
+
+`--features cuda` uses [`cudarc 0.19.0`](https://docs.rs/cudarc/0.19.0/cudarc/driver/sys/)
+for generated Driver API types and ABI signatures, and `libloading 0.8` for
+fallible loading of the 16 required versioned entry points from `libcuda.so.1`.
+The signatures are inferred from cudarc's generated fields. Its eager loader
+is deliberately not called: a missing unrelated CUDA symbol must not panic an
+engine that only needs allocation and copy. The library is retained through
+all native owners and failed cleanup. The dependency is pinned to preserve
+Rust 1.85; newer cudarc releases using libloading 0.9 need Rust 1.88. The
+`cuda-12000` binding selection is a compile-time API baseline, not a requirement
+to install a CUDA toolkit. No libcudart, nvcc, cuBLAS or NVRTC is needed.
 Unsupported platforms/drivers remain unavailable rather than selecting CPU access.
+
+OrbitTE owns fallible QP/MR/context destruction and DMA quiescence explicitly.
+The higher-level wrappers' automatic `Drop` behavior does not supply our
+failure-retention contract. Reusing bindings does not establish GPUDirect,
+NVLink, device MR support or a new completed parity row.
 
 Set `EngineConfig.rdma = Some(RdmaConfig::new("mlx5_0"))` and explicitly choose
 the port/GID index, traffic class, hop limit and endpoint/staging budgets. An

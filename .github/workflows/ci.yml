@@ -24,9 +24,9 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
-      - name: Install system verbs ABI
+      - name: Install RDMA binding prerequisites
         if: contains(matrix.features, 'rdma')
-        run: sudo apt-get update && sudo apt-get install -y libibverbs-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libibverbs1
       - name: Format
         run: cargo fmt --check
       - name: Check
