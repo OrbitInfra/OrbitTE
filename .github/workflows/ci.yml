@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Format
+        run: cargo fmt --check
+      - name: Check
+        run: cargo check --locked
+      - name: Package
+        run: cargo publish --dry-run --locked
