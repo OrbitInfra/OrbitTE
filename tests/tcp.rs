@@ -23,10 +23,8 @@ fn request(
     length: usize,
 ) -> TransferRequest {
     TransferRequest {
-        local: local.clone(),
-        local_offset,
-        remote,
-        remote_offset,
+        local_address: local.base_address() + local_offset as u64,
+        remote_address: remote.base_address() + remote_offset as u64,
         length,
     }
 }
@@ -39,31 +37,19 @@ fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
         .expect("exported registration")
 }
 
-fn request_addresses(
-    engine: &TransferEngine,
-    peer: &RemoteSegment,
-    local_address: u64,
-    remote_address: u64,
-    length: usize,
-) -> TransferRequest {
-    let (local, local_offset) = engine.resolve_local_address(local_address, length).unwrap();
-    let (remote, remote_offset) = peer.resolve_address(remote_address, length).unwrap();
-    TransferRequest {
-        local,
-        local_offset,
-        remote,
-        remote_offset,
-        length,
-    }
-}
-
 #[test]
 fn batched_read_write_range_guards_and_retired_descriptors() {
     let source = TransferEngine::new(EngineConfig::default()).unwrap();
     let data: Vec<_> = (0..128).map(|index| index as u8).collect();
-    let export = source
-        .register_memory(data.clone().into_boxed_slice(), Permission::RemoteReadWrite)
+    let backing = common::external_memory(&data);
+    let extra = common::external_memory(&[0x42; 8]);
+    let exports = source
+        .register_host_memory_batch(
+            &[(backing.memory, 0, 128), (extra.memory, 0, 8)],
+            Permission::RemoteReadWrite,
+        )
         .unwrap();
+    let export = &exports[0];
     let requester = TransferEngine::new(EngineConfig::default()).unwrap();
     let destination = requester
         .register_memory(vec![0xee; 128].into_boxed_slice(), Permission::LocalOnly)
@@ -75,6 +61,7 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
     let requests = [
         request(&destination, remote, 8, 16, 32),
         request(&destination, remote, 64, 0, 48),
+        request(&destination, region(&peer, exports[1].id()), 120, 0, 8),
     ];
     let report = requester
         .submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
@@ -82,13 +69,14 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
     assert!(report.is_complete());
     assert_eq!(
         (report.completed_requests, report.transferred_bytes),
-        (2, 80)
+        (3, 88)
     );
     let mut bytes = [0; 128];
     destination.read(0, &mut bytes).unwrap();
     let mut expected = [0xee; 128];
     expected[8..40].copy_from_slice(&data[16..48]);
     expected[64..112].copy_from_slice(&data[..48]);
+    expected[120..].fill(0x42);
     assert_eq!(bytes, expected);
 
     destination.write(0, &[0xa7; 16]).unwrap();
@@ -108,7 +96,8 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
     assert_eq!(&bytes[..48], &data[..48]);
     assert_eq!(&bytes[64..], &data[64..]);
 
-    source.unregister_memory(&export).unwrap();
+    source.unregister_memory(export).unwrap();
+    source.unregister_memory(&exports[1]).unwrap();
     let report = requester
         .submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
         .unwrap();
@@ -148,12 +137,45 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
         .unwrap();
     let valid = request(&local, region(&peer, export.id()), 0, 0, 8);
-    let mut invalid = valid.clone();
-    invalid.remote_offset = usize::MAX;
-    assert!(matches!(
-        requester.submit_and_wait(TransferOp::Write, &peer, &[valid.clone(), invalid], TIMEOUT),
-        Err(Error::InvalidRange)
-    ));
+    for (label, local_address, remote_address, length, overflowing) in [
+        ("local overflow", u64::MAX, valid.remote_address, 8, true),
+        ("remote overflow", valid.local_address, u64::MAX, 8, true),
+        ("empty", valid.local_address, valid.remote_address, 0, true),
+        ("unregistered local", 0, valid.remote_address, 8, false),
+        ("unregistered remote", valid.local_address, 0, 8, false),
+        (
+            "local crosses boundary",
+            valid.local_address + 1,
+            valid.remote_address,
+            8,
+            false,
+        ),
+        (
+            "remote crosses boundary",
+            valid.local_address,
+            valid.remote_address + 1,
+            8,
+            false,
+        ),
+    ] {
+        let invalid = TransferRequest {
+            local_address,
+            remote_address,
+            length,
+        };
+        let error = requester
+            .submit_and_wait(TransferOp::Write, &peer, &[valid.clone(), invalid], TIMEOUT)
+            .unwrap_err();
+        assert!(
+            if overflowing {
+                matches!(error, Error::InvalidRange)
+            } else {
+                matches!(error, Error::RegionNotFound)
+            },
+            "{label}: {error}"
+        );
+        assert_eq!(requester.stats().unwrap().inflight_batches, 0, "{label}");
+    }
     assert!(matches!(
         requester.submit_and_wait(
             TransferOp::Write,
@@ -414,20 +436,16 @@ fn two_process_restart_fences_old_authority() {
     let remote = region(&peer, process.region);
     assert_eq!(remote.base_address(), process.address);
     let requests = [
-        request_addresses(
-            &requester,
-            &peer,
-            local.base_address(),
-            process.address + 8192,
-            512,
-        ),
-        request_addresses(
-            &requester,
-            &peer,
-            local.base_address() + 512,
-            process.address + 16384,
-            512,
-        ),
+        TransferRequest {
+            local_address: local.base_address(),
+            remote_address: process.address + 8192,
+            length: 512,
+        },
+        TransferRequest {
+            local_address: local.base_address() + 512,
+            remote_address: process.address + 16384,
+            length: 512,
+        },
     ];
     let report = requester
         .submit_and_notify(
@@ -463,13 +481,11 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_notify(
                 TransferOp::Write,
                 &peer,
-                &[request_addresses(
-                    &requester,
-                    &peer,
-                    local.base_address(),
-                    process.address + 128,
-                    256
-                )],
+                &[TransferRequest {
+                    local_address: local.base_address(),
+                    remote_address: process.address + 128,
+                    length: 256
+                }],
                 &Notification {
                     name: "write".into(),
                     message: "256".into()
@@ -523,13 +539,11 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_wait(
                 TransferOp::Read,
                 &refreshed,
-                &[request_addresses(
-                    &requester,
-                    &refreshed,
-                    local.base_address(),
-                    replacement.address,
-                    256
-                )],
+                &[TransferRequest {
+                    local_address: local.base_address(),
+                    remote_address: replacement.address,
+                    length: 256
+                }],
                 TIMEOUT
             )
             .unwrap()

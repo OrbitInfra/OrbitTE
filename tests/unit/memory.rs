@@ -252,3 +252,139 @@ fn shared_host_allocation_serializes_aliases_across_engines() {
     }
     writer.join().unwrap();
 }
+
+#[test]
+fn batch_registration_preserves_order_references_and_shared_allocator_ownership() {
+    let fixture = common::external_memory(&[3; 16]);
+    let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 3, 28);
+    let existing = registry
+        .register_host(Arc::clone(&fixture.memory), 0, 4, Permission::RemoteRead)
+        .unwrap();
+    let ranges = vec![
+        (Arc::clone(&fixture.memory), 0, 4),
+        (Arc::clone(&fixture.memory), 4, 8),
+        (Arc::clone(&fixture.memory), 4, 8),
+        (Arc::clone(&fixture.memory), 0, 16),
+    ];
+    let batch = registry
+        .register_host_batch(&ranges, Permission::RemoteReadWrite)
+        .unwrap();
+    assert_eq!(batch.len(), 4);
+    assert_eq!(batch[0].id(), existing.id());
+    assert_eq!(batch[0].permission(), Permission::RemoteRead);
+    assert_eq!(batch[1].id(), batch[2].id());
+    assert_eq!(batch[3].base_address(), fixture.memory.base_address());
+    assert_eq!(registry.usage().unwrap(), (3, 28));
+    batch[1].write(0, &[7; 8]).unwrap();
+    let mut bytes = [0; 16];
+    batch[3].read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [3, 3, 3, 3, 7, 7, 7, 7, 7, 7, 7, 7, 3, 3, 3, 3]);
+    registry.unregister(&existing).unwrap();
+    registry.unregister(&batch[1]).unwrap();
+    assert!(registry.get(batch[1].id()).is_ok());
+    for index in [0, 2, 3] {
+        registry.unregister(&batch[index]).unwrap();
+    }
+    assert!(registry.descriptors().unwrap().is_empty());
+    drop(existing);
+    drop(ranges);
+    drop(fixture.memory);
+    assert!(fixture.owner.upgrade().is_some());
+    assert_eq!(registry.usage().unwrap(), (3, 28));
+    drop(batch);
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(registry.usage().unwrap(), (0, 0));
+}
+
+#[test]
+fn batch_registration_failures_leave_no_new_ranges_or_duplicate_references() {
+    for case in ["range", "bytes", "regions", "id", "references"] {
+        let registry = MemoryRegistry::new(
+            SourceEpoch([1; 16]),
+            if case == "regions" { 1 } else { 4 },
+            if case == "bytes" { 7 } else { 64 },
+        );
+        let allocation = Arc::new(HostMemory::new(vec![0; 16].into_boxed_slice()).unwrap());
+        let existing = registry
+            .register_host(Arc::clone(&allocation), 0, 4, Permission::RemoteRead)
+            .unwrap();
+        {
+            let mut entries = registry.entries.lock().unwrap();
+            if case == "id" {
+                entries.next_id = u64::MAX;
+            }
+            if case == "references" {
+                entries.regions.get_mut(&existing.id()).unwrap().references = usize::MAX;
+            }
+        }
+        let next_id = registry.entries.lock().unwrap().next_id;
+        let references = registry.entries.lock().unwrap().regions[&existing.id()].references;
+        let ranges = [
+            (Arc::clone(&allocation), 0, 4),
+            (Arc::clone(&allocation), 4, 4),
+            (
+                Arc::clone(&allocation),
+                if case == "range" { 15 } else { 8 },
+                4,
+            ),
+        ];
+        let error = registry
+            .register_host_batch(&ranges, Permission::RemoteReadWrite)
+            .unwrap_err();
+        assert!(
+            if case == "range" {
+                matches!(error, Error::InvalidRange)
+            } else {
+                matches!(error, Error::ResourceExhausted)
+            },
+            "{case}: {error}"
+        );
+        assert_eq!(registry.usage().unwrap(), (1, 4), "{case}");
+        assert_eq!(registry.descriptors().unwrap().len(), 1, "{case}");
+        let mut entries = registry.entries.lock().unwrap();
+        assert_eq!(entries.next_id, next_id, "{case}");
+        assert_eq!(
+            entries.regions[&existing.id()].references,
+            references,
+            "{case}"
+        );
+        entries.regions.get_mut(&existing.id()).unwrap().references = 1;
+        drop(entries);
+        registry.unregister(&existing).unwrap();
+        assert!(registry.descriptors().unwrap().is_empty(), "{case}");
+    }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn batch_rejects_foreign_alias_locks_before_publication_or_reference_changes() {
+    for retired in [false, true] {
+        let fixture = common::external_memory(&[0; 16]);
+        let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 4, 64);
+        let address = NonNull::new(fixture.memory.base_address() as usize as *mut u8).unwrap();
+        // SAFETY: this negative-control wrapper retains the real owner and is
+        // never dereferenced. Its registration must fail before publication.
+        let conflicting = Arc::new(
+            unsafe { HostMemory::from_raw_parts(address, 16, fixture.owner.upgrade().unwrap()) }
+                .unwrap(),
+        );
+        let existing = if retired {
+            let memory = registry
+                .register_host(Arc::clone(&fixture.memory), 0, 8, Permission::RemoteRead)
+                .unwrap();
+            registry.unregister(&memory).unwrap();
+            Some(memory)
+        } else {
+            None
+        };
+        let before = registry.usage().unwrap();
+        let ranges = [(Arc::clone(&fixture.memory), 0, 8), (conflicting, 4, 8)];
+        assert!(matches!(
+            registry.register_host_batch(&ranges, Permission::RemoteRead),
+            Err(Error::RegistrationConflict)
+        ));
+        assert!(registry.descriptors().unwrap().is_empty());
+        assert_eq!(registry.usage().unwrap(), before);
+        drop(existing);
+    }
+}

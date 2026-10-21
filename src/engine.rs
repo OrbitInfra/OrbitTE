@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::memory::{MemoryRegistry, checked_range};
+use crate::memory::MemoryRegistry;
 use crate::notification::NotificationInbox;
 use crate::tcp::{self, TcpTransport};
 use crate::{
@@ -16,14 +16,21 @@ pub enum TransferOp {
     Write,
 }
 
-/// One CPU transfer. The owned local handle survives concurrent unregister.
+/// Absolute host addresses within active local and epoch-fenced peer ranges.
+/// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 pub struct TransferRequest {
-    pub local: RegisteredMemory,
-    pub local_offset: usize,
-    pub remote: RemoteRegion,
-    pub remote_offset: usize,
+    pub local_address: u64,
+    pub remote_address: u64,
     pub length: usize,
+}
+
+pub(crate) struct PreparedTransfer {
+    pub(crate) local: RegisteredMemory,
+    pub(crate) local_offset: usize,
+    pub(crate) remote: RemoteRegion,
+    pub(crate) remote_offset: usize,
+    pub(crate) length: usize,
 }
 
 /// Whether the failed request may have modified remote memory.
@@ -171,6 +178,22 @@ impl TransferEngine {
             .register_host(allocation, offset, length, permission)
     }
 
+    /// Registers `(allocation, offset, length)` ranges in input order. Admission
+    /// is atomic: failure publishes no ranges or duplicate references. Each
+    /// element adds one explicit reference; exact duplicates keep the first
+    /// permission and share one retained-range charge.
+    pub fn register_host_memory_batch(
+        &self,
+        ranges: &[(Arc<HostMemory>, usize, usize)],
+        permission: Permission,
+    ) -> Result<Vec<RegisteredMemory>> {
+        if ranges.len() > self.config.max_batch_requests {
+            return Err(Error::ResourceExhausted);
+        }
+        let _admission = self.source.admit()?;
+        self.source.registry.register_host_batch(ranges, permission)
+    }
+
     /// Resolves an absolute local address to an owned registered range and offset.
     /// Matches TENT's address order, preferring the longer range at equal bases.
     pub fn resolve_local_address(
@@ -246,34 +269,33 @@ impl TransferEngine {
             Some(notification) => self.validate_notification(notification)?,
             None => 0,
         };
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(requests.len())
+            .map_err(|_| Error::ResourceExhausted)?;
         for request in requests {
-            self.source.registry.check_owner(&request.local)?;
-            self.source.registry.get(request.local.id())?;
-            if request.remote.epoch != peer.source_epoch() {
-                return Err(Error::ForeignRegistration);
-            }
-            if !peer
-                .regions()
-                .iter()
-                .any(|region| region.id == request.remote.id)
-            {
-                return Err(Error::RegionNotFound);
-            }
-            checked_range(request.local_offset, request.length, request.local.len())?;
-            checked_range(request.remote_offset, request.length, request.remote.len())?;
-            if !request
-                .remote
-                .permission
-                .allows(operation == TransferOp::Write)
-            {
-                return Err(Error::PermissionDenied);
-            }
             if request.length > self.config.max_transfer_bytes {
                 return Err(Error::ResourceExhausted);
+            }
+            let (local, local_offset) = self
+                .source
+                .registry
+                .resolve_address(request.local_address, request.length)?;
+            let (remote, remote_offset) =
+                peer.resolve_address(request.remote_address, request.length)?;
+            if !remote.permission.allows(operation == TransferOp::Write) {
+                return Err(Error::PermissionDenied);
             }
             total_bytes = total_bytes
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
+            prepared.push(PreparedTransfer {
+                local,
+                local_offset,
+                remote,
+                remote_offset,
+                length: request.length,
+            });
         }
         let _admission = self.admit_batch(total_bytes)?;
         let mut report = BatchReport {
@@ -286,7 +308,7 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
-        for (index, request) in requests.iter().enumerate() {
+        for (index, request) in prepared.iter().enumerate() {
             if let Err((error, remote_effect)) = tcp::transfer(operation, peer, request, deadline) {
                 report.failure = Some(TransferFailure {
                     request_index: index,

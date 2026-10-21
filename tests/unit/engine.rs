@@ -13,9 +13,42 @@ fn source_close_is_permanent_and_timeout_is_not_a_drain_receipt() {
         engine.register_memory(vec![0; 8].into_boxed_slice(), Permission::RemoteRead),
         Err(Error::SourceClosed)
     ));
+    assert!(matches!(
+        engine.register_host_memory_batch(&[], Permission::RemoteRead),
+        Err(Error::SourceClosed)
+    ));
     drop(permit);
     engine.close_source(Duration::ZERO).unwrap();
     engine.close_source(Duration::from_secs(1)).unwrap();
+}
+
+#[test]
+fn registration_batch_descriptor_limit_precedes_reference_changes() {
+    let engine = TransferEngine::new(EngineConfig {
+        max_batch_requests: 2,
+        ..EngineConfig::default()
+    })
+    .unwrap();
+    assert!(
+        engine
+            .register_host_memory_batch(&[], Permission::RemoteRead)
+            .unwrap()
+            .is_empty()
+    );
+    let allocation = Arc::new(HostMemory::new(vec![0; 8].into_boxed_slice()).unwrap());
+    let original = engine
+        .register_host_memory(Arc::clone(&allocation), 0, 8, Permission::RemoteRead)
+        .unwrap();
+    let ranges = vec![(allocation, 0, 8); 3];
+    assert!(matches!(
+        engine.register_host_memory_batch(&ranges, Permission::RemoteReadWrite),
+        Err(Error::ResourceExhausted)
+    ));
+    engine.unregister_memory(&original).unwrap();
+    assert!(matches!(
+        engine.resolve_local_address(original.base_address(), 8),
+        Err(Error::RegionNotFound)
+    ));
 }
 
 #[test]

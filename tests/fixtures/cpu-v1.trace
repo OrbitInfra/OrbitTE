@@ -3,7 +3,7 @@ ORBITTE_CPU_TRACE 1
 BUFFER source 64 pattern
 BUFFER local 64 238
 REGISTER source rw
-REGISTER source r
+REGISTER_BATCH source r 2
 REGISTER local local
 DESCRIBE initial
 READ read-batch 8:16:16,40:0:8 ~ -
@@ -28,6 +28,7 @@ UNREGISTER source
 DESCRIBE still-exported
 WRITE duplicate-first-permission 0:56:8 ~ -
 BYTES final-source source 0 64
+UNREGISTER source
 UNREGISTER source
 DESCRIBE retired
 UNREGISTER local

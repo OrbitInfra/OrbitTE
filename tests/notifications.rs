@@ -105,10 +105,8 @@ fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
             .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
             .unwrap();
         let request = TransferRequest {
-            local: local.clone(),
-            local_offset: 0,
-            remote: peer.regions()[0],
-            remote_offset: 0,
+            local_address: local.base_address(),
+            remote_address: peer.regions()[0].base_address(),
             length: 8,
         };
         let done = notification("scope-1", "complete");

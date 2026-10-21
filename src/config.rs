@@ -9,6 +9,7 @@ pub struct EngineConfig {
     pub bind_addr: SocketAddr,
     pub max_registered_regions: usize,
     pub max_registered_bytes: usize,
+    /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,

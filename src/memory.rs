@@ -271,6 +271,14 @@ struct RetainedRange {
     end: u64,
 }
 
+struct RegistrationPlan {
+    input: usize,
+    address: u64,
+    end: u64,
+    id: u64,
+    references: usize,
+}
+
 struct RegistryEntry {
     memory: RegisteredMemory,
     references: usize,
@@ -307,14 +315,32 @@ impl MemoryRegistry {
         length: usize,
         permission: Permission,
     ) -> Result<RegisteredMemory> {
-        checked_range(offset, length, allocation.len())?;
-        let address = allocation
-            .base_address()
-            .checked_add(offset as u64)
-            .ok_or(Error::InvalidRange)?;
-        let end = address
-            .checked_add(length as u64)
-            .ok_or(Error::InvalidRange)?;
+        self.register_host_batch(&[(allocation, offset, length)], permission)?
+            .pop()
+            .ok_or(Error::Internal("single registration returned no handle"))
+    }
+
+    pub(crate) fn register_host_batch(
+        &self,
+        ranges: &[(Arc<HostMemory>, usize, usize)],
+        permission: Permission,
+    ) -> Result<Vec<RegisteredMemory>> {
+        let mut plans: Vec<RegistrationPlan> = Vec::new();
+        let mut selections = Vec::new();
+        let mut registered: Vec<RegisteredMemory> = Vec::new();
+        let mut result = Vec::new();
+        plans
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        selections
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        registered
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        result
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
         let mut entries = self
             .entries
             .lock()
@@ -322,71 +348,132 @@ impl MemoryRegistry {
         entries
             .retained
             .retain(|entry| entry.registration.strong_count() != 0);
-        let allocation_ref = Arc::downgrade(&allocation);
-        for previous in &entries.retained {
-            if address < previous.end
-                && previous.address < end
-                && !Weak::ptr_eq(&previous.allocation, &allocation_ref)
-            {
+        let mut next_id = entries.next_id;
+        let mut added_regions = 0usize;
+        let mut added_bytes = 0usize;
+        for (input, (allocation, offset, length)) in ranges.iter().enumerate() {
+            checked_range(*offset, *length, allocation.len())?;
+            let address = allocation
+                .base_address()
+                .checked_add(*offset as u64)
+                .ok_or(Error::InvalidRange)?;
+            let end = address
+                .checked_add(*length as u64)
+                .ok_or(Error::InvalidRange)?;
+            let allocation_ref = Arc::downgrade(allocation);
+            if entries.retained.iter().any(|previous| {
+                address < previous.end
+                    && previous.address < end
+                    && !Weak::ptr_eq(&previous.allocation, &allocation_ref)
+            }) || plans.iter().any(|previous| {
+                address < previous.end
+                    && previous.address < end
+                    && !Arc::ptr_eq(&ranges[previous.input].0, allocation)
+            }) {
                 return Err(Error::RegistrationConflict);
             }
+            if let Some(index) = plans
+                .iter()
+                .position(|plan| plan.address == address && plan.end == end)
+            {
+                plans[index].references = plans[index]
+                    .references
+                    .checked_add(1)
+                    .ok_or(Error::ResourceExhausted)?;
+                selections.push(index);
+                continue;
+            }
+            let existing = entries.regions.values().find(|entry| {
+                entry.memory.base_address() == address && entry.memory.len() == *length
+            });
+            let (id, references) = if let Some(entry) = existing {
+                (
+                    entry.memory.id(),
+                    entry
+                        .references
+                        .checked_add(1)
+                        .ok_or(Error::ResourceExhausted)?,
+                )
+            } else {
+                let id = next_id;
+                next_id = next_id.checked_add(1).ok_or(Error::ResourceExhausted)?;
+                added_regions += 1;
+                added_bytes = added_bytes
+                    .checked_add(*length)
+                    .ok_or(Error::ResourceExhausted)?;
+                (id, 1)
+            };
+            selections.push(plans.len());
+            plans.push(RegistrationPlan {
+                input,
+                address,
+                end,
+                id,
+                references,
+            });
         }
-        if let Some(entry) = entries
-            .regions
-            .values_mut()
-            .find(|entry| entry.memory.base_address() == address && entry.memory.len() == length)
-        {
-            entry.references = entry
-                .references
-                .checked_add(1)
-                .ok_or(Error::ResourceExhausted)?;
-            // TENT keeps the first descriptor/permission for exact duplicates.
-            return Ok(entry.memory.clone());
-        }
-        let next_id = entries
-            .next_id
-            .checked_add(1)
-            .ok_or(Error::ResourceExhausted)?;
         let mut usage = self
             .budget
             .lock()
             .map_err(|_| Error::Internal("memory budget lock poisoned"))?;
+        let new_regions = usage
+            .regions
+            .checked_add(added_regions)
+            .ok_or(Error::ResourceExhausted)?;
         let new_bytes = usage
             .bytes
-            .checked_add(length)
+            .checked_add(added_bytes)
             .ok_or(Error::ResourceExhausted)?;
-        if usage.regions >= self.max_regions || new_bytes > self.max_bytes {
+        if new_regions > self.max_regions || new_bytes > self.max_bytes {
             return Err(Error::ResourceExhausted);
         }
-        let memory = RegisteredMemory(Arc::new(Registration {
-            descriptor: RemoteRegion {
-                epoch: self.epoch,
-                id: entries.next_id,
-                address,
-                length,
-                permission,
-            },
-            allocation,
-            allocation_offset: offset,
-            budget: Arc::clone(&self.budget),
-        }));
-        usage.regions += 1;
+        entries
+            .retained
+            .try_reserve(added_regions)
+            .map_err(|_| Error::ResourceExhausted)?;
+
+        // All fallible checks precede publication, including duplicate bumps.
+        usage.regions = new_regions;
         usage.bytes = new_bytes;
         entries.next_id = next_id;
-        entries.retained.push(RetainedRange {
-            registration: Arc::downgrade(&memory.0),
-            allocation: allocation_ref,
-            address,
-            end,
-        });
-        entries.regions.insert(
-            memory.id(),
-            RegistryEntry {
-                memory: memory.clone(),
-                references: 1,
-            },
-        );
-        Ok(memory)
+        for plan in plans {
+            if let Some(entry) = entries.regions.get_mut(&plan.id) {
+                entry.references = plan.references;
+                registered.push(entry.memory.clone());
+            } else {
+                let (allocation, offset, length) = &ranges[plan.input];
+                let memory = RegisteredMemory(Arc::new(Registration {
+                    descriptor: RemoteRegion {
+                        epoch: self.epoch,
+                        id: plan.id,
+                        address: plan.address,
+                        length: *length,
+                        permission,
+                    },
+                    allocation: Arc::clone(allocation),
+                    allocation_offset: *offset,
+                    budget: Arc::clone(&self.budget),
+                }));
+                entries.retained.push(RetainedRange {
+                    registration: Arc::downgrade(&memory.0),
+                    allocation: Arc::downgrade(allocation),
+                    address: plan.address,
+                    end: plan.end,
+                });
+                entries.regions.insert(
+                    plan.id,
+                    RegistryEntry {
+                        memory: memory.clone(),
+                        references: plan.references,
+                    },
+                );
+                registered.push(memory);
+            }
+        }
+        for index in selections {
+            result.push(registered[index].clone());
+        }
+        Ok(result)
     }
 
     pub(crate) fn unregister(&self, memory: &RegisteredMemory) -> Result<()> {

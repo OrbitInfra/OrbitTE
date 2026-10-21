@@ -243,6 +243,21 @@ public:
                                              buffer.bytes.size(), permission),
               "register");
       ++buffer.references;
+    } else if (operation == "REGISTER_BATCH" && fields.size() == 4) {
+      auto &buffer = buffers_.at(fields[1]);
+      const auto count = number(fields[3]);
+      require(fields[2] == "r" && count > 0 && count <= 1024 &&
+                  buffer.references > 0,
+              "invalid registration batch");
+      std::vector<void *> addresses(count, buffer.bytes.data());
+      std::vector<size_t> lengths(count, buffer.bytes.size());
+      checked(tent_register_memory_batch(owner(fields[1]), addresses.data(),
+                                         lengths.data(), count,
+                                         PERM_GLOBAL_READ_ONLY),
+              "register batch");
+      buffer.references += count;
+      std::cout << "OBS\tREGISTER_BATCH\t" << fields[1] << '\t' << count
+                << '\n';
     } else if (operation == "UNREGISTER" && fields.size() == 2) {
       auto &buffer = buffers_.at(fields[1]);
       require(buffer.references > 0, "buffer not registered");
