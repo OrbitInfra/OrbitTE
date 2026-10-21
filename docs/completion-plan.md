@@ -290,7 +290,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   [RDMA/CUDA gates](rdma-cuda.md). This does not register application/GPU memory
   directly, cache endpoints, implement multirail or close full P4.
 
-  The binding maintenance substage reuses published `rdma-mummy-sys` rather
+  The binding maintenance substage reuses published `ibverbs-sys` rather
   than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
   and retained DMA owners; the backend's qualification limits still apply.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,

@@ -2,7 +2,7 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 
-use rdma_mummy_sys as ffi;
+use ibverbs_sys as ffi;
 
 use super::Descriptor;
 
@@ -113,7 +113,13 @@ unsafe extern "C" fn open(
             return error;
         }
         let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
-        let error = ffi::ibv_query_port(h.context.cast(), port, &mut attr);
+        // The published binding exposes the stable compatibility symbol.
+        // Every port field consumed below is in its legacy output prefix.
+        let error = ffi::ibv_query_port(
+            h.context.cast(),
+            port,
+            (&mut attr as *mut ffi::ibv_port_attr).cast(),
+        );
         if error != 0 {
             return error;
         }
@@ -282,23 +288,36 @@ unsafe extern "C" fn post(
         wr.wr.rdma.remote_addr = address;
         wr.wr.rdma.rkey = rkey;
         let mut bad = std::ptr::null_mut();
-        ffi::ibv_post_send(h.qp.cast(), &mut wr, &mut bad)
+        let qp = h.qp.cast::<ffi::ibv_qp>();
+        match (*(*qp).context).ops.post_send {
+            Some(post_send) => post_send(qp, &mut wr, &mut bad),
+            None => libc::EOPNOTSUPP,
+        }
     }
 }
 
 unsafe extern "C" fn poll(h: *mut Handles, result: *mut Completion) -> c_int {
     // SAFETY: Endpoint retains the CQ; one initialized output receives one CQE.
     unsafe {
-        let mut completion: ffi::ibv_wc = std::mem::zeroed();
-        let count = ffi::ibv_poll_cq((*h).cq.cast(), 1, &mut completion);
+        let cq = (*h).cq.cast::<ffi::ibv_cq>();
+        let Some(poll_cq) = (*(*cq).context).ops.poll_cq else {
+            return -libc::EOPNOTSUPP;
+        };
+        let mut completion = ffi::ibv_wc::default();
+        let count = poll_cq(cq, 1, &mut completion);
         if count == 1 {
-            *result = Completion {
-                id: completion.wr_id,
-                status: completion.status,
-                opcode: completion.opcode,
-                length: completion.byte_len,
-                vendor_error: completion.vendor_err,
+            let mut output = Completion {
+                id: completion.wr_id(),
+                ..Completion::default()
             };
+            if let Some((status, vendor_error)) = completion.error() {
+                output.status = status;
+                output.vendor_error = vendor_error;
+            } else {
+                output.opcode = completion.opcode();
+                output.length = completion.len() as u32;
+            }
+            *result = output;
         }
         count
     }
@@ -340,3 +359,7 @@ pub(super) static REAL: Verbs = Verbs {
     dealloc_pd,
     close_device,
 };
+
+#[cfg(test)]
+#[path = "../../tests/unit/rdma/sys.rs"]
+mod tests;

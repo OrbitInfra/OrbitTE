@@ -16,14 +16,14 @@ publish = ["crates-io"]
 
 [features]
 default = []
-rdma = ["dep:rdma-mummy-sys", "dep:libc"]
+rdma = ["dep:ibverbs-sys", "dep:libc"]
 cuda = ["dep:cudarc", "dep:libloading"]
 
 [dependencies]
 # 0.19.0 retains libloading 0.8 and the Rust 1.85 baseline.
 cudarc = { version = "=0.19.0", optional = true, default-features = false, features = ["std", "driver", "dynamic-loading", "cuda-12000"] }
 libloading = { version = "0.8", optional = true }
-rdma-mummy-sys = { version = "=0.2.6", optional = true }
+ibverbs-sys = { version = "=0.3.2", optional = true }
 libc = { version = "0.2", optional = true }
 
 [lib]

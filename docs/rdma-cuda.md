@@ -8,14 +8,33 @@ it does not establish full B04/B01 or native TENT compatibility.
 ## Build and select a path
 
 The default crate still needs no CUDA/RDMA SDK or native dependency.
-`--features rdma` uses [`rdma-mummy-sys 0.2.6`](https://docs.rs/rdma-mummy-sys/0.2.6/rdma_mummy_sys/),
-the low-level Rust bindings also used by Sideway. Building them needs a C
-compiler, CMake and libclang. Their bundled C helpers load the system
-`libibverbs.so.1`; OrbitTE no longer carries its own C bridge or build script.
-Install the runtime library and the actual RNIC provider on each RDMA host.
-Engine, protocol, RC setup, progress, admission and backing owners remain Rust.
-Only the Linux native-build profile is tested; cross compilation remains
-unqualified.
+`--features rdma` uses the published
+[`ibverbs-sys 0.3.2+55.0`](https://docs.rs/ibverbs-sys/0.3.2+55.0/ibverbs_sys/)
+release for the standard libibverbs ABI. It links directly to the system
+`libibverbs.so.1`. Building needs GCC with the GNU linker, CMake, libclang and
+libibverbs development/linker files; install the runtime library and the actual
+RNIC provider on each RDMA host. The dependency configures and builds vendored
+rdma-core while generating bindings; runtime linking still uses the system
+library. No Mooncake source is used.
+
+```sh
+# Debian / Ubuntu prerequisites
+sudo apt-get install g++ cmake pkg-config libclang-dev libibverbs-dev
+CC=gcc CXX=g++ cargo test --locked --all-features
+```
+
+The published dependency's symbol-version configure test failed with this
+host's Clang 20/LLD combination; GCC/GNU ld passes. The command and CI explicitly
+select that tested C toolchain. Only Linux native builds are tested; cross
+compilation remains unqualified.
+
+The standard post/poll inline operations dispatch through the provider function
+table exposed by the generated bindings. Missing callbacks return an unsupported
+error. Port queries use libibverbs' stable compatibility symbol; the engine
+consumes fields from its common output prefix. CQ errors preserve their status
+and vendor syndrome without reading success-only opcode/length fields.
+OrbitTE carries no C bridge or build script. Engine, protocol, RC setup,
+progress, admission and backing owners remain Rust.
 
 `--features cuda` uses [`cudarc 0.19.0`](https://docs.rs/cudarc/0.19.0/cudarc/driver/sys/)
 for generated Driver API types and ABI signatures, and `libloading 0.8` for
