@@ -28,7 +28,13 @@ fn hex(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return "-".into();
     }
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        result.push(char::from(DIGITS[(byte >> 4) as usize]));
+        result.push(char::from(DIGITS[(byte & 15) as usize]));
+    }
+    result
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
