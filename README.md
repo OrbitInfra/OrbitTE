@@ -10,8 +10,10 @@ ownership with those consumers.
 ## Status
 
 **Early development.** The source tree implements owned/external CPU memory registration,
-epoch-fenced P2P descriptors, bounded synchronous TCP READ/WRITE batches and
-source close/drain, plus bounded local/remote and batch-completion notifications.
+epoch-fenced P2P descriptors, bounded synchronous/asynchronous TCP READ/WRITE batches and
+separate requester/source close and drain, plus bounded local/remote and
+batch-completion notifications. Async batches retain real owners through
+cancel, timeout and detached-handle cleanup.
 Real loopback and independent-process tests cover bytes,
 restart fencing and failure ownership. The published `0.1.0-alpha.1` is still
 the original identity-only package; this implementation has not been released.
@@ -35,6 +37,7 @@ On Linux with Rust 1.85+ and permission to bind loopback sockets:
 cargo run --locked --example tcp_roundtrip
 cargo run --locked --example external_host
 cargo run --locked --example notifications
+cargo run --locked --example async_batch
 cargo test --locked
 ```
 
@@ -44,6 +47,8 @@ same address and rejects requests carrying its old source epoch.
 The external-host example batch-registers ranges of a pre-existing allocation
 without copying it and submits an absolute-address transfer. It does not pin pages.
 The notification example verifies READ bytes and a single completion message.
+The [async example and contract](docs/async-batches.md) cover allocated capacity,
+append, status, seal/wait/free and local owner retention.
 Data completion and notification delivery have separate outcomes; a lost
 notification receipt does not authorize replaying completed data or the message.
 The [frozen CPU comparison](docs/cpu-oracle.md) runs one shared byte/registration/

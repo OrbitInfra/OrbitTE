@@ -34,6 +34,7 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod batch;
 mod config;
 mod engine;
 mod error;
@@ -42,6 +43,7 @@ mod notification;
 mod segment;
 mod tcp;
 
+pub use batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus};
 pub use config::EngineConfig;
 pub use engine::{
     BatchReport, EngineStats, RemoteEffect, TransferEngine, TransferFailure, TransferOp,

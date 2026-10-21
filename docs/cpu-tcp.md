@@ -1,6 +1,6 @@
 # CPU TCP foundation
 
-This covers the implemented P1.1/P1.2/P1.3/P2.1/P2.2 substages in the
+This covers the implemented P1.1/P1.2/P1.3/P1.4/P2.1/P2.2 substages in the
 [completion plan](completion-plan.md), pending independent acceptance. It
 provides original Rust code with no dependencies and no C++ TENT runtime.
 The source changes have not been published; crates.io `0.1.0-alpha.1` still
@@ -14,7 +14,7 @@ Use its ownership boundaries while implementing the OrbitKV consumer path:
 
 | TENT responsibility | Current Rust owner | Delivered subset |
 | --- | --- | --- |
-| `runtime/transfer_engine_impl` | `src/engine.rs` | Immutable config, batch validation/admission, ordered execution reports and source drain |
+| `runtime/transfer_engine_impl` | `src/engine.rs`, `src/batch.rs` | Immutable config, synchronous/async batch ownership, ordered execution and requester/source drain |
 | `runtime/segment`, `segment_tracker`, registration lifecycle | `src/memory.rs`, `src/segment.rs` | Shared allocation owners, reference-counted ranges, base/length descriptors, bounds/permissions and epoch fencing |
 | `runtime/control_plane`, RPC dispatch | `src/tcp.rs` | Direct P2P descriptor open/explicit refresh and source-owned handlers |
 | `transport/tcp` | `src/tcp.rs` | Host byte movement, deadlines, complete READ response and final WRITE acknowledgement |
@@ -104,6 +104,12 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
   Requester operations remain available. Engine drop stops accepts, interrupts
   socket waits and joins its workers before their final references are released.
 
+Async allocation, task polling, cancellation, detach and explicit free are
+specified in [the asynchronous batch contract](async-batches.md). They use the
+same validation and data executor as synchronous calls. `locally_drained`
+refers to requester owners; a lost remote WRITE receipt still has an unknown
+remote effect and requires the source's own drain/ownership contract.
+
 ## Notification contracts
 
 `Notification { name, message }` carries application-defined UTF-8 strings;
@@ -161,7 +167,8 @@ uncertain receipt rather than retaining a hook that retries it on later polls.
 | Bind | `127.0.0.1:0` | OS selects a loopback port; an explicit routable bind is required for other hosts |
 | Retained registrations | 1,024 / 1 GiB | Counts retained registration ranges, including unregistered handles/handlers; exact duplicates charge once, distinct overlapping ranges each charge; protocol limit 4,096 regions |
 | Batch descriptors | 1,024 | Transfer or host-registration batch rejected before effects if exceeded |
-| In-flight requester batches | 32 | Includes descriptor-open and explicit notification calls |
+| Allocated async batches / descriptor slots | 32 / 32,768 | Includes open, completed-but-unfreed and detached-active batches; at most one worker per allocated batch |
+| In-flight requester submissions | 32 | Queued/running async groups plus synchronous, descriptor-open and explicit notification calls |
 | In-flight requester bytes | 64 MiB | Admitted slice lengths plus notification name/message bytes until the call exits |
 | One payload | 8 MiB | Configurable up to 64 MiB; each source independently enforces its limit |
 | Source workers / queue | 4 / 4 sockets | Fixed worker pool and bounded socket queue; queue overflow closes the connection |
@@ -283,6 +290,7 @@ cargo test --locked
 cargo run --locked --example tcp_roundtrip
 cargo run --locked --example external_host
 cargo run --locked --example notifications
+cargo run --locked --example async_batch
 cargo publish --dry-run --locked
 ```
 
@@ -322,7 +330,8 @@ full oracle, mixed-peer, RDMA and NVIDIA hardware gates remain unqualified.
 The API now accepts existing host allocations, resolves source addresses and
 delivers bounded notifications. OrbitKV still needs the concrete allocator/native
 adapter and must connect its existing generation mailbox to this polling API
-before migration. Its allocator must
+before migration. The async CPU lifecycle is implemented; its actual allocator,
+ABI and installed profile still need qualification. Its allocator must
 honor the external-access and retention contract. This substage does not change OrbitKV's
 Mooncake dependency. RDMA registration/completion and CUDA memory need their
 own backing, context and physical-drain proof; this CPU result cannot qualify

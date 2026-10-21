@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_te::{
-    EngineConfig, HostMemory, Notification, NotificationStatus, Permission, RegisteredMemory,
-    TransferEngine, TransferOp, TransferRequest,
+    BatchState, EngineConfig, HostMemory, Notification, NotificationStatus, Permission,
+    RegisteredMemory, TransferEngine, TransferOp, TransferRequest,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -40,8 +40,8 @@ fn hex(bytes: &[u8]) -> String {
 fn main() -> Result<(), Box<dyn Error>> {
     let path = std::env::args().nth(1).ok_or("expected trace path")?;
     let trace = std::fs::read_to_string(path)?;
-    let source = TransferEngine::new(EngineConfig::default())?;
-    let requester = TransferEngine::new(EngineConfig::default())?;
+    let source = Arc::new(TransferEngine::new(EngineConfig::default())?);
+    let requester = Arc::new(TransferEngine::new(EngineConfig::default())?);
     let mut buffers = BTreeMap::<String, Buffer>::new();
     let mut peer = None;
     for (line_index, line) in trace.lines().enumerate() {
@@ -186,7 +186,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .read(offset.parse()?, &mut bytes)?;
                 println!("OBS\tBYTES\t{label}\t{}", hex(&bytes));
             }
-            [operation @ ("READ" | "WRITE"), label, slices, name, message] => {
+            [
+                operation @ ("READ" | "WRITE" | "READ_SPLIT"),
+                label,
+                slices,
+                name,
+                message,
+            ] => {
                 let peer = peer.as_ref().ok_or("DESCRIBE must precede transfers")?;
                 let mut requests = Vec::new();
                 if *slices != "-" {
@@ -207,39 +213,66 @@ fn main() -> Result<(), Box<dyn Error>> {
                         });
                     }
                 }
-                let operation = if *operation == "READ" {
-                    TransferOp::Read
-                } else {
+                let split = *operation == "READ_SPLIT";
+                let operation = if *operation == "WRITE" {
                     TransferOp::Write
-                };
-                let report = if *name == "~" {
-                    requester.submit_and_wait(operation, peer, &requests, TIMEOUT)?
                 } else {
-                    requester.submit_and_notify(
+                    TransferOp::Read
+                };
+                let notification = (*name != "~").then(|| Notification {
+                    name: text(name),
+                    message: text(message),
+                });
+                let mut batch = if split {
+                    if notification.is_some() || requests.is_empty() {
+                        return Err("split trace needs nonempty unnotified requests".into());
+                    }
+                    let mut batch = requester.allocate_batch(requests.len())?;
+                    for (index, request) in requests.iter().enumerate() {
+                        let range = batch.submit(
+                            operation,
+                            peer,
+                            std::slice::from_ref(request),
+                            None,
+                            TIMEOUT,
+                        )?;
+                        if range != (index..index + 1) {
+                            return Err("append changed public task identity".into());
+                        }
+                    }
+                    batch.seal()?;
+                    batch
+                } else {
+                    requester.submit_async(
                         operation,
                         peer,
                         &requests,
-                        &Notification {
-                            name: text(name),
-                            message: text(message),
-                        },
+                        notification.as_ref(),
                         TIMEOUT,
                     )?
                 };
-                if !report.is_complete() {
+                let report = batch.wait(TIMEOUT)?;
+                if report.state != BatchState::Completed || !report.locally_drained {
                     return Err(format!("transfer {label} failed: {report:?}").into());
+                }
+                for _ in 0..2 {
+                    if batch.status()? != report {
+                        return Err("terminal status changed".into());
+                    }
                 }
                 if *name != "~"
                     && !requests.is_empty()
-                    && !matches!(report.notification, NotificationStatus::Delivered)
+                    && !matches!(
+                        *batch.submissions()?[0].notification,
+                        NotificationStatus::Delivered
+                    )
                 {
-                    return Err(
-                        format!("notification {label} failed: {:?}", report.notification).into(),
-                    );
+                    return Err(format!("notification {label} failed").into());
                 }
+                batch.free()?;
                 println!(
                     "OBS\tRESULT\t{label}\tcompleted\t{}\t{}",
-                    report.completed_requests, report.transferred_bytes
+                    report.completed_tasks, report.transferred_bytes
                 );
             }
             ["NOTIFY", label, mode, name, message] => {
@@ -286,7 +319,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("trace did not unregister all references".into());
     }
     source.close_source(TIMEOUT)?;
+    requester.close_requester(TIMEOUT)?;
     requester.close_source(TIMEOUT)?;
+    let stats = requester.stats()?;
+    if stats.allocated_batches != 0
+        || stats.allocated_requests != 0
+        || stats.requester_workers != 0
+        || stats.inflight_batches != 0
+        || stats.inflight_bytes != 0
+    {
+        return Err("async owners remain after final free".into());
+    }
+    drop(requester);
+    drop(source);
+    drop(buffers);
     println!("OBS\tCLEANUP\tok");
     Ok(())
 }

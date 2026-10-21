@@ -6,7 +6,7 @@ REGISTER source rw
 REGISTER_BATCH source r 2
 REGISTER local local
 DESCRIBE initial
-READ read-batch 8:16:16,40:0:8 ~ -
+READ_SPLIT read-batch 8:16:16,40:0:8 ~ -
 BYTES read-bytes local 0 64
 FILL local 0 8 167
 WRITE write-batch 0:32:8 done write
