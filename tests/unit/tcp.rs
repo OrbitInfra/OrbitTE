@@ -3,6 +3,8 @@ use std::net::Shutdown;
 use super::*;
 use crate::TransferEngine;
 
+use crate::test_support as common;
+
 const TIMEOUT: Duration = Duration::from_secs(3);
 
 fn wire_request(
@@ -37,13 +39,13 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x01\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x02\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 3]);
     assert_eq!(request.encode().as_slice(), expected);
-    for (index, value) in [(0, 0), (9, 2), (10, 255), (11, 1)] {
+    for (index, value) in [(0, 0), (9, 1), (9, 3), (10, 255), (11, 1)] {
         let mut malformed = request.encode();
         malformed[index] = value;
         assert!(Request::decode(&malformed).is_err());
@@ -190,6 +192,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
         regions: vec![RemoteRegion {
             epoch,
             id: 1,
+            address: 0x1000,
             length: 8,
             permission: Permission::RemoteReadWrite,
         }],
@@ -330,4 +333,107 @@ fn a_trickling_response_cannot_extend_the_absolute_deadline() {
     request.local.read(0, &mut bytes).unwrap();
     assert_eq!(bytes, [7; 8]);
     handler.join().unwrap();
+}
+
+#[test]
+fn external_owner_survives_unregister_until_the_handler_really_exits() {
+    use std::sync::atomic::Ordering;
+
+    let fixture = common::external_memory(&[0; 8]);
+    let engine = TransferEngine::new(EngineConfig {
+        max_registered_regions: 1,
+        max_registered_bytes: 8,
+        ..EngineConfig::default()
+    })
+    .unwrap();
+    let memory = engine
+        .register_host_memory(
+            Arc::clone(&fixture.memory),
+            0,
+            8,
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    drop(fixture.memory);
+    let mut channel = wire_request(&engine, Operation::Write, memory.id(), 0, 8);
+    assert_eq!(
+        Reply::read(&mut channel, engine.source_epoch())
+            .unwrap()
+            .status,
+        9
+    );
+    engine.unregister_memory(&memory).unwrap();
+    drop(memory);
+    assert!(matches!(
+        engine.close_source(Duration::from_millis(5)),
+        Err(Error::Timeout)
+    ));
+    assert!(fixture.owner.upgrade().is_some());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 0);
+    assert_eq!(engine.stats().unwrap().retained_bytes, 8);
+    channel.write_all(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+    assert_eq!(
+        Reply::read(&mut channel, engine.source_epoch())
+            .unwrap()
+            .status,
+        0
+    );
+    engine.close_source(TIMEOUT).unwrap();
+    assert!(fixture.owner.upgrade().is_none());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.stats().unwrap().retained_bytes, 0);
+}
+
+#[test]
+fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
+    for case in 0..7 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let epoch = SourceEpoch::generate().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut channel = Channel {
+                stream,
+                deadline: deadline(TIMEOUT).unwrap(),
+                stopping: None,
+            };
+            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+            let count = if case == 5 { 2 } else { 1 };
+            let mut payload = vec![0; 4 + count * REGION_SIZE];
+            payload[..4].copy_from_slice(&(count as u32).to_be_bytes());
+            for entry in payload[4..].chunks_exact_mut(REGION_SIZE) {
+                entry[..8].copy_from_slice(&1u64.to_be_bytes());
+                entry[8..16].copy_from_slice(&0x1000u64.to_be_bytes());
+                entry[16..24].copy_from_slice(&8u64.to_be_bytes());
+                entry[24] = 3;
+            }
+            match case {
+                0 => payload[12..20].copy_from_slice(&0u64.to_be_bytes()),
+                1 => payload[12..20].copy_from_slice(&(u64::MAX - 2).to_be_bytes()),
+                2 => payload[20..28].copy_from_slice(&0u64.to_be_bytes()),
+                3 => payload[28] = 7,
+                4 => payload[29] = 1,
+                _ => {}
+            }
+            let mut reply = Reply {
+                status: 0,
+                epoch,
+                length: payload.len() as u64,
+            }
+            .encode();
+            if case == 6 {
+                reply[8..10].copy_from_slice(&1u16.to_be_bytes());
+            }
+            channel.write_all(&reply).unwrap();
+            let _ = channel.write_all(&payload);
+        });
+        assert!(
+            matches!(
+                open_segment(endpoint, epoch, deadline(TIMEOUT).unwrap()),
+                Err(Error::Protocol(_))
+            ),
+            "malformed descriptor case {case}"
+        );
+        server.join().unwrap();
+    }
 }

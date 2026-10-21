@@ -31,7 +31,8 @@
 //! # }
 //! ```
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 mod config;
 mod engine;
@@ -46,5 +47,9 @@ pub use engine::{
     TransferRequest,
 };
 pub use error::{Error, Result};
-pub use memory::{Permission, RegisteredMemory};
+pub use memory::{HostMemory, Permission, RegisteredMemory};
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
+
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod test_support;

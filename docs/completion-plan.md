@@ -19,7 +19,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 ## Starting point and delivery states
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-tree now implements the P1.1/P2.1 CPU substage described in
+tree now implements the P1.1/P1.2/P2.1 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md). This code is not published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -32,8 +32,10 @@ Use these states for each substage and each claimed hardware profile:
 | Accepted | An independent reviewer inspected the diff, reran relevant gates and accepted the evidence and remaining limits |
 | Unqualified / Failed | Required hardware/evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
-P1.1/P2.1 are implemented and have local Linux loopback/process test evidence;
-neither is independently accepted. No complete numbered stage is qualified.
+P1.1/P2.1 were merged in #2 after passing stable/MSRV CI and local CPU checks.
+P1.2 adds externally owned host ranges and absolute-address descriptors. These
+have local Linux loopback/process evidence; independent acceptance is still
+open. No complete numbered stage is qualified.
 P0's TENT oracle and compatibility fixtures remain open. Missing hardware leaves
 a profile unqualified and visible in the full target.
 
@@ -46,10 +48,11 @@ READ, authoritative source epochs, source close/drain, generation-scoped
 notifications and NIC-load observations. Source authority comes from the
 source grant; a refreshed endpoint must not silently replace that epoch.
 
-The first source delivery implements P1.1/P2.1 below with owned CPU allocations.
-Next close the consumer gaps in P1/P2/P9: a frozen CPU comparison trace, external
-pinned-allocation ownership and address mapping, bounded notification delivery,
-and the adapter surface. Qualify that profile under P10/P11 before switching
+P1.1/P2.1 establish the CPU path; P1.2 adds externally owned host allocations,
+duplicate registration references, shared alias locking and address lookup.
+Next close the consumer gaps in P1/P2/P9: a frozen CPU comparison trace, bounded
+notification delivery and the concrete allocator/native adapter surface.
+Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
 (P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
 ready. The complete parity inventory remains the target; the delivery priority
@@ -60,7 +63,7 @@ does not turn incomplete rows into completed features.
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | Planned; source baseline recorded |
-| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1 implemented; broader P1 open |
+| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Planned |
@@ -145,6 +148,14 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   batch admission, resource counters and source-handler close/drain. Local
   Linux checks pass. External pinned allocations, topology/NUMA, TENT config
   precedence, asynchronous task/cancel/merge and native providers remain open.
+- [x] **P1.2 — external host owner and address registration (Implemented, not
+  Accepted).** A retained host-allocation owner, checked registered subranges,
+  TENT-style duplicate references/first permission and containing-buffer lookup,
+  shared alias locks, retained-range conflicts and versioned base-address
+  descriptors. Real TCP tests use external source/destination backing and prove
+  unregister/timeout cannot release the owner while a handler remains active.
+  CUDA-pinned allocator integration, RNIC registration and native free-failure
+  qualification remain open; this substage does not pin pages itself.
 - [ ] Implement Rust request/status/error/options types and native engine
   construction using frozen per-engine config, without changing process-global
   environment to configure concurrent engines.
@@ -472,10 +483,10 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Independently review P1.1/P2.1 and rerun the [CPU gates](cpu-tcp.md#verification).
-Then deliver the frozen TENT CPU comparison trace and externally owned pinned
-allocation contract required by OrbitKV, followed by bounded notifications and
-the native consumer adapter. Keep the larger 33-symbol/native-schema oracle,
+Review P1.2 and rerun the [CPU gates](cpu-tcp.md#verification), including the
+external-host recipe. Next deliver the frozen TENT CPU comparison trace and
+bounded notifications, then the concrete OrbitKV allocator/native adapter.
+Keep the larger 33-symbol/native-schema oracle,
 wire compatibility and other parity work visible in P0/P9. Hardware RDMA/CUDA
 qualification remains required before OrbitKV can adopt those profiles.
 
