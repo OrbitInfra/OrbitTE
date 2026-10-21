@@ -31,8 +31,12 @@ owners and conservatively retain unquiesced failures.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots across cancellation and detached batches;
-its two H20 TCP ownership controls passed. Manager adoption and independent
-acceptance remain open. Track this consumer candidate as P1.5 in the plan.
+its two H20 TCP ownership controls passed. The subsequent opt-in
+[OrbitKV TCP peer candidate](https://github.com/OrbitInfra/OrbitKV/pull/304)
+connects source grants, epochs and generation-scoped gRPC completion to actual
+Manager GPU Save/Restore. Two H20 source/grant and GPU byte gates passed with
+a private CUDA 12.2 runtime; installed Manager/serving qualification remains
+open. Track these consumer candidates as P1.5/P2.3 in the plan.
 The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
 coverage, GPUDirect, NVLink and SSD remain open. These source substages await
 independent acceptance and complete hardware/installed qualification.

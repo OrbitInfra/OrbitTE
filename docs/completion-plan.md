@@ -21,7 +21,8 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md), plus the initial P4.1/P5.1 RDMA/CUDA staging
-paths. P1.5 adds the opt-in consumer allocation bridge below. This code is not
+paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the
+consumer TCP peer path below. This code is not
 published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -69,8 +70,13 @@ at `3f4d65709e86a060f323da7e0d1b59975f6939bc`; its native fork is
 P1.4 adds bounded asynchronous batch/task ownership and requester drain for
 CPU TCP. P1.5 implements the first real pinned-allocation bridge in
 [OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303), with a scoped H20
-TCP ownership pilot. Whole-pool native adaptation, source-grant epochs and
-generation-mailbox consumption remain open in P1/P2/P9. RDMA and CUDA development
+TCP ownership pilot. P2.3 connects the opt-in OrbitKV TCP payload provider in
+[OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304), preserving source
+grants, their epochs and the existing generation-scoped gRPC completion owner.
+That Manager owner is separate from the transfer notification mailbox; this
+change does not add a mailbox adapter. Whole-pool native adaptation, installed
+consumer qualification and remaining notification integration stay open in
+P1/P2/P9/P11. RDMA and CUDA development
 proceeds with these owners; no hardware qualification is inferred from CPU progress.
 Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
@@ -84,7 +90,7 @@ does not turn incomplete rows into completed features.
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping/oracle open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
-| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
+| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging implemented; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
@@ -269,6 +275,32 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   malformed/partial-body, queue-pressure and independent-process restart tests
   pass. The original substage used OrbitTE wire v3 (now v4); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
+- [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
+  installed qualification open).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
+  at `5a50d092c651d28ff3f79f6de661c9da8120b2b3` pins OrbitTE `02d64e55`.
+  An explicit `orbitte-tcp` provider shares Manager discovery, source admission,
+  planning and gRPC generation completion. The standalone build excludes
+  Mooncake; the runtime default remains TENT. Source tickets retain actual
+  allocation registrations; requester READ preserves the grant epoch through
+  metadata open and payload. Cancellation retains the blocking owner;
+  unquiesced work retains the source ticket, destination buffers and admission.
+  Source close fences before requester drain, even after cleanup failure.
+  The first profile allows 64 MiB/16,384 split descriptors per READ and 4,096
+  active/retained allocation regions. It rejects excess work; planner resizing
+  is not implemented. Strict default/dual/standalone checks, real TCP epoch and
+  protocol controls, ticket loss/retry/cancellation and isolated quarantine
+  controls pass. Two exact H20 source gates passed with private CUDA 12.2:
+  duplicate grant registration, generation reuse, eviction and TCP bytes;
+  then real Manager services, etcd/inventory, multi-grant READ, GPU Save/Restore
+  byte comparison, membership fencing and worker/service drain. The run verifies
+  private libraries, no mapped TENT, owned child/supervisor/etcd reaping and GPU
+  lease release. The failed first cleanup-assertion attempt is retained with
+  the passing corrected run in the external evidence root
+  `/root/orbitte-artifacts/peer-read-20261021/`.
+  This does not qualify an installed Manager/wheel, serving, CUDA 13 runtime,
+  physical cross-host Manager traffic, RDMA, GDR, multirail, SSD or TENT wire
+  compatibility. Transfer notification-mailbox adaptation remains separate.
+  See the maintained [consumer contract and explicit gates](https://github.com/OrbitInfra/OrbitKV/blob/5a50d092c651d28ff3f79f6de661c9da8120b2b3/docs/transport.md#experimental-orbitte-peer-tcp-profile).
 - [ ] Implement peer identity, memory descriptors and P2P open/refresh/update
   behavior, owned RPC dispatch and handler isolation/reconnect semantics.
 - [ ] Implement actual host READ/WRITE with registration/range/permission checks,
@@ -585,10 +617,13 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Review P0.1/P1.3/P1.4 and rerun the [native CPU comparison](cpu-oracle.md#run-the-gates)
-alongside the [CPU gates](cpu-tcp.md#verification). Next close the concrete
-OrbitKV allocator/native adapter using its existing generation mailbox and
-source grants, and review P4.1/P5.1 staging on P1.4's owners.
+Review the P2.3 consumer candidate and its retained source/H20 evidence before
+accepting dependent work. Next connect the host-RDMA consumer path to these same
+allocation, source-grant and completion owners, including real fault/drain gates;
+review P4.1/P5.1 staging on P1.4's owners before extending its hardware claims.
+Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
+[CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
+the transfer notification mailbox remains a separate API contract.
 RDMA and CUDA source work may proceed before the physical test setup is ready;
 compile/shim checks leave those hardware profiles unqualified. Use the supplied
 execution-node instructions to verify live attempts, then run profile-specific
@@ -596,8 +631,8 @@ byte and physical-owner gates before making a backend claim. Keep source/build
 and raw run evidence outside both source checkouts.
 Audit vanilla TENT and OrbitKV-extended C layouts separately. Keep the larger
 33-symbol/native-schema oracle, wire interoperability, full F08 and other parity
-work visible in P0/P6/P9. Actual OrbitKV CUDA-pinned allocator adaptation, full RDMA/CUDA and installed
-consumer qualification remain required before adopting those profiles.
+work visible in P0/P6/P9. Whole-pool OrbitKV registration, full RDMA/CUDA and
+installed consumer qualification remain required before adopting those profiles.
 
 Calendar estimates require measured progress on this first slice and confirmed
 maintainer, hardware and provider-SDK capacity. Hardware acquisition is a
