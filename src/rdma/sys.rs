@@ -4,7 +4,6 @@ use std::ffi::{c_char, c_int, c_void};
 
 use super::Descriptor;
 
-#[derive(Default)]
 #[repr(C)]
 pub(super) struct Handles {
     pub context: *mut c_void,
@@ -12,6 +11,18 @@ pub(super) struct Handles {
     pub cq: *mut c_void,
     pub qp: *mut c_void,
     pub mr: *mut c_void,
+}
+
+impl Default for Handles {
+    fn default() -> Self {
+        Self {
+            context: std::ptr::null_mut(),
+            pd: std::ptr::null_mut(),
+            cq: std::ptr::null_mut(),
+            qp: std::ptr::null_mut(),
+            mr: std::ptr::null_mut(),
+        }
+    }
 }
 
 #[derive(Default)]

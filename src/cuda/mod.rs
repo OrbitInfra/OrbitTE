@@ -270,7 +270,12 @@ impl CudaMemory {
             let initialized = unsafe { (context.driver.memset)(allocation.address, 0, length) };
             let synced = unsafe { (context.driver.synchronize)() };
             allocation.uncertain = synced != 0;
-            check("cuCtxSynchronize initialization", synced)?;
+            if synced != 0 {
+                return Err(Error::Unquiesced {
+                    operation: "cuCtxSynchronize initialization",
+                    code: synced,
+                });
+            }
             check("cuMemsetD8", initialized)
         })?;
         Ok(Self {
@@ -311,7 +316,11 @@ impl CudaMemory {
         check("cuPointerGetAttribute memory type", unsafe {
             (driver.pointer_attribute)((&mut memory_type as *mut i32).cast(), 2, address)
         })?;
-        if memory_type != 2 {
+        let mut managed = 0u32;
+        check("cuPointerGetAttribute managed", unsafe {
+            (driver.pointer_attribute)((&mut managed as *mut u32).cast(), 8, address)
+        })?;
+        if memory_type != 2 || managed != 0 {
             return Err(Error::Unavailable(
                 "CUDA registration requires device memory (managed/host memory is not this profile)",
             ));

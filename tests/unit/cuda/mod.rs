@@ -22,6 +22,7 @@ struct Device {
     pop_error: AtomicI32,
     free_error: AtomicI32,
     memory_type: AtomicI32,
+    managed: AtomicI32,
     events: Mutex<Vec<&'static str>>,
 }
 // SAFETY: device bytes are accessed exclusively via one CudaMemory lock; pinned
@@ -109,11 +110,13 @@ unsafe extern "C" fn to_host(output: *mut c_void, address: u64, length: usize) -
 unsafe extern "C" fn to_device(address: u64, input: *const c_void, length: usize) -> c_int {
     event("HtoD");
     let error = current().copy_error.load(Ordering::Acquire);
-    if error == 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(input.cast::<u8>(), address as *mut u8, length);
-        }
+    // A synchronized backend error may still have changed a prefix of GPU
+    // bytes. Logical failure is not a rollback receipt.
+    let copied = if error == 0 { length } else { length.min(1) };
+    unsafe {
+        std::ptr::copy_nonoverlapping(input.cast::<u8>(), address as *mut u8, copied);
     }
+
     error
 }
 unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c_uint) -> c_int {
@@ -151,6 +154,7 @@ unsafe extern "C" fn attribute(output: *mut c_void, attribute: c_int, address: u
         match attribute {
             1 => *output.cast::<driver::Context>() = Arc::as_ptr(&device) as *mut c_void,
             2 => *output.cast::<i32>() = device.memory_type.load(Ordering::Acquire),
+            8 => *output.cast::<u32>() = device.managed.load(Ordering::Acquire) as u32,
             9 => *output.cast::<i32>() = 0,
             _ => return 1,
         }
@@ -196,6 +200,7 @@ fn allocation(bytes: &[u8]) -> Arc<Device> {
         pop_error: AtomicI32::new(0),
         free_error: AtomicI32::new(0),
         memory_type: AtomicI32::new(2),
+        managed: AtomicI32::new(0),
         events: Mutex::default(),
     });
     let address = unsafe { &*device.bytes.get() }.as_ptr() as u64;
@@ -227,6 +232,12 @@ fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
         CudaMemory::register(address + 8, 9, owner.clone(), driver()),
         Err(Error::InvalidRange)
     ));
+    owner.managed.store(1, Ordering::Release);
+    assert!(matches!(
+        CudaMemory::register(address, 16, owner.clone(), driver()),
+        Err(Error::Unavailable(_))
+    ));
+    owner.managed.store(0, Ordering::Release);
     let memory = memory(&owner);
     memory.write(4, b"orbit").unwrap();
     let mut bytes = [0; 16];
@@ -243,8 +254,23 @@ fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
     assert_eq!(untouched, [0xcc; 8]);
     assert!(owner.pins.lock().unwrap().is_empty());
     assert!(STACK.with(|s| s.borrow().is_empty()));
+    assert!(matches!(
+        memory.write(1, &[0x19; 4]),
+        Err(Error::Backend { code: 42, .. })
+    ));
+    owner.copy_error.store(0, Ordering::Release);
+    let mut changed = [0; 16];
+    memory.read(0, &mut changed).unwrap();
+    assert_eq!(changed[1], 0x19);
+    assert_eq!(changed[2], 0x5a);
     let events = owner.events.lock().unwrap();
-    let error_copy = events.iter().rposition(|e| *e == "DtoH").unwrap();
+    let error_copy = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| **e == "DtoH")
+        .nth(1)
+        .unwrap()
+        .0;
     assert_eq!(
         &events[error_copy..error_copy + 3],
         &["DtoH", "sync", "pop"]
@@ -313,6 +339,8 @@ fn cuda_registered_ranges_use_actual_owners_and_tcp_read_write_paths() {
     drop(allocation);
     assert!(weak.upgrade().is_some());
     drop(source_memory);
+    // A wire ACK precedes the source handler dropping its physical owners.
+    source.close_source(Duration::from_secs(2)).unwrap();
     assert!(weak.upgrade().is_none());
 }
 

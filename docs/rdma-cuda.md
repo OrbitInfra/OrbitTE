@@ -66,7 +66,9 @@ CUDA copies serialize per allocation, push its retained context, use private
 pinned staging, synchronize, and pop/verify the context even on copy errors.
 Caller host slices are never submitted to CUDA. A normal copy error followed by
 successful synchronization returns an error without publishing partial READ
-bytes. Synchronization/restoration ambiguity retains device owner, pinned
+host-slice bytes. A failed H2D/registered-GPU commit can have changed GPU bytes
+even when synchronization proves quiescence; a failure does not establish rollback
+or authorize consumers to publish those bytes. Synchronization/restoration ambiguity retains device owner, pinned
 staging and context. Failed native frees retain resources and their driver.
 
 ## Failure, drain and resource ownership

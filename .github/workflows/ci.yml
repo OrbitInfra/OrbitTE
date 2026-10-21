@@ -13,6 +13,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
         features: ['', rdma, cuda, 'rdma,cuda']
