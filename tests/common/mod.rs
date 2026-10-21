@@ -36,7 +36,8 @@ pub fn external_memory(bytes: &[u8]) -> ExternalFixture {
         drops: Arc::clone(&drops),
     });
     // SAFETY: this is the only initial access, before HostMemory is constructed.
-    let address = NonNull::new(unsafe { (&mut *allocation.bytes.get()).as_mut_ptr() }).unwrap();
+    let bytes = unsafe { &mut *allocation.bytes.get() };
+    let address = NonNull::new(bytes.as_mut_ptr()).unwrap();
     let owner = Arc::downgrade(&allocation);
     // SAFETY: the private box remains stable and its owner cannot expose any
     // uncoordinated byte access. HostMemory retains the actual allocation.
