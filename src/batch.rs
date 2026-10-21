@@ -189,7 +189,13 @@ impl Batch {
                             prepared,
                         } = queued;
                         let report = engine.execute(&prepared, Some((&state, first_task)));
-                        drop(prepared);
+                        if report.locally_drained {
+                            drop(prepared);
+                        } else {
+                            // Quarantine real owners and capacity on unproven native
+                            // termination. Logical failure does not authorize free.
+                            std::mem::forget((prepared, Arc::clone(&engine), Arc::clone(&state)));
+                        }
                         state.finish_submission(submission, first_task, report);
                     }
                 },
@@ -261,8 +267,8 @@ impl Batch {
         }
     }
 
-    /// Stops appending; status becomes terminal only after every accepted group
-    /// has released its physical owners. Sealing an empty batch completes it.
+    /// Stops appending. A terminal failure can retain unquiesced native work;
+    /// inspect locally_drained before free. An empty sealed batch completes.
     pub fn seal(&mut self) -> Result<()> {
         let progress = self.progress()?;
         progress.lock().sealed = true;
@@ -401,7 +407,11 @@ impl ProgressState {
                 .filter(|task| task.state == TaskState::Completed)
                 .count(),
             transferred_bytes: self.tasks.iter().map(|task| task.transferred_bytes).sum(),
-            locally_drained: self.pending == 0,
+            locally_drained: self.pending == 0
+                && self
+                    .submissions
+                    .iter()
+                    .all(|submission| submission.locally_drained),
         }
     }
 }
@@ -448,7 +458,8 @@ impl BatchProgress {
                 } else {
                     TaskState::Skipped
                 };
-                task.locally_drained = true;
+                task.locally_drained =
+                    task_index != failure.request_index || report.locally_drained;
                 if task_index == failure.request_index {
                     task.failure = Some(Arc::clone(failure));
                 }
@@ -460,7 +471,7 @@ impl BatchProgress {
             transferred_bytes: report.transferred_bytes,
             failure,
             notification: Arc::new(report.notification),
-            locally_drained: true,
+            locally_drained: report.locally_drained,
         };
         state.pending -= 1;
         self.changed.notify_all();
@@ -477,7 +488,9 @@ impl Drop for WorkerExit {
         state.worker_exited = true;
         if state.pending != 0 {
             for index in 0..state.submissions.len() {
-                if state.submissions[index].locally_drained {
+                if state.submissions[index].locally_drained
+                    || state.submissions[index].failure.is_some()
+                {
                     continue;
                 }
                 let range = state.submissions[index].tasks.clone();

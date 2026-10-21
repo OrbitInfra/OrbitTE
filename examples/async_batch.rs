@@ -20,6 +20,7 @@ fn main() -> orbit_te::Result<()> {
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                transport: orbit_te::Transport::Tcp,
                 local_address: destination.base_address() + local_offset,
                 remote_address: exported.base_address() + remote_offset,
                 length: 8,

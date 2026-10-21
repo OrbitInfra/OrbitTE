@@ -11,8 +11,13 @@ homepage = "https://github.com/OrbitInfra/OrbitTE"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+include = ["src/**", "native/**", "build.rs", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
+
+[features]
+default = []
+rdma = []
+cuda = []
 
 [lib]
 name = "orbit_te"
@@ -21,3 +26,8 @@ path = "src/lib.rs"
 [[example]]
 name = "cpu_trace"
 path = "tests/reference/rust_driver.rs"
+
+[[example]]
+name = "hardware_peer"
+path = "examples/hardware_peer.rs"
+required-features = ["rdma", "cuda"]

@@ -33,6 +33,7 @@ fn main() -> orbit_te::Result<()> {
         Duration::from_secs(1),
     )?;
     let transfer = TransferRequest {
+        transport: orbit_te::Transport::Tcp,
         local_address: destination.base_address(),
         remote_address: memory.base_address() + 16,
         length: 5,

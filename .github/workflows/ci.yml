@@ -13,23 +13,32 @@ jobs:
   check:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
+        features: ['', rdma, cuda, 'rdma,cuda']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      ORBITTE_FEATURES: ${{ matrix.features }}
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+      - name: Install system verbs ABI
+        if: contains(matrix.features, 'rdma')
+        run: sudo apt-get update && sudo apt-get install -y libibverbs-dev
       - name: Format
         run: cargo fmt --check
       - name: Check
-        run: cargo check --locked
+        run: cargo check --locked --features "$ORBITTE_FEATURES"
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Test CPU TCP and ownership
-        run: cargo test --locked
+        run: cargo test --locked --features "$ORBITTE_FEATURES"
       - name: CPU trace fixture and comparator controls
         run: python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbitte-cpu-trace-${{ matrix.toolchain }}"
+      - name: Native peer supervision ownership control
+        if: matrix.toolchain == 'stable' && matrix.features == ''
+        run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
-        run: cargo publish --dry-run --locked
+        run: cargo publish --dry-run --locked --features "$ORBITTE_FEATURES"

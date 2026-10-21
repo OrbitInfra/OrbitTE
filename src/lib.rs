@@ -1,8 +1,8 @@
-//! Rust-owned memory, epoch-fenced CPU TCP transfers and bounded notifications.
+//! Owned CPU/NVIDIA memory, fenced TCP/staged RDMA transfers and notifications.
 //!
 //! This first implementation follows TENT's engine, segment/control-plane and
 //! transport ownership boundaries. Its versioned development protocol is
-//! OrbitTE-only; TENT wire/ABI compatibility and hardware transports remain open.
+//! OrbitTE-only; full hardware coverage and TENT wire/ABI compatibility remain open.
 //! See the repository's completion plan for qualification and integration gates.
 //!
 //! ```
@@ -18,6 +18,7 @@
 //! let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(1))?;
 //! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbit_te::Error::RegionNotFound)?;
 //! let request = TransferRequest {
+//!     transport: orbit_te::Transport::Tcp,
 //!     local_address: destination.base_address(),
 //!     remote_address: remote.base_address(), length: 5,
 //! };
@@ -44,10 +45,15 @@ mod segment;
 mod tcp;
 
 pub use batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus};
+#[cfg(feature = "cuda")]
+pub mod cuda;
+#[cfg(feature = "rdma")]
+pub mod rdma;
+
 pub use config::EngineConfig;
 pub use engine::{
     BatchReport, EngineStats, RemoteEffect, TransferEngine, TransferFailure, TransferOp,
-    TransferRequest,
+    TransferRequest, Transport,
 };
 pub use error::{Error, Result};
 pub use memory::{HostMemory, Permission, RegisteredMemory};
