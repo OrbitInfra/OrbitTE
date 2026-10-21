@@ -11,7 +11,8 @@ ownership with those consumers.
 
 **Early development.** The source tree implements owned/external CPU memory registration,
 epoch-fenced P2P descriptors, bounded synchronous TCP READ/WRITE batches and
-source close/drain. Real loopback and independent-process tests cover bytes,
+source close/drain, plus bounded local/remote and batch-completion notifications.
+Real loopback and independent-process tests cover bytes,
 restart fencing and failure ownership. The published `0.1.0-alpha.1` is still
 the original identity-only package; this implementation has not been released.
 
@@ -20,7 +21,7 @@ share registration references; overlapping views share one allocation lock.
 Local and remote absolute-address lookup follows TENT's containing-buffer order.
 
 The first protocol is OrbitTE-only. TENT API/wire compatibility, RDMA, NVIDIA
-GPU paths, notifications and SSD transports remain open. This is an initial
+GPU paths and SSD transports remain open. This is an initial
 CPU substage, pending independent review and hardware/installed qualification.
 See the [CPU TCP contract and recipe](docs/cpu-tcp.md) for behavior and limits.
 
@@ -31,6 +32,7 @@ On Linux with Rust 1.85+ and permission to bind loopback sockets:
 ```sh
 cargo run --locked --example tcp_roundtrip
 cargo run --locked --example external_host
+cargo run --locked --example notifications
 cargo test --locked
 ```
 
@@ -39,6 +41,9 @@ source in a separate OS process, verifies READ/WRITE bytes, restarts it on the
 same address and rejects requests carrying its old source epoch.
 The external-host example registers a pre-existing allocation without copying
 it and uses absolute addresses to build the transfer. It does not pin pages.
+The notification example verifies READ bytes and a single completion message.
+Data completion and notification delivery have separate outcomes; a lost
+notification receipt does not authorize replaying completed data or the message.
 
 ## Implementation plan
 

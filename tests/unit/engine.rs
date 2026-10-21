@@ -51,13 +51,17 @@ fn batch_admission_bounds_concurrent_operations_and_restores_capacity() {
 
 #[test]
 fn invalid_configuration_fails_before_binding_or_spawning_threads() {
-    let mut configs = vec![EngineConfig::default(); 6];
+    let mut configs = vec![EngineConfig::default(); 10];
     configs[0].handler_threads = 0;
     configs[1].max_registered_regions = 4097;
     configs[2].max_transfer_bytes = (64 << 20) + 1;
     configs[3].max_inflight_bytes = 0;
     configs[4].handler_timeout = Duration::ZERO;
     configs[5].handler_timeout = Duration::from_secs(301);
+    configs[6].max_pending_notifications = 0;
+    configs[7].max_notification_bytes = (64 << 10) + 1;
+    configs[8].max_pending_notification_bytes = 0;
+    configs[9].max_pending_notification_bytes = 1024;
     for config in configs {
         assert!(matches!(
             TransferEngine::new(config),

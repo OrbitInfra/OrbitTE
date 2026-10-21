@@ -6,8 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::{
-    EngineConfig, Error, HostMemory, Permission, RemoteEffect, RemoteSegment, SourceEpoch,
-    TransferEngine, TransferOp, TransferRequest,
+    EngineConfig, Error, HostMemory, Notification, NotificationEffect, NotificationStatus,
+    Permission, RemoteEffect, RemoteSegment, SourceEpoch, TransferEngine, TransferOp,
+    TransferRequest,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -222,13 +223,24 @@ fn execution_failure_preserves_completed_prefix_and_skips_later_requests() {
         request(&local, region(&peer, third.id()), 16, 0, 8),
     ];
     let report = requester
-        .submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
+        .submit_and_notify(
+            TransferOp::Read,
+            &peer,
+            &requests,
+            &Notification {
+                name: "scope".into(),
+                message: "complete".into(),
+            },
+            TIMEOUT,
+        )
         .unwrap();
     assert_eq!(
         (report.completed_requests, report.transferred_bytes),
         (1, 8)
     );
     assert_eq!(report.failure.unwrap().request_index, 1);
+    assert!(matches!(report.notification, NotificationStatus::Skipped));
+    assert!(source.receive_notifications().unwrap().is_empty());
     let mut bytes = [0; 24];
     local.read(0, &mut bytes).unwrap();
     assert_eq!(&bytes[..8], &[1; 8]);
@@ -272,7 +284,25 @@ fn peer_process_fixture() {
             bytes, [0xa7; 256],
             "independent source did not observe the WRITE"
         );
+        assert_eq!(
+            source.receive_notifications().unwrap(),
+            [
+                Notification {
+                    name: "read".into(),
+                    message: "1024".into()
+                },
+                Notification {
+                    name: "write".into(),
+                    message: "256".into()
+                },
+                Notification {
+                    name: "确认".into(),
+                    message: String::new()
+                },
+            ]
+        );
     }
+    assert!(source.receive_notifications().unwrap().is_empty());
     source.close_source(TIMEOUT).unwrap();
     source.unregister_memory(&memory).unwrap();
     drop(memory);
@@ -400,13 +430,23 @@ fn two_process_restart_fences_old_authority() {
         ),
     ];
     let report = requester
-        .submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
+        .submit_and_notify(
+            TransferOp::Read,
+            &peer,
+            &requests,
+            &Notification {
+                name: "read".into(),
+                message: "1024".into(),
+            },
+            TIMEOUT,
+        )
         .unwrap();
     assert_eq!(
         (report.completed_requests, report.transferred_bytes),
         (2, 1024)
     );
     assert!(report.is_complete());
+    assert!(matches!(report.notification, NotificationStatus::Delivered));
     let mut bytes = [0; 1024];
     local.read(0, &mut bytes).unwrap();
     for (index, byte) in bytes.iter().enumerate() {
@@ -420,7 +460,7 @@ fn two_process_restart_fences_old_authority() {
     local.write(0, &[0xa7; 256]).unwrap();
     assert!(
         requester
-            .submit_and_wait(
+            .submit_and_notify(
                 TransferOp::Write,
                 &peer,
                 &[request_addresses(
@@ -430,15 +470,41 @@ fn two_process_restart_fences_old_authority() {
                     process.address + 128,
                     256
                 )],
+                &Notification {
+                    name: "write".into(),
+                    message: "256".into()
+                },
                 TIMEOUT
             )
             .unwrap()
             .is_complete()
     );
+    requester
+        .send_notification(
+            &peer,
+            &Notification {
+                name: "确认".into(),
+                message: String::new(),
+            },
+            TIMEOUT,
+        )
+        .unwrap();
     process.finish(true);
 
     let mut replacement = PeerProcess::start(process.endpoint);
     assert_ne!(process.epoch, replacement.epoch);
+    let stale = requester
+        .send_notification(
+            &peer,
+            &Notification {
+                name: "stale".into(),
+                message: String::new(),
+            },
+            TIMEOUT,
+        )
+        .unwrap_err();
+    assert!(matches!(stale.error, Error::EpochMismatch));
+    assert_eq!(stale.effect, NotificationEffect::None);
     assert!(matches!(
         requester.open_segment(replacement.endpoint, process.epoch, TIMEOUT),
         Err(Error::EpochMismatch)

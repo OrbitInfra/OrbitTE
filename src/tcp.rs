@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 use crate::engine::{Source, deadline, remaining};
 use crate::memory::checked_range;
 use crate::{
-    EngineConfig, Error, Permission, RemoteEffect, RemoteRegion, RemoteSegment, Result,
-    SourceEpoch, TransferOp, TransferRequest,
+    EngineConfig, Error, Notification, NotificationEffect, NotificationFailure, Permission,
+    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp, TransferRequest,
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -26,6 +26,7 @@ enum Operation {
     Describe = 0,
     Read = 1,
     Write = 2,
+    Notify = 3,
 }
 
 struct Request {
@@ -55,6 +56,7 @@ impl Request {
             0 => Operation::Describe,
             1 => Operation::Read,
             2 => Operation::Write,
+            3 => Operation::Notify,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -70,6 +72,9 @@ impl Request {
             return Err(Error::Protocol(
                 "descriptor request contains a memory range",
             ));
+        }
+        if operation == Operation::Notify && request.region != 0 {
+            return Err(Error::Protocol("notification contains a registration ID"));
         }
         Ok(request)
     }
@@ -225,6 +230,44 @@ pub(crate) fn open_segment(
         epoch,
         regions,
     })
+}
+
+pub(crate) fn notify(
+    peer: &RemoteSegment,
+    notification: &Notification,
+    deadline: Instant,
+) -> std::result::Result<(), NotificationFailure> {
+    let mut effect = NotificationEffect::None;
+    let result = (|| {
+        let mut channel = Channel::connect(peer.endpoint, deadline)?;
+        channel.write_all(
+            &Request {
+                operation: Operation::Notify,
+                epoch: peer.epoch,
+                region: 0,
+                offset: notification.name.len() as u64,
+                length: notification.message.len() as u64,
+            }
+            .encode(),
+        )?;
+        let ready = Reply::read(&mut channel, peer.epoch)?;
+        if ready.status != 9 {
+            return Err(Error::Protocol("notification missing ready response"));
+        }
+        effect = NotificationEffect::Unknown;
+        channel.write_all(notification.name.as_bytes())?;
+        channel.write_all(notification.message.as_bytes())?;
+        // Even empty strings require a body byte before the receiver may commit.
+        channel.write_all(&[0])?;
+        let receipt = Reply::read(&mut channel, peer.epoch)?;
+        if receipt.status != 0 || receipt.length != 0 {
+            return Err(Error::Protocol(
+                "notification acknowledgement length/status",
+            ));
+        }
+        Ok(())
+    })();
+    result.map_err(|error| NotificationFailure { error, effect })
 }
 
 pub(crate) fn transfer(
@@ -483,6 +526,31 @@ fn serve(channel: &mut Channel<'_>, source: &Source, max_bytes: usize) -> Result
             }
             channel.reply(source, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;
+            return Ok(());
+        }
+        if request.operation == Operation::Notify {
+            let name_length =
+                usize::try_from(request.offset).map_err(|_| Error::ResourceExhausted)?;
+            let message_length =
+                usize::try_from(request.length).map_err(|_| Error::ResourceExhausted)?;
+            let reservation = source.notifications.reserve(name_length, message_length)?;
+            let mut name = buffer(name_length)?;
+            let mut message = buffer(message_length)?;
+            channel.reply(source, 9, 0)?;
+            channel.read_exact(&mut name)?;
+            channel.read_exact(&mut message)?;
+            let mut marker = [0; 1];
+            channel.read_exact(&mut marker)?;
+            if marker != [0] {
+                return Err(Error::Protocol("invalid notification commit marker"));
+            }
+            let name = String::from_utf8(name)
+                .map_err(|_| Error::Protocol("notification name is not UTF-8"))?;
+            let message = String::from_utf8(message)
+                .map_err(|_| Error::Protocol("notification message is not UTF-8"))?;
+            remaining(channel.deadline)?;
+            reservation.commit(Notification { name, message })?;
+            channel.reply(source, 0, 0)?;
             return Ok(());
         }
         let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
