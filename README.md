@@ -26,7 +26,8 @@ local and remote lookup follows TENT's containing-buffer order.
 
 Opt-in `rdma` and `cuda` features add single-rail RC verbs with owned host
 staging, retained NVIDIA device/pinned allocations and synchronized CUDA copies.
-They share batch owners and conservatively retain unquiesced failures.
+They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
+owners and conservatively retain unquiesced failures.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
 coverage, GPUDirect, NVLink and SSD remain open. These source substages await

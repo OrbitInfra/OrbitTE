@@ -290,6 +290,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   [RDMA/CUDA gates](rdma-cuda.md). This does not register application/GPU memory
   directly, cache endpoints, implement multirail or close full P4.
 
+  The binding maintenance substage reuses published `ibverbs-sys` rather
+  than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
+  and retained DMA owners; the backend's qualification limits still apply.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -321,6 +324,9 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Hardware qualification is separate. GDR, IPC/NVLink/MNNVL, streams/events,
   producer lifecycle integration and reclaim proofs remain open.
 
+  The binding maintenance substage reuses generated `cudarc` Driver API types
+  and signatures with fallible, selective `libloading` lookup. The pinned
+  dependency keeps Rust 1.85 and the existing quiescence/retention contract.
 - [ ] Implement CUDA location/pointer classification, allocation, exact context
   restoration and retained streams/events/export/import mappings. Unexpected
   driver errors cannot select an ordinary CPU copy path.

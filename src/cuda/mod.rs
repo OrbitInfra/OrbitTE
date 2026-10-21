@@ -2,17 +2,18 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::c_void;
 use std::fmt;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use cudarc::driver::sys;
+
 use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
 mod driver;
-use driver::{Driver, check};
+use driver::{Driver, PointerAttribute, SUCCESS, check};
 
 static RETAINED_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_PINNED: AtomicUsize = AtomicUsize::new(0);
@@ -36,7 +37,7 @@ pub fn retained_resources() -> RetainedResources {
 
 struct Context {
     driver: Arc<Driver>,
-    raw: NonNull<c_void>,
+    raw: NonNull<sys::CUctx_st>,
     device: i32,
     primary: bool,
     owner: Option<Arc<dyn Send + Sync>>,
@@ -85,13 +86,13 @@ impl Context {
         let mut popped = std::ptr::null_mut();
         // SAFETY: exactly one pop pairs with this push, including operation errors.
         let code = unsafe { (self.driver.pop)(&mut popped) };
-        if code != 0 || popped != self.raw.as_ptr() {
+        if code != SUCCESS || popped != self.raw.as_ptr() {
             self.poisoned.store(true, Ordering::Release);
             RETAINED_CONTEXT.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(Arc::clone(self));
             return Err(Error::Unquiesced {
                 operation: "cuCtxPopCurrent restoration",
-                code: if code == 0 { -1 } else { code },
+                code: if code == SUCCESS { -1 } else { code as i32 },
             });
         }
         result
@@ -103,7 +104,7 @@ impl Drop for Context {
         if self.primary {
             // SAFETY: this owns one primary-context reference and no allocation
             // or context guard can remain when its final Arc reaches Drop.
-            if unsafe { (self.driver.primary_release)(self.device) } != 0 {
+            if unsafe { (self.driver.primary_release)(self.device) } != SUCCESS {
                 RETAINED_CONTEXT.fetch_add(1, Ordering::AcqRel);
                 std::mem::forget(Arc::clone(&self.driver));
                 if let Some(owner) = self.owner.take() {
@@ -269,11 +270,11 @@ impl CudaMemory {
             })?;
             let initialized = unsafe { (context.driver.memset)(allocation.address, 0, length) };
             let synced = unsafe { (context.driver.synchronize)() };
-            allocation.uncertain = synced != 0;
-            if synced != 0 {
+            allocation.uncertain = synced != SUCCESS;
+            if synced != SUCCESS {
                 return Err(Error::Unquiesced {
                     operation: "cuCtxSynchronize initialization",
-                    code: synced,
+                    code: synced as i32,
                 });
             }
             check("cuMemsetD8", initialized)
@@ -314,22 +315,38 @@ impl CudaMemory {
         let mut device = 0i32;
         // SAFETY: typed initialized outputs match CUDA's pointer attributes.
         check("cuPointerGetAttribute memory type", unsafe {
-            (driver.pointer_attribute)((&mut memory_type as *mut i32).cast(), 2, address)
+            (driver.pointer_attribute)(
+                (&mut memory_type as *mut i32).cast(),
+                PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                address,
+            )
         })?;
         let mut managed = 0u32;
         check("cuPointerGetAttribute managed", unsafe {
-            (driver.pointer_attribute)((&mut managed as *mut u32).cast(), 8, address)
+            (driver.pointer_attribute)(
+                (&mut managed as *mut u32).cast(),
+                PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED,
+                address,
+            )
         })?;
-        if memory_type != 2 || managed != 0 {
+        if memory_type != sys::CUmemorytype::CU_MEMORYTYPE_DEVICE as i32 || managed != 0 {
             return Err(Error::Unavailable(
                 "CUDA registration requires device memory (managed/host memory is not this profile)",
             ));
         }
         check("cuPointerGetAttribute context", unsafe {
-            (driver.pointer_attribute)((&mut raw as *mut driver::Context).cast(), 1, address)
+            (driver.pointer_attribute)(
+                (&mut raw as *mut driver::Context).cast(),
+                PointerAttribute::CU_POINTER_ATTRIBUTE_CONTEXT,
+                address,
+            )
         })?;
         check("cuPointerGetAttribute device", unsafe {
-            (driver.pointer_attribute)((&mut device as *mut i32).cast(), 9, address)
+            (driver.pointer_attribute)(
+                (&mut device as *mut i32).cast(),
+                PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
+                address,
+            )
         })?;
         let context = Arc::new(Context {
             driver,
@@ -423,11 +440,11 @@ impl CudaMemory {
                 }
             };
             let synced = unsafe { (context.driver.synchronize)() };
-            allocation.uncertain = synced != 0;
-            if synced != 0 {
+            allocation.uncertain = synced != SUCCESS;
+            if synced != SUCCESS {
                 return Err(Error::Unquiesced {
                     operation: "cuCtxSynchronize copy",
-                    code: synced,
+                    code: synced as i32,
                 });
             }
             check("CUDA staged copy", code)

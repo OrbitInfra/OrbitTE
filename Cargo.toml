@@ -11,13 +11,20 @@ homepage = "https://github.com/OrbitInfra/OrbitTE"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["src/**", "native/**", "build.rs", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]
 default = []
-rdma = []
-cuda = []
+rdma = ["dep:ibverbs-sys", "dep:libc"]
+cuda = ["dep:cudarc", "dep:libloading"]
+
+[dependencies]
+# 0.19.0 retains libloading 0.8 and the Rust 1.85 baseline.
+cudarc = { version = "=0.19.0", optional = true, default-features = false, features = ["std", "driver", "dynamic-loading", "cuda-12000"] }
+libloading = { version = "0.8", optional = true }
+ibverbs-sys = { version = "=0.3.2", optional = true }
+libc = { version = "0.2", optional = true }
 
 [lib]
 name = "orbit_te"

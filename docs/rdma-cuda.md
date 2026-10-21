@@ -8,12 +8,50 @@ it does not establish full B04/B01 or native TENT compatibility.
 ## Build and select a path
 
 The default crate still needs no CUDA/RDMA SDK or native dependency.
-`--features rdma` builds a small C bridge to system libibverbs (including its
-inline ABI); install Linux libibverbs development headers, a C compiler and `ar`.
-Engine, protocol, progress, admission and owners are Rust. Cross-compiling this
-bridge is currently rejected. `--features cuda` loads `libcuda.so.1` and versioned
-Driver API symbols at runtime; it does not link libcudart or require nvcc.
+`--features rdma` uses the published
+[`ibverbs-sys 0.3.2+55.0`](https://docs.rs/ibverbs-sys/0.3.2+55.0/ibverbs_sys/)
+release for the standard libibverbs ABI. It links directly to the system
+`libibverbs.so.1`. Building needs GCC with the GNU linker, CMake, libclang and
+libibverbs development/linker files; install the runtime library and the actual
+RNIC provider on each RDMA host. The dependency configures and builds vendored
+rdma-core while generating bindings; runtime linking still uses the system
+library. No Mooncake source is used.
+
+```sh
+# Debian / Ubuntu prerequisites
+sudo apt-get install g++ cmake pkg-config libclang-dev libibverbs-dev
+CC=gcc CXX=g++ cargo test --locked --all-features
+```
+
+The published dependency's symbol-version configure test failed with this
+host's Clang 20/LLD combination; GCC/GNU ld passes. The command and CI explicitly
+select that tested C toolchain. Only Linux native builds are tested; cross
+compilation remains unqualified.
+
+The standard post/poll inline operations dispatch through the provider function
+table exposed by the generated bindings. Missing callbacks return an unsupported
+error. Port queries use libibverbs' stable compatibility symbol; the engine
+consumes fields from its common output prefix. CQ errors preserve their status
+and vendor syndrome without reading success-only opcode/length fields.
+OrbitTE carries no C bridge or build script. Engine, protocol, RC setup,
+progress, admission and backing owners remain Rust.
+
+`--features cuda` uses [`cudarc 0.19.0`](https://docs.rs/cudarc/0.19.0/cudarc/driver/sys/)
+for generated Driver API types and ABI signatures, and `libloading 0.8` for
+fallible loading of the 16 required versioned entry points from `libcuda.so.1`.
+The signatures are inferred from cudarc's generated fields. Its eager loader
+is deliberately not called: a missing unrelated CUDA symbol must not panic an
+engine that only needs allocation and copy. The library is retained through
+all native owners and failed cleanup. The dependency is pinned to preserve
+Rust 1.85; newer cudarc releases using libloading 0.9 need Rust 1.88. The
+`cuda-12000` binding selection is a compile-time API baseline, not a requirement
+to install a CUDA toolkit. No libcudart, nvcc, cuBLAS or NVRTC is needed.
 Unsupported platforms/drivers remain unavailable rather than selecting CPU access.
+
+OrbitTE owns fallible QP/MR/context destruction and DMA quiescence explicitly.
+The higher-level wrappers' automatic `Drop` behavior does not supply our
+failure-retention contract. Reusing bindings does not establish GPUDirect,
+NVLink, device MR support or a new completed parity row.
 
 Set `EngineConfig.rdma = Some(RdmaConfig::new("mlx5_0"))` and explicitly choose
 the port/GID index, traffic class, hop limit and endpoint/staging budgets. An

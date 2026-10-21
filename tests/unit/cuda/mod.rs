@@ -2,7 +2,7 @@
 
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::BTreeMap;
-use std::ffi::{c_int, c_uint};
+use std::ffi::{c_int, c_uint, c_void};
 use std::sync::atomic::AtomicI32;
 use std::sync::{OnceLock, Weak};
 use std::time::Duration;
@@ -11,6 +11,7 @@ use super::*;
 use crate::{
     BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport,
 };
+use driver::Status;
 
 // The shim owns actual host backing and records Driver API boundaries. These
 // tests prove CPU ownership contracts, not GPU execution or memory ordering.
@@ -53,51 +54,60 @@ fn current() -> &'static Device {
 fn event(name: &'static str) {
     current().events.lock().unwrap().push(name);
 }
-unsafe extern "C" fn init(_: c_uint) -> c_int {
-    0
+fn status(code: c_int) -> Status {
+    match code {
+        0 => SUCCESS,
+        1 => Status::CUDA_ERROR_INVALID_VALUE,
+        201 => Status::CUDA_ERROR_INVALID_CONTEXT,
+        700 => Status::CUDA_ERROR_ILLEGAL_ADDRESS,
+        _ => panic!("unexpected CUDA test error {code}"),
+    }
 }
-unsafe extern "C" fn get(output: *mut c_int, ordinal: c_int) -> c_int {
+unsafe extern "C" fn init(_: c_uint) -> Status {
+    SUCCESS
+}
+unsafe extern "C" fn get(output: *mut c_int, ordinal: c_int) -> Status {
     unsafe {
         *output = ordinal;
     }
-    0
+    SUCCESS
 }
-unsafe extern "C" fn retain(_: *mut driver::Context, _: c_int) -> c_int {
+unsafe extern "C" fn retain(_: *mut driver::Context, _: c_int) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn release(_: c_int) -> c_int {
+unsafe extern "C" fn release(_: c_int) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn push(context: driver::Context) -> c_int {
+unsafe extern "C" fn push(context: driver::Context) -> Status {
     STACK.with(|s| s.borrow_mut().push(context as usize));
     event("push");
-    0
+    SUCCESS
 }
-unsafe extern "C" fn pop(output: *mut driver::Context) -> c_int {
+unsafe extern "C" fn pop(output: *mut driver::Context) -> Status {
     event("pop");
     let error = current().pop_error.load(Ordering::Acquire);
     if error != 0 {
-        return error;
+        return status(error);
     }
     unsafe {
-        *output = STACK.with(|s| s.borrow_mut().pop().unwrap()) as *mut c_void;
+        *output = STACK.with(|s| s.borrow_mut().pop().unwrap()) as driver::Context;
     }
-    0
+    SUCCESS
 }
-unsafe extern "C" fn sync() -> c_int {
+unsafe extern "C" fn sync() -> Status {
     event("sync");
-    current().sync_error.load(Ordering::Acquire)
+    status(current().sync_error.load(Ordering::Acquire))
 }
-unsafe extern "C" fn allocate(_: *mut u64, _: usize) -> c_int {
+unsafe extern "C" fn allocate(_: *mut u64, _: usize) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn free(_: u64) -> c_int {
+unsafe extern "C" fn free(_: u64) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> c_int {
+unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn to_host(output: *mut c_void, address: u64, length: usize) -> c_int {
+unsafe extern "C" fn to_host(output: *mut c_void, address: u64, length: usize) -> Status {
     event("DtoH");
     let error = current().copy_error.load(Ordering::Acquire);
     if error == 0 {
@@ -105,9 +115,9 @@ unsafe extern "C" fn to_host(output: *mut c_void, address: u64, length: usize) -
             std::ptr::copy_nonoverlapping(address as *const u8, output.cast(), length);
         }
     }
-    error
+    status(error)
 }
-unsafe extern "C" fn to_device(address: u64, input: *const c_void, length: usize) -> c_int {
+unsafe extern "C" fn to_device(address: u64, input: *const c_void, length: usize) -> Status {
     event("HtoD");
     let error = current().copy_error.load(Ordering::Acquire);
     // A synchronized backend error may still have changed a prefix of GPU
@@ -117,9 +127,9 @@ unsafe extern "C" fn to_device(address: u64, input: *const c_void, length: usize
         std::ptr::copy_nonoverlapping(input.cast::<u8>(), address as *mut u8, copied);
     }
 
-    error
+    status(error)
 }
-unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c_uint) -> c_int {
+unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c_uint) -> Status {
     event("pin");
     let mut bytes = vec![0; length].into_boxed_slice();
     let pointer = bytes.as_mut_ptr();
@@ -131,9 +141,9 @@ unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c
     unsafe {
         *output = pointer.cast();
     }
-    0
+    SUCCESS
 }
-unsafe extern "C" fn host_free(pointer: *mut c_void) -> c_int {
+unsafe extern "C" fn host_free(pointer: *mut c_void) -> Status {
     event("unpin");
     let error = current().free_error.load(Ordering::Acquire);
     if error == 0 {
@@ -146,29 +156,39 @@ unsafe extern "C" fn host_free(pointer: *mut c_void) -> c_int {
                 .is_some()
         );
     }
-    error
+    status(error)
 }
-unsafe extern "C" fn attribute(output: *mut c_void, attribute: c_int, address: u64) -> c_int {
+unsafe extern "C" fn attribute(
+    output: *mut c_void,
+    attribute: PointerAttribute,
+    address: u64,
+) -> Status {
     let device = device_at(address);
     unsafe {
         match attribute {
-            1 => *output.cast::<driver::Context>() = Arc::as_ptr(&device) as *mut c_void,
-            2 => *output.cast::<i32>() = device.memory_type.load(Ordering::Acquire),
-            8 => *output.cast::<u32>() = device.managed.load(Ordering::Acquire) as u32,
-            9 => *output.cast::<i32>() = 0,
-            _ => return 1,
+            PointerAttribute::CU_POINTER_ATTRIBUTE_CONTEXT => {
+                *output.cast::<driver::Context>() = Arc::as_ptr(&device) as driver::Context
+            }
+            PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE => {
+                *output.cast::<i32>() = device.memory_type.load(Ordering::Acquire)
+            }
+            PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED => {
+                *output.cast::<u32>() = device.managed.load(Ordering::Acquire) as u32
+            }
+            PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => *output.cast::<i32>() = 0,
+            _ => return Status::CUDA_ERROR_INVALID_VALUE,
         }
     }
-    0
+    SUCCESS
 }
-unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> c_int {
+unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> Status {
     let device = device_at(address);
     let bytes = unsafe { &*device.bytes.get() };
     unsafe {
         *base = bytes.as_ptr() as u64;
         *length = bytes.len();
     }
-    0
+    SUCCESS
 }
 fn driver() -> Arc<Driver> {
     Arc::new(Driver {
@@ -245,18 +265,18 @@ fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
     assert_eq!(&bytes[..4], &[0x5a; 4]);
     assert_eq!(&bytes[4..9], b"orbit");
     assert_eq!(&bytes[9..], &[0x5a; 7]);
-    owner.copy_error.store(42, Ordering::Release);
+    owner.copy_error.store(1, Ordering::Release);
     let mut untouched = [0xcc; 8];
     assert!(matches!(
         memory.read(4, &mut untouched),
-        Err(Error::Backend { code: 42, .. })
+        Err(Error::Backend { code: 1, .. })
     ));
     assert_eq!(untouched, [0xcc; 8]);
     assert!(owner.pins.lock().unwrap().is_empty());
     assert!(STACK.with(|s| s.borrow().is_empty()));
     assert!(matches!(
         memory.write(1, &[0x19; 4]),
-        Err(Error::Backend { code: 42, .. })
+        Err(Error::Backend { code: 1, .. })
     ));
     owner.copy_error.store(0, Ordering::Release);
     let mut changed = [0; 16];
