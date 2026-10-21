@@ -6,6 +6,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     InvalidConfig(&'static str),
+    BatchBusy,
+    BatchClosed,
+    BatchOpen,
+    RequesterClosed,
+    InvalidTask,
+    Cancelled,
     InvalidRange,
     PermissionDenied,
     RegionNotFound,
@@ -24,6 +30,14 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid configuration: {message}"),
+            Self::BatchBusy => f.write_str("batch work is not physically drained"),
+            Self::BatchClosed => f.write_str("batch is sealed or freed"),
+            Self::BatchOpen => {
+                f.write_str("seal the batch before waiting for a stable terminal result")
+            }
+            Self::RequesterClosed => f.write_str("requester admission is closed"),
+            Self::InvalidTask => f.write_str("task is outside the submitted batch"),
+            Self::Cancelled => f.write_str("task cancelled before physical submission"),
             Self::InvalidRange => {
                 f.write_str("transfer range is empty, overflowing or outside its registration")
             }

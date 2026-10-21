@@ -11,6 +11,8 @@ pub struct EngineConfig {
     pub max_registered_bytes: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,
+    pub max_allocated_batches: usize,
+    pub max_allocated_requests: usize,
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,
     pub max_transfer_bytes: usize,
@@ -30,6 +32,8 @@ impl Default for EngineConfig {
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,
             max_batch_requests: 1024,
+            max_allocated_batches: 32,
+            max_allocated_requests: 32 * 1024,
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,
             max_transfer_bytes: 8 << 20,
@@ -51,6 +55,8 @@ impl EngineConfig {
         }
         if self.max_registered_bytes == 0
             || self.max_batch_requests == 0
+            || self.max_allocated_batches == 0
+            || self.max_allocated_requests == 0
             || self.max_inflight_batches == 0
             || self.max_inflight_bytes == 0
             || self.max_transfer_bytes == 0

@@ -131,7 +131,7 @@ class Trace {
       auto &destination = buffers_.at("local").bytes;
       range(local, length, destination.size());
       range(remote, length, source.size());
-      entries[i].opcode = fields[0] == "READ" ? OPCODE_READ : OPCODE_WRITE;
+      entries[i].opcode = fields[0] == "WRITE" ? OPCODE_WRITE : OPCODE_READ;
       entries[i].source = destination.data() + local;
       entries[i].target_id = *peer_;
       entries[i].target_offset =
@@ -143,7 +143,13 @@ class Trace {
     require(batch != 0, "batch allocation failed");
     try {
       auto name = text(fields[3]), message = text(fields[4]);
-      if (fields[3] == "~")
+      if (fields[0] == "READ_SPLIT") {
+        require(fields[3] == "~" && !slices.empty(),
+                "invalid split submission");
+        for (size_t i = 0; i < slices.size(); ++i)
+          checked(tent_submit(requester_.get(), batch, &entries[i], 1),
+                  "append submit");
+      } else if (fields[3] == "~")
         checked(
             tent_submit(requester_.get(), batch, entries.data(), slices.size()),
             "submit");
@@ -280,7 +286,8 @@ public:
       range(offset, length, buffer.size());
       std::cout << "OBS\tBYTES\t" << fields[1] << '\t'
                 << hex(buffer.data() + offset, length) << '\n';
-    } else if ((operation == "READ" || operation == "WRITE") &&
+    } else if ((operation == "READ" || operation == "WRITE" ||
+                operation == "READ_SPLIT") &&
                fields.size() == 5) {
       transfer(fields);
     } else if (operation == "NOTIFY" && fields.size() == 5) {

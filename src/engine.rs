@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::batch::{AllocationBudget, Batch, BatchProgress};
 use crate::memory::MemoryRegistry;
 use crate::notification::NotificationInbox;
 use crate::tcp::{self, TcpTransport};
@@ -70,6 +71,9 @@ impl BatchReport {
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineStats {
+    pub allocated_batches: usize,
+    pub allocated_requests: usize,
+    pub requester_workers: usize,
     pub retained_regions: usize,
     pub retained_bytes: usize,
     pub active_source_operations: usize,
@@ -86,7 +90,8 @@ pub struct TransferEngine {
     config: EngineConfig,
     source: Arc<Source>,
     transport: TcpTransport,
-    batches: Mutex<BatchUsage>,
+    batches: Arc<RequesterAdmission>,
+    allocations: Arc<AllocationBudget>,
 }
 
 impl TransferEngine {
@@ -116,7 +121,8 @@ impl TransferEngine {
             config,
             source,
             transport,
-            batches: Mutex::default(),
+            batches: Arc::default(),
+            allocations: Arc::new(AllocationBudget::new()),
         })
     }
 
@@ -137,11 +143,16 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("source lock poisoned"))?
             .active;
+        let allocated = self.allocations.usage()?;
         let batches = self
             .batches
+            .usage
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            allocated_batches: allocated.0,
+            allocated_requests: allocated.1,
+            requester_workers: allocated.2,
             retained_regions,
             retained_bytes,
             active_source_operations,
@@ -253,14 +264,14 @@ impl TransferEngine {
         self.submit(operation, peer, requests, Some(notification), timeout)
     }
 
-    fn submit(
+    pub(crate) fn prepare(
         &self,
         operation: TransferOp,
         peer: &RemoteSegment,
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
-    ) -> Result<BatchReport> {
+    ) -> Result<PreparedSubmission> {
         if requests.len() > self.config.max_batch_requests {
             return Err(Error::ResourceExhausted);
         }
@@ -297,7 +308,43 @@ impl TransferEngine {
                 length: request.length,
             });
         }
-        let _admission = self.admit_batch(total_bytes)?;
+        let admission = self.admit_batch(total_bytes)?;
+        Ok(PreparedSubmission {
+            operation,
+            peer: peer.clone(),
+            requests: prepared,
+            notification: notification.cloned(),
+            deadline,
+            _admission: admission,
+        })
+    }
+
+    fn submit(
+        &self,
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        requests: &[TransferRequest],
+        notification: Option<&Notification>,
+        timeout: Duration,
+    ) -> Result<BatchReport> {
+        let prepared = self.prepare(operation, peer, requests, notification, timeout)?;
+        Ok(self.execute(&prepared, None))
+    }
+
+    pub(crate) fn execute(
+        &self,
+        submission: &PreparedSubmission,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> BatchReport {
+        let PreparedSubmission {
+            operation,
+            peer,
+            requests,
+            notification,
+            deadline,
+            ..
+        } = submission;
+
         let mut report = BatchReport {
             completed_requests: 0,
             transferred_bytes: 0,
@@ -308,8 +355,19 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
-        for (index, request) in prepared.iter().enumerate() {
-            if let Err((error, remote_effect)) = tcp::transfer(operation, peer, request, deadline) {
+        for (index, request) in requests.iter().enumerate() {
+            if let Some((progress, first_task)) = progress {
+                if !progress.begin_task(first_task + index) {
+                    report.failure = Some(TransferFailure {
+                        request_index: index,
+                        error: Error::Cancelled,
+                        remote_effect: RemoteEffect::None,
+                    });
+                    break;
+                }
+            }
+            if let Err((error, remote_effect)) = tcp::transfer(*operation, peer, request, *deadline)
+            {
                 report.failure = Some(TransferFailure {
                     request_index: index,
                     error,
@@ -319,16 +377,49 @@ impl TransferEngine {
             }
             report.completed_requests += 1;
             report.transferred_bytes += request.length;
+            if let Some((progress, first_task)) = progress {
+                progress.complete_task(first_task + index, request.length);
+            }
         }
         if report.is_complete() && !requests.is_empty() {
             if let Some(notification) = notification {
-                report.notification = match self.notify(peer, notification, deadline) {
+                report.notification = match self.notify(peer, notification, *deadline) {
                     Ok(()) => NotificationStatus::Delivered,
                     Err(failure) => NotificationStatus::Failed(failure),
                 };
             }
         }
-        Ok(report)
+        report
+    }
+
+    /// Allocates a bounded batch and retains this engine until explicit free or
+    /// the final detached worker exits. Submission reserves actual backing.
+    pub fn allocate_batch(self: &Arc<Self>, capacity: usize) -> Result<Batch> {
+        let _admission = self.admit_batch(0)?;
+        Batch::allocate(
+            Arc::clone(self),
+            Arc::clone(&self.allocations),
+            capacity,
+            self.config.max_batch_requests,
+            self.config.max_allocated_batches,
+            self.config.max_allocated_requests,
+        )
+    }
+
+    /// Creates and seals a single asynchronous submission. Polling and waiting
+    /// observe worker progress; a dropped handle cannot release active owners.
+    pub fn submit_async(
+        self: &Arc<Self>,
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        requests: &[TransferRequest],
+        notification: Option<&Notification>,
+        timeout: Duration,
+    ) -> Result<Batch> {
+        let mut batch = self.allocate_batch(requests.len().max(1))?;
+        batch.submit(operation, peer, requests, notification, timeout)?;
+        batch.seal()?;
+        Ok(batch)
     }
 
     /// Delivers to this engine's inbox without requiring a transport connection.
@@ -408,11 +499,40 @@ impl TransferEngine {
         Ok(())
     }
 
-    fn admit_batch(&self, bytes: usize) -> Result<BatchPermit<'_>> {
+    /// Permanently closes outgoing admission and waits for accepted calls,
+    /// including queued async work, to release physical owners. Timeout leaves
+    /// admission closed and permits another wait. Source admission is separate.
+    pub fn close_requester(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
         let mut usage = self
             .batches
+            .usage
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
+        usage.open = false;
+        while usage.count != 0 {
+            let duration = remaining(deadline)?;
+            usage = self
+                .batches
+                .drained
+                .wait_timeout(usage, duration)
+                .map_err(|_| Error::Internal("batch lock poisoned"))?
+                .0;
+        }
+        Ok(())
+    }
+
+    fn admit_batch(&self, bytes: usize) -> Result<BatchPermit> {
+        let mut usage = self
+            .batches
+            .usage
+            .lock()
+            .map_err(|_| Error::Internal("batch lock poisoned"))?;
+        if !usage.open {
+            return Err(Error::RequesterClosed);
+        }
         let new_bytes = usage
             .bytes
             .checked_add(bytes)
@@ -425,7 +545,7 @@ impl TransferEngine {
         usage.count += 1;
         usage.bytes = new_bytes;
         Ok(BatchPermit {
-            batches: &self.batches,
+            batches: Arc::clone(&self.batches),
             bytes,
         })
     }
@@ -491,25 +611,50 @@ impl Drop for SourcePermit<'_> {
     }
 }
 
-#[derive(Default)]
+pub(crate) struct PreparedSubmission {
+    pub(crate) operation: TransferOp,
+    pub(crate) peer: RemoteSegment,
+    pub(crate) requests: Vec<PreparedTransfer>,
+    pub(crate) notification: Option<Notification>,
+    deadline: Instant,
+    _admission: BatchPermit,
+}
+
 struct BatchUsage {
+    open: bool,
     count: usize,
     bytes: usize,
 }
-
-struct BatchPermit<'a> {
-    batches: &'a Mutex<BatchUsage>,
+impl Default for BatchUsage {
+    fn default() -> Self {
+        Self {
+            open: true,
+            count: 0,
+            bytes: 0,
+        }
+    }
+}
+#[derive(Default)]
+struct RequesterAdmission {
+    usage: Mutex<BatchUsage>,
+    drained: Condvar,
+}
+struct BatchPermit {
+    batches: Arc<RequesterAdmission>,
     bytes: usize,
 }
-
-impl Drop for BatchPermit<'_> {
+impl Drop for BatchPermit {
     fn drop(&mut self) {
         let mut usage = self
             .batches
+            .usage
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(|poison| poison.into_inner());
         usage.count -= 1;
         usage.bytes -= self.bytes;
+        if usage.count == 0 {
+            self.batches.drained.notify_all();
+        }
     }
 }
 

@@ -19,7 +19,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 ## Starting point and delivery states
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-tree now implements the P1.1/P1.2/P1.3/P2.1/P2.2 CPU substages described in
+tree now implements the P1.1/P1.2/P1.3/P1.4/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md). This code is not published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -59,8 +59,10 @@ trace. P1.3 adds atomic host-region registration batches and absolute-address
 requests that retain their resolved owners. The OrbitKV consumer audit remains
 at `3f4d65709e86a060f323da7e0d1b59975f6939bc`; its native fork is
 `12cbf549b6351c800de0f94a480276d216b9a43b`, with an extended request ABI.
-Asynchronous batch/task ownership and an audited allocator/native adapter remain
-open in P1/P2/P9.
+P1.4 adds bounded asynchronous batch/task ownership and requester drain for
+CPU TCP. An audited allocator/native adapter remains open in P1/P2/P9. RDMA
+and CUDA development proceeds with these owners; no hardware qualification is
+inferred from CPU progress.
 Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
 (P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
@@ -72,7 +74,7 @@ does not turn incomplete rows into completed features.
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping/oracle open |
-| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2/P1.3 implemented; broader P1 open |
+| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2/P1.3/P1.4 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Planned |
@@ -184,6 +186,18 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   coalesced in Rust; this restriction is distinguished from the frozen native
   publication behavior. This is allocator-facing input support, not an
   installed OrbitKV adapter, C ABI or CUDA-pinned qualification.
+- [x] **P1.4 — asynchronous CPU batches (Implemented, not Accepted).**
+  Bounded allocate/append/seal/status/free, stable public task indices and
+  post-seal terminal state, worker-driven progress and observational polling.
+  Task/submission data outcomes and notifications are independent. Queue time
+  consumes the submission deadline. Cancellation never releases running owners;
+  dropped handles retain the engine, backing and allocation/admission charges
+  until accepted work exits. Requester close/drain is separate from source
+  close. Real blocked TCP controls exercise cancel, wait timeout, unregister,
+  detach and release. The native comparison now uses async allocation, multiple
+  submits, repeated terminal polling and free. See [the contract](async-batches.md).
+  Merge/alias mapping, explicit progress, backend aborts, priority and native
+  deferred-free compatibility remain open; this is not the complete F08 stage.
 - [ ] Implement Rust request/status/error/options types and native engine
   construction using frozen per-engine config, without changing process-global
   environment to configure concurrent engines.
@@ -521,15 +535,18 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Review P0.1/P1.3 and rerun the [native CPU comparison](cpu-oracle.md#run-the-gates)
-alongside the [CPU gates](cpu-tcp.md#verification). Next deliver TENT's F08
-asynchronous batch/task lifecycle: bounded allocate/submit/status/free,
-terminal stability and retained physical ownership. Then close the concrete
+Review P0.1/P1.3/P1.4 and rerun the [native CPU comparison](cpu-oracle.md#run-the-gates)
+alongside the [CPU gates](cpu-tcp.md#verification). Next close the concrete
 OrbitKV allocator/native adapter using its existing generation mailbox and
-source grants. Audit the vanilla TENT and OrbitKV-extended C request layouts
-separately; a matching function name does not establish ABI compatibility.
-Keep the larger 33-symbol/native-schema oracle, wire compatibility and other
-parity work visible in P0/P9. Actual CUDA-pinned allocator, RDMA/CUDA and installed
+source grants, and develop the first host RDMA/NVIDIA paths on P1.4's owners.
+RDMA and CUDA source work may proceed before the physical test setup is ready;
+compile/shim checks leave those hardware profiles unqualified. Use the supplied
+execution-node instructions to verify live attempts, then run profile-specific
+byte and physical-owner gates before making a backend claim. Keep source/build
+and raw run evidence outside both source checkouts.
+Audit vanilla TENT and OrbitKV-extended C layouts separately. Keep the larger
+33-symbol/native-schema oracle, wire interoperability, full F08 and other parity
+work visible in P0/P6/P9. Actual CUDA-pinned allocator, RDMA/CUDA and installed
 consumer qualification remain required before adopting those profiles.
 
 Calendar estimates require measured progress on this first slice and confirmed

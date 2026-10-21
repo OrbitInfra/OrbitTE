@@ -743,3 +743,240 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         (0, 0, 0, 0)
     );
 }
+
+#[test]
+fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
+    use crate::{BatchState, TaskState};
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+
+    for queued_cancel in [true, false] {
+        let (listener, peer) = fault_peer();
+        let epoch = peer.epoch;
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let handler = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut channel = Channel {
+                stream,
+                deadline: deadline(TIMEOUT).unwrap(),
+                stopping: None,
+            };
+            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+            admitted_tx.send(()).unwrap();
+            release_rx.recv_timeout(TIMEOUT).unwrap();
+            channel
+                .write_all(
+                    &Reply {
+                        status: 0,
+                        epoch,
+                        length: 8,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            channel.write_all(&[0xa7; 8]).unwrap();
+            listener
+        });
+        let engine = Arc::new(
+            TransferEngine::new(EngineConfig {
+                max_allocated_batches: 1,
+                ..EngineConfig::default()
+            })
+            .unwrap(),
+        );
+        let fixture = common::external_memory(&[0; 8]);
+        let local = engine
+            .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
+            .unwrap();
+        let request = TransferRequest {
+            local_address: local.base_address(),
+            remote_address: peer.regions[0].base_address(),
+            length: 8,
+        };
+        let mut batch = engine.allocate_batch(2).unwrap();
+        batch
+            .submit(
+                TransferOp::Read,
+                &peer,
+                std::slice::from_ref(&request),
+                None,
+                TIMEOUT,
+            )
+            .unwrap();
+        admitted_rx.recv_timeout(TIMEOUT).unwrap();
+        let queued_timeout = if queued_cancel {
+            TIMEOUT
+        } else {
+            Duration::from_millis(20)
+        };
+        batch
+            .submit(TransferOp::Read, &peer, &[request], None, queued_timeout)
+            .unwrap();
+        if queued_cancel {
+            assert!(batch.cancel(0).unwrap());
+            assert!(batch.cancel(1).unwrap());
+        }
+        batch.seal().unwrap();
+        assert!(matches!(
+            batch.wait(Duration::from_millis(25)),
+            Err(Error::Timeout)
+        ));
+        assert_eq!(batch.task_status(0).unwrap().state, TaskState::Running);
+        assert!(!batch.status().unwrap().locally_drained);
+        assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+        assert!(matches!(
+            engine.close_requester(Duration::ZERO),
+            Err(Error::Timeout)
+        ));
+        assert!(matches!(
+            engine.allocate_batch(1),
+            Err(Error::RequesterClosed)
+        ));
+        engine.unregister_memory(&local).unwrap();
+        drop(local);
+        drop(fixture.memory);
+        assert!(fixture.owner.upgrade().is_some());
+        assert_eq!(fixture.drops.load(Ordering::SeqCst), 0);
+        release_tx.send(()).unwrap();
+        let status = batch.wait(TIMEOUT).unwrap();
+        assert_eq!(
+            status.state,
+            if queued_cancel {
+                BatchState::Cancelled
+            } else {
+                BatchState::Failed
+            }
+        );
+        assert_eq!(
+            (
+                status.completed_tasks,
+                status.transferred_bytes,
+                status.locally_drained
+            ),
+            (1, 8, true)
+        );
+        let tasks = batch.task_statuses().unwrap();
+        assert_eq!(tasks[0].state, TaskState::Completed);
+        assert_eq!(tasks[0].cancel_requested, queued_cancel);
+        let failure = tasks[1].failure.as_ref().unwrap();
+        assert!(if queued_cancel {
+            matches!(failure.error, Error::Cancelled)
+        } else {
+            matches!(failure.error, Error::Timeout)
+        });
+        assert_eq!(failure.remote_effect, RemoteEffect::None);
+        assert_eq!(failure.request_index, 1);
+        assert!(fixture.owner.upgrade().is_none());
+        assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+        engine.close_requester(TIMEOUT).unwrap();
+        let stats = engine.stats().unwrap();
+        assert_eq!(
+            (
+                stats.retained_bytes,
+                stats.inflight_batches,
+                stats.inflight_bytes
+            ),
+            (0, 0, 0)
+        );
+        let listener = handler.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+            "queued work reached the network after cancellation/deadline"
+        );
+        batch.free().unwrap();
+        assert_eq!(engine.stats().unwrap().allocated_batches, 0);
+    }
+}
+
+#[test]
+fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit() {
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+
+    let (listener, peer) = fault_peer();
+    let epoch = peer.epoch;
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let handler = thread::spawn(move || {
+        for index in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut channel = Channel {
+                stream,
+                deadline: deadline(TIMEOUT).unwrap(),
+                stopping: None,
+            };
+            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+            if index == 0 {
+                admitted_tx.send(()).unwrap();
+                release_rx.recv_timeout(TIMEOUT).unwrap();
+            }
+            channel
+                .write_all(
+                    &Reply {
+                        status: 0,
+                        epoch,
+                        length: 8,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            channel.write_all(&[0xa7; 8]).unwrap();
+        }
+    });
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            max_allocated_batches: 1,
+            ..EngineConfig::default()
+        })
+        .unwrap(),
+    );
+    let weak_engine = Arc::downgrade(&engine);
+    let fixture = common::external_memory(&[0; 8]);
+    let local = engine
+        .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
+        .unwrap();
+    let request = TransferRequest {
+        local_address: local.base_address(),
+        remote_address: peer.regions[0].base_address(),
+        length: 8,
+    };
+    let mut batch = engine.allocate_batch(2).unwrap();
+    batch
+        .submit(
+            TransferOp::Read,
+            &peer,
+            std::slice::from_ref(&request),
+            None,
+            TIMEOUT,
+        )
+        .unwrap();
+    batch
+        .submit(TransferOp::Read, &peer, &[request], None, TIMEOUT)
+        .unwrap();
+    admitted_rx.recv_timeout(TIMEOUT).unwrap();
+    engine.unregister_memory(&local).unwrap();
+    drop(local);
+    drop(fixture.memory);
+    drop(batch);
+    assert_eq!(engine.stats().unwrap().allocated_batches, 1);
+    assert!(matches!(
+        engine.allocate_batch(1),
+        Err(Error::ResourceExhausted)
+    ));
+    assert!(fixture.owner.upgrade().is_some());
+    drop(engine);
+    assert!(weak_engine.upgrade().is_some());
+    release_tx.send(()).unwrap();
+    handler.join().unwrap();
+    let end = Instant::now() + TIMEOUT;
+    while weak_engine.upgrade().is_some() || fixture.owner.upgrade().is_some() {
+        assert!(
+            Instant::now() < end,
+            "detached batch did not drain and release its actual owners"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+}

@@ -41,7 +41,7 @@ outputs is insufficient.
 | --- | --- | --- |
 | F04 host registration | Existing backing, single and batch duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation, failover and mixed peers |
-| F08 terminal completion | Native batch polled repeatedly before free; notifications must not be redelivered | Asynchronous multi-target hooks and merged task aliases |
+| F08 batch lifetime | Both drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
 | Selected F09 C output | Native notification result reuse, reset on free and repeated free | OrbitTE C ABI and the remaining 33-symbol/native contract |
 
@@ -53,7 +53,10 @@ range via one real batch call; later single unregister calls must release every
 reference. New duplicate descriptors in one native batch are outside this trace.
 `FILL` and `BYTES` specify offsets/lengths. `READ`/`WRITE` take a label,
 comma-separated `local_offset:remote_offset:length` slices, notification name
-and message. `~` disables the attached notification; `-` means empty strings
+and message. `READ_SPLIT` submits each slice separately into one allocated
+batch, without notification. The Rust driver seals after append; frozen native
+TENT has no seal API. Both poll completion repeatedly, verify bytes/counts and
+free every batch before cleanup. `~` disables the attached notification; `-` means empty strings
 or an empty slice list. `NOTIFY` selects local/remote delivery; `TAKE` drains
 the source inbox. Fixtures use bounded, valid ranges and C-string-compatible
 messages. Random addresses, IDs and timing are excluded from observations;
