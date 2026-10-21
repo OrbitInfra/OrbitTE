@@ -9,10 +9,29 @@ ownership with those consumers.
 
 ## Status
 
-**Early development.** This initial prerelease establishes the repository and
-Rust package. No transfer API or transport backend is implemented yet. The
-package is not ready for application use; TENT API/wire compatibility and
-performance have not been established.
+**Early development.** The source tree implements owned CPU memory registration,
+epoch-fenced P2P descriptors, bounded synchronous TCP READ/WRITE batches and
+source close/drain. Real loopback and independent-process tests cover bytes,
+restart fencing and failure ownership. The published `0.1.0-alpha.1` is still
+the original identity-only package; this implementation has not been released.
+
+The first protocol is OrbitTE-only. TENT API/wire compatibility, RDMA, NVIDIA
+GPU paths, notifications and SSD transports remain open. This is an initial
+CPU substage, pending independent review and hardware/installed qualification.
+See the [CPU TCP contract and recipe](docs/cpu-tcp.md) for behavior and limits.
+
+## Try the source
+
+On Linux with Rust 1.85+ and permission to bind loopback sockets:
+
+```sh
+cargo run --locked --example tcp_roundtrip
+cargo test --locked
+```
+
+The example prints `18 bytes: hello from OrbitTE`. The test suite includes a
+source in a separate OS process, verifies READ/WRITE bytes, restarts it on the
+same address and rejects requests carrying its old source epoch.
 
 ## Implementation plan
 
@@ -38,6 +57,8 @@ accelerator platforms are outside the implementation scope.
 ```sh
 cargo fmt --check
 cargo check --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 cargo publish --dry-run --locked
 ```
 
@@ -46,4 +67,6 @@ cargo publish --dry-run --locked
 Licensed under Apache-2.0. See [LICENSE](LICENSE).
 
 [Mooncake TENT](https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent)
-is the capability baseline. This bootstrap contains no Mooncake source code.
+is the capability and architecture baseline. The Rust runtime has no Mooncake
+C++ dependency. The implementation and its development protocol are original
+Rust code; source correspondence is recorded in the [CPU contract](docs/cpu-tcp.md).

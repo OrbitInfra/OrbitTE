@@ -18,8 +18,9 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 ## Starting point and delivery states
 
-`orbit-te 0.1.0-alpha.1` is published. The repository contains package metadata,
-documentation and bootstrap CI. There is no transfer implementation yet.
+`orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
+tree now implements the P1.1/P2.1 CPU substage described in
+[the CPU TCP contract](cpu-tcp.md). This code is not published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
 
@@ -31,18 +32,36 @@ Use these states for each substage and each claimed hardware profile:
 | Accepted | An independent reviewer inspected the diff, reran relevant gates and accepted the evidence and remaining limits |
 | Unqualified / Failed | Required hardware/evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
-No runtime stage is currently implemented, qualified or accepted. The reference
-revision and initial source inventory are recorded; P0's executable contracts
-and oracle harness are still required. Missing hardware leaves a profile
-unqualified and visible in the full target.
+P1.1/P2.1 are implemented and have local Linux loopback/process test evidence;
+neither is independently accepted. No complete numbered stage is qualified.
+P0's TENT oracle and compatibility fixtures remain open. Missing hardware leaves
+a profile unqualified and visible in the full target.
+
+## OrbitKV delivery priority
+
+Prioritize the transfer contracts OrbitKV consumes before widening provider
+coverage. At OrbitKV `a9befeec596bb9064d25d34f93d07fe59077809d`, the current
+transfer owner needs stable allocator registration, P2P segment lookup, batched
+READ, authoritative source epochs, source close/drain, generation-scoped
+notifications and NIC-load observations. Source authority comes from the
+source grant; a refreshed endpoint must not silently replace that epoch.
+
+The first source delivery implements P1.1/P2.1 below with owned CPU allocations.
+Next close the consumer gaps in P1/P2/P9: a frozen CPU comparison trace, external
+pinned-allocation ownership and address mapping, bounded notification delivery,
+and the adapter surface. Qualify that profile under P10/P11 before switching
+OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
+(P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
+ready. The complete parity inventory remains the target; the delivery priority
+does not turn incomplete rows into completed features.
 
 ## Delivery sequence
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | Planned; source baseline recorded |
-| P1 | Rust engine, configuration and resource ownership | P0 | Planned |
-| P2 | P2P control plane and standard TCP vertical path | P1 | Planned |
+| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1 implemented; broader P1 open |
+| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Planned |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Planned |
@@ -120,6 +139,12 @@ native libraries. No feature is considered implemented by completing P0.
 
 Requirements: F01-F04, F08-F10 foundations, F22.
 
+- [x] **P1.1 — owned CPU foundation (Implemented, not Accepted).** Immutable
+  Rust config, random source epochs, owned stable backing, checked ranges and
+  permissions, non-reused registration IDs, retained-memory budgets, bounded
+  batch admission, resource counters and source-handler close/drain. Local
+  Linux checks pass. External pinned allocations, topology/NUMA, TENT config
+  precedence, asynchronous task/cancel/merge and native providers remain open.
 - [ ] Implement Rust request/status/error/options types and native engine
   construction using frozen per-engine config, without changing process-global
   environment to configure concurrent engines.
@@ -147,6 +172,13 @@ drive production owners. No fake test is described as a network or DMA pass.
 
 Requirements: B01; F05-F08, F11, F20 foundations.
 
+- [x] **P2.1 — first CPU TCP vertical path (Implemented, not Accepted).** Explicit
+  epoch-fenced descriptor open/refresh, sequential READ/WRITE batches with exact
+  prefix accounting, source-side validation, staged complete-slice commits,
+  final WRITE ACK, absolute I/O deadlines and bounded handlers. Real loopback,
+  concurrent and independent-process restart/byte tests pass. The development
+  protocol is OrbitTE-only; TENT mixed-peer tests, physical two-host tests,
+  notifications, automatic updates and the reference oracle remain open.
 - [ ] Implement peer identity, memory descriptors and P2P open/refresh/update
   behavior, owned RPC dispatch and handler isolation/reconnect semantics.
 - [ ] Implement actual host READ/WRITE with registration/range/permission checks,
@@ -440,11 +472,12 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Implement P0's executable CPU contract/oracle slice: freeze the 33-symbol ABI and
-native request/config schema, map memory/batch/notification/failure cases, and
-build a CPU-only reference runner outside the normal OrbitTE dependency graph.
-Then deliver P1 ownership plus P2's real two-process TCP READ/WRITE path in
-separately reviewable substages. Broader feature stages remain in the target.
+Independently review P1.1/P2.1 and rerun the [CPU gates](cpu-tcp.md#verification).
+Then deliver the frozen TENT CPU comparison trace and externally owned pinned
+allocation contract required by OrbitKV, followed by bounded notifications and
+the native consumer adapter. Keep the larger 33-symbol/native-schema oracle,
+wire compatibility and other parity work visible in P0/P9. Hardware RDMA/CUDA
+qualification remains required before OrbitKV can adopt those profiles.
 
 Calendar estimates require measured progress on this first slice and confirmed
 maintainer, hardware and provider-SDK capacity. Hardware acquisition is a

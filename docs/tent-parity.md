@@ -1,8 +1,10 @@
 # NVIDIA TENT parity contract
 
 This document defines what OrbitTE must reproduce. Delivery is tracked only in
-[the completion plan](completion-plan.md). Every OrbitTE runtime capability below
-is currently unimplemented. The published `orbit-te 0.1.0-alpha.1` establishes
+[the completion plan](completion-plan.md). A first owned-memory/CPU TCP substage
+is implemented in the source tree; its scope and remaining parity gaps are
+listed in the [CPU contract](cpu-tcp.md). No complete requirement row below is
+qualified or accepted yet. The published `orbit-te 0.1.0-alpha.1` still establishes
 package identity and provides no transfer API.
 
 The selected purpose is a network and memory transfer engine for CPU DRAM and
