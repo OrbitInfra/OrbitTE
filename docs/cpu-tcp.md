@@ -1,6 +1,6 @@
 # CPU TCP foundation
 
-This covers the implemented P1.1/P1.2/P2.1 substages in the
+This covers the implemented P1.1/P1.2/P2.1/P2.2 substages in the
 [completion plan](completion-plan.md), pending independent acceptance. It
 provides original Rust code with no dependencies and no C++ TENT runtime.
 The source changes have not been published; crates.io `0.1.0-alpha.1` still
@@ -18,6 +18,7 @@ Use its ownership boundaries while implementing the OrbitKV consumer path:
 | `runtime/segment`, `segment_tracker`, registration lifecycle | `src/memory.rs`, `src/segment.rs` | Shared allocation owners, reference-counted ranges, base/length descriptors, bounds/permissions and epoch fencing |
 | `runtime/control_plane`, RPC dispatch | `src/tcp.rs` | Direct P2P descriptor open/explicit refresh and source-owned handlers |
 | `transport/tcp` | `src/tcp.rs` | Host byte movement, deadlines, complete READ response and final WRITE acknowledgement |
+| Local/control notification queues and submit hooks | `src/notification.rs`, `src/engine.rs`, `src/tcp.rs` | Bounded named messages, atomic polling and synchronous batch-completion delivery |
 | Config/resource observations | `src/config.rs`, `TransferEngine::stats` | Per-engine budgets and retained/admitted resource counters |
 
 The TCP-only slice keeps RPC and TCP byte ownership together. Separate control
@@ -86,6 +87,56 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
   Requester operations remain available. Engine drop stops accepts, interrupts
   socket waits and joins its workers before their final references are released.
 
+## Notification contracts
+
+`Notification { name, message }` carries application-defined UTF-8 strings;
+empty strings and deliberate repeated messages are valid. Each successful send
+enqueues one message. `send_local_notification` delivers in process, and
+`send_notification(peer, notification, timeout)` uses the same path for a peer
+whose endpoint and epoch identify this engine. Other peers use epoch-fenced TCP.
+Receipts confirm enqueue, not application consumption or persisted delivery.
+
+`receive_notifications()` atomically drains the shared queue in enqueue order
+into an owned vector; empty polling returns an empty vector. Concurrent pollers
+receive disjoint messages. Sends are ordered by actual enqueue, including local
+and remote sends; separate connections have no stronger global ordering.
+Name matching, generations, counters and waits belong to the consumer. OrbitKV
+already has a generation mailbox and one serialized native polling owner.
+
+`submit_and_notify` sends once to the batch peer only after every data request
+completes. Empty batches and failed prefixes leave `NotificationStatus::Skipped`.
+Oversized notifications fail validation before any data request. A single
+absolute deadline covers data and notification I/O. `BatchReport::is_complete`
+reports data completion; inspect `report.notification` separately. A full inbox
+can produce successful data bytes plus `NotificationStatus::Failed`. Such a
+result never authorizes replaying committed data.
+
+The receiver reserves count/bytes before sending ready. Partial, invalid UTF-8
+or malformed bodies never enter the inbox; reservations release only when the
+handler exits or commits. Draining unrelated messages cannot release an active
+reservation. Source close rejects new local/remote sends, drains admitted sends
+and leaves already queued messages readable until engine destruction.
+
+`NotificationFailure.effect` is `None` before a body can be committed and
+`Unknown` after body submission without a final receipt. Unknown outcomes are
+never automatically replayed. Manual retries can duplicate a delivered message;
+this profile has no message-ID deduplication or durable exactly-once guarantee.
+Queue limits and UTF-8 validation are explicit Rust-profile restrictions.
+
+At the frozen revision, [`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
+owns the local queue and notification hooks, clears each receive poll, and
+merges transport/local deliveries. A hook records unique request targets,
+waits for all its tasks, and removes each successfully notified target so later
+polls do not redeliver it. Empty submissions have no target to notify.
+[`local_notification_test.cpp`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/tests/local_notification_test.cpp)
+checks self-delivery, completed-transfer hooks and repeated polling;
+[`notification_fallback_test.cpp`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/tests/notification_fallback_test.cpp)
+restricts fallback to unavailable channels, not ambiguous posts. This is source
+correspondence, not an executed native differential comparison. Multi-target
+asynchronous hooks, transport merging/fallback and the native C free/output
+conventions remain open. The Rust CPU path makes one attempt and reports an
+uncertain receipt rather than retaining a hook that retries it on later polls.
+
 ## Budgets and profile
 
 | Default | Value | Accounting |
@@ -93,11 +144,13 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
 | Bind | `127.0.0.1:0` | OS selects a loopback port; an explicit routable bind is required for other hosts |
 | Retained registrations | 1,024 / 1 GiB | Counts retained registration ranges, including unregistered handles/handlers; exact duplicates charge once, distinct overlapping ranges each charge; protocol limit 4,096 regions |
 | Batch descriptors | 1,024 | Whole batch rejected before I/O if exceeded |
-| In-flight requester batches | 32 | Includes descriptor-open calls |
-| In-flight requester bytes | 64 MiB | Sum of all admitted slice lengths until their batch exits |
+| In-flight requester batches | 32 | Includes descriptor-open and explicit notification calls |
+| In-flight requester bytes | 64 MiB | Admitted slice lengths plus notification name/message bytes until the call exits |
 | One payload | 8 MiB | Configurable up to 64 MiB; each source independently enforces its limit |
 | Source workers / queue | 4 / 4 sockets | Fixed worker pool and bounded socket queue; queue overflow closes the connection |
 | Source timeout | 5 s | Monotonic accept-to-handler deadline, configurable in `(0, 300s]` |
+| Pending notifications | 1,024 / 1 MiB | Queued messages plus reserved incoming bodies; empty messages still consume a count |
+| One notification | 64 KiB | Combined UTF-8 bytes of name/message, configurable downwards and enforced at both ends |
 
 Only Linux host-memory loopback is tested in this delivery. Entropy comes from
 `/dev/urandom`; failure to read it fails construction. This protocol uses plain
@@ -106,7 +159,8 @@ authentication. There is one connection per request, sequential batch execution,
 bounded payload staging and no topology selection or performance claim.
 
 `stats()` samples retained regions/bytes, active source operations and requester
-batch/byte admission. Counters are sampled under separate locks, not one global
+batch/byte admission, queued notifications and retained notification count/bytes
+(including reservations). Counters are sampled under separate locks, not one global
 atomic snapshot. Full TENT metrics and NIC-load observations remain open.
 These counters bound registered/retained ranges, not the footprint of an
 arbitrary external allocator owner or caller-held `HostMemory`. OrbitKV retains
@@ -131,15 +185,16 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 2**, not TENT's YLT RPC framing or HP-TCP.
+This is **OrbitTE protocol version 3**, not TENT's YLT RPC framing or HP-TCP.
 It makes this first Rust CPU slice executable while TENT wire compatibility
 remains an explicit P0/P9 gate. Future wire changes require a version change
 and corresponding decoder rejection tests.
-Version 2 adds base addresses to descriptors; version 1 peers are explicitly
-rejected. There is no legacy-protocol fallback.
+Version 2 added base addresses; version 3 adds reserved notification admission,
+body submission and final receipts. Versions 1 and 2 are explicitly rejected.
+There is no legacy-protocol fallback.
 
 Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`2`), a
+Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`3`), a
 one-byte operation/status and one zero reserved byte.
 
 | Frame | Remaining fields |
@@ -148,12 +203,15 @@ one-byte operation/status and one zero reserved byte.
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
 | Descriptor payload | Region count (4), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1) and zero reserved bytes (7) |
 
-Operations: `0` describe, `1` READ, `2` WRITE. Describe requires zero ID/range.
+Operations: `0` describe, `1` READ, `2` WRITE, `3` notify. Describe requires zero
+ID/range. Notify requires ID zero; offset is name length and length is message
+length, both in UTF-8 bytes. Its body is name bytes, message bytes and a zero
+commit marker. Even two empty strings require that marker before enqueue.
 Permissions: `0` local-only (omitted from exported descriptors), `1` remote
 read, `2` remote write, `3` remote read/write. Errors carry no payload.
 Statuses: `0` success, `1` epoch mismatch, `2` unknown region, `3` permission
 denied, `4` invalid range, `5` source closed, `6` exhausted, `7` protocol error,
-`8` internal error, `9` WRITE ready. Unknown versions, flags, IDs, enum values,
+`8` internal error, `9` WRITE/notification ready. Unknown versions, flags, IDs, enum values,
 overflowing/out-of-bounds ranges and oversized payloads are rejected.
 
 READ: request → success header and exactly the requested bytes. WRITE:
@@ -161,6 +219,10 @@ request → ready → exactly the requested bytes → final success. The source
 commits only a complete WRITE body; the requester commits only a complete READ
 body. A dropped or invalid reply never authorizes replay. Describe replies are
 bounded independently of the transfer payload limit, at 4 + 4,096 × 32 bytes.
+Notify: request → reserve inbox and reply ready → complete body and marker →
+validate/enqueue → final success with zero length. Rejection before ready
+proves no enqueue; lost final receipt leaves delivery uncertain. Incomplete
+bodies release their reservations when the owning handler exits.
 
 ## Verification
 
@@ -172,6 +234,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo run --locked --example tcp_roundtrip
 cargo run --locked --example external_host
+cargo run --locked --example notifications
 cargo publish --dry-run --locked
 ```
 
@@ -188,6 +251,12 @@ resolution. Additional controls prove actual owner release only after handler
 exit, duplicate references, alias serialization and invalid address metadata.
 The ignored `peer_process_fixture` is invoked by that parent gate; it is not a
 skipped runtime qualification case.
+The same process gate now verifies attached READ/WRITE messages, explicit
+Unicode messages, empty polling and stale-epoch notification rejection after
+replacement. `tests/notifications.rs` checks shared local/remote queue bounds,
+concurrent senders/pollers and data completion despite notification failure.
+Wire controls cover reserved-body ownership during drain/close, malformed UTF-8,
+empty/incomplete bodies and unknown final receipts without replay.
 
 CI runs the same CPU checks on stable Rust and the declared 1.85 MSRV. This is
 source-level CPU evidence. Physical two-host, installed release, frozen C++
@@ -195,9 +264,10 @@ oracle, mixed-peer, RDMA and NVIDIA hardware gates remain unqualified.
 
 ## Remaining OrbitKV integration boundary
 
-The API now accepts existing host allocations and resolves source addresses.
-OrbitKV still needs the concrete allocator adapter, a generation-scoped
-notification mailbox and native bindings before migration. Its allocator must
+The API now accepts existing host allocations, resolves source addresses and
+delivers bounded notifications. OrbitKV still needs the concrete allocator/native
+adapter and must connect its existing generation mailbox to this polling API
+before migration. Its allocator must
 honor the external-access and retention contract. This substage does not change OrbitKV's
 Mooncake dependency. RDMA registration/completion and CUDA memory need their
 own backing, context and physical-drain proof; this CPU result cannot qualify

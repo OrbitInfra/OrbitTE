@@ -39,13 +39,13 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x02\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x03\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 3]);
     assert_eq!(request.encode().as_slice(), expected);
-    for (index, value) in [(0, 0), (9, 1), (9, 3), (10, 255), (11, 1)] {
+    for (index, value) in [(0, 0), (9, 1), (9, 2), (9, 4), (10, 255), (11, 1)] {
         let mut malformed = request.encode();
         malformed[index] = value;
         assert!(Request::decode(&malformed).is_err());
@@ -435,5 +435,215 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
             "malformed descriptor case {case}"
         );
         server.join().unwrap();
+    }
+}
+
+#[test]
+fn notification_reservations_survive_drains_and_source_close() {
+    let engine = TransferEngine::new(EngineConfig {
+        max_pending_notifications: 2,
+        max_pending_notification_bytes: 8,
+        max_notification_bytes: 8,
+        ..EngineConfig::default()
+    })
+    .unwrap();
+    let first = Notification {
+        name: "a".into(),
+        message: "b".into(),
+    };
+    engine.send_local_notification(&first).unwrap();
+    for (id, name, message, status) in [(1, 0, 0, 7), (0, u64::MAX, 1, 6), (0, 0, 9, 6)] {
+        let mut rejected = wire_request(&engine, Operation::Notify, id, name, message);
+        let mut reply = [0; REPLY_SIZE];
+        rejected.read_exact(&mut reply).unwrap();
+        assert_eq!(reply[10], status);
+    }
+    let mut pending = wire_request(&engine, Operation::Notify, 0, 2, 4);
+    assert_eq!(
+        Reply::read(&mut pending, engine.source_epoch())
+            .unwrap()
+            .status,
+        9
+    );
+    assert_eq!(engine.stats().unwrap().retained_notification_bytes, 8);
+    let mut rejected = wire_request(&engine, Operation::Notify, 0, 0, 0);
+    assert!(matches!(
+        Reply::read(&mut rejected, engine.source_epoch()),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(engine.receive_notifications().unwrap(), [first]);
+    let usage = engine.stats().unwrap();
+    assert_eq!(
+        (
+            usage.queued_notifications,
+            usage.retained_notifications,
+            usage.retained_notification_bytes
+        ),
+        (0, 1, 6)
+    );
+    assert!(matches!(
+        engine.close_source(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    pending.write_all(b"na12").unwrap();
+    assert!(engine.receive_notifications().unwrap().is_empty());
+    pending.write_all(b"34\0").unwrap();
+    assert_eq!(
+        Reply::read(&mut pending, engine.source_epoch())
+            .unwrap()
+            .status,
+        0
+    );
+    engine.close_source(TIMEOUT).unwrap();
+    assert_eq!(
+        engine.receive_notifications().unwrap(),
+        [Notification {
+            name: "na".into(),
+            message: "1234".into()
+        }]
+    );
+    assert_eq!(engine.stats().unwrap().retained_notifications, 0);
+    let mut closed = wire_request(&engine, Operation::Notify, 0, 0, 0);
+    assert!(matches!(
+        Reply::read(&mut closed, engine.source_epoch()),
+        Err(Error::SourceClosed)
+    ));
+}
+
+#[test]
+fn malformed_and_incomplete_notifications_never_enter_the_inbox() {
+    for (name, message, body, rejected) in [
+        (1, 0, vec![0xff, 0], true),
+        (0, 1, vec![0xff, 0], true),
+        (0, 0, vec![1], true),
+        (1, 2, vec![b'a', b'b'], false),
+        (0, 0, vec![], false),
+    ] {
+        let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+        let mut pending = wire_request(&engine, Operation::Notify, 0, name, message);
+        assert_eq!(
+            Reply::read(&mut pending, engine.source_epoch())
+                .unwrap()
+                .status,
+            9
+        );
+        pending.write_all(&body).unwrap();
+        if rejected {
+            assert!(matches!(
+                Reply::read(&mut pending, engine.source_epoch()),
+                Err(Error::Protocol(_))
+            ));
+        } else {
+            pending.stream.shutdown(Shutdown::Both).unwrap();
+        }
+        engine.close_source(TIMEOUT).unwrap();
+        assert!(engine.receive_notifications().unwrap().is_empty());
+        let usage = engine.stats().unwrap();
+        assert_eq!(
+            (
+                usage.retained_notifications,
+                usage.retained_notification_bytes
+            ),
+            (0, 0)
+        );
+    }
+}
+
+#[test]
+fn lost_notification_receipt_never_replays_or_erases_completed_data() {
+    for attached in [false, true] {
+        let (listener, peer) = fault_peer();
+        let epoch = peer.epoch;
+        let handler = thread::spawn(move || {
+            if attached {
+                let (stream, _) = listener.accept().unwrap();
+                let mut channel = Channel {
+                    stream,
+                    deadline: deadline(TIMEOUT).unwrap(),
+                    stopping: None,
+                };
+                let mut header = [0; REQUEST_SIZE];
+                channel.read_exact(&mut header).unwrap();
+                assert!(Request::decode(&header).unwrap().operation == Operation::Read);
+                channel
+                    .write_all(
+                        &Reply {
+                            status: 0,
+                            epoch,
+                            length: 8,
+                        }
+                        .encode(),
+                    )
+                    .unwrap();
+                channel.write_all(&[0xa7; 8]).unwrap();
+            }
+            let (stream, _) = listener.accept().unwrap();
+            let mut channel = Channel {
+                stream,
+                deadline: deadline(TIMEOUT).unwrap(),
+                stopping: None,
+            };
+            let mut header = [0; REQUEST_SIZE];
+            channel.read_exact(&mut header).unwrap();
+            let request = Request::decode(&header).unwrap();
+            assert!(request.operation == Operation::Notify);
+            assert_eq!((request.offset, request.length), (0, 0));
+            channel
+                .write_all(
+                    &Reply {
+                        status: 9,
+                        epoch,
+                        length: 0,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let mut marker = [1];
+            channel.read_exact(&mut marker).unwrap();
+            assert_eq!(marker, [0]);
+            // Enqueue succeeded at the source, but its final receipt is lost.
+            listener
+        });
+        let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+        let notification = Notification {
+            name: String::new(),
+            message: String::new(),
+        };
+        let failure = if attached {
+            let request = fault_request(&engine, &peer);
+            let report = engine
+                .submit_and_notify(
+                    TransferOp::Read,
+                    &peer,
+                    std::slice::from_ref(&request),
+                    &notification,
+                    TIMEOUT,
+                )
+                .unwrap();
+            assert!(report.is_complete());
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (1, 8)
+            );
+            let mut bytes = [0; 8];
+            request.local.read(0, &mut bytes).unwrap();
+            assert_eq!(bytes, [0xa7; 8]);
+            match report.notification {
+                crate::NotificationStatus::Failed(failure) => failure,
+                other => panic!("unexpected notification outcome: {other:?}"),
+            }
+        } else {
+            engine
+                .send_notification(&peer, &notification, TIMEOUT)
+                .unwrap_err()
+        };
+        assert!(matches!(failure.error, Error::Io(_)));
+        assert_eq!(failure.effect, NotificationEffect::Unknown);
+        let listener = handler.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+        assert_eq!(engine.stats().unwrap().inflight_batches, 0);
     }
 }

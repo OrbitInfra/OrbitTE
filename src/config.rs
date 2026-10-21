@@ -13,6 +13,11 @@ pub struct EngineConfig {
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,
     pub max_transfer_bytes: usize,
+    /// Count and payload budgets include queued messages and incoming bodies.
+    pub max_pending_notifications: usize,
+    pub max_pending_notification_bytes: usize,
+    /// Combined UTF-8 bytes of a single notification name and message.
+    pub max_notification_bytes: usize,
     pub handler_threads: usize,
     pub handler_timeout: Duration,
 }
@@ -27,6 +32,9 @@ impl Default for EngineConfig {
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,
             max_transfer_bytes: 8 << 20,
+            max_pending_notifications: 1024,
+            max_pending_notification_bytes: 1 << 20,
+            max_notification_bytes: 64 << 10,
             handler_threads: 4,
             handler_timeout: Duration::from_secs(5),
         }
@@ -53,6 +61,16 @@ impl EngineConfig {
         }
         if self.handler_threads == 0 || self.handler_threads > 128 {
             return Err(Error::InvalidConfig("handler threads must be in 1..=128"));
+        }
+        if self.max_pending_notifications == 0
+            || self.max_pending_notification_bytes == 0
+            || self.max_notification_bytes == 0
+            || self.max_notification_bytes > 64 << 10
+            || self.max_notification_bytes > self.max_pending_notification_bytes
+        {
+            return Err(Error::InvalidConfig(
+                "notification budgets must be positive; each message fits the inbox and is at most 64 KiB",
+            ));
         }
         if self.handler_timeout.is_zero() || self.handler_timeout > Duration::from_secs(300) {
             return Err(Error::InvalidConfig("handler timeout must be in (0, 300s]"));

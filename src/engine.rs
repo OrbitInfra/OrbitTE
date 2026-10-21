@@ -3,10 +3,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::memory::{MemoryRegistry, checked_range};
+use crate::notification::NotificationInbox;
 use crate::tcp::{self, TcpTransport};
 use crate::{
-    EngineConfig, Error, HostMemory, Permission, RegisteredMemory, RemoteRegion, RemoteSegment,
-    Result, SourceEpoch,
+    EngineConfig, Error, HostMemory, Notification, NotificationFailure, NotificationStatus,
+    Permission, RegisteredMemory, RemoteRegion, RemoteSegment, Result, SourceEpoch,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,9 +49,11 @@ pub struct BatchReport {
     pub completed_requests: usize,
     pub transferred_bytes: usize,
     pub failure: Option<TransferFailure>,
+    pub notification: NotificationStatus,
 }
 
 impl BatchReport {
+    /// Whether all data transfers completed; inspect `notification` separately.
     pub fn is_complete(&self) -> bool {
         self.failure.is_none()
     }
@@ -65,6 +68,10 @@ pub struct EngineStats {
     pub active_source_operations: usize,
     pub inflight_batches: usize,
     pub inflight_bytes: usize,
+    pub queued_notifications: usize,
+    /// Queued messages plus incoming bodies that reserved inbox capacity.
+    pub retained_notifications: usize,
+    pub retained_notification_bytes: usize,
 }
 
 /// Engine, source registry and bounded TCP handler ownership.
@@ -85,6 +92,11 @@ impl TransferEngine {
                 epoch,
                 config.max_registered_regions,
                 config.max_registered_bytes,
+            ),
+            notifications: NotificationInbox::new(
+                config.max_pending_notifications,
+                config.max_pending_notification_bytes,
+                config.max_notification_bytes,
             ),
             admission: Mutex::new(SourceAdmission {
                 open: true,
@@ -110,6 +122,8 @@ impl TransferEngine {
 
     pub fn stats(&self) -> Result<EngineStats> {
         let (retained_regions, retained_bytes) = self.source.registry.usage()?;
+        let (queued_notifications, retained_notifications, retained_notification_bytes) =
+            self.source.notifications.usage()?;
         let active_source_operations = self
             .source
             .admission
@@ -126,6 +140,9 @@ impl TransferEngine {
             active_source_operations,
             inflight_batches: batches.count,
             inflight_bytes: batches.bytes,
+            queued_notifications,
+            retained_notifications,
+            retained_notification_bytes,
         })
     }
 
@@ -196,11 +213,39 @@ impl TransferEngine {
         requests: &[TransferRequest],
         timeout: Duration,
     ) -> Result<BatchReport> {
+        self.submit(operation, peer, requests, None, timeout)
+    }
+
+    /// Sends one notification to this peer after every request completes.
+    /// Empty or failed batches do not notify. Data and notification completion
+    /// share one deadline, but their results are reported separately.
+    pub fn submit_and_notify(
+        &self,
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        requests: &[TransferRequest],
+        notification: &Notification,
+        timeout: Duration,
+    ) -> Result<BatchReport> {
+        self.submit(operation, peer, requests, Some(notification), timeout)
+    }
+
+    fn submit(
+        &self,
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        requests: &[TransferRequest],
+        notification: Option<&Notification>,
+        timeout: Duration,
+    ) -> Result<BatchReport> {
         if requests.len() > self.config.max_batch_requests {
             return Err(Error::ResourceExhausted);
         }
         let deadline = deadline(timeout)?;
-        let mut total_bytes = 0usize;
+        let mut total_bytes = match notification {
+            Some(notification) => self.validate_notification(notification)?,
+            None => 0,
+        };
         for request in requests {
             self.source.registry.check_owner(&request.local)?;
             self.source.registry.get(request.local.id())?;
@@ -235,6 +280,11 @@ impl TransferEngine {
             completed_requests: 0,
             transferred_bytes: 0,
             failure: None,
+            notification: if notification.is_some() {
+                NotificationStatus::Skipped
+            } else {
+                NotificationStatus::NotRequested
+            },
         };
         for (index, request) in requests.iter().enumerate() {
             if let Err((error, remote_effect)) = tcp::transfer(operation, peer, request, deadline) {
@@ -248,7 +298,66 @@ impl TransferEngine {
             report.completed_requests += 1;
             report.transferred_bytes += request.length;
         }
+        if report.is_complete() && !requests.is_empty() {
+            if let Some(notification) = notification {
+                report.notification = match self.notify(peer, notification, deadline) {
+                    Ok(()) => NotificationStatus::Delivered,
+                    Err(failure) => NotificationStatus::Failed(failure),
+                };
+            }
+        }
         Ok(report)
+    }
+
+    /// Delivers to this engine's inbox without requiring a transport connection.
+    pub fn send_local_notification(&self, notification: &Notification) -> Result<()> {
+        let _admission = self.source.admit()?;
+        self.source.notifications.push(notification)
+    }
+
+    /// A successful receipt means enqueued, not application-consumed. An unknown
+    /// outcome must not be automatically retried; deliberate repeated messages
+    /// are distinct deliveries, as in TENT.
+    pub fn send_notification(
+        &self,
+        peer: &RemoteSegment,
+        notification: &Notification,
+        timeout: Duration,
+    ) -> std::result::Result<(), NotificationFailure> {
+        let deadline = deadline(timeout)?;
+        let bytes = self.validate_notification(notification)?;
+        let _admission = self.admit_batch(bytes)?;
+        self.notify(peer, notification, deadline)
+    }
+
+    /// Atomically drains this engine's shared inbox in enqueue order. An empty
+    /// poll returns an empty vector; concurrent receivers never share a message.
+    /// Already queued messages remain drainable after source admission closes.
+    pub fn receive_notifications(&self) -> Result<Vec<Notification>> {
+        self.source.notifications.receive()
+    }
+
+    fn validate_notification(&self, notification: &Notification) -> Result<usize> {
+        let bytes = notification.byte_len()?;
+        if bytes > self.config.max_notification_bytes {
+            return Err(Error::ResourceExhausted);
+        }
+        Ok(bytes)
+    }
+
+    fn notify(
+        &self,
+        peer: &RemoteSegment,
+        notification: &Notification,
+        deadline: Instant,
+    ) -> std::result::Result<(), NotificationFailure> {
+        remaining(deadline)?;
+        if peer.source_epoch() == self.source_epoch() && peer.endpoint() == self.endpoint() {
+            self.send_local_notification(notification)
+                .map_err(Into::into)
+        } else {
+            tcp::notify(peer, notification, deadline)
+        }
     }
 
     /// Closes source admission permanently, then waits for handlers already
@@ -320,6 +429,7 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 pub(crate) struct Source {
     pub(crate) epoch: SourceEpoch,
     pub(crate) registry: MemoryRegistry,
+    pub(crate) notifications: NotificationInbox,
     admission: Mutex<SourceAdmission>,
     drained: Condvar,
 }

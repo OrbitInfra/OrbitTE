@@ -1,4 +1,4 @@
-//! Rust-owned memory registration and epoch-fenced CPU TCP transfers.
+//! Rust-owned memory, epoch-fenced CPU TCP transfers and bounded notifications.
 //!
 //! This first implementation follows TENT's engine, segment/control-plane and
 //! transport ownership boundaries. Its versioned development protocol is
@@ -38,6 +38,7 @@ mod config;
 mod engine;
 mod error;
 mod memory;
+mod notification;
 mod segment;
 mod tcp;
 
@@ -48,6 +49,7 @@ pub use engine::{
 };
 pub use error::{Error, Result};
 pub use memory::{HostMemory, Permission, RegisteredMemory};
+pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 
 #[cfg(test)]

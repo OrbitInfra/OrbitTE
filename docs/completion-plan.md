@@ -19,7 +19,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 ## Starting point and delivery states
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-tree now implements the P1.1/P1.2/P2.1 CPU substages described in
+tree now implements the P1.1/P1.2/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md). This code is not published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -34,8 +34,8 @@ Use these states for each substage and each claimed hardware profile:
 
 P1.1/P2.1 were merged in #2 after passing stable/MSRV CI and local CPU checks.
 P1.2 adds externally owned host ranges and absolute-address descriptors. These
-have local Linux loopback/process evidence; independent acceptance is still
-open. No complete numbered stage is qualified.
+and P2.2's bounded notifications have local Linux loopback/process evidence;
+independent acceptance is still open. No complete numbered stage is qualified.
 P0's TENT oracle and compatibility fixtures remain open. Missing hardware leaves
 a profile unqualified and visible in the full target.
 
@@ -50,8 +50,11 @@ source grant; a refreshed endpoint must not silently replace that epoch.
 
 P1.1/P2.1 establish the CPU path; P1.2 adds externally owned host allocations,
 duplicate registration references, shared alias locking and address lookup.
-Next close the consumer gaps in P1/P2/P9: a frozen CPU comparison trace, bounded
-notification delivery and the concrete allocator/native adapter surface.
+P2.2 adds bounded local/remote notifications and separate attached-delivery
+outcomes. OrbitKV already owns generation scopes and matching counts in its
+notification mailbox (verified at `3f4d65709e86a060f323da7e0d1b59975f6939bc`);
+those remain consumer policy. Next close the consumer gaps in P1/P2/P9: a frozen
+CPU comparison trace and the concrete allocator/native adapter surface.
 Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
 (P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
@@ -64,7 +67,7 @@ does not turn incomplete rows into completed features.
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | Planned; source baseline recorded |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2 implemented; broader P1 open |
-| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1 implemented; broader P2 open |
+| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Planned |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Planned |
@@ -189,7 +192,17 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   final WRITE ACK, absolute I/O deadlines and bounded handlers. Real loopback,
   concurrent and independent-process restart/byte tests pass. The development
   protocol is OrbitTE-only; TENT mixed-peer tests, physical two-host tests,
-  notifications, automatic updates and the reference oracle remain open.
+  transport notification fallback, automatic updates and the reference oracle
+  remain open.
+- [x] **P2.2 — bounded CPU notifications (Implemented, not Accepted).** TENT-style
+  named local/remote messages, atomic drain/empty polling and one attached
+  message after successful nonempty synchronous batches. Queue count/bytes
+  include incoming reservations. Source close drains admitted handlers and
+  leaves queued messages readable. Data results remain intact if notification
+  delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
+  malformed/partial-body, queue-pressure and independent-process restart tests
+  pass. This uses OrbitTE wire v3; native C allocation/free, asynchronous
+  multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [ ] Implement peer identity, memory descriptors and P2P open/refresh/update
   behavior, owned RPC dispatch and handler isolation/reconnect semantics.
 - [ ] Implement actual host READ/WRITE with registration/range/permission checks,
@@ -483,9 +496,11 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Review P1.2 and rerun the [CPU gates](cpu-tcp.md#verification), including the
-external-host recipe. Next deliver the frozen TENT CPU comparison trace and
-bounded notifications, then the concrete OrbitKV allocator/native adapter.
+Review P1.2/P2.2 and rerun the [CPU gates](cpu-tcp.md#verification), including the
+external-host and notification recipes. Next deliver the frozen TENT CPU
+comparison trace, then the concrete OrbitKV allocator/native adapter. Reuse
+OrbitKV's existing generation mailbox rather than implementing cache scopes
+inside the transfer engine.
 Keep the larger 33-symbol/native-schema oracle,
 wire compatibility and other parity work visible in P0/P9. Hardware RDMA/CUDA
 qualification remains required before OrbitKV can adopt those profiles.
