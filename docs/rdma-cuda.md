@@ -142,7 +142,9 @@ The controller verifies host/boot identity, deploys only the native binary and
 supervisor to a unique `/var/tmp/orbitte-runs/` directory, verifies its hash and
 holds nonblocking resource locks through each child lifetime. Per-peer native
 work has a 55-second supervision deadline; the source also has a 45-second
-completion deadline. Only owned children can be terminated. SSH disconnection
+completion deadline. Only owned children can be terminated. If an owned child
+cannot be reaped after termination/kill, the supervisor reports failed cleanup
+and keeps its resource locks until waitpid confirms exit. SSH disconnection
 does not discard supervision. Raw commands, failures, stdout/stderr and manifests
 remain in the selected external output directory; keys/tokens never enter a
 bundle. The runner does not reconfigure a platform job or its duration.

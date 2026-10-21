@@ -79,7 +79,9 @@ class Controller:
                     record = self.collect(node, root)
                     evidence[node + ':' + root] = record
                     if record['result.json'] is not None:
-                        pending.remove((node, root))
+                        result = json.loads(record['result.json'])
+                        if result.get('child_reaped') and result.get('resource_locks_released'):
+                            pending.remove((node, root))
                 except Exception as error:
                     evidence[node + ':' + root] = {'collection_error': str(error)}
             if pending:

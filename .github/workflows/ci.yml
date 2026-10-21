@@ -37,5 +37,8 @@ jobs:
         run: cargo test --locked --features "$ORBITTE_FEATURES"
       - name: CPU trace fixture and comparator controls
         run: python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbitte-cpu-trace-${{ matrix.toolchain }}"
+      - name: Native peer supervision ownership control
+        if: matrix.toolchain == 'stable' && matrix.features == ''
+        run: python3 -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
         run: cargo publish --dry-run --locked --features "$ORBITTE_FEATURES"

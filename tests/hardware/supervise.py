@@ -21,6 +21,7 @@ def supervise(config_path):
     root = config_path.parent
     result = {'hostname': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'started_unix': time.time(), 'supervisor_pid': os.getpid()}
     locks = []
+    process = None
     try:
         if result['hostname'] != config['hostname'] or result['boot_id'] != config['boot_id']:
             raise RuntimeError('host/boot identity changed')
@@ -57,6 +58,16 @@ def supervise(config_path):
     except Exception as error:
         result.update(status='failed', error=str(error))
     finally:
+        if process is not None and process.poll() is None:
+            # Even SIGKILL cannot prove that an uninterruptible native child
+            # exited. Publish failure, then retain the resource leases until
+            # waitpid proves termination. Never make a busy GPU/NIC reusable.
+            result.update(status='failed', child_reaped=False, resource_locks_released=False)
+            write(root / 'result.json', result)
+            while process.poll() is None:
+                time.sleep(1)
+            result['exit_code'] = process.wait()
+        result['child_reaped'] = True
         result['finished_unix'] = time.time()
         for lock in locks:
             lock.close()
