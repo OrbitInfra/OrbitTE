@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -38,6 +39,27 @@ class UnreapedChild:
 
 
 class SupervisionOwnership(unittest.TestCase):
+    def test_starter_reaps_supervisor_and_native_peer_before_returning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case = root / 'case'
+            case.mkdir()
+            binary = root / 'hardware_peer'
+            binary.write_bytes(b'#!/bin/sh\nexit 0\n')
+            binary.chmod(0o700)
+            lock = root / 'resource.lock'
+            lock.touch()
+            config = case / 'config.json'
+            config.write_text(json.dumps({'hostname': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'locks': [str(lock)], 'arguments': [], 'timeout_seconds': 2}))
+            process = subprocess.run([sys.executable, '-B', str(Path(supervise.__file__)), 'start', str(config)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            supervisor_pid = json.loads(process.stdout)['supervisor_pid']
+            result = json.loads((case / 'result.json').read_text())
+            self.assertEqual(result['status'], 'passed')
+            self.assertTrue(result['child_reaped'])
+            self.assertFalse(Path('/proc', str(supervisor_pid)).exists())
+            self.assertFalse(Path('/proc', str(result['native_pid'])).exists())
+
     def test_kill_timeout_retains_lock_until_child_is_reaped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -20,6 +20,7 @@ class Controller:
         self.remote = '/var/tmp/orbitte-runs/' + output.name + '-' + uuid.uuid4().hex[:12]
         self.commands = []
         self.started = []
+        self.connections = []
 
     def command(self, command, *, allow_failure=False):
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
@@ -67,7 +68,12 @@ class Controller:
         self.ssh(node, ['mkdir', '-m', '700', '-p', root])
         self.copy(node, local, root + '/config.json')
         self.started.append((node, root))
-        self.ssh(node, ['python3', self.remote + '/supervise.py', 'start', root + '/config.json'])
+        command = ['ssh', '-F', self.profile['ssh_config'], target['alias'], shlex.join(['python3', self.remote + '/supervise.py', 'start', root + '/config.json'])]
+        stdout = self.output / (Path(root).name + '-starter.stdout')
+        stderr = self.output / (Path(root).name + '-starter.stderr')
+        with stdout.open('wb') as output, stderr.open('wb') as errors:
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=errors)
+        self.connections.append((process, command, stdout, stderr))
 
     def settle(self):
         pending = list(self.started)
@@ -86,9 +92,17 @@ class Controller:
                     evidence[node + ':' + root] = {'collection_error': str(error)}
             if pending:
                 time.sleep(0.5)
-        result = {'all_supervised_children_reaped': not pending, 'unconfirmed': pending, 'evidence': evidence}
+        connections = []
+        for process, command, stdout, stderr in self.connections:
+            try:
+                code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                code = None
+            connections.append({'command': command, 'local_ssh_pid': process.pid, 'exit_code': code, 'stdout': str(stdout), 'stderr': str(stderr)})
+        reaped = not pending and all(connection['exit_code'] == 0 for connection in connections)
+        result = {'all_supervised_children_reaped': reaped, 'unconfirmed': pending, 'evidence': evidence, 'starter_connections': connections}
         (self.output / 'cleanup.json').write_text(json.dumps(result, indent=2) + '\n')
-        return not pending
+        return reaped
 
     def case(self, index, case):
         source, requester = case['source'], case['requester']

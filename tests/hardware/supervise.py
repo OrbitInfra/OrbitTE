@@ -75,13 +75,20 @@ def supervise(config_path):
         write(root / 'result.json', result)
 
 
+def start(config):
+    with (config.parent / 'supervisor.log').open('ab') as log:
+        process = subprocess.Popen([sys.executable, __file__, 'supervise', str(config)], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    print(json.dumps({'supervisor_pid': process.pid}), flush=True)
+    # Keep an explicit waiter: a container PID 1 need not reap orphaned daemons.
+    # The supervised child still has its own session if SSH disconnects.
+    return process.wait()
+
+
 if __name__ == '__main__':
     action, config = sys.argv[1:]
     config = Path(config).resolve()
     if action == 'start':
-        with (config.parent / 'supervisor.log').open('ab') as log:
-            process = subprocess.Popen([sys.executable, __file__, 'supervise', str(config)], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-        print(json.dumps({'supervisor_pid': process.pid}))
+        raise SystemExit(start(config))
     elif action == 'supervise':
         supervise(config)
     else:
