@@ -616,3 +616,56 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
     );
     assert!(!events.contains(&"destroy_cq"));
 }
+
+#[test]
+fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
+    let mut runtime = runtime("direct:async_abort_lock_pause");
+    runtime.config.max_endpoints = 2;
+    runtime.config.max_direct_bytes = 16;
+    let mut first = runtime.staging_endpoint(8, 2).unwrap();
+    let mut second = runtime.staging_endpoint(8, 2).unwrap();
+    let events = crate::rdma::tests::events(&runtime);
+    let pause = crate::rdma::tests::pause(&runtime);
+    let record = Arc::clone(&second.record);
+    let constructor = record.lock().unwrap();
+    crate::rdma::device::tests::emit_async(&runtime, 3);
+    wait_blocked(&pause);
+    crate::rdma::device::tests::emit_async(&runtime, 255);
+    wait_until(|| runtime.stats().unwrap().async_event_workers == 0);
+    release(&pause);
+    drop(constructor);
+    wait_until(|| runtime.stats().unwrap().retained_endpoints == 2);
+    assert!(matches!(first.close(), Err(Error::Unquiesced { .. })));
+    assert!(matches!(second.close(), Err(Error::Unquiesced { .. })));
+    drop(first);
+    drop(second);
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_endpoints,
+            stats.retained_endpoints,
+            stats.retained_windows,
+            stats.direct_bytes
+        ),
+        (2, 2, 2, 16)
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(events.iter().filter(|s| **s == "destroy_qp").count(), 1);
+    assert!(!events.contains(&"destroy_cq"));
+    assert!(!events.contains(&"deregister"));
+}
+
+pub(super) fn before_abort_lock(shared: &Shared, record: &Record) {
+    if shared.config.device != "async_abort_lock_pause" || record.tag != 1 {
+        return;
+    }
+    let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
+    let pause = crate::rdma::device::tests::pause_device(&device);
+    let (lock, changed) = &*pause;
+    let mut state = lock.lock().unwrap();
+    state.0 = true;
+    changed.notify_all();
+    while !state.1 {
+        state = changed.wait(state).unwrap();
+    }
+}

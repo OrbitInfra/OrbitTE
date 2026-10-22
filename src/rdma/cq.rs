@@ -256,12 +256,12 @@ impl Progress {
     }
 
     pub(super) fn handle(&self) -> Result<*mut std::ffi::c_void> {
-        self.shared.asynchronous.check()?;
         let control = self
             .shared
             .control
             .lock()
             .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
+        self.shared.asynchronous.check()?;
         if let Some(fault) = control.fault {
             return Err(fault.error());
         }
@@ -273,12 +273,12 @@ impl Progress {
     }
 
     pub(super) fn register(&self, resources: Box<Resources>) -> Result<Arc<Record>> {
-        self.shared.asynchronous.check()?;
         let mut control = self
             .shared
             .control
             .lock()
             .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
+        self.shared.asynchronous.check()?;
         if let Some(fault) = control.fault {
             return Err(fault.error());
         }
@@ -713,11 +713,14 @@ impl Shared {
         // Fence accepted constructors under the same lock as native QP creation.
         // No other thread polls or submits native WRs.
         for record in records {
+            #[cfg(test)]
+            tests::before_abort_lock(self, record);
+            let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
+                drop(request);
                 self.retain(operation, code);
                 return;
             }
-            let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             request.failure.get_or_insert(fault);
             let Some(resources) = &mut request.resources else {
                 continue;
@@ -760,10 +763,6 @@ impl Shared {
     }
 
     fn post(&self, record: &Arc<Record>) -> bool {
-        if let Err(error) = self.asynchronous.check() {
-            self.fail(Fault::from_error(error));
-            return false;
-        }
         if record.actions.load(Ordering::Acquire) & WORK == 0 {
             return false;
         }
@@ -809,6 +808,11 @@ impl Shared {
             }
         };
         let mut posted = sys::PostResult::default();
+        if let Err(error) = self.asynchronous.check() {
+            drop(request);
+            self.fail(Fault::from_error(error));
+            return false;
+        }
         *phase = Phase::Posted;
         let code = unsafe {
             match work.operation {

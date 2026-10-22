@@ -16,7 +16,12 @@ pub(crate) fn events(runtime: &Runtime) -> Arc<Mutex<Vec<&'static str>>> {
 }
 
 pub(crate) fn pause(runtime: &Runtime) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
-    let owner = runtime.device().unwrap();
+    pause_device(&runtime.device().unwrap())
+}
+
+pub(in crate::rdma) fn pause_device(
+    owner: &Device,
+) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
     let state = owner.state.lock().unwrap();
     let State::Open(resources) = &*state else {
         panic!("device is not open");

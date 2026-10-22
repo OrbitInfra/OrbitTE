@@ -95,7 +95,6 @@ impl Device {
         memory: &RegisteredMemory,
     ) -> Result<()> {
         let address = memory.host_address()?;
-        self.asynchronous.check()?;
         let state = self
             .state
             .lock()
@@ -103,6 +102,7 @@ impl Device {
         let State::Open(resources) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the MR owner retains the exact registration and actual Device.
         check("ibv_reg_mr", unsafe {
             (self.verbs.register_local)(
@@ -115,7 +115,6 @@ impl Device {
     }
 
     pub(super) fn create_cq(&self, handles: &mut sys::Handles, capacity: u32) -> Result<()> {
-        self.asynchronous.check()?;
         let state = self
             .state
             .lock()
@@ -123,6 +122,7 @@ impl Device {
         let State::Open(resources) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the progress owner retains the real Device through CQ close.
         check("ibv_create_cq", unsafe {
             (self.verbs.create_cq)(handles, &resources.handles, capacity)
@@ -137,7 +137,6 @@ impl Device {
         psn: u32,
         local: &mut Descriptor,
     ) -> Result<()> {
-        self.asynchronous.check()?;
         let state = self
             .state
             .lock()
@@ -145,6 +144,7 @@ impl Device {
         let State::Open(device) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the request and progress lane retain the Device and shared CQ;
         // its mutex excludes progress/cleanup while these handles initialize.
         let code = unsafe {
