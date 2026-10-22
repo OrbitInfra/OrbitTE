@@ -113,8 +113,7 @@ fn finish(
     payload: usize,
     bytes: usize,
 ) -> Result<()> {
-    engine.close_requester(TIMEOUT)?;
-    engine.close_source(TIMEOUT)?;
+    engine.close(TIMEOUT)?;
     engine.unregister_memory(&memory)?;
     drop(memory);
     drop(backing);
@@ -125,9 +124,13 @@ fn finish(
         || stats.allocated_batches != 0
         || stats.requester_workers != 0
         || stats.active_source_operations != 0
+        || rdma.active_devices != 0
+        || rdma.retained_devices != 0
         || rdma.active_endpoints != 0
         || rdma.staging_bytes != 0
         || rdma.retained_endpoints != 0
+        || rdma.retained_bytes != 0
+        || rdma.opened_devices != u64::from(transport == Transport::Rdma)
     {
         return Err(Error::Internal("resource counters did not drain"));
     }
@@ -139,8 +142,8 @@ fn finish(
         return Err(Error::Internal("CUDA resources were retained"));
     }
     println!(
-        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_endpoints\":0,\"staging_bytes\":0,\"completed_rdma_reads\":{},\"completed_rdma_writes\":{}}}",
-        rdma.completed_reads, rdma.completed_writes
+        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"completed_rdma_reads\":{},\"completed_rdma_writes\":{}}}",
+        rdma.opened_devices, rdma.completed_reads, rdma.completed_writes
     );
     Ok(())
 }

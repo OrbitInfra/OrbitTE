@@ -7,9 +7,26 @@ use ibverbs_sys as ffi;
 use super::Descriptor;
 
 #[repr(C)]
-pub(super) struct Handles {
+pub(super) struct DeviceHandles {
     pub context: *mut c_void,
     pub pd: *mut c_void,
+}
+
+impl Default for DeviceHandles {
+    fn default() -> Self {
+        Self {
+            context: std::ptr::null_mut(),
+            pd: std::ptr::null_mut(),
+        }
+    }
+}
+
+// libibverbs contexts and PDs support calls from multiple threads. Device owns
+// these handles behind a mutex and retains them through every child endpoint.
+unsafe impl Send for DeviceHandles {}
+
+#[repr(C)]
+pub(super) struct Handles {
     pub cq: *mut c_void,
     pub qp: *mut c_void,
     pub mr: *mut c_void,
@@ -18,8 +35,6 @@ pub(super) struct Handles {
 impl Default for Handles {
     fn default() -> Self {
         Self {
-            context: std::ptr::null_mut(),
-            pd: std::ptr::null_mut(),
             cq: std::ptr::null_mut(),
             qp: std::ptr::null_mut(),
             mr: std::ptr::null_mut(),
@@ -39,9 +54,10 @@ pub(super) struct Completion {
 
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
+    pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub open: unsafe extern "C" fn(
         *mut Handles,
-        *const c_char,
+        *const DeviceHandles,
         u8,
         u8,
         *mut c_void,
@@ -64,8 +80,8 @@ pub(super) struct Verbs {
     pub destroy_qp: Close,
     pub deregister: Close,
     pub destroy_cq: Close,
-    pub dealloc_pd: Close,
-    pub close_device: Close,
+    pub dealloc_pd: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
+    pub close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
 }
 
 // The opaque handles belong to Resources, not to a wrapper's infallible Drop.
@@ -78,19 +94,8 @@ fn failure() -> c_int {
         .unwrap_or(libc::EIO)
 }
 
-unsafe extern "C" fn open(
-    handles: *mut Handles,
-    name: *const c_char,
-    port: u8,
-    gid_index: u8,
-    buffer: *mut c_void,
-    length: usize,
-    permission: u32,
-    psn: u32,
-    local: *mut Descriptor,
-) -> c_int {
-    // SAFETY: Runtime supplies initialized handles/descriptor and an exclusive,
-    // stable allocation. Partial handles remain in Resources for ordered close.
+unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_char) -> c_int {
+    // SAFETY: Device owns initialized handles, including partial construction.
     unsafe {
         let h = &mut *handles;
         let mut count = 0;
@@ -112,11 +117,35 @@ unsafe extern "C" fn open(
         if error != 0 {
             return error;
         }
+        h.pd = ffi::ibv_alloc_pd(h.context.cast()).cast();
+        if h.pd.is_null() {
+            return failure();
+        }
+        0
+    }
+}
+
+unsafe extern "C" fn open(
+    handles: *mut Handles,
+    device: *const DeviceHandles,
+    port: u8,
+    gid_index: u8,
+    buffer: *mut c_void,
+    length: usize,
+    permission: u32,
+    psn: u32,
+    local: *mut Descriptor,
+) -> c_int {
+    // SAFETY: Endpoint retains the shared Device and exclusive stable bytes.
+    // Re-query addressing for each endpoint instead of caching a stale GID/LID.
+    unsafe {
+        let h = &mut *handles;
+        let device = &*device;
         let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
         // The published binding exposes the stable compatibility symbol.
         // Every port field consumed below is in its legacy output prefix.
         let error = ffi::ibv_query_port(
-            h.context.cast(),
+            device.context.cast(),
             port,
             (&mut attr as *mut ffi::ibv_port_attr).cast(),
         );
@@ -127,19 +156,15 @@ unsafe extern "C" fn open(
             return libc::ENETDOWN;
         }
         let mut gid = ffi::ibv_gid { raw: [0; 16] };
-        let error = ffi::ibv_query_gid(h.context.cast(), port, i32::from(gid_index), &mut gid);
+        let error = ffi::ibv_query_gid(device.context.cast(), port, i32::from(gid_index), &mut gid);
         if error != 0 {
             return error;
         }
         if attr.link_layer == 2 && gid.raw == [0; 16] {
             return libc::EADDRNOTAVAIL;
         }
-        h.pd = ffi::ibv_alloc_pd(h.context.cast()).cast();
-        if h.pd.is_null() {
-            return failure();
-        }
         h.cq = ffi::ibv_create_cq(
-            h.context.cast(),
+            device.context.cast(),
             4,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -156,7 +181,7 @@ unsafe extern "C" fn open(
         if permission & 2 != 0 {
             access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
         }
-        h.mr = ffi::ibv_reg_mr(h.pd.cast(), buffer, length, access as c_int).cast();
+        h.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
         if h.mr.is_null() {
             return failure();
         }
@@ -169,7 +194,7 @@ unsafe extern "C" fn open(
         init.cap.max_recv_wr = 1;
         init.cap.max_send_sge = 1;
         init.cap.max_recv_sge = 1;
-        h.qp = ffi::ibv_create_qp(h.pd.cast(), &mut init).cast();
+        h.qp = ffi::ibv_create_qp(device.pd.cast(), &mut init).cast();
         if h.qp.is_null() {
             return failure();
         }
@@ -324,8 +349,8 @@ unsafe extern "C" fn poll(h: *mut Handles, result: *mut Completion) -> c_int {
 }
 
 macro_rules! destroy {
-    ($name:ident, $field:ident, $verb:ident) => {
-        unsafe extern "C" fn $name(h: *mut Handles) -> c_int {
+    ($name:ident, $owner:ident, $field:ident, $verb:ident) => {
+        unsafe extern "C" fn $name(h: *mut $owner) -> c_int {
             // SAFETY: Resources owns every handle; clearing follows native
             // success only, and the caller stops before destroying dependencies.
             unsafe {
@@ -342,13 +367,14 @@ macro_rules! destroy {
         }
     };
 }
-destroy!(destroy_qp, qp, ibv_destroy_qp);
-destroy!(deregister, mr, ibv_dereg_mr);
-destroy!(destroy_cq, cq, ibv_destroy_cq);
-destroy!(dealloc_pd, pd, ibv_dealloc_pd);
-destroy!(close_device, context, ibv_close_device);
+destroy!(destroy_qp, Handles, qp, ibv_destroy_qp);
+destroy!(deregister, Handles, mr, ibv_dereg_mr);
+destroy!(destroy_cq, Handles, cq, ibv_destroy_cq);
+destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
+destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
+    open_device,
     open,
     connect,
     post,

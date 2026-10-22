@@ -4,18 +4,48 @@ use std::ffi::{CStr, c_char, c_int, c_void};
 
 use super::*;
 
+pub(crate) struct FakeDevice {
+    mode: String,
+    pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
+    endpoints: std::sync::atomic::AtomicUsize,
+}
+
 struct Fake {
     mode: String,
+    device: *const FakeDevice,
     length: usize,
     operation: i32,
     closed: usize,
 }
 
-// This CPU ABI shim exercises ownership and errors; it is not a device emulator
-// or evidence that a provider completed DMA.
+// CPU ABI controls, not a device emulator or proof that DMA completed.
+unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char) -> c_int {
+    let mode = unsafe { CStr::from_ptr(name) }.to_str().unwrap().to_owned();
+    if mode == "device_missing" {
+        return libc::ENODEV;
+    }
+    let state = Box::into_raw(Box::new(FakeDevice {
+        mode,
+        events: Arc::new(Mutex::new(vec!["open_device"])),
+        endpoints: std::sync::atomic::AtomicUsize::new(0),
+    }));
+    unsafe {
+        (*h).context = state.cast();
+        if (*state).mode.starts_with("device_open") {
+            return libc::EIO;
+        }
+        (*state).events.lock().unwrap().push("alloc_pd");
+        (*h).pd = std::ptr::dangling_mut::<u8>().cast();
+        if (*state).mode == "device_pd_close" {
+            return libc::EIO;
+        }
+    }
+    0
+}
+
 unsafe extern "C" fn open(
     h: *mut sys::Handles,
-    name: *const c_char,
+    device: *const sys::DeviceHandles,
     _: u8,
     _: u8,
     bytes: *mut c_void,
@@ -24,18 +54,21 @@ unsafe extern "C" fn open(
     psn: u32,
     descriptor: *mut Descriptor,
 ) -> c_int {
-    let mode = unsafe { CStr::from_ptr(name) }.to_str().unwrap().to_owned();
-    let failing = mode == "open";
+    let device = unsafe { &*(*device).context.cast::<FakeDevice>() };
+    device.events.lock().unwrap().push("open_endpoint");
+    device
+        .endpoints
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let failing = device.mode == "open";
     let state = Box::into_raw(Box::new(Fake {
-        mode,
+        mode: device.mode.clone(),
+        device,
         length,
         operation: 0,
         closed: 0,
     }));
     unsafe {
-        (*h).context = state.cast();
-        (*h).pd = std::ptr::dangling_mut::<u8>().cast();
-        (*h).cq = std::ptr::dangling_mut::<u8>().cast();
+        (*h).cq = state.cast();
         (*h).qp = std::ptr::dangling_mut::<u8>().cast();
         (*h).mr = std::ptr::dangling_mut::<u8>().cast();
         *descriptor = Descriptor {
@@ -60,15 +93,15 @@ unsafe extern "C" fn connect(
     _: u8,
     _: u8,
 ) -> c_int {
-    i32::from(unsafe { &*(*h).context.cast::<Fake>() }.mode == "connect")
+    i32::from(unsafe { &*(*h).cq.cast::<Fake>() }.mode == "connect")
 }
 unsafe extern "C" fn post(h: *mut sys::Handles, _: u64, _: u32, _: u32, write: c_int) -> c_int {
-    let state = unsafe { &mut *(*h).context.cast::<Fake>() };
+    let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
     state.operation = write;
     i32::from(state.mode == "post")
 }
 unsafe extern "C" fn poll(h: *mut sys::Handles, completion: *mut sys::Completion) -> c_int {
-    let state = unsafe { &*(*h).context.cast::<Fake>() };
+    let state = unsafe { &*(*h).cq.cast::<Fake>() };
     if state.mode == "timeout" {
         return 0;
     }
@@ -88,31 +121,32 @@ unsafe extern "C" fn poll(h: *mut sys::Handles, completion: *mut sys::Completion
 }
 unsafe fn close(h: *mut sys::Handles, index: usize) -> c_int {
     let handles = unsafe { &mut *h };
-    if handles.context.is_null() {
-        return 0;
-    }
-    let state = unsafe { &mut *handles.context.cast::<Fake>() };
+    let state_pointer = handles.cq.cast::<Fake>();
     let handle = match index {
         0 => &mut handles.qp,
         1 => &mut handles.mr,
-        2 => &mut handles.cq,
-        3 => &mut handles.pd,
-        _ => &mut handles.context,
+        _ => &mut handles.cq,
     };
     if handle.is_null() {
         return 0;
     }
-    assert_eq!(
-        state.closed, index,
-        "native dependencies must be closed in order"
-    );
+    let state = unsafe { &mut *state_pointer };
+    assert_eq!(state.closed, index, "endpoint dependencies close in order");
+    let device = unsafe { &*state.device };
+    device
+        .events
+        .lock()
+        .unwrap()
+        .push(["destroy_qp", "deregister", "destroy_cq"][index]);
     if state.mode == format!("close{index}") {
         return 16;
     }
     *handle = std::ptr::null_mut();
     state.closed += 1;
-    if index == 4 {
-        // Every dependent handle has been cleared; the mock's final owner ends.
+    if index == 2 {
+        device
+            .endpoints
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         let state = state as *mut Fake;
         unsafe {
             drop(Box::from_raw(state));
@@ -129,13 +163,40 @@ unsafe extern "C" fn mr(h: *mut sys::Handles) -> c_int {
 unsafe extern "C" fn cq(h: *mut sys::Handles) -> c_int {
     unsafe { close(h, 2) }
 }
-unsafe extern "C" fn pd(h: *mut sys::Handles) -> c_int {
-    unsafe { close(h, 3) }
+unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
+    let h = unsafe { &mut *h };
+    if h.pd.is_null() {
+        return 0;
+    }
+    let state = unsafe { &*h.context.cast::<FakeDevice>() };
+    assert_eq!(state.endpoints.load(std::sync::atomic::Ordering::SeqCst), 0);
+    state.events.lock().unwrap().push("dealloc_pd");
+    if matches!(state.mode.as_str(), "close3" | "device_pd_close") {
+        return 16;
+    }
+    h.pd = std::ptr::null_mut();
+    0
 }
-unsafe extern "C" fn ctx(h: *mut sys::Handles) -> c_int {
-    unsafe { close(h, 4) }
+unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
+    let h = unsafe { &mut *h };
+    if h.context.is_null() {
+        return 0;
+    }
+    let state = unsafe { &*h.context.cast::<FakeDevice>() };
+    assert!(h.pd.is_null(), "PD closes before context");
+    assert_eq!(state.endpoints.load(std::sync::atomic::Ordering::SeqCst), 0);
+    state.events.lock().unwrap().push("close_device");
+    if matches!(state.mode.as_str(), "close4" | "device_open_close") {
+        return 16;
+    }
+    unsafe {
+        drop(Box::from_raw(h.context.cast::<FakeDevice>()));
+    }
+    h.context = std::ptr::null_mut();
+    0
 }
 static VERBS: sys::Verbs = sys::Verbs {
+    open_device,
     open,
     connect,
     post,
@@ -155,6 +216,7 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
         },
         usage: Arc::default(),
         verbs: &VERBS,
+        device: Mutex::default(),
     }
 }
 
@@ -276,7 +338,7 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
 
 #[test]
 fn teardown_failure_retains_exact_staging_and_blocks_new_admission() {
-    for index in 0..5 {
+    for index in 0..3 {
         let runtime = runtime(&format!("close{index}"));
         let mut endpoint = runtime.endpoint(8, 2).unwrap();
         assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
@@ -293,5 +355,11 @@ fn teardown_failure_retains_exact_staging_and_blocks_new_admission() {
             (1, 8, 1, 8)
         );
         assert!(matches!(runtime.endpoint(1, 0), Err(Error::Unavailable(_))));
+        assert!(runtime.close().is_err());
+        let events = super::device::tests::events(&runtime);
+        let usage = Arc::clone(&runtime.usage);
+        drop(runtime);
+        assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
+        assert_eq!(usage.lock().unwrap().active_devices, 1);
     }
 }

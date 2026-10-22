@@ -87,11 +87,20 @@ RDMA: CPU/GPU -> owned host MR -> RC RDMA READ/WRITE -> owned host MR -> CPU/GPU
 CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 ```
 
-Each RDMA slice owns a PD/CQ/QP/MR and stable host staging. READ/WRITE use real
-signaled verbs work requests and CQ completions; no application/GPU pointer is
-registered with the RNIC in this profile. This is not zero-copy host RDMA or
-GPUDirect. Endpoint caching, multirail, registered application buffers and
-pipelined chunks remain open.
+P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
+Overlapping and successive slices retain that actual shared owner; separate
+engines do not share PDs. Every slice still owns its CQ/QP/MR and stable host
+staging, with independent permissions, rkey, QP and PSN. The shared PD is not a
+source-grant authorization boundary. Port state, MTU, LID and the selected GID
+are re-queried for every new endpoint instead of reusing cached addressing.
+
+This follows the frozen TENT `e2d6e8e0` hierarchy in
+`tent/src/transport/rdma/context.cpp` and `endpoint.cpp`: context/PD outlive their
+endpoints and memory registrations. TENT's pooled CQs and endpoint/MR caches are
+not part of this substage. READ/WRITE use real signaled verbs work requests and
+CQ completions; no application/GPU pointer is registered with the RNIC. Endpoint
+caching, multirail, zero-copy host RDMA, GPUDirect and pipelined chunks remain
+open. Resource reuse alone is not a measured throughput or latency result.
 
 Source admission, authoritative epoch, registration bounds and permissions are
 checked before bootstrap. READ snapshots source bytes into its staging. WRITE
@@ -115,11 +124,36 @@ staging and context. Failed native frees retain resources and their driver.
 
 ## Failure, drain and resource ownership
 
-Endpoint count and registered staging bytes are bounded per engine. Teardown
-runs QP -> MR -> CQ -> PD -> device, stopping on the first error. Failed teardown
-retains the remaining handles, actual staging and budget; later RDMA admission
-is rejected. `RdmaStats` exposes retained endpoints/bytes and successful requester
-READ/WRITE CQ counts independently of application commit/notification results.
+Endpoint count and registered staging bytes remain bounded per engine. Each
+slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+retains the remaining handles, actual staging, its real shared device reference
+and budgets; later RDMA admission is rejected. Even dropping the engine cannot
+destroy a context/PD still retained by an endpoint.
+
+`TransferEngine::close(timeout)` locks source then requester admission, fences
+both before waiting, and gives their accepted operations one shared drain
+deadline. Already accepted work can still create its slices during this drain;
+closing admission does not cancel it. Once both owners are drained, the runtime
+permanently closes device admission, then explicitly destroys PD -> context.
+Concurrent/repeated callers serialize native destruction. A timeout leaves both
+admissions closed and the device live; another call can continue waiting.
+Native teardown failure retains the actual resources, remains charged, returns
+`Unquiesced` and cannot be retried by another close caller or Drop.
+
+`close_source` and `close_requester` preserve their independent contracts: either
+one leaves the other direction and shared device available. Neither alone nor
+the pair supplies an explicit PD/context teardown receipt. Use whole-engine
+`close` before releasing an owner's native-resource budget. Drop can attempt
+best-effort device teardown after the last endpoint disappears, but cannot
+report failure; it preserves the same retention rule. The pinned OrbitKV
+consumer still uses the earlier per-slice implementation; its pin and explicit
+shutdown-receipt migration require a separate consumer gate.
+
+`RdmaStats` adds active/retained shared device counts and successful device-open
+count. An idle open engine can have one active device and zero endpoints;
+whole-engine close returns active devices to zero on success. Existing retained
+endpoint/byte and successful requester READ/WRITE CQ counts remain independent
+of application commit/notification results.
 
 `Error::Unquiesced` means a backend could not prove termination/teardown. A
 synchronous report or async task/group can be logically failed with
@@ -138,6 +172,16 @@ shutdown and reuse qualification remain open. Synchronous native calls/teardown
 can exceed an API deadline; no hard real-time or provider interrupt is claimed.
 
 ## Verification and physical execution
+
+The P4.2b CPU controls exercise overlapping/consecutive slice reuse, device
+lifetime after runtime drop, partial device construction, every slice teardown
+failure retaining its device, PD/context cleanup failure, concurrent exactly-once
+close, directional close, whole-close admission fencing, drain timeout and a
+previously accepted operation opening its slice after the fence. The physical
+probe uses whole-engine close and requires exactly one device open per RDMA
+peer, zero shared devices after shutdown and all existing byte/guard/CQ checks.
+These new code paths need their own physical qualification; earlier consumer
+profiles pinned to `02d64e55` do not establish it.
 
 CPU-only ABI shims cover verbs descriptor layout, malformed fields, construction,
 post/poll/CQ errors, deadline and every teardown boundary; they assert exact
@@ -158,7 +202,7 @@ performs three noncontiguous READs across two appended submissions, then three
 WRITEs, generation-specific notifications and complete source/destination/guard
 comparisons. Each run varies a deterministic seed. It checks exact completion
 bytes and successful requester WR counts, then unregisters, drains and checks
-zero remaining registrations, workers, endpoints, staging and retained CUDA
+zero remaining registrations, workers, shared RDMA devices, endpoints, staging and retained CUDA
 resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
 This is a correctness pilot, not a benchmark or a full fault qualification.
 
