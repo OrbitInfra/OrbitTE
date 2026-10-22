@@ -50,6 +50,7 @@ pub(super) struct Completion {
     pub opcode: u32,
     pub length: u32,
     pub vendor_error: u32,
+    pub qpn: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +71,7 @@ pub(super) struct PostResult {
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
+    pub create_cq: unsafe extern "C" fn(*mut Handles, *const DeviceHandles, u32) -> c_int,
     pub register_local:
         unsafe extern "C" fn(*mut Handles, *const DeviceHandles, *mut c_void, usize) -> c_int,
     pub open: unsafe extern "C" fn(
@@ -153,6 +155,31 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
     }
 }
 
+unsafe extern "C" fn create_cq(
+    handles: *mut Handles,
+    device: *const DeviceHandles,
+    capacity: u32,
+) -> c_int {
+    // SAFETY: the progress owner retains this CQ and its actual Device/PD.
+    unsafe {
+        (*handles).cq = ffi::ibv_create_cq(
+            (*device).context.cast(),
+            capacity as c_int,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+        .cast();
+        if (*handles).cq.is_null() {
+            failure()
+        } else if (*(*handles).cq.cast::<ffi::ibv_cq>()).cqe < capacity as c_int {
+            libc::EOPNOTSUPP
+        } else {
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn register_local(
     handles: *mut Handles,
     device: *const DeviceHandles,
@@ -216,19 +243,8 @@ unsafe extern "C" fn open(
         if attr.link_layer == 2 && gid.raw == [0; 16] {
             return libc::EADDRNOTAVAIL;
         }
-        h.cq = ffi::ibv_create_cq(
-            device.context.cast(),
-            max_send_wr as c_int,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-        )
-        .cast();
         if h.cq.is_null() {
-            return failure();
-        }
-        if (*h.cq.cast::<ffi::ibv_cq>()).cqe < max_send_wr as c_int {
-            return libc::EOPNOTSUPP;
+            return libc::EINVAL;
         }
         let mut access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
         if permission & 1 != 0 {
@@ -461,6 +477,7 @@ unsafe extern "C" fn poll(h: *mut Handles, result: *mut Completion) -> c_int {
         if count == 1 {
             let mut output = Completion {
                 id: completion.wr_id(),
+                qpn: completion.qp_num,
                 ..Completion::default()
             };
             if let Some((status, vendor_error)) = completion.error() {
@@ -503,6 +520,7 @@ destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
     open_device,
+    create_cq,
     register_local,
     open,
     connect,

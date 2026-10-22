@@ -6,6 +6,7 @@ use crate::{Error, Result, TransferOp};
 /// Owns the signaled-WR debt until validated CQ completion or native teardown.
 pub(super) struct SendQueue {
     requests: Vec<sys::WorkRequest>,
+    first_id: u64,
     cursor: usize,
     window_start: usize,
     pending: u64,
@@ -18,10 +19,13 @@ impl SendQueue {
         base: usize,
         cap: usize,
         usage: Arc<Mutex<RdmaStats>>,
+        first_id: u64,
     ) -> Result<Self> {
         if length == 0
             || length > u32::MAX as usize
             || !(1..=64 << 20).contains(&base)
+            || first_id == 0
+            || first_id.checked_add(63).is_none()
             || !(1..=64).contains(&cap)
         {
             return Err(Error::InvalidRange);
@@ -39,7 +43,7 @@ impl SendQueue {
         for index in 0..count {
             let offset = index * block;
             requests.push(sys::WorkRequest {
-                id: index as u64 + 1,
+                id: first_id + index as u64,
                 offset: offset as u32,
                 length: (if index + 1 == count {
                     length - offset
@@ -50,6 +54,7 @@ impl SendQueue {
         }
         Ok(Self {
             requests,
+            first_id,
             cursor: 0,
             window_start: 0,
             pending: 0,
@@ -57,16 +62,20 @@ impl SendQueue {
         })
     }
 
-    pub(super) fn reserve(&mut self, limit: usize) -> Result<&[sys::WorkRequest]> {
+    pub(super) fn reserve(&mut self, limit: usize, capacity: usize) -> Result<&[sys::WorkRequest]> {
         if !(1..=64).contains(&limit) || self.pending() || self.cursor == self.requests.len() {
             return Err(Error::Internal("RDMA window state"));
         }
-        let end = (self.cursor + limit).min(self.requests.len());
-        let count = end - self.cursor;
         let mut usage = self
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+        let available = capacity.saturating_sub(usage.work_requests);
+        if available == 0 {
+            return Err(Error::ResourceExhausted);
+        }
+        let end = (self.cursor + limit.min(available)).min(self.requests.len());
+        let count = end - self.cursor;
         usage.work_requests += count;
         usage.peak_work_requests = usage.peak_work_requests.max(usage.work_requests);
         self.window_start = self.cursor;
@@ -119,9 +128,10 @@ impl SendQueue {
         completion: sys::Completion,
         operation: TransferOp,
     ) -> Result<()> {
-        let index = usize::try_from(completion.id)
-            .ok()
-            .and_then(|id| id.checked_sub(1))
+        let index = completion
+            .id
+            .checked_sub(self.first_id)
+            .and_then(|id| usize::try_from(id).ok())
             .filter(|index| *index >= self.window_start && *index < self.cursor)
             .ok_or(Error::Protocol("RDMA completion identity"))?;
         let bit = 1u64 << (index - self.window_start);

@@ -276,6 +276,67 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
 
 #[cfg(feature = "rdma")]
 #[test]
+fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners() {
+    let source = rdma_fixture("ok");
+    let requester = rdma_fixture("post_close0");
+    let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = Arc::clone(&captured);
+    crate::rdma::tests::on_requester_close(move |endpoint, transfer| {
+        assert!(matches!(
+            transfer,
+            Err(Error::Backend {
+                operation: "ibv_post_send",
+                ..
+            })
+        ));
+        // The original logical error has already been captured. Force the
+        // asynchronous native close/retention before requester reads its receipt.
+        assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
+        assert!(!endpoint.has_resources());
+        observed.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    let remote = source
+        .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(
+            source.endpoint(),
+            source.source_epoch(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    let report = requester
+        .submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[TransferRequest {
+                transport: Transport::Rdma,
+                local_address: local.base_address(),
+                remote_address: remote.base_address(),
+                length: 8,
+            }],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(captured.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!report.locally_drained);
+    assert!(matches!(
+        report.failure.unwrap().error,
+        Error::Unquiesced { .. }
+    ));
+    let stats = requester.stats().unwrap();
+    let rdma = stats.rdma.unwrap();
+    assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 1));
+    assert_eq!(stats.inflight_batches, 1);
+    assert!(requester.close(Duration::from_millis(10)).is_err());
+    source.close(Duration::from_secs(2)).unwrap();
+}
+
+#[cfg(feature = "rdma")]
+#[test]
 fn whole_close_timeout_preserves_shared_device_and_can_continue_waiting() {
     let engine = rdma_fixture("ok");
     let runtime = engine.source.rdma.as_ref().unwrap();
@@ -290,7 +351,7 @@ fn whole_close_timeout_preserves_shared_device_and_can_continue_waiting() {
     assert!(matches!(engine.close(Duration::ZERO), Err(Error::Timeout)));
     assert_eq!(runtime.stats().unwrap().active_devices, 1);
     drop(requester);
-    engine.close(Duration::ZERO).unwrap();
+    engine.close(Duration::from_secs(2)).unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
 }
 
@@ -311,7 +372,7 @@ fn directional_close_keeps_other_direction_and_shared_device_available() {
         runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
         assert_eq!(runtime.stats().unwrap().opened_devices, 1);
         assert_eq!(runtime.stats().unwrap().active_devices, 1);
-        engine.close(Duration::ZERO).unwrap();
+        engine.close(Duration::from_secs(2)).unwrap();
         assert_eq!(runtime.stats().unwrap().active_devices, 0);
     }
 }
@@ -324,7 +385,7 @@ fn whole_close_reports_device_failure_without_retrying_from_another_close() {
     runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
     for _ in 0..2 {
         assert!(matches!(
-            engine.close(Duration::ZERO),
+            engine.close(Duration::from_secs(2)),
             Err(Error::Unquiesced {
                 operation: "ibv_dealloc_pd",
                 code: 16
@@ -335,6 +396,81 @@ fn whole_close_reports_device_failure_without_retrying_from_another_close() {
     assert_eq!((stats.active_devices, stats.retained_devices), (1, 1));
     assert!(matches!(engine.source.admit(), Err(Error::SourceClosed)));
     assert!(matches!(engine.admit_batch(0), Err(Error::RequesterClosed)));
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn source_ack_follows_output_drop_and_native_quota_reuse() {
+    for mode in ["ack_pause", "direct:ack_pause"] {
+        let source = rdma_fixture(mode);
+        let requester = rdma_fixture("copy");
+        let runtime = source.source.rdma.as_ref().unwrap();
+        let pause = crate::rdma::tests::pause(runtime);
+        let remote = source
+            .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
+            .unwrap();
+        let local = requester
+            .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        let address = remote.base_address();
+        let worker = std::thread::spawn(move || {
+            let report = requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address(),
+                        remote_address: address,
+                        length: 8,
+                    }],
+                    Duration::from_secs(2),
+                )
+                .unwrap();
+            let mut bytes = [0; 8];
+            local.read(0, &mut bytes).unwrap();
+            requester.close(Duration::from_secs(2)).unwrap();
+            (report, bytes)
+        });
+        let (lock, changed) = &*pause;
+        let (state, timed) = changed
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+            .unwrap();
+        assert!(!timed.timed_out());
+        drop(state);
+        let stats = runtime.stats().unwrap();
+        let mut next = runtime.endpoint(&remote, 0, 8, 1, Instant::now() + Duration::from_secs(2));
+        if let Ok(endpoint) = &mut next {
+            endpoint.close().unwrap();
+        }
+        let reusable = next.is_ok();
+        drop(next);
+        lock.lock().unwrap().1 = true;
+        changed.notify_all();
+        let (report, bytes) = worker.join().unwrap();
+        assert!(report.failure.is_none());
+        assert_eq!(bytes, [0x42; 8]);
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.staging_bytes,
+                stats.direct_bytes
+            ),
+            (0, 0, 0)
+        );
+        assert!(
+            reusable,
+            "source endpoint/byte quota must be reusable before ACK"
+        );
+        source.close(Duration::from_secs(2)).unwrap();
+    }
 }
 
 #[cfg(feature = "rdma")]

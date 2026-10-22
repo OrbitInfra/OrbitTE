@@ -109,12 +109,36 @@ class Controller:
         source_root = self.remote + f'/{index:02}-source'
         requester_root = self.remote + f'/{index:02}-requester'
         consumer = self.profile.get('runner') == 'orbitkv-peer-host'
-        if self.profile.get('runner') not in [None, 'orbitkv-peer-host']:
+        shared = self.profile.get('runner') == 'orbitte-shared-cq'
+        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq']:
             raise ValueError('unsupported hardware runner')
         if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
             raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
 
         def command(node, role, kind, root, readiness=None):
+            if shared:
+                if case['transport'] != 'rdma' or kind != 'cpu':
+                    raise ValueError('shared CQ gate accepts host RDMA only')
+                capacity, window = case['rdma_max_cqes'], case['rdma_max_send_wr']
+                if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= 2:
+                    raise ValueError('invalid shared CQ/SQ profile')
+                arguments = ['rdma::cq::tests::hardware::shared_cq_peer', '--exact', '--ignored', '--test-threads=1', '--nocapture']
+                environment = {
+                    'ORBITTE_SHARED_ROLE': role,
+                    'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
+                    'ORBITTE_SHARED_DEVICE': self.profile['rnic'],
+                    'ORBITTE_SHARED_GID': str(self.profile['gid_index']),
+                    'ORBITTE_SHARED_PAYLOAD': str(case['payload']),
+                    'ORBITTE_SHARED_SEED': str(case['seed']),
+                    'ORBITTE_SHARED_CQES': str(capacity),
+                    'ORBITTE_SHARED_WINDOW': str(window),
+                    'ORBITTE_SHARED_MAPS': root + '/maps.txt',
+                }
+                if readiness is not None:
+                    if len(readiness) != 1:
+                        raise ValueError('invalid shared CQ readiness')
+                    environment['ORBITTE_SHARED_PEER'] = readiness[0]
+                return arguments, environment
             if consumer:
                 arguments = ['peer::orbitte::tests::rdma_host::registered_host_rdma_peer', '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
@@ -140,7 +164,7 @@ class Controller:
                 'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
                 'ORBITTE_RDMA_HOST_MEMORY': host_memory,
             }
-            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64)]:
+            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITTE_RDMA_MAX_ENDPOINTS', 4096)]:
                 value = case.get(key)
                 if value is not None:
                     if type(value) is not int or not 1 <= value <= limit:

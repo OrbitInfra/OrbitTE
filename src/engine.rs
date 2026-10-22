@@ -349,7 +349,9 @@ impl TransferEngine {
                     let usage = runtime.stats()?;
                     if usage.retained_endpoints != 0
                         || usage.retained_devices != 0
+                        || usage.retained_cqs != 0
                         || usage.retained_persistent_mrs != 0
+                        || usage.progress_failures != 0
                     {
                         return Err(Error::Unavailable("RDMA retained native resources"));
                     }

@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.5/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.6/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -100,10 +100,11 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
-engines do not share PDs. Every request owns its CQ/QP, exact direct range
-lease or stable staging. Source-grant and staging MRs remain per request, with
+engines do not share PDs. P4.6 gives that context one shared CQ and one
+post/poll worker. Every request retains its own QP, exact direct range lease or
+stable staging. Source-grant and staging MRs remain per request, with
 independent permissions, rkey, QP and PSN. P4.5 requester local-only host MRs
-outlive the request QP/CQ and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
+outlive the request QP and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
 
 This follows the frozen TENT `e2d6e8e0` hierarchy in
@@ -114,8 +115,10 @@ P4.3 establishes that direct host path with stricter exact-request MR extents
 and retained failure owners. It does not copy TENT's removal behavior that can
 erase an owner after failed deregistration. P4.5 follows TENT's independent
 registered-buffer owner and separates local MR lifetime from endpoint lifetime.
-Pooled CQs, connected endpoint reuse and shared worker progress remain future
-P4 work. Resource reuse alone is no performance result.
+P4.6 follows context-owned `cq.cpp` and worker-owned `workers.cpp` progress,
+including quota reservation and retaining a completion owner through the end
+of its handler. Connected endpoint reuse remains future P4 work. Resource reuse
+alone is no performance result.
 
 The persistent cache uses actual `RegisteredMemory` identity within one PD,
 registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` only, and
@@ -173,10 +176,13 @@ select host direct or staging. Device pointers always use declared staging.
 The requester exchanges validated descriptors, connects its RC QP and posts
 bounded windows of signaled slice WRs. After all required CQ identities,
 opcodes/statuses and READ byte counts pass, it destroys
-its QP, returns the local cached-MR borrow (or destroys its private MR), then
-closes its CQ and releases any direct range lease before sending DONE. The source
+its QP, returns the local cached-MR borrow (or destroys its private MR), and
+releases its direct range lease before sending DONE. The shared CQ continues
+serving other request QPs. The source
 then destroys its own handles and releases its direct lease, or commits WRITE
-staging, before its final ACK. Requester READ staging copies back after ACK.
+staging, and drops the source endpoint/output charge before its final ACK.
+That ACK permits the next request to reuse the native endpoint/byte quota.
+Requester READ staging copies back after ACK.
 
 P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
 `endpoint.cpp::submitSlices` and `workers.cpp` completion ownership. The base
@@ -184,15 +190,21 @@ P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
 for host-local READ or 32 for WRITE/device-local READ; CUDA-pinned host memory
 counts as host. A final tail shorter than one quarter of the chosen block folds
 into the preceding slice. The entire requested range remains leased even after
-a window's CQEs have arrived. This is one exclusive request/QP/CQ, not TENT's
-shared worker and CQ pools.
+a window's CQEs have arrived. Each request keeps an exclusive QP window within
+the shared CQ.
 
-`max_send_wr` defaults to 16 and accepts 1..64; native CQ capacity and returned
-QP capabilities must cover that many signaled WRs. One window must finish
-before the next is posted. WR IDs remain unique across the entire request.
-RDMA READ credit stays at one; SQ/CQ capacity is not a claim of simultaneous
-READ credit or throughput. Window metadata is bounded to at most 64 slices.
-Port/rail discovery, connected endpoint reuse and shared progress remain open.
+`max_send_wr` defaults to 16 and accepts 1..64 per QP. `max_cqes` defaults to
+1024 and accepts 1..4096 across all attached request QPs; `max_endpoints` accepts
+1..4096. The provider must return the requested CQ and QP capacities. The worker
+reserves the minimum of remaining slices, QP window and currently free CQ
+slots before dispatch. A full CQ backpressures other requests without losing
+owners; completing one window allows the next. Round-robin dispatch avoids a
+fixed first-QP preference. WR IDs occupy a monotonically burned block of 64 per
+request within the CQ lifetime; exhaustion refuses admission before wrapping.
+Completion routing validates both the global WR identity and native QP number.
+RDMA READ credit stays at one; SQ/CQ capacity is not a throughput claim. Window
+metadata remains bounded to at most 64 slices. Port/rail discovery, connected
+endpoint reuse, event progress and multirail remain open.
 
 Before a post dispatch, all window slots become charged. A known `bad_wr`
 identity proves only an accepted prefix and an unposted suffix. A null/foreign
@@ -200,9 +212,13 @@ pointer on post failure leaves the whole window potentially posted; the engine
 never dereferences or subtracts that pointer. Post failure stops the request
 and sends no DONE. Unknown/duplicate CQ identity, wrong success opcode/READ
 length, CQ errors and deadline expiry also stop progress. A logical failure
-clears no unproven native debt. Normal QP/MR/CQ teardown clears whatever remains;
-failed teardown retains the actual queue metadata, allocation, registration and
-charges. TENT's pre-destroy cancellation of quota is not a release proof here.
+clears no unproven native debt. An ambiguous/partially accepted post, invalid
+completion, CQ error or deadline with pending WRs poisons the entire shared
+lane. New posts and registrations stop. Every attached record is fenced under
+the same mutex used to create/connect a QP, all QPs are destroyed, then the CQ
+is destroyed before unresolved WR charges are cleared. Only then are remaining
+MRs/borrows and direct loans released. Failed teardown retains actual queue
+metadata, allocation, registration and charges. TENT's pre-destroy cancellation of quota is not a release proof here.
 
 `completed_reads`/`completed_writes` count successful slice CQEs;
 `completed_read_bytes`/`completed_write_bytes` count their exact payload bytes.
@@ -238,20 +254,35 @@ staging and context. Failed native frees retain resources and their driver.
 ## Failure, drain and resource ownership
 
 Endpoint count, registered direct host bytes and staging bytes stay bounded
-per engine. Each request tears down QP -> MR borrow/private MR -> CQ, stopping
-on the first error. Failed teardown
-retains the remaining handles, actual staging or direct registration/allocation
-lease, its real shared device reference and budgets; later RDMA admission is
-rejected. Even dropping the engine cannot destroy a context/PD still retained
+per engine. A successful request, or a provably unposted failure with no WR
+debt, tears down its QP and MR borrow/private MR while the shared CQ remains
+open. Under the request mutex, registry membership is removed before Closed
+is published. The close receipt then moves drained resources/output into the
+caller endpoint, including on a logical transfer error. A worker snapshot keeps
+only metadata; dropping the endpoint immediately returns its byte/count charge
+even if that snapshot remains alive. Output stays stable until that drop.
+A lane fault uses the all-QP/CQ barrier above. Cleanup stops on the first
+native error: the entire remaining lane, its actual owners and unresolved
+charges stay retained without retry. Later RDMA admission is rejected. A fatal
+lane remains terminal even after successful cleanup; automatic recovery or CQ
+replacement is not implemented. Even dropping the engine cannot destroy a context/PD still retained
 by an endpoint.
 
 `TransferEngine::close(timeout)` locks source then requester admission, fences
 both before waiting, and gives their accepted operations one shared drain
 deadline. Already accepted work can still create its endpoints during this drain;
 closing admission does not cancel it. Once both owners are drained, the runtime
-permanently closes device admission, drains and destroys cached local MRs,
+permanently closes device admission, waits for actual request owners to leave,
+drains cached local MRs, closes the shared CQ and joins its progress worker,
 then explicitly destroys PD -> context. Waiting for another MR creator or
-closer uses the same absolute deadline. Timeout preserves the actual owner,
+closer uses the same absolute deadline. A request's close wait also uses its
+original absolute deadline; expiry before a physical receipt returns
+`Unquiesced`, including when another native call holds the shared worker. The
+lane continues to own and clean the actual record. A retained receipt waits
+until all accepted constructors are fenced and actual remaining owners/charges
+are recorded, using that same
+deadline. Requester and source always consume the idempotent close receipt
+before claiming drain. Timeout preserves the actual owner,
 its charge and the PD; a later close can continue waiting.
 Concurrent/repeated callers serialize native destruction. A timeout leaves both
 admissions closed and the device live; another call can continue waiting.
@@ -269,8 +300,9 @@ report failure; it preserves the same retention rule. The pinned OrbitKV
 consumer still uses the earlier per-slice implementation; its pin and explicit
 shutdown-receipt migration require a separate consumer gate.
 
-`RdmaStats` adds active/retained shared device counts and successful device-open
-count. An idle open engine can have one active device and zero endpoints;
+`RdmaStats` reports active/retained/opened CQ counts, live progress workers,
+permanent lane failures and peak simultaneously pending QPs, alongside shared
+device counts. An idle open engine can have one active device and zero endpoints;
 whole-engine close returns active devices to zero on success. Existing retained
 endpoint/byte and successful requester READ/WRITE CQ counts remain independent
 of application commit/notification results. `direct_bytes` remains charged
@@ -491,9 +523,87 @@ The independent MSRV binary SHA-256 is
 The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/17/checks) cover the
 stable/MSRV feature matrix and unmodified frozen TENT CPU comparison; that
 comparison covers selected CPU behavior, not native wire interoperability.
-Source remote MR reuse/revocation, endpoint/QP/CQ pooling, shared worker/event
-progress, backend abort, multirail, GPU MR/GDR, real hardware faults, performance,
-installed OrbitKV and complete P4/TENT parity remain open.
+At that revision, source remote MR reuse/revocation, endpoint/QP/CQ pooling,
+shared worker/event progress, backend abort, multirail, GPU MR/GDR, real hardware
+faults, performance, installed OrbitKV and complete P4/TENT parity remained
+open. P4.6 below adds shared CQ and post/poll progress.
+
+### Shared CQ and progress qualification
+
+P4.6 implements the single-context CQ and single post/poll owner. CPU controls
+cover simultaneous QPs at aggregate capacity 1/3, independent SQ limits,
+out-of-order routing, never-reused request identities, wrong-QP/unknown CQEs,
+whole-lane retained ownership and debt before the native close barrier. They
+also pause an accepted record before QP creation during abort/retention, block
+one native dispatch while another request's close deadline expires, and check
+that a retained requester cannot report `locally_drained` after a logical
+transfer error. Closed resource handoff and retained accounting receipts have
+deterministic controls; a retained metadata snapshot must not defer caller
+quota release. A separate ACK gate requires source endpoint/byte quota to be
+available for immediate reuse before the final ACK is written. Single-CPU
+concurrent reruns exercise those boundaries. These are ownership controls, not
+physical fault receipts.
+
+The explicit ignored test
+`rdma::cq::tests::hardware::shared_cq_peer` constructs four actual RC QPs per
+phase and performs READ then WRITE between two physical hosts. A test-only gate
+pauses the first native dispatch until the other requests have queued. It
+never synthesizes WRs, CQEs or bytes; the provider executes all posts/polls.
+CQ capacities 1/3 and SQ windows 1/2 prove aggregate backpressure and overlapping
+native QPs. Full buffers/guards, exact read/write bytes, one CQ/worker, one
+requester MR open/seven reuses and complete normal shutdown are required.
+Run with the `orbitte-shared-cq` hardware-controller profile and the release
+unit-test executable. It is a native-owner component gate; its test bootstrap
+does not claim public wire compatibility. The existing fourteen-case public
+runner remains the DRAM/pinned/GPU-staging/TCP regression gate.
+
+Source `8e38447` in [OrbitTE #18](https://github.com/OrbitInfra/OrbitTE/pull/18)
+passes independent stable/Rust 1.85 source/CPU review: strict Clippy, 90 unit
+controls, 3 notification tests, 5 TCP tests and one doctest. Each separately
+built release unit binary passes 30 complete single-CPU runs with 16 test
+threads. The independent reviewer also rejects 35 runs of six mutations that
+restore the old constructor fence, premature retention receipt, skipped
+requester close,
+delayed resource handoff, incomplete retention accounting or ACK-before-drop.
+
+Each separately compiled implementation/stable and independent/MSRV native
+binary passes six healthy two-host four-QP cases in both
+directions, with CQ capacities 1/3 and SQ windows 1/2. Peak WR and outstanding-QP
+counts establish bounded completion debt, not simultaneous physical DMA or
+throughput. Fourteen public DRAM/pinned-host/device-staged/TCP regressions pass
+with exact slice CQ/byte/post and MR reuse counts. Every RDMA regression uses
+`rdma_max_endpoints=1` to exercise immediate native quota reuse. Independent
+review accepts this healthy single-rail profile at the exact runtime source.
+
+In each native run, both controllers and all 40 SSH starters return zero. Postflight verifies all
+80 owned native/supervisor PIDs are absent, reacquires/releases the three
+original lock inodes, and checks A GPU7 has zero memory and no compute apps.
+A's 19/B's 16 frozen libraries remain unchanged; actual mapped-library identities
+are checked separately from overlay file-stat identities. A maps compatibility
+Driver API `590.48.01` on kernel driver `535.161.08`; no CUDART or TENT is mapped.
+B uses CPU memory only; no B GPU is selected or queried.
+
+Evidence stays outside the checkout under
+`/root/orbitte-artifacts/rdma-endpoints-20261022/`.
+`independent-source-8e38447/independent-review.json` records source/CPU acceptance;
+`final-8e38447/implementation-hardware-review.json` records the implementation
+native receipt. `independent-hardware-8e38447/verification.json` records the
+independent raw/postflight checks; its `independent-review.json` is the final
+acceptance receipt. `final-8e38447/implementation-evidence-8e38447.tar.gz` has SHA-256
+`76b3cb8ba97b64fe4e9d020cb18cfe0f302d50e48cff0a3b0ec23b89ed0ec793`.
+The independent source/CPU/native archive `independent-evidence-8e38447.tar.gz`
+has SHA-256
+`6b8ff04806ceafc567fabbfbf82201c6a5a79623c1b2d728fdbb6545cbddca48`.
+Earlier CI/quota/ACK failures and the independent native run rejected for an
+unfrozen B library remain preserved; they do not qualify this source.
+The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/18/checks) cover the
+stable/MSRV feature matrix and unmodified frozen TENT CPU comparison.
+
+Connected endpoint reuse, source remote-rkey reuse/revocation,
+multirail/discovery, event progress, actual native failures and full P4 remain
+open. Endpoint reuse must establish remote authorization revocation and both
+endpoint incarnations before replacing the per-request QP/MR authority
+boundary. OrbitKV linkage remains deferred to the accepted complete P4 exit.
 
 ### Run the native gate
 

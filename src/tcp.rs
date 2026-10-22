@@ -412,9 +412,9 @@ fn rdma_transfer(
             }
             Ok(())
         })();
-        if endpoint.has_resources() {
-            endpoint.close()?;
-        }
+        #[cfg(test)]
+        crate::rdma::tests::before_requester_close(&mut endpoint, &transfer);
+        endpoint.close()?;
         transfer?;
         if operation == TransferOp::Read {
             remaining(deadline)?;
@@ -470,6 +470,9 @@ fn rdma_serve(
         remaining(channel.deadline)?;
         endpoint.copy_back(memory, offset)?;
     }
+    drop(endpoint);
+    #[cfg(test)]
+    crate::rdma::tests::before_source_ack(runtime);
     channel.reply(source, 0, 0)
 }
 

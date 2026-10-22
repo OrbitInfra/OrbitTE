@@ -19,7 +19,7 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
         (32 << 20, 64 << 10, 64, vec![512 << 10; 64]),
         (32 << 20, 64 << 10, 32, vec![1 << 20; 32]),
     ] {
-        let queue = SendQueue::new(length, base, cap, usage()).unwrap();
+        let queue = SendQueue::new(length, base, cap, usage(), 1).unwrap();
         assert_eq!(
             queue
                 .requests
@@ -49,9 +49,9 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
 fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
     for limit in [1, 3, 64] {
         let usage = usage();
-        let mut queue = SendQueue::new(1024, 16, 64, usage.clone()).unwrap();
+        let mut queue = SendQueue::new(1024, 16, 64, usage.clone(), 1).unwrap();
         while !queue.finished() {
-            let requests = queue.reserve(limit).unwrap().to_vec();
+            let requests = queue.reserve(limit, 64).unwrap().to_vec();
             assert!(queue.outstanding() <= limit);
             queue
                 .posted(
@@ -125,8 +125,8 @@ fn partial_unknown_and_inconsistent_posts_keep_only_proven_or_possible_debt_unti
         (libc::EIO, 9, false, 4),
     ] {
         let usage = usage();
-        let mut queue = SendQueue::new(64, 16, 64, usage.clone()).unwrap();
-        queue.reserve(4).unwrap();
+        let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
+        queue.reserve(4, 64).unwrap();
         assert!(
             queue
                 .posted(
@@ -156,8 +156,8 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         (1, 7, 0, 0, 3, 1),
     ] {
         let usage = usage();
-        let mut queue = SendQueue::new(64, 16, 64, usage.clone()).unwrap();
-        queue.reserve(4).unwrap();
+        let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
+        queue.reserve(4, 64).unwrap();
         queue
             .posted(
                 0,
@@ -175,7 +175,8 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
                         status,
                         opcode,
                         length,
-                        vendor_error: 0
+                        vendor_error: 0,
+                        qpn: 0
                     },
                     TransferOp::Read
                 )
@@ -194,8 +195,8 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         queue.quiesce();
     }
     let usage = usage();
-    let mut queue = SendQueue::new(64, 16, 64, usage.clone()).unwrap();
-    queue.reserve(4).unwrap();
+    let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
+    queue.reserve(4, 64).unwrap();
     queue
         .posted(
             0,
