@@ -20,9 +20,9 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus the initial P4.1/P5.1 RDMA/CUDA staging
-paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the
-consumer TCP peer path below. This code is not
+[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA and
+P4.1/P5.1 RDMA/CUDA staging paths. P1.5 adds the opt-in consumer allocation
+bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -48,12 +48,29 @@ P0.1 adds a [scoped native CPU comparison](cpu-oracle.md); the complete P0 oracl
 and compatibility inventory remain open. Missing hardware leaves
 a profile unqualified and visible in the full target.
 
-## OrbitKV delivery priority
+## Native-engine delivery focus
 
-Prioritize the transfer contracts OrbitKV consumes before widening provider
-coverage. At OrbitKV `a9befeec596bb9064d25d34f93d07fe59077809d`, the current
-transfer owner needs stable allocator registration, P2P segment lookup, batched
-READ, authoritative source epochs, source close/drain, generation-scoped
+Complete OrbitTE's native RDMA stage P4 against frozen TENT before resuming
+OrbitKV integration. Deliver reviewable substages inside P4: direct application
+DRAM registration, endpoint/MR reuse, fragmented work/completion ownership,
+discovery/topology and multirail, with the physical fault and shutdown gates
+below. Advance NVIDIA P5 owners where those prerequisites are ready. Do not
+upgrade OrbitKV's dependency or add consumer adapters between these substages.
+The return to consumer work requires independent acceptance of the complete P4
+exit, not a healthy staging pilot or one additional merged PR. Remaining P5-P10
+contracts stay in scope; accepting P4 does not establish full TENT parity.
+
+Use TENT's context/PD, registered-buffer, endpoint-store and worker/slice
+boundaries as the implementation reference. Preserve the Rust contract that
+failed native cleanup retains actual owners and budget charges. Every substage
+records its exact source correspondence and deliberate safety differences.
+
+## Historical OrbitKV contracts and evidence
+
+These records preserve earlier consumer requirements and accepted profiles;
+they do not set the current execution order. At OrbitKV
+`a9befeec596bb9064d25d34f93d07fe59077809d`, the audited transfer owner needs stable
+allocator registration, P2P segment lookup, batched READ, authoritative source epochs, source close/drain, generation-scoped
 notifications and NIC-load observations. Source authority comes from the
 source grant; a refreshed endpoint must not silently replace that epoch.
 
@@ -78,11 +95,10 @@ change does not add a mailbox adapter. Whole-pool native adaptation, installed
 consumer qualification and remaining notification integration stay open in
 P1/P2/P9/P11. RDMA and CUDA development
 proceeds with these owners; no hardware qualification is inferred from CPU progress.
-Qualify that profile under P10/P11 before switching
-OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
-(P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
-ready. The complete parity inventory remains the target; the delivery priority
-does not turn incomplete rows into completed features.
+Any later OrbitKV runtime switch still needs its own P10/P11 qualification.
+Native P4/P5 now proceed ahead of consumer linkage, HP-TCP/SHM and optional
+providers when their prerequisites are ready. The complete parity inventory
+remains the target; the current order does not reduce the required scope.
 
 ## Delivery sequence
 
@@ -92,7 +108,7 @@ does not turn incomplete rows into completed features.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging, P4.2a consumer and P4.2b shared device owner implemented; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.3 implemented with scoped native acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -273,7 +289,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   leaves queued messages readable. Data results remain intact if notification
   delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
   malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. The original substage used OrbitTE wire v3 (now v4); native C allocation/free, asynchronous
+  pass. The original substage used OrbitTE wire v3 (now v5); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
   scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
@@ -400,6 +416,25 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   This does not add pooled endpoints/MRs, application registrations, GDR,
   multirail or a performance claim. OrbitKV's pinned earlier implementation
   and shutdown receipt must be migrated and qualified separately.
+- [x] **P4.3 — direct application host MR (Implemented; scoped source/CPU and
+  healthy native gates independently Accepted).** RDMA registers the exact
+  requested DRAM or CUDA-pinned host range in the engine's shared PD. Canonical allocation
+  range leases retain the real registration, allocation and budget across
+  aliases/engines; overlapping CPU or DMA accesses fail while disjoint ranges
+  remain usable. Native teardown must succeed before CPU access and source ACK.
+  Explicit staging remains selectable; device allocations keep the declared
+  staging path, and a failed host registration never falls back to staging.
+  Wire v5 rejects earlier peers: WRITE attempts can change application bytes
+  before DONE/ACK, and a failed direct READ can already have changed its target.
+  CPU fault controls cover mixed policies, exact MR extents, retained teardown,
+  unregister and running cancel/detach/close. Source `09fa949` passes independent
+  CPU reruns and twelve native two-host DRAM, CUDA-pinned host direct,
+  mixed/explicit staging and A-H20 device-staging/TCP cases; full bytes/guards,
+  actual direct/CQ counts, frozen libraries and complete normal release pass.
+  `dc77a5b` adds only the close-before-drop assertion. See the scoped
+  [qualification and external evidence](rdma-cuda.md#direct-host-mr-qualification).
+  This is per-request registration, not TENT's persistent MR cache, endpoint
+  pooling, GDR or complete P4.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -677,35 +712,31 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-P2.3's source/H20 TCP pilot and P4.2a's registered-host RDMA component have
-independent source/CPU review and rerun acceptance; installed consumer
-qualification remains open beyond the accepted scoped gates. A separate CUDA
-13.1 compatibility profile passes A-node pinned source grants and embedded
-Manager TCP/RDMA staging GPU restores. The later single-runtime installed
-IPC/peer-byte prerequisite is recorded in P11; it does not close serving,
-cross-host, GDR or physical-fault qualification.
-P4.2b preserves these owners while reusing the per-RNIC context/PD. Independent
-source/CPU and scoped two-host healthy native gates pass. Next migrate OrbitKV's
-pin and explicit whole-engine shutdown receipt in its existing transfer owner,
-then qualify that consumer change. Extend installed process-boundary coverage
-beyond the accepted profile before physical cross-host Manager/GPU and native
-fault/drain gates. The native GPU-staging result does not close those Manager
-or installed-artifact obligations.
-Preserve P4.1/P5.1 owners before expanding registrations, endpoints or hardware
-claims.
-Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
-[CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
-the transfer notification mailbox remains a separate API contract.
-RDMA and CUDA source work may proceed before the physical test setup is ready;
-compile/shim checks leave those hardware profiles unqualified. Use the supplied
-execution-node instructions to verify live attempts, then run profile-specific
-byte and physical-owner gates before making a backend claim. Keep source/build
-and raw run evidence outside both source checkouts.
-Audit vanilla TENT and OrbitKV-extended C layouts separately. Keep the larger
-33-symbol/native-schema oracle, wire interoperability, full F08 and other parity
-work visible in P0/P6/P9. Whole-pool OrbitKV registration, full RDMA/CUDA and
-installed consumer qualification remain required before adopting those profiles.
+Keep implementation and acceptance centered on native OrbitTE. P4.2b's shared
+context/PD and whole-engine close have scoped independent CPU and healthy native
+acceptance. P4.3 adds scoped independent source/CPU and twelve healthy native
+cases for exact DRAM/CUDA-pinned host direct, mixed/explicit staging and A-H20
+device-staging/TCP bytes. Its per-request registration and healthy normal release
+are accepted for that declared profile; physical faults and complete P4 remain
+open. Preserve failed runs and ownership controls. Missing fault or hardware
+gates remain unqualified.
 
-Calendar estimates require measured progress on this first slice and confirmed
-maintainer, hardware and provider-SDK capacity. Hardware acquisition is a
-prerequisite to qualification, not grounds to reduce the full-parity target.
+Continue within P4 to persistent MR and endpoint-store ownership, fragmented
+work and CQ progress, device/topology discovery and multirail. Follow the frozen
+TENT context/buffer/endpoint/worker architecture while preserving actual-owner
+retention and generation fences. Build NVIDIA P5 capabilities against those
+owners, then qualify direct GPU registration and topology profiles separately.
+The complete P4 exit and independent acceptance form the first large native
+stage boundary; do not substitute a substage's successful CI for that boundary.
+
+Keep the [native CPU comparison](cpu-oracle.md#run-the-gates), CPU negative
+controls and physical-profile manifests alongside each delivery. Reference
+vanilla TENT and the OrbitKV-extended C layouts separately. The 33-symbol/native
+schema oracle, wire interoperability, full F08 and remaining parity rows stay
+required in their existing stages. Source/build products and raw run evidence
+stay outside source checkouts.
+
+OrbitKV dependency migration, whole-engine shutdown consumption and installed
+Manager/serving qualification resume under P11 after the native-stage boundary.
+Historical consumer evidence above remains valid only for its recorded artifact
+and profile. It does not qualify new native direct MR, GDR or multirail code.

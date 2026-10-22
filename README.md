@@ -24,16 +24,24 @@ Host registration batches preflight every range before publishing changes.
 Transfers accept absolute addresses and retain the resolved backing during I/O;
 local and remote lookup follows TENT's containing-buffer order.
 
-Opt-in `rdma` and `cuda` features add single-rail RC verbs with owned host
-staging, retained NVIDIA device/pinned allocations and synchronized CUDA copies.
+Opt-in `rdma` and `cuda` features add single-rail RC verbs with exact application
+host MRs or explicit private staging, retained NVIDIA device/pinned allocations
+and synchronized CUDA copies. Direct host DMA leases retain actual registration
+owners and exclude conflicting access across aliases; disjoint ranges remain
+usable. Failed native cleanup retains those owners and charges. Device
+allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 Each engine lazily reuses one RNIC context/PD while slices keep exclusive
-CQ/QP/MR/staging owners. Whole-engine `close(timeout)` fences both directions,
-drains accepted work and explicitly destroys shared device resources; failed
+CQ/QP/MR and direct-lease or staging owners. Whole-engine `close(timeout)`
+fences both directions, drains accepted work and explicitly destroys shared device resources; failed
 teardown stays retained. Independent review accepts its CPU ownership gates and
 a scoped two-host DRAM/A-H20 GPU-staging native profile. Consumer dependency and
-shutdown migration remain separate from those native gates.
+shutdown migration remain separate from those native gates. A separate direct
+host profile now passes independent CPU review and twelve two-host ordinary
+DRAM/CUDA-pinned host direct, mixed/staged and A-H20 device-staging/TCP cases.
+The complete native P4 stage remains open; consumer linkage resumes after its
+larger stage boundary.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates
@@ -79,6 +87,10 @@ notification trace against unmodified native TENT in a separate test build.
 It adds selected behavioral evidence while full API/wire compatibility remains open.
 
 ## Implementation plan
+
+Current work completes OrbitTE's native RDMA stage before returning to OrbitKV
+linkage. Architecture follows frozen TENT's context, registered-buffer, endpoint
+and worker ownership; consumer updates wait for the larger stage's acceptance.
 
 The target is functional parity with the frozen latest Mooncake TENT baseline
 for CPU DRAM and NVIDIA GPUs. Network and memory movement form the core;

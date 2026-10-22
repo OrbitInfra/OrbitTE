@@ -1,9 +1,10 @@
-# RDMA and CUDA staging foundation
+# RDMA registration and CUDA staging
 
-P4.1/P5.1 add opt-in source implementations, pending independent acceptance and
-complete hardware qualification. The [completion plan](completion-plan.md) is
-the only execution queue. This is a first bounded, single-rail staging profile;
-it does not establish full B04/B01 or native TENT compatibility.
+P4.1-P4.3/P5.1 add opt-in source implementations. Acceptance is scoped to the
+exact native profiles below; the complete hardware and parity stages stay open.
+The [completion plan](completion-plan.md) is the only execution queue. Direct
+application host registration and explicit staging share a bounded, single-rail
+owner. Neither establishes full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
 
@@ -58,7 +59,14 @@ failure-retention contract. Reusing bindings does not establish GPUDirect,
 NVLink, device MR support or a new completed parity row.
 
 Set `EngineConfig.rdma = Some(RdmaConfig::new("mlx5_0"))` and explicitly choose
-the port/GID index, traffic class, hop limit and endpoint/staging budgets. An
+the port/GID index, traffic class, hop limit and endpoint/direct/staging budgets.
+`RdmaConfig.host_memory` defaults to `RdmaHostMemory::Direct`: actual DRAM and
+CUDA-pinned host ranges become exact per-request native MRs. Set it to `Staged`
+for private host copies. `max_direct_bytes` and `max_staging_bytes` separately
+bound each engine's charged native bytes (64 MiB each by default); both share
+`max_endpoints`. A failed host MR registration is an error, never a staging
+fallback. This policy selects host backing only: `CudaMemory` is explicitly
+staged in either mode, because direct GPU MR/GDR is not implemented. An
 Ethernet GID must be nonzero; select a routable GID/type from the real device.
 There is no automatic device, rail or topology discovery/selection yet.
 Each `TransferRequest` now includes `transport: Transport::Tcp` or `Rdma`.
@@ -83,35 +91,57 @@ do not infer arbitrary framework readiness or generation leases.
 
 ```text
 TCP:  CPU/GPU -> owned host bytes -> socket -> owned host bytes -> CPU/GPU
-RDMA: CPU/GPU -> owned host MR -> RC RDMA READ/WRITE -> owned host MR -> CPU/GPU
+RDMA host direct: actual application host range <-> RC RDMA READ/WRITE <-> peer MR
+RDMA staging: CPU/GPU -> owned host MR <-> RC RDMA READ/WRITE <-> owned host MR -> CPU/GPU
 CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 ```
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive slices retain that actual shared owner; separate
 engines do not share PDs. Every slice still owns its CQ/QP/MR and stable host
-staging, with independent permissions, rkey, QP and PSN. The shared PD is not a
-source-grant authorization boundary. Port state, MTU, LID and the selected GID
+staging or exact direct host range, with independent permissions, rkey, QP and
+PSN. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
 
 This follows the frozen TENT `e2d6e8e0` hierarchy in
-`tent/src/transport/rdma/context.cpp` and `endpoint.cpp`: context/PD outlive their
-endpoints and memory registrations. TENT's pooled CQs and endpoint/MR caches are
-not part of this substage. READ/WRITE use real signaled verbs work requests and
-CQ completions; no application/GPU pointer is registered with the RNIC. Endpoint
-caching, multirail, zero-copy host RDMA, GPUDirect and pipelined chunks remain
-open. Resource reuse alone is not a measured throughput or latency result.
+`tent/src/transport/rdma/context.cpp`, `buffers.cpp` and `endpoint.cpp`: context/PD
+outlive their endpoints and memory registrations. `LocalBufferManager` passes
+application buffer addresses and lengths to each context's `registerMemReg`;
+P4.3 establishes that direct host path with stricter exact-request MR extents
+and retained failure owners. It does not copy TENT's removal behavior that can
+erase an owner after failed deregistration. TENT's persistent MRs, pooled CQs
+and endpoint store remain future P4 work. Each request currently registers and
+destroys its own MR/QP/CQ. Resource reuse alone is no performance result.
+
+Canonical `HostMemory` owns raw stable backing and a range-access authority.
+Direct leases use allocation-relative ranges and retain the exact
+`RegisteredMemory`, its allocation and registration charge. Overlapping CPU
+copies or DMA leases return unavailable across aliases and engines; disjoint
+ranges may proceed. CPU copies form no allocation-wide Rust slice across DMA.
+Unregister hides lookup but cannot release admitted backing. Native teardown
+must succeed before the range is unlocked; failed QP/MR/CQ teardown retains
+that real lease. External callers still coordinate access outside this owner.
 
 Source admission, authoritative epoch, registration bounds and permissions are
-checked before bootstrap. READ snapshots source bytes into its staging. WRITE
-preloads requester staging. The requester exchanges validated descriptors,
-connects its RC QP and posts one WR. It checks completion identity/opcode/status
-and READ byte count, then destroys QP and MR before sending a commit marker.
-The source destroys QP/MR before exposing staging to CPU/CUDA or committing a
-WRITE to registered backing. A final ACK follows that commit. A requester READ
-copies into its destination only after local close and the source ACK.
-A failed/partial transfer sends no marker and cannot commit source WRITE staging.
-A lost marker/ACK receipt can make a WRITE's remote effect unknown; never replay it.
+checked before bootstrap. With staging, READ snapshots source bytes and WRITE
+preloads requester staging. With direct host MRs, the RNIC accesses the actual
+leased application range without those copies. Either peer can independently
+select host direct or staging. Device pointers always use declared staging.
+The requester exchanges validated descriptors, connects its RC QP and posts one
+signaled WR. It checks CQ identity/opcode/status and READ byte count, destroys
+QP/MR/CQ and releases any direct range lease before sending DONE. The source
+then destroys its own handles and releases its direct lease, or commits WRITE
+staging, before its final ACK. Requester READ staging copies back after ACK.
+
+Wire v5 explicitly rejects v1-v4; it is OrbitTE-only. A WRITE attempt is marked
+`RemoteEffect::Unknown` before posting regardless of requester memory policy:
+the peer may expose direct host memory. DONE/ACK are completion receipts, not
+an atomic commit boundary for direct transfers. Failed direct WRITE may have
+changed remote bytes without DONE. Failed direct READ may have changed its local
+target before a lost/failed ACK. Successful native destruction proves local
+quiescence, not transactional rollback or remote source drain. A failed report
+must not authorize replay. Staged source WRITE still requires DONE to copy into
+application backing, but the requester does not assume that peer policy.
 
 CUDA copies serialize per allocation, push its retained context, use private
 pinned staging, synchronize, and pop/verify the context even on copy errors.
@@ -124,11 +154,12 @@ staging and context. Failed native frees retain resources and their driver.
 
 ## Failure, drain and resource ownership
 
-Endpoint count and registered staging bytes remain bounded per engine. Each
-slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
-retains the remaining handles, actual staging, its real shared device reference
-and budgets; later RDMA admission is rejected. Even dropping the engine cannot
-destroy a context/PD still retained by an endpoint.
+Endpoint count, registered direct host bytes and staging bytes stay bounded
+per engine. Each slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+retains the remaining handles, actual staging or direct registration/allocation
+lease, its real shared device reference and budgets; later RDMA admission is
+rejected. Even dropping the engine cannot destroy a context/PD still retained
+by an endpoint.
 
 `TransferEngine::close(timeout)` locks source then requester admission, fences
 both before waiting, and gives their accepted operations one shared drain
@@ -155,7 +186,10 @@ shutdown-receipt migration require a separate consumer gate.
 count. An idle open engine can have one active device and zero endpoints;
 whole-engine close returns active devices to zero on success. Existing retained
 endpoint/byte and successful requester READ/WRITE CQ counts remain independent
-of application commit/notification results.
+of application commit/notification results. `direct_bytes` remains charged
+through endpoint-owner release (or forever on unquiesced retention);
+`opened_direct_endpoints` counts successfully constructed direct host endpoints.
+Staging-only or device-staged peers report zero direct opens.
 
 `Error::Unquiesced` means a backend could not prove termination/teardown. A
 synchronous report or async task/group can be logically failed with
@@ -174,6 +208,14 @@ concurrent shutdown/reuse qualification remain open. Synchronous native calls/te
 can exceed an API deadline; no hard real-time or provider interrupt is claimed.
 
 ## Verification and physical execution
+
+P4.3 CPU controls verify owned/external canonical ranges across two engines,
+exact MR addresses/lengths, independent direct/staging quotas, all mixed host
+policies over real control sockets, post-failure direct WRITE ambiguity, failed
+direct READ receipts and retained source leases. Running cancel, wait timeout,
+unregister, detach and engine drop preserve the real direct loan until worker
+exit. QP/MR/CQ and partial-construction failure controls keep the actual owner
+and registration charge. These are CPU contract controls, not DMA receipts.
 
 The P4.2b CPU controls exercise overlapping/consecutive slice reuse, device
 lifetime after runtime drop, partial device construction, every slice teardown
@@ -227,6 +269,44 @@ and [frozen native TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/ac
 pass for that source. The latter compares the CPU contract, not native RDMA
 wire interoperability.
 
+### Direct host MR qualification
+
+Source `09fa949` in [OrbitTE #15](https://github.com/OrbitInfra/OrbitTE/pull/15)
+passes independent source/CPU review and twelve healthy native cases on the
+same two RoCE v2 hosts. Ordinary DRAM uses exact direct MRs in both roles;
+explicit staged and both mixed host policies pass separately. A's H20 also
+exchanges CUDA-pinned host direct bytes and device-staged bytes with B's DRAM
+in both roles, with CPU/GPU TCP controls. Every peer compares its complete
+buffer, noncontiguous request ranges, untouched bytes and guards. Each direct
+host RDMA peer constructs six direct endpoints; device-staged and explicit
+staging peers construct zero. RDMA requesters observe three READ and three WRITE
+CQ successes, and all direct/staging/device/endpoint charges return to zero.
+
+The independent MSRV-built native binary differs from the implementation build
+and reruns all twelve cases against independently frozen inputs. All 48 native
+and supervisor PIDs are absent after each twelve-case run; 24 SSH starters and the controller
+return zero through actual waits. The original two RNIC locks and A GPU7 lock
+are reacquired/released, and A GPU7 returns to zero memory with no compute apps.
+All mapped libraries match their preflight path/inode/SHA profile. A maps
+compatibility `libcuda590.48.01` on kernel driver `535.161.08`; no CUDART or TENT
+is mapped, and B does not initialize CUDA. `dc77a5b` only strengthens the CPU
+assertion that successful close unlocks access before endpoint-owner drop;
+production and native harness bytes are unchanged from the hardware source.
+
+Evidence and frozen binaries stay outside the source checkout at
+`/root/orbitte-artifacts/rdma-direct-host-20261022/`:
+`implementation-hardware-review.json`,
+`independent-source-09fa949/independent-review.json` and
+`independent-hardware-09fa949/independent-review.json` record the scope.
+The implementation archive is `implementation-evidence-09fa949.tar.gz`, SHA-256
+`10822ee6c9d353563308056347a9d56235ebb6572e2afe53ce4f0e5775784e8c`.
+The [eight-job CI matrix](https://github.com/OrbitInfra/OrbitTE/actions/runs/39757218570)
+and [unmodified frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/39757218335)
+pass for the source plus test assertion. The native comparison covers selected
+CPU API behavior, not RDMA wire interoperability. This profile does not qualify
+persistent MR/endpoint caches, multirail, direct GPU MR/GDR, physical RNIC faults,
+installed OrbitKV, performance or complete P4/TENT parity.
+
 ### Run the native gate
 
 The explicit native [`hardware_peer`](../examples/hardware_peer.rs) runner
@@ -235,7 +315,10 @@ WRITEs, generation-specific notifications and complete source/destination/guard
 comparisons. Each run varies a deterministic seed. It checks exact completion
 bytes and successful requester WR counts, closes the whole engine, then
 unregisters/releases memory and checks zero remaining registrations, workers,
-shared RDMA devices, endpoints, staging and retained CUDA resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
+shared RDMA devices, endpoints, direct/staging bytes and retained CUDA resources.
+Direct host peers must construct exactly six direct endpoints; device-staged or
+explicit-staging peers must construct zero. These counters accompany real CQ
+counts and full byte comparisons rather than replacing them. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
 This is a correctness pilot, not a benchmark or a full fault qualification.
 
 Use [`tests/hardware/run.py`](../tests/hardware/run.py) with an externally stored
@@ -255,7 +338,11 @@ library; role-specific environment and the selected GPU UUID take precedence.
 The controller collects actual native `/proc/self/maps` from both peers and
 requires them alongside successful supervision. Each case has
 `source`, `requester` node keys, `source_kind`, `requester_kind`, `transport`,
-`payload` (128 bytes..32 MiB), and `seed`. GPU cases expose only the selected UUID
+`payload` (128 bytes..32 MiB), and `seed`. Optional `host_memory` selects
+`direct` (default) or `staged`; `source_host_memory`/`requester_host_memory`
+override that per peer. The example receives the explicit policy through
+`ORBITTE_RDMA_HOST_MEMORY`; the library itself uses per-engine Rust config.
+GPU cases expose only the selected UUID
 through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock paths
 must match the resource owner's existing convention.
 

@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -359,7 +359,8 @@ fn rdma_transfer(
             .rdma
             .as_ref()
             .ok_or(Error::Unavailable("RDMA is not configured"))?;
-        let mut endpoint = runtime.endpoint(request.length, 0)?;
+        let mut endpoint =
+            runtime.endpoint(&request.local, request.local_offset, request.length, 0)?;
         let transfer = (|| {
             if operation == TransferOp::Write {
                 endpoint.fill(&request.local, request.local_offset)?;
@@ -392,13 +393,13 @@ fn rdma_transfer(
             if ready.status != 9 {
                 return Err(Error::Protocol("RDMA missing ready response"));
             }
-            endpoint.transfer(&remote, operation, deadline)?;
-            // Source never commits staging until requester has completed and
-            // closed its QP/MR. No application backing is exposed to the RNIC.
-            endpoint.close()?;
+            // A peer may expose direct application backing. Once a WRITE is
+            // attempted it can change remote bytes even without DONE or ACK.
             if operation == TransferOp::Write {
                 effect = RemoteEffect::Unknown;
             }
+            endpoint.transfer(&remote, operation, deadline)?;
+            endpoint.close()?;
             channel.write_all(&[1])?;
             let receipt = Reply::read(&mut channel, peer.epoch)?;
             if receipt.status != 0 || receipt.length != 0 {
@@ -412,9 +413,7 @@ fn rdma_transfer(
         transfer?;
         if operation == TransferOp::Read {
             remaining(deadline)?;
-            request
-                .local
-                .write(request.local_offset, endpoint.bytes()?)?;
+            endpoint.copy_back(&request.local, request.local_offset)?;
         }
         Ok(())
     })();
@@ -436,7 +435,7 @@ fn rdma_serve(
         .as_ref()
         .ok_or(Error::Unavailable("RDMA is not configured"))?;
     let writing = request.operation == Operation::RdmaWrite;
-    let mut endpoint = runtime.endpoint(length, if writing { 2 } else { 1 })?;
+    let mut endpoint = runtime.endpoint(memory, offset, length, if writing { 2 } else { 1 })?;
     let transfer = (|| {
         if !writing {
             endpoint.fill(memory, offset)?;
@@ -458,7 +457,7 @@ fn rdma_serve(
     transfer?;
     if writing {
         remaining(channel.deadline)?;
-        memory.write(offset, endpoint.bytes()?)?;
+        endpoint.copy_back(memory, offset)?;
     }
     channel.reply(source, 0, 0)
 }

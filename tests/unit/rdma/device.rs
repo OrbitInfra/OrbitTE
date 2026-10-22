@@ -13,12 +13,21 @@ pub(crate) fn events(runtime: &Runtime) -> Arc<Mutex<Vec<&'static str>>> {
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.events)
 }
 
+pub(crate) fn pause(runtime: &Runtime) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
+    let owner = runtime.device().unwrap();
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("device is not open");
+    };
+    Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.pause)
+}
+
 #[test]
 fn slices_reuse_one_device_and_explicit_close_is_permanent() {
     let runtime = runtime("ok");
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
     for _ in 0..16 {
-        let mut endpoint = runtime.endpoint(8, 0).unwrap();
+        let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
         endpoint.close().unwrap();
     }
     let events = events(&runtime);
@@ -46,7 +55,10 @@ fn slices_reuse_one_device_and_explicit_close_is_permanent() {
     let closed = events.lock().unwrap().clone();
     assert_eq!(&closed[closed.len() - 2..], &["dealloc_pd", "close_device"]);
     runtime.close().unwrap();
-    assert!(matches!(runtime.endpoint(8, 0), Err(Error::Unavailable(_))));
+    assert!(matches!(
+        runtime.staging_endpoint(8, 0),
+        Err(Error::Unavailable(_))
+    ));
     drop(runtime);
     assert_eq!(*events.lock().unwrap(), closed);
 }
@@ -56,8 +68,8 @@ fn endpoint_owners_keep_device_live_after_runtime_drop() {
     let mut runtime = runtime("ok");
     runtime.config.max_endpoints = 2;
     runtime.config.max_staging_bytes = 16;
-    let mut first = runtime.endpoint(8, 0).unwrap();
-    let mut second = runtime.endpoint(8, 0).unwrap();
+    let mut first = runtime.staging_endpoint(8, 0).unwrap();
+    let mut second = runtime.staging_endpoint(8, 0).unwrap();
     let events = events(&runtime);
     let usage = Arc::clone(&runtime.usage);
     drop(runtime);
@@ -85,7 +97,7 @@ fn concurrent_slices_and_closers_construct_and_destroy_device_once() {
         let runtime = Arc::clone(&runtime);
         let barrier = Arc::clone(&barrier);
         workers.push(thread::spawn(move || {
-            let mut endpoint = runtime.endpoint(8, 0).unwrap();
+            let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
             barrier.wait();
             barrier.wait();
             endpoint.close().unwrap();
@@ -125,7 +137,7 @@ fn concurrent_slices_and_closers_construct_and_destroy_device_once() {
 fn device_teardown_failures_are_retained_without_retry_from_close_or_drop() {
     for (mode, operation) in [("close3", "ibv_dealloc_pd"), ("close4", "ibv_close_device")] {
         let runtime = Arc::new(runtime(mode));
-        runtime.endpoint(8, 0).unwrap().close().unwrap();
+        runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
         let events = events(&runtime);
         let usage = Arc::clone(&runtime.usage);
         let mut closers = Vec::new();
@@ -160,7 +172,10 @@ fn device_teardown_failures_are_retained_without_retry_from_close_or_drop() {
                 .count(),
             1
         );
-        assert!(matches!(runtime.endpoint(8, 0), Err(Error::Unavailable(_))));
+        assert!(matches!(
+            runtime.staging_endpoint(8, 0),
+            Err(Error::Unavailable(_))
+        ));
         drop(runtime);
         assert_eq!(*events.lock().unwrap(), retained);
         assert_eq!(usage.lock().unwrap().active_devices, 1);
@@ -177,7 +192,7 @@ fn partial_device_construction_cleans_up_or_poison_retains_its_charge() {
     ] {
         let runtime = runtime(mode);
         let retained = mode.ends_with("close");
-        let error = runtime.endpoint(8, 0).err().unwrap();
+        let error = runtime.staging_endpoint(8, 0).err().unwrap();
         assert_eq!(
             matches!(error, Error::Unquiesced { .. }),
             retained,
@@ -197,7 +212,10 @@ fn partial_device_construction_cleans_up_or_poison_retains_its_charge() {
             (usize::from(retained), usize::from(retained))
         );
         if retained {
-            assert!(matches!(runtime.endpoint(8, 0), Err(Error::Unavailable(_))));
+            assert!(matches!(
+                runtime.staging_endpoint(8, 0),
+                Err(Error::Unavailable(_))
+            ));
             assert!(matches!(runtime.close(), Err(Error::Unquiesced { .. })));
         } else {
             runtime.close().unwrap();
@@ -208,11 +226,11 @@ fn partial_device_construction_cleans_up_or_poison_retains_its_charge() {
 #[test]
 fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     let runtime = runtime("ok");
-    let mut endpoint = runtime.endpoint(8, 0).unwrap();
+    let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     let events = events(&runtime);
     assert!(matches!(runtime.close(), Err(Error::Timeout)));
     assert!(matches!(
-        runtime.endpoint(1, 0),
+        runtime.staging_endpoint(1, 0),
         Err(Error::Unavailable(_)) | Err(Error::ResourceExhausted)
     ));
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));

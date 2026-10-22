@@ -42,28 +42,76 @@ pub(crate) fn checked_range(offset: usize, length: usize, capacity: usize) -> Re
 
 /// Stable host backing and its shared access lock. Use the same `Arc<HostMemory>`
 /// for overlapping registrations, including registrations in different engines.
-/// This owner does not pin pages or register them with an RDMA provider.
+/// Direct RDMA leases exclude conflicting access until native teardown succeeds.
+/// This owner does not itself pin pages or register them with an RDMA provider.
 pub struct HostMemory {
     address: u64,
     length: usize,
-    backing: Mutex<HostBacking>,
+    backing: Mutex<HostAccess>,
+}
+
+struct HostAccess {
+    bytes: HostBacking,
+    #[cfg(feature = "rdma")]
+    dma: Vec<Range<usize>>,
+}
+
+impl HostAccess {
+    fn check_access(&self, range: &Range<usize>) -> Result<()> {
+        #[cfg(feature = "rdma")]
+        if self
+            .dma
+            .iter()
+            .any(|loan| range.start < loan.end && loan.start < range.end)
+        {
+            return Err(Error::Unavailable("host range is owned by RDMA"));
+        }
+        #[cfg(not(feature = "rdma"))]
+        let _ = range;
+        Ok(())
+    }
 }
 
 enum HostBacking {
-    Owned(Box<[u8]>),
-    External(ExternalMemory),
+    Owned {
+        address: NonNull<u8>,
+        length: usize,
+    },
+    External {
+        address: NonNull<u8>,
+        _owner: Arc<dyn Send + Sync>,
+    },
 }
 
-struct ExternalMemory {
-    address: NonNull<u8>,
-    _owner: Arc<dyn Send + Sync>,
+impl HostBacking {
+    fn address(&self) -> NonNull<u8> {
+        match self {
+            Self::Owned { address, .. } | Self::External { address, .. } => *address,
+        }
+    }
 }
 
-// SAFETY: from_raw_parts requires a stable, host-accessible allocation whose
-// owner can be retained/released on any thread. All dereferences hold the shared
-// HostMemory lock; the caller must coordinate external CPU/device access.
+// SAFETY: all CPU dereferences hold HostAccess's lock and reject overlapping
+// native loans. External owners additionally promise stable host access on any
+// thread. Raw owned backing avoids forming Rust slices across disjoint DMA.
 #[allow(unsafe_code)]
-unsafe impl Send for ExternalMemory {}
+unsafe impl Send for HostBacking {}
+
+impl Drop for HostBacking {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        if let Self::Owned { address, length } = self {
+            // SAFETY: this exact Box was consumed by HostMemory::new. Native
+            // leases retain their actual owner until successful QP/MR teardown.
+            unsafe {
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    address.as_ptr(),
+                    *length,
+                )));
+            }
+        }
+    }
+}
 
 impl fmt::Debug for HostMemory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,10 +127,16 @@ impl HostMemory {
         if bytes.is_empty() {
             return Err(Error::InvalidRange);
         }
+        let length = bytes.len();
+        let address = NonNull::new(Box::into_raw(bytes).cast::<u8>()).ok_or(Error::InvalidRange)?;
         Ok(Self {
-            address: bytes.as_ptr() as usize as u64,
-            length: bytes.len(),
-            backing: Mutex::new(HostBacking::Owned(bytes)),
+            address: address.as_ptr() as usize as u64,
+            length,
+            backing: Mutex::new(HostAccess {
+                bytes: HostBacking::Owned { address, length },
+                #[cfg(feature = "rdma")]
+                dma: Vec::new(),
+            }),
         })
     }
 
@@ -94,9 +148,9 @@ impl HostMemory {
     /// on any engine thread, and stable until the last `HostMemory` is dropped.
     /// `owner` must keep that actual allocation alive, including after unregister
     /// or a timeout. No owner API may reallocate or free the retained range.
-    /// Coordinate all external CPU/device accesses with these copies; no live
-    /// Rust reference may conflict with them. Concurrent aliases must share one
-    /// `Arc<HostMemory>` instead of accessing through independent locks.
+    /// Coordinate all external CPU/device accesses with these copies and native
+    /// DMA leases; no live Rust reference may conflict with them. Concurrent
+    /// aliases must share one `Arc<HostMemory>` instead of independent locks.
     /// A device pointer without host access does not satisfy this contract.
     #[allow(unsafe_code)]
     pub unsafe fn from_raw_parts(
@@ -113,10 +167,14 @@ impl HostMemory {
         Ok(Self {
             address: address.as_ptr() as usize as u64,
             length,
-            backing: Mutex::new(HostBacking::External(ExternalMemory {
-                address,
-                _owner: owner,
-            })),
+            backing: Mutex::new(HostAccess {
+                bytes: HostBacking::External {
+                    address,
+                    _owner: owner,
+                },
+                #[cfg(feature = "rdma")]
+                dma: Vec::new(),
+            }),
         })
     }
 
@@ -130,6 +188,7 @@ impl HostMemory {
         self.length == 0
     }
 
+    /// Returns unavailable if a conflicting direct RDMA lease is still held.
     #[allow(unsafe_code)]
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
         let range = checked_range(offset, destination.len(), self.length)?;
@@ -137,46 +196,69 @@ impl HostMemory {
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        match &*backing {
-            HostBacking::Owned(bytes) => destination.copy_from_slice(&bytes[range]),
-            HostBacking::External(memory) => {
-                // SAFETY: the range is within the stable allocation promised by
-                // from_raw_parts. The shared lock serializes all registered aliases;
-                // the caller coordinates other accesses. The output slice is valid.
-                unsafe {
-                    std::ptr::copy(
-                        memory.address.as_ptr().add(offset),
-                        destination.as_mut_ptr(),
-                        destination.len(),
-                    );
-                }
-            }
+        backing.check_access(&range)?;
+        // SAFETY: the validated range has no conflicting DMA lease. The shared
+        // lock serializes CPU copies and lease acquisition. External access is
+        // coordinated by from_raw_parts' caller. No allocation-wide slice exists.
+        unsafe {
+            std::ptr::copy(
+                backing.bytes.address().as_ptr().add(offset),
+                destination.as_mut_ptr(),
+                destination.len(),
+            );
         }
         Ok(())
     }
 
+    /// Returns unavailable if a conflicting direct RDMA lease is still held.
     #[allow(unsafe_code)]
     pub fn write(&self, offset: usize, source: &[u8]) -> Result<()> {
         let range = checked_range(offset, source.len(), self.length)?;
-        let mut backing = self
+        let backing = self
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        match &mut *backing {
-            HostBacking::Owned(bytes) => bytes[range].copy_from_slice(source),
-            HostBacking::External(memory) => {
-                // SAFETY: the validated range, retained owner and shared lock
-                // satisfy from_raw_parts' write contract. The input slice is valid.
-                unsafe {
-                    std::ptr::copy(
-                        source.as_ptr(),
-                        memory.address.as_ptr().add(offset),
-                        source.len(),
-                    );
-                }
-            }
+        backing.check_access(&range)?;
+        // SAFETY: as for read; only this checked range is accessed under the
+        // shared lock. Disjoint native leases do not conflict with this copy.
+        unsafe {
+            std::ptr::copy(
+                source.as_ptr(),
+                backing.bytes.address().as_ptr().add(offset),
+                source.len(),
+            );
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "rdma")]
+pub(crate) struct HostDmaLease {
+    _registration: RegisteredMemory,
+    allocation: Arc<HostMemory>,
+    range: Range<usize>,
+    address: NonNull<u8>,
+}
+
+#[cfg(feature = "rdma")]
+impl HostDmaLease {
+    pub(crate) fn address(&self) -> NonNull<u8> {
+        self.address
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.range.len()
+    }
+}
+
+#[cfg(feature = "rdma")]
+impl Drop for HostDmaLease {
+    fn drop(&mut self) {
+        let mut backing = self
+            .allocation
+            .backing
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        backing.dma.retain(|range| *range != self.range);
     }
 }
 
@@ -209,6 +291,48 @@ impl RegisteredMemory {
     }
     pub fn permission(&self) -> Permission {
         self.0.descriptor.permission
+    }
+
+    #[cfg(feature = "rdma")]
+    #[allow(unsafe_code)]
+    pub(crate) fn host_dma_lease(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<Option<HostDmaLease>> {
+        checked_range(offset, length, self.len())?;
+        #[cfg(not(feature = "cuda"))]
+        let Allocation::Host(memory) = &self.0.allocation;
+        #[cfg(feature = "cuda")]
+        let Allocation::Host(memory) = &self.0.allocation else {
+            return Ok(None);
+        };
+        let offset = self
+            .0
+            .allocation_offset
+            .checked_add(offset)
+            .ok_or(Error::InvalidRange)?;
+        let range = checked_range(offset, length, memory.len())?;
+        let mut backing = memory
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.check_access(&range)?;
+        backing
+            .dma
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        // SAFETY: the lease is inside this exact stable allocation and retains
+        // the actual Registration as well as its backing, including its charge.
+        let address =
+            unsafe { NonNull::new_unchecked(backing.bytes.address().as_ptr().add(offset)) };
+        backing.dma.push(range.clone());
+        Ok(Some(HostDmaLease {
+            _registration: self.clone(),
+            allocation: Arc::clone(memory),
+            range,
+            address,
+        }))
     }
 
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {

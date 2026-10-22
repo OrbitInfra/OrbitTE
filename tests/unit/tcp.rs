@@ -39,13 +39,22 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x04\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x05\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 3]);
     assert_eq!(request.encode().as_slice(), expected);
-    for (index, value) in [(0, 0), (9, 1), (9, 2), (9, 3), (9, 5), (10, 255), (11, 1)] {
+    for (index, value) in [
+        (0, 0),
+        (9, 1),
+        (9, 2),
+        (9, 3),
+        (9, 4),
+        (9, 6),
+        (10, 255),
+        (11, 1),
+    ] {
         let mut malformed = request.encode();
         malformed[index] = value;
         assert!(Request::decode(&malformed).is_err());

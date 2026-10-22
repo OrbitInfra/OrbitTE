@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::cuda::{self, CudaMemory};
-use orbit_te::rdma::RdmaConfig;
+use orbit_te::rdma::{RdmaConfig, RdmaHostMemory};
 use orbit_te::{
     BatchState, EngineConfig, Error, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, Result, SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
@@ -116,6 +116,9 @@ fn finish(
     if let Some(path) = std::env::var_os("ORBITTE_HARDWARE_MAPS") {
         std::fs::write(path, std::fs::read_to_string("/proc/self/maps")?)?;
     }
+    let expect_direct = transport == Transport::Rdma
+        && matches!(&backing, Memory::Host(_))
+        && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
     engine.close(TIMEOUT)?;
     engine.unregister_memory(&memory)?;
     drop(memory);
@@ -131,6 +134,8 @@ fn finish(
         || rdma.retained_devices != 0
         || rdma.active_endpoints != 0
         || rdma.staging_bytes != 0
+        || rdma.direct_bytes != 0
+        || rdma.opened_direct_endpoints != if expect_direct { 6 } else { 0 }
         || rdma.retained_endpoints != 0
         || rdma.retained_bytes != 0
         || rdma.opened_devices != u64::from(transport == Transport::Rdma)
@@ -145,8 +150,11 @@ fn finish(
         return Err(Error::Internal("CUDA resources were retained"));
     }
     println!(
-        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"completed_rdma_reads\":{},\"completed_rdma_writes\":{}}}",
-        rdma.opened_devices, rdma.completed_reads, rdma.completed_writes
+        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{}}}",
+        rdma.opened_devices,
+        rdma.opened_direct_endpoints,
+        rdma.completed_reads,
+        rdma.completed_writes
     );
     Ok(())
 }
@@ -160,6 +168,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut rdma = RdmaConfig::new(&args[3]);
     rdma.gid_index = args[4].parse()?;
     rdma.hop_limit = 64;
+    rdma.host_memory = match env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() {
+        Ok("staged") => RdmaHostMemory::Staged,
+        Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
+        _ => return Err("ORBITTE_RDMA_HOST_MEMORY must be direct or staged".into()),
+    };
     let kind = &args[5];
     let payload: usize = args[6].parse()?;
     let seed: u64 = args[7].parse()?;

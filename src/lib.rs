@@ -1,4 +1,4 @@
-//! Owned CPU/NVIDIA memory, fenced TCP/staged RDMA transfers and notifications.
+//! Owned CPU/NVIDIA memory, fenced TCP/direct or staged RDMA transfers and notifications.
 //!
 //! This first implementation follows TENT's engine, segment/control-plane and
 //! transport ownership boundaries. Its versioned development protocol is
