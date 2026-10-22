@@ -25,6 +25,15 @@ fn channels() -> (Channel<'static>, Channel<'static>) {
     (sender, receiver)
 }
 
+fn expect_closed_without_next_phase(channel: &mut Channel<'_>) {
+    let mut next = [0];
+    let result = channel.read_exact(&mut next);
+    assert!(
+        matches!(&result, Err(Error::Io(error)) if matches!(error.kind(), io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset)),
+        "invalid peer metadata must close before another phase: {result:?}, byte {next:?}"
+    );
+}
+
 fn request(epoch: SourceEpoch, region: u64) -> Request {
     Request {
         operation: Operation::RdmaWrite,
@@ -273,6 +282,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 .unwrap();
             channel.write_all(&offer).unwrap();
             if stage == 0 {
+                expect_closed_without_next_phase(&mut channel);
                 return;
             }
             let binding = Binding::accept(&mut channel, &wire, local, grant).unwrap();
@@ -298,6 +308,9 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                     &changed,
                 );
                 let _ = channel.write_all(&descriptor.encode());
+                // Keep the backing live until the requester closes. A broken
+                // GRANT check must fail on an unexpected DONE, not peer EOF.
+                expect_closed_without_next_phase(&mut channel);
                 return;
             }
             binding.write(&mut channel, GRANT).unwrap();
@@ -341,7 +354,16 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             .unwrap();
         handler.join().unwrap();
         assert_eq!(report.completed_requests, 0, "stage {stage} field {field}");
-        assert!(report.failure.is_some(), "stage {stage} field {field}");
+        let failure = report.failure.as_ref().unwrap();
+        if stage == 0 && field == 0 {
+            assert!(matches!(failure.error, Error::EpochMismatch));
+        } else {
+            assert!(matches!(failure.error, Error::Protocol(_)), "{failure:?}");
+        }
+        if stage == 0 {
+            let log = crate::rdma::tests::events(source_runtime(&requester));
+            assert!(!log.lock().unwrap().contains(&"connect"));
+        }
         assert!(report.locally_drained);
         let stats = requester.stats().unwrap().rdma.unwrap();
         assert_eq!(
