@@ -92,7 +92,7 @@ does not turn incomplete rows into completed features.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging and P4.2a consumer candidate implemented; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging, P4.2a consumer and P4.2b shared device owner implemented; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -383,6 +383,23 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Installed serving, physical cross-host Manager/GPU, source/requester RNIC
   faults, lost DONE/ACK qualification, endpoint caching,
   zero-copy, GDR and multirail stay open. Old CUDA 12.2 pilots remain historical.
+- [x] **P4.2b — shared RNIC context/PD and whole-engine close (Implemented;
+  scoped source/CPU/healthy native gates independently Accepted).** A per-engine lazy
+  owner reuses one context/PD across slices; CQ/QP/MR/staging stay exclusive.
+  Every new endpoint re-queries port/GID addressing. Actual device references
+  survive failed slice teardown. Whole-engine `close` fences both directions
+  before shared-deadline drain and explicitly destroys PD/context, with stable
+  failure retention and no retry from concurrent close or Drop. Existing
+  directional close remains independent. CPU ABI/concurrency controls and the
+  physical probe require single device construction and complete normal close.
+  Source `1782771` passes independent CPU reruns and six two-host RoCE/TCP
+  DRAM/A-H20 staging native cases, with actual byte/guard/CQ checks, one device
+  open per RDMA peer and zero normal-close charges. See the scoped
+  [qualification and external evidence](rdma-cuda.md#shared-device-owner-qualification)
+  and [owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
+  This does not add pooled endpoints/MRs, application registrations, GDR,
+  multirail or a performance claim. OrbitKV's pinned earlier implementation
+  and shutdown receipt must be migrated and qualified separately.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -667,8 +684,13 @@ qualification remains open beyond the accepted scoped gates. A separate CUDA
 Manager TCP/RDMA staging GPU restores. The later single-runtime installed
 IPC/peer-byte prerequisite is recorded in P11; it does not close serving,
 cross-host, GDR or physical-fault qualification.
-Next extend installed process-boundary coverage beyond this accepted profile,
-then qualify physical cross-host Manager/GPU and native-fault/drain gates.
+P4.2b preserves these owners while reusing the per-RNIC context/PD. Independent
+source/CPU and scoped two-host healthy native gates pass. Next migrate OrbitKV's
+pin and explicit whole-engine shutdown receipt in its existing transfer owner,
+then qualify that consumer change. Extend installed process-boundary coverage
+beyond the accepted profile before physical cross-host Manager/GPU and native
+fault/drain gates. The native GPU-staging result does not close those Manager
+or installed-artifact obligations.
 Preserve P4.1/P5.1 owners before expanding registrations, endpoints or hardware
 claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the

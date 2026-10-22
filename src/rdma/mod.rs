@@ -2,7 +2,6 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::CString;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -11,7 +10,10 @@ use std::time::{Duration, Instant};
 use crate::engine::remaining;
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
+mod device;
 mod sys;
+
+use device::Device;
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
 
@@ -61,6 +63,11 @@ impl RdmaConfig {
 /// still own pinned pages or RNIC resources after native teardown failed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RdmaStats {
+    /// Shared context/PD owners, including partially constructed retained ones.
+    pub active_devices: usize,
+    pub retained_devices: usize,
+    /// Successful context/PD constructions during this runtime lifetime.
+    pub opened_devices: u64,
     pub active_endpoints: usize,
     pub staging_bytes: usize,
     pub retained_endpoints: usize,
@@ -73,6 +80,14 @@ pub(crate) struct Runtime {
     config: RdmaConfig,
     usage: Arc<Mutex<RdmaStats>>,
     verbs: &'static sys::Verbs,
+    device: Mutex<DeviceCache>,
+}
+
+#[derive(Default)]
+struct DeviceCache {
+    closed: bool,
+    owner: Option<Arc<Device>>,
+    failure: Option<(&'static str, i32)>,
 }
 
 impl Runtime {
@@ -82,6 +97,7 @@ impl Runtime {
             config,
             usage: Arc::default(),
             verbs: &sys::REAL,
+            device: Mutex::default(),
         }))
     }
 
@@ -90,6 +106,57 @@ impl Runtime {
             .lock()
             .map(|usage| *usage)
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))
+    }
+
+    fn device(&self) -> Result<Arc<Device>> {
+        let mut cache = self
+            .device
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
+        if cache.closed {
+            return Err(Error::Unavailable("RDMA runtime is closed"));
+        }
+        if let Some((operation, code)) = cache.failure {
+            return Err(Error::Unquiesced { operation, code });
+        }
+        if let Some(owner) = &cache.owner {
+            return Ok(Arc::clone(owner));
+        }
+        match Device::open(&self.config, self.verbs, Arc::clone(&self.usage)) {
+            Ok(owner) => {
+                cache.owner = Some(Arc::clone(&owner));
+                Ok(owner)
+            }
+            Err(error) => {
+                if let Error::Unquiesced { operation, code } = error {
+                    cache.failure = Some((operation, code));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn close(&self) -> Result<()> {
+        let mut cache = self
+            .device
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
+        cache.closed = true;
+        if let Some((operation, code)) = cache.failure {
+            return Err(Error::Unquiesced { operation, code });
+        }
+        let usage = self.stats()?;
+        if usage.retained_endpoints != 0 {
+            return Err(Error::Unavailable("RDMA endpoints retain native resources"));
+        }
+        if usage.active_endpoints != 0 {
+            return Err(Error::Timeout);
+        }
+        if let Some(owner) = &cache.owner {
+            owner.close()?;
+        }
+        cache.owner = None;
+        Ok(())
     }
 
     pub(crate) fn endpoint(&self, length: usize, permission: u32) -> Result<Endpoint> {
@@ -105,7 +172,7 @@ impl Runtime {
                 .staging_bytes
                 .checked_add(length)
                 .ok_or(Error::ResourceExhausted)?;
-            if usage.retained_endpoints != 0 {
+            if usage.retained_endpoints != 0 || usage.retained_devices != 0 {
                 return Err(Error::Unavailable(
                     "RDMA admission is poisoned by retained native resources",
                 ));
@@ -125,8 +192,10 @@ impl Runtime {
         let bytes = Staging::new(length)?;
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
+        let device = self.device()?;
         let mut endpoint = Endpoint {
             resources: Some(Box::new(Resources {
+                _device: Arc::clone(&device),
                 handles: sys::Handles::default(),
                 bytes,
                 lease,
@@ -136,30 +205,8 @@ impl Runtime {
             verbs: self.verbs,
             phase: Phase::Init,
         };
-        let name = CString::new(self.config.device.as_str())
-            .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
-        let resources = endpoint
-            .resources
-            .as_mut()
-            .ok_or(Error::Internal("missing RDMA resources"))?;
-        // SAFETY: the initialized descriptor/handles and stable owned bytes
-        // outlive every native operation, including partially constructed ones.
-        let code = unsafe {
-            (endpoint.verbs.open)(
-                &mut resources.handles,
-                name.as_ptr(),
-                self.config.port,
-                self.config.gid_index,
-                resources.bytes.address.as_ptr().cast(),
-                length,
-                permission,
-                psn,
-                &mut endpoint.local,
-            )
-        };
-        if let Err(error) =
-            check("ibverbs endpoint construction", code).and_then(|()| endpoint.local.validate())
-        {
+        let initialized = device.open_endpoint(&mut endpoint, permission, psn);
+        if let Err(error) = initialized.and_then(|()| endpoint.local.validate()) {
             endpoint.close()?;
             return Err(error);
         }
@@ -226,6 +273,7 @@ impl Drop for Staging {
 }
 
 struct Resources {
+    _device: Arc<Device>,
     handles: sys::Handles,
     bytes: Staging,
     lease: Lease,
@@ -469,8 +517,6 @@ fn close_handles(verbs: &sys::Verbs, handles: &mut sys::Handles) -> Result<()> {
         ("ibv_destroy_qp", verbs.destroy_qp),
         ("ibv_dereg_mr", verbs.deregister),
         ("ibv_destroy_cq", verbs.destroy_cq),
-        ("ibv_dealloc_pd", verbs.dealloc_pd),
-        ("ibv_close_device", verbs.close_device),
     ] {
         // SAFETY: each bridge checks for a null handle and clears only on native
         // success. Stop on error so dependent resources cannot be freed early.

@@ -28,6 +28,12 @@ Opt-in `rdma` and `cuda` features add single-rail RC verbs with owned host
 staging, retained NVIDIA device/pinned allocations and synchronized CUDA copies.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
+Each engine lazily reuses one RNIC context/PD while slices keep exclusive
+CQ/QP/MR/staging owners. Whole-engine `close(timeout)` fences both directions,
+drains accepted work and explicitly destroys shared device resources; failed
+teardown stays retained. Independent review accepts its CPU ownership gates and
+a scoped two-host DRAM/A-H20 GPU-staging native profile. Consumer dependency and
+shutdown migration remain separate from those native gates.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

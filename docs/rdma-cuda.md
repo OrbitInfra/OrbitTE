@@ -87,11 +87,20 @@ RDMA: CPU/GPU -> owned host MR -> RC RDMA READ/WRITE -> owned host MR -> CPU/GPU
 CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 ```
 
-Each RDMA slice owns a PD/CQ/QP/MR and stable host staging. READ/WRITE use real
-signaled verbs work requests and CQ completions; no application/GPU pointer is
-registered with the RNIC in this profile. This is not zero-copy host RDMA or
-GPUDirect. Endpoint caching, multirail, registered application buffers and
-pipelined chunks remain open.
+P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
+Overlapping and successive slices retain that actual shared owner; separate
+engines do not share PDs. Every slice still owns its CQ/QP/MR and stable host
+staging, with independent permissions, rkey, QP and PSN. The shared PD is not a
+source-grant authorization boundary. Port state, MTU, LID and the selected GID
+are re-queried for every new endpoint instead of reusing cached addressing.
+
+This follows the frozen TENT `e2d6e8e0` hierarchy in
+`tent/src/transport/rdma/context.cpp` and `endpoint.cpp`: context/PD outlive their
+endpoints and memory registrations. TENT's pooled CQs and endpoint/MR caches are
+not part of this substage. READ/WRITE use real signaled verbs work requests and
+CQ completions; no application/GPU pointer is registered with the RNIC. Endpoint
+caching, multirail, zero-copy host RDMA, GPUDirect and pipelined chunks remain
+open. Resource reuse alone is not a measured throughput or latency result.
 
 Source admission, authoritative epoch, registration bounds and permissions are
 checked before bootstrap. READ snapshots source bytes into its staging. WRITE
@@ -115,11 +124,38 @@ staging and context. Failed native frees retain resources and their driver.
 
 ## Failure, drain and resource ownership
 
-Endpoint count and registered staging bytes are bounded per engine. Teardown
-runs QP -> MR -> CQ -> PD -> device, stopping on the first error. Failed teardown
-retains the remaining handles, actual staging and budget; later RDMA admission
-is rejected. `RdmaStats` exposes retained endpoints/bytes and successful requester
-READ/WRITE CQ counts independently of application commit/notification results.
+Endpoint count and registered staging bytes remain bounded per engine. Each
+slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+retains the remaining handles, actual staging, its real shared device reference
+and budgets; later RDMA admission is rejected. Even dropping the engine cannot
+destroy a context/PD still retained by an endpoint.
+
+`TransferEngine::close(timeout)` locks source then requester admission, fences
+both before waiting, and gives their accepted operations one shared drain
+deadline. Already accepted work can still create its slices during this drain;
+closing admission does not cancel it. Once both owners are drained, the runtime
+permanently closes device admission, then explicitly destroys PD -> context.
+Concurrent/repeated callers serialize native destruction. A timeout leaves both
+admissions closed and the device live; another call can continue waiting.
+Native teardown failure retains the actual resources, remains charged, returns
+`Unquiesced` and cannot be retried by another close caller or Drop. Successful
+close does not unregister caller-held memory or free allocated batch handles;
+those owners retain their backing/capacity until explicit unregister/free/drop.
+
+`close_source` and `close_requester` preserve their independent contracts: either
+one leaves the other direction and shared device available. Neither alone nor
+the pair supplies an explicit PD/context teardown receipt. Use whole-engine
+`close` before releasing an owner's native-resource budget. Drop can attempt
+best-effort device teardown after the last endpoint disappears, but cannot
+report failure; it preserves the same retention rule. The pinned OrbitKV
+consumer still uses the earlier per-slice implementation; its pin and explicit
+shutdown-receipt migration require a separate consumer gate.
+
+`RdmaStats` adds active/retained shared device counts and successful device-open
+count. An idle open engine can have one active device and zero endpoints;
+whole-engine close returns active devices to zero on success. Existing retained
+endpoint/byte and successful requester READ/WRITE CQ counts remain independent
+of application commit/notification results.
 
 `Error::Unquiesced` means a backend could not prove termination/teardown. A
 synchronous report or async task/group can be logically failed with
@@ -133,11 +169,22 @@ physical ambiguity; the remote engine owns that retention.
 Retention is conservative protection, not implemented recovery. There is no
 reclaim proof/API for quarantined operations yet; process-scoped retained CUDA
 resources are observable through `cuda::retained_resources`. A context with
-failed restore/unpin is poisoned. GPU/RNIC loss, hardware abort/drain, concurrent
-shutdown and reuse qualification remain open. Synchronous native calls/teardown
+failed restore/unpin is poisoned. GPU/RNIC loss, hardware abort/drain and physical
+concurrent shutdown/reuse qualification remain open. Synchronous native calls/teardown
 can exceed an API deadline; no hard real-time or provider interrupt is claimed.
 
 ## Verification and physical execution
+
+The P4.2b CPU controls exercise overlapping/consecutive slice reuse, device
+lifetime after runtime drop, partial device construction, every slice teardown
+failure retaining its device, PD/context cleanup failure, concurrent exactly-once
+close, directional close, whole-close admission fencing, drain timeout and a
+previously accepted operation opening its slice after the fence. The physical
+probe uses whole-engine close and requires exactly one device open per RDMA
+peer, zero shared devices after shutdown and all existing byte/guard/CQ checks.
+The scoped native qualification below applies to these new code paths. Earlier
+consumer profiles pinned to `02d64e55` remain separate and do not qualify a
+consumer dependency or shutdown migration.
 
 CPU-only ABI shims cover verbs descriptor layout, malformed fields, construction,
 post/poll/CQ errors, deadline and every teardown boundary; they assert exact
@@ -153,13 +200,42 @@ cargo test --locked --all-features
 cargo build --locked --release --all-features --example hardware_peer
 ```
 
+### Shared device owner qualification
+
+At `1782771` in [OrbitTE #14](https://github.com/OrbitInfra/OrbitTE/pull/14),
+independent source/CPU review and six healthy native cases pass: two physical
+RoCE v2 hosts exchange DRAM READ/WRITE in both roles; A's H20 exchanges CUDA
+staging bytes with B's DRAM through RDMA and TCP controls. Complete buffers,
+noncontiguous ranges, untouched bytes and guards are compared. Each RDMA peer
+opens one shared device across its slices, then whole-engine close returns
+active/retained device, endpoint and staging charges to zero.
+
+The explicit GPU Driver API profile maps compatibility `libcuda590.48.01` on
+kernel driver `535.161.08`, with no CUDART or TENT mapped. B uses CPU memory only.
+Actual mapped libraries are frozen before the accepted GPU run and their
+identities/bytes are unchanged after exit. Independent native peers, supervisors,
+SSH starters and controller finish normally; original RNIC/A-GPU lock inodes
+are reacquired/released and A GPU7 returns to zero memory with no compute apps.
+This is native-engine healthy-path qualification, not an OrbitKV Manager,
+installed wheel, serving, direct GPU MR/GDR, physical fault or performance result.
+
+Evidence, source/binary manifests, failed profiles and checker controls remain
+outside the checkout at `/root/orbitte-artifacts/rdma-context-20261022/`;
+`independent-hardware-1782771/independent-review.json` records the accepted scope.
+[The eight-job CI matrix](https://github.com/OrbitInfra/OrbitTE/actions/runs/39748938048)
+and [frozen native TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/39748938003)
+pass for that source. The latter compares the CPU contract, not native RDMA
+wire interoperability.
+
+### Run the native gate
+
 The explicit native [`hardware_peer`](../examples/hardware_peer.rs) runner
 performs three noncontiguous READs across two appended submissions, then three
 WRITEs, generation-specific notifications and complete source/destination/guard
 comparisons. Each run varies a deterministic seed. It checks exact completion
-bytes and successful requester WR counts, then unregisters, drains and checks
-zero remaining registrations, workers, endpoints, staging and retained CUDA
-resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
+bytes and successful requester WR counts, closes the whole engine, then
+unregisters/releases memory and checks zero remaining registrations, workers,
+shared RDMA devices, endpoints, staging and retained CUDA resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
 This is a correctness pilot, not a benchmark or a full fault qualification.
 
 Use [`tests/hardware/run.py`](../tests/hardware/run.py) with an externally stored
@@ -173,7 +249,11 @@ python3 tests/hardware/run.py --profile /external/profile.json \
 
 The profile supplies `ssh_config`, `rnic`, `gid_index`, `nodes` and `cases`.
 Each node has an existing SSH `alias`, exact `hostname`/`boot_id`, `bind` address,
-`nic_lock`, and (when GPU memory is used) `gpu_lock`/`gpu_uuid`. Each case has
+`nic_lock`, and (when GPU memory is used) `gpu_lock`/`gpu_uuid`. Optional node
+`env` selects explicit native library paths, such as a CUDA forward-compatibility
+library; role-specific environment and the selected GPU UUID take precedence.
+The controller collects actual native `/proc/self/maps` from both peers and
+requires them alongside successful supervision. Each case has
 `source`, `requester` node keys, `source_kind`, `requester_kind`, `transport`,
 `payload` (128 bytes..32 MiB), and `seed`. GPU cases expose only the selected UUID
 through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock paths

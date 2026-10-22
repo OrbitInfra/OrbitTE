@@ -72,7 +72,11 @@ owners independently.
 open, notification and async submissions. It waits for accepted queued/running
 work to release local owners. Timeout leaves admission closed; call again to
 wait. `close_source` separately gates source registration and handlers. Existing
-source-only close behavior is preserved. Closing requester admission does not
+source-only close behavior is preserved. Whole-engine `close(timeout)` fences
+both directions before waiting against one deadline; accepted queued work can
+still create backend slices while draining. It then explicitly closes shared
+RDMA device resources. A native cleanup error is retained without retry; see
+the [device owner contract](rdma-cuda.md#failure-drain-and-resource-ownership). Closing requester admission does not
 invalidate existing status/free operations or claim that a remote ACK was read.
 
 ## Frozen correspondence and limits

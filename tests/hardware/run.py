@@ -58,7 +58,7 @@ class Controller:
         locks = []
         if transport == 'rdma':
             locks.append(target['nic_lock'])
-        environment = dict(environment or {})
+        environment = {**target.get('env', {}), **(environment or {})}
         if kind != 'cpu':
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
@@ -133,7 +133,7 @@ class Controller:
                     environment['ORBITKV_ORBITTE_REMOTE'] = json.dumps(readiness)
                 return arguments, environment
             arguments = [role, self.profile['nodes'][node]['bind'], self.profile['rnic'], str(self.profile['gid_index']), kind, str(case['payload']), str(case['seed']), case['transport']]
-            return arguments + (readiness[:3] if readiness else []), {}
+            return arguments + (readiness[:3] if readiness else []), {'ORBITTE_HARDWARE_MAPS': root + '/maps.txt'}
 
         arguments, environment = command(source, 'source', case['source_kind'], source_root)
         self.start(source, source_root, case['source_kind'], arguments, case['transport'], environment)
@@ -158,7 +158,7 @@ class Controller:
             if all(record['result.json'] is not None for record in evidence.values()):
                 break
             time.sleep(0.3)
-        passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' for record in evidence.values())
+        passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
         # Preserve every successful/failed run verbatim, including supervisors.
         (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'evidence': evidence}, indent=2) + '\n')
         if not passed:

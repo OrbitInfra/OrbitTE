@@ -337,7 +337,8 @@ impl TransferEngine {
                         .rdma
                         .as_ref()
                         .ok_or(Error::Unavailable("RDMA is not configured"))?;
-                    if runtime.stats()?.retained_endpoints != 0 {
+                    let usage = runtime.stats()?;
+                    if usage.retained_endpoints != 0 || usage.retained_devices != 0 {
                         return Err(Error::Unavailable("RDMA retained native resources"));
                     }
                 }
@@ -549,6 +550,10 @@ impl TransferEngine {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
+        self.close_source_until(deadline)
+    }
+
+    fn close_source_until(&self, deadline: Instant) -> Result<()> {
         let mut admission = self
             .source
             .admission
@@ -574,6 +579,10 @@ impl TransferEngine {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
+        self.close_requester_until(deadline)
+    }
+
+    fn close_requester_until(&self, deadline: Instant) -> Result<()> {
         let mut usage = self
             .batches
             .usage
@@ -588,6 +597,40 @@ impl TransferEngine {
                 .wait_timeout(usage, duration)
                 .map_err(|_| Error::Internal("batch lock poisoned"))?
                 .0;
+        }
+        Ok(())
+    }
+
+    /// Fences both directions before waiting for accepted source and requester
+    /// operations, then explicitly closes the shared RDMA context/PD if enabled.
+    /// Timeout leaves both admissions closed and permits another drain wait.
+    /// Native teardown failure retains its owner and is never retried, including
+    /// by Drop or another close caller. The deadline bounds drain waits, not a
+    /// native provider call that cannot be preempted.
+    pub fn close(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
+        {
+            // Every path taking both locks uses source before requester.
+            let mut source = self
+                .source
+                .admission
+                .lock()
+                .map_err(|_| Error::Internal("source lock poisoned"))?;
+            let mut requester = self
+                .batches
+                .usage
+                .lock()
+                .map_err(|_| Error::Internal("batch lock poisoned"))?;
+            source.open = false;
+            requester.open = false;
+        }
+        self.close_source_until(deadline)?;
+        self.close_requester_until(deadline)?;
+        #[cfg(feature = "rdma")]
+        if let Some(runtime) = &self.source.rdma {
+            runtime.close()?;
         }
         Ok(())
     }
