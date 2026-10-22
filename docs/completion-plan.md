@@ -19,8 +19,10 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 ## Starting point and delivery states
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-tree now implements the P1.1/P1.2/P1.3/P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md). This code is not published to crates.io yet.
+tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
+[the CPU TCP contract](cpu-tcp.md), plus the initial P4.1/P5.1 RDMA/CUDA staging
+paths. P1.5 adds the opt-in consumer allocation bridge below. This code is not
+published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
 
@@ -36,6 +38,11 @@ P1.1/P2.1 were merged in #2 after passing stable/MSRV CI and local CPU checks.
 P1.2's external host ranges and P2.2's bounded notifications were merged in
 #3/#4 after passing the same source gates. They have local Linux loopback/process evidence;
 independent acceptance is still open. No complete numbered stage is qualified.
+PRs #5-#9 are merged through `02d64e552f94ef965eff32b35a55789018223439`,
+covering the CPU comparison, host batches, async ownership and native RDMA/CUDA
+bindings. Stable/MSRV checks, 58 Rust tests, two supervision controls and eight
+healthy two-host H20 staging cases passed for that tree. These scoped results
+do not establish independent acceptance, complete native faults or full parity.
 P0.1 adds a [scoped native CPU comparison](cpu-oracle.md); the complete P0 oracle
 and compatibility inventory remain open. Missing hardware leaves
 a profile unqualified and visible in the full target.
@@ -60,9 +67,11 @@ requests that retain their resolved owners. The OrbitKV consumer audit remains
 at `3f4d65709e86a060f323da7e0d1b59975f6939bc`; its native fork is
 `12cbf549b6351c800de0f94a480276d216b9a43b`, with an extended request ABI.
 P1.4 adds bounded asynchronous batch/task ownership and requester drain for
-CPU TCP. An audited allocator/native adapter remains open in P1/P2/P9. RDMA
-and CUDA development proceeds with these owners; no hardware qualification is
-inferred from CPU progress.
+CPU TCP. P1.5 implements the first real pinned-allocation bridge in
+[OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303), with a scoped H20
+TCP ownership pilot. Whole-pool native adaptation, source-grant epochs and
+generation-mailbox consumption remain open in P1/P2/P9. RDMA and CUDA development
+proceeds with these owners; no hardware qualification is inferred from CPU progress.
 Qualify that profile under P10/P11 before switching
 OrbitKV's runtime dependency. Then prioritize host RDMA and NVIDIA memory paths
 (P4/P5) ahead of HP-TCP/SHM and optional providers when their prerequisites are
@@ -74,7 +83,7 @@ does not turn incomplete rows into completed features.
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping/oracle open |
-| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1/P1.2/P1.3/P1.4 implemented; broader P1 open |
+| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1/P2.2 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging implemented; full P4 open |
@@ -174,8 +183,9 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   shared alias locks, retained-range conflicts and versioned base-address
   descriptors. Real TCP tests use external source/destination backing and prove
   unregister/timeout cannot release the owner while a handler remains active.
-  CUDA-pinned allocator integration, RNIC registration and native free-failure
-  qualification remain open; this substage does not pin pages itself.
+  This substage does not pin pages itself. P1.5 adds an actual CUDA-pinned
+  consumer bridge; whole-pool integration and native free-failure qualification
+  remain open.
 - [x] **P1.3 — native host batch inputs (Implemented, not Accepted).**
   Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
   and retain actual backing through completion. Host range batches preflight
@@ -198,6 +208,23 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   submits, repeated terminal polling and free. See [the contract](async-batches.md).
   Merge/alias mapping, explicit progress, backend aborts, priority and native
   deferred-free compatibility remain open; this is not the complete F08 stage.
+- [x] **P1.5 — OrbitKV pinned allocation bridge (Implemented consumer candidate,
+  not Accepted).** [OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303)
+  at `f9eda6acd9defdae46d95514bd4e94d48b657fc6` pins OrbitTE `02d64e55` and
+  exposes one canonical host view per real `PinnedAllocation`. The view retains
+  that exact slot and its shard; a weak cache avoids cycles and independent
+  alias locks. Strict default-feature Clippy passes. Two explicit hardware
+  controls passed on H20 GPU 7 with private CUDA 12.2: production memfd/CUDA host
+  registration, actual TCP READ/WRITE bytes, duplicates, cancel/wait timeout,
+  unregister, failed early free, detach, slot exhaustion, allocator drop and
+  eventual release. The native child and supervisor were reaped and locks
+  released. Evidence is external at
+  `/root/orbitte-artifacts/merge-and-allocator-20261021/allocator-hardware/`.
+  This is an opt-in allocation-range bridge in a consumer PR, not a Manager
+  transport replacement, whole-pool MR cache, source-grant/mailbox integration,
+  installed serving, RDMA or device-DMA failure qualification. The caller must
+  still coordinate external CPU/GPU/process access. See the maintained
+  [consumer contract and hardware gate](https://github.com/OrbitInfra/OrbitKV/blob/f9eda6acd9defdae46d95514bd4e94d48b657fc6/docs/transport.md#experimental-orbitte-allocation-bridge).
 - [ ] Implement Rust request/status/error/options types and native engine
   construction using frozen per-engine config, without changing process-global
   environment to configure concurrent engines.
