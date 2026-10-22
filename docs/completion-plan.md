@@ -829,7 +829,7 @@ context async-event ownership for its declared source/CPU/native profiles.
 It retains the per-request QP barrier; persistent key domains and connected
 endpoint-store ownership remain open.
 Next continue within P4 to connected endpoint-store ownership, source-rkey
-authority/revocation, dual endpoint incarnations, device/topology discovery,
+authority/revocation on persistent connections, dual endpoint incarnations, device/topology discovery,
 event progress and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those

@@ -668,9 +668,10 @@ faults, persistent key reuse, connected reuse, GDR or the complete P4 exit.
 
 The independent source review passes 22 gates with stable/Rust 1.85, 100 unit
 tests, notification/TCP/doc tests, strict Clippy and supervision/comparator
-controls. Both implementation and independent MSRV release builds pass 30
-single-CPU runs with 16 test threads. Sixty deliberate old-logic controls
-reject skipped source INV, missing/late async ACK, lost-consumer teardown,
+controls. The implementation stable and independent MSRV release builds each
+pass 30 single-CPU runs with 16 test threads. Sixty deliberate old-logic controls
+reject skipped source INV, missing ACK or fault publication after ACK,
+lost-consumer teardown,
 PORT_ACTIVE health restoration, the old pre-lock abort fence and other source
 window/CQ ownership regressions. These CPU fault controls do not establish
 physical port/device/CQ teardown-failure qualification.

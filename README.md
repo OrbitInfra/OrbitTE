@@ -67,7 +67,8 @@ accept the declared MR reuse and normal-close profile. Shared CQ/progress now
 passes independent source/CPU review and six four-QP plus fourteen public
 regression cases from each separately built native binary. Single-endpoint
 RDMA regression quotas exercise immediate resource reuse. Connected endpoint
-reuse, source authorization revocation and the remaining P4 exit gates stay open.
+reuse, source authorization revocation on persistent connections and the remaining
+P4 exit gates stay open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates
