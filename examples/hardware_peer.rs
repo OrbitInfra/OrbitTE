@@ -134,6 +134,10 @@ fn finish(
         || idle.opened_windows != windows
         || idle.completed_window_binds != windows
         || idle.completed_window_invalidations != windows
+        || idle.burned_window_keys != windows
+        || idle.window_key_exhaustions != 0
+        || (windows == 0 && idle.window_key_indices != 0)
+        || (windows != 0 && !(1..=windows as usize).contains(&idle.window_key_indices))
     {
         return Err(Error::Internal("source MW lifecycle counters differ"));
     }
@@ -170,6 +174,7 @@ fn finish(
         || rdma.async_event_workers != 0
         || rdma.progress_failures != 0
         || rdma.active_devices != 0
+        || rdma.window_key_indices != 0
         || rdma.retained_devices != 0
         || rdma.persistent_mrs != 0
         || rdma.persistent_mr_bytes != 0
@@ -199,6 +204,13 @@ fn finish(
     println!(
         "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
         idle.async_event_workers, rdma.async_event_workers, rdma.acknowledged_async_events
+    );
+    println!(
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        idle.window_key_indices,
+        rdma.window_key_indices,
+        rdma.burned_window_keys,
+        rdma.window_key_exhaustions
     );
     println!(
         "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",

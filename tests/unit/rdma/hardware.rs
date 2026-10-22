@@ -338,6 +338,12 @@ fn shared_cq_peer() {
     );
     assert_eq!(idle.active_windows, 0);
     assert_eq!(
+        idle.burned_window_keys,
+        if source { (2 * COUNT) as u64 } else { 0 }
+    );
+    assert_eq!(idle.window_key_exhaustions, 0);
+    assert_eq!(idle.window_key_indices != 0, source);
+    assert_eq!(
         idle.completed_window_binds,
         if source { (2 * COUNT) as u64 } else { 0 }
     );
@@ -367,6 +373,14 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    assert_eq!(closed.window_key_indices, 0);
+    println!(
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        idle.window_key_indices,
+        closed.window_key_indices,
+        closed.burned_window_keys,
+        closed.window_key_exhaustions
+    );
     println!(
         "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
         idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
@@ -539,6 +553,9 @@ fn source_window_peer() {
         (0, 0, 0, 0)
     );
     assert_eq!(idle.completed_window_binds, u64::from(source));
+    assert_eq!(idle.burned_window_keys, u64::from(source));
+    assert_eq!(idle.window_key_exhaustions, 0);
+    assert_eq!(idle.window_key_indices, usize::from(source));
     assert_eq!(
         idle.completed_window_invalidations,
         u64::from(source && probe == "revoked")
@@ -554,6 +571,14 @@ fn source_window_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    assert_eq!(closed.window_key_indices, 0);
+    println!(
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        idle.window_key_indices,
+        closed.window_key_indices,
+        closed.burned_window_keys,
+        closed.window_key_exhaustions
+    );
     println!(
         "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
         idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events

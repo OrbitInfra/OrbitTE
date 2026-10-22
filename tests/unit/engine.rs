@@ -109,7 +109,7 @@ fn invalid_configuration_fails_before_binding_or_spawning_threads() {
 }
 
 #[cfg(feature = "rdma")]
-fn rdma_fixture(mode: &str) -> TransferEngine {
+pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
     let config = EngineConfig::default();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
@@ -131,6 +131,11 @@ fn rdma_fixture(mode: &str) -> TransferEngine {
         batches: Arc::default(),
         allocations: Arc::new(AllocationBudget::new()),
     }
+}
+
+#[cfg(feature = "rdma")]
+pub(crate) fn source_runtime(engine: &TransferEngine) -> &crate::rdma::Runtime {
+    engine.source.rdma.as_ref().unwrap()
 }
 
 #[cfg(feature = "rdma")]

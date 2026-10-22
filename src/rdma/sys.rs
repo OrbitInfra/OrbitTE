@@ -348,7 +348,8 @@ unsafe extern "C" fn open(
                 return failure();
             }
             let key = (*h.mw.cast::<ffi::ibv_mw>()).rkey;
-            h.window_key = (key & !255) | (key.wrapping_add(1) & 255);
+            // Device selects and permanently burns a fresh full key in its PD.
+            h.window_key = key;
         }
         *local = Descriptor {
             address: buffer as u64,

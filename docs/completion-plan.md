@@ -289,7 +289,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   leaves queued messages readable. Data results remain intact if notification
   delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
   malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. The original substage used OrbitTE wire v3 (now v6); native C allocation/free, asynchronous
+  pass. The original substage used OrbitTE wire v3 (now v7); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
   scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
@@ -424,7 +424,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   remain usable. Native teardown must succeed before CPU access and source ACK.
   Explicit staging remains selectable; device allocations keep the declared
   staging path, and a failed host registration never falls back to staging.
-  This substage used wire v5 (now v6), rejecting earlier peers: WRITE attempts can change application bytes
+  This substage used wire v5 (now v7), rejecting earlier peers: WRITE attempts can change application bytes
   before DONE/ACK, and a failed direct READ can already have changed its target.
   CPU fault controls cover mixed policies, exact MR extents, retained teardown,
   unregister and running cancel/detach/close. Source `09fa949` passes independent
@@ -515,6 +515,20 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   review and two independently built 24-case native runs. Scope, exact artifacts
   and open physical fault gates are recorded in
   [the qualification](rdma-cuda.md#one-use-source-memory-window-qualification).
+- [ ] **P4.7b — persistent PD key domain and bilateral incarnations
+  (Implemented; qualification pending).** The actual PD owns a bounded,
+  non-evicting bitmap of burned full MW rkeys across native MW destruction and
+  reallocation. Tag/index-capacity exhaustion refuses authority before BIND;
+  failures retain the actual owners and history. Separate checked PD-owned
+  connection/grant counters and a random PD nonce drive OrbitTE wire v7.
+  All RDMA phases bind both process/PD/connection identities, the exact request
+  and an independent grant generation; no old-version fallback exists.
+  Connections, MWs and parent MRs remain per request with both physical QP
+  barriers. CPU controls cover all 256 tags, index limits, concurrent burns,
+  unused grants, retained PDs, counter overflow and real control-socket replay
+  rejection before connect/BIND/data or staged output commit. Qualification
+  and remaining reuse limits are tracked in
+  [the contract](rdma-cuda.md#persistent-key-domain-and-bilateral-incarnation-qualification).
 - [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
   Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
@@ -523,8 +537,12 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   lookup eviction alone must not repay debt or re-enable stale authority.
   P4.5 caches requester local MRs; P4.6 shares the context CQ/worker. QPs and
   source grants remain per request. P4.7a adds one-use MW authority; its
-  scoped acceptance is complete. A persistent key-generation/reuse domain and
-  dual-incarnation protocol remain prerequisites before persisting connected endpoints.
+  scoped acceptance is complete. P4.7b implements the persistent key domain and
+  bilateral incarnation/grant protocol above; its acceptance is pending.
+  Split persistent connection QP ownership from per-grant MW/MR/loan/charges,
+  add terminal endpoint-store publication/detached retirement and nonrepeating
+  per-grant WR namespaces, and establish the physical incoming-DMA drain
+  contract before persisting connected endpoints.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete event-driven progress and backend cancellation qualification for

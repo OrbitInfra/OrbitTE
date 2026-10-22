@@ -787,4 +787,4 @@ impl Drop for BatchPermit {
 
 #[cfg(test)]
 #[path = "../tests/unit/engine.rs"]
-mod tests;
+pub(crate) mod tests;

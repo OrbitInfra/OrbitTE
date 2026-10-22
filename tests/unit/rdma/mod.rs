@@ -203,7 +203,11 @@ unsafe extern "C" fn open(
             }
             device.windows.fetch_add(1, Ordering::SeqCst);
             (*h).mw = Box::into_raw(Box::new(false)).cast();
-            (*h).window_key = 0x102;
+            (*h).window_key = if device.mode == "key_indices" {
+                qpn << 8 | 1
+            } else {
+                0x101
+            };
         }
         *descriptor = Descriptor {
             address: bytes as u64,
@@ -771,6 +775,14 @@ fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
     for config in [
         RdmaConfig::new(""),
         RdmaConfig::new("x\0y"),
+        RdmaConfig {
+            max_window_key_indices: 0,
+            ..RdmaConfig::new("x")
+        },
+        RdmaConfig {
+            max_window_key_indices: (1 << 24) + 1,
+            ..RdmaConfig::new("x")
+        },
         RdmaConfig {
             max_cached_mrs: 0,
             ..RdmaConfig::new("x")
