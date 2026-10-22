@@ -1,9 +1,10 @@
 # RDMA registration and CUDA staging
 
 P4.1-P4.3/P5.1 add opt-in source implementations. Acceptance is scoped to the
-exact native profiles below; the complete hardware and parity stages stay open. The [completion plan](completion-plan.md) is
-the only execution queue. Direct application host registration and explicit staging share a bounded,
-single-rail owner. Neither establishes full B04/B01 or native TENT compatibility.
+exact native profiles below; the complete hardware and parity stages stay open.
+The [completion plan](completion-plan.md) is the only execution queue. Direct
+application host registration and explicit staging share a bounded, single-rail
+owner. Neither establishes full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
 
@@ -98,8 +99,8 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive slices retain that actual shared owner; separate
 engines do not share PDs. Every slice still owns its CQ/QP/MR and stable host
-staging or exact direct host range, with independent permissions, rkey, QP and PSN. The shared PD is not a
-source-grant authorization boundary. Port state, MTU, LID and the selected GID
+staging or exact direct host range, with independent permissions, rkey, QP and
+PSN. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
 
 This follows the frozen TENT `e2d6e8e0` hierarchy in
@@ -154,11 +155,11 @@ staging and context. Failed native frees retain resources and their driver.
 ## Failure, drain and resource ownership
 
 Endpoint count, registered direct host bytes and staging bytes stay bounded
-per engine. Each
-slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+per engine. Each slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
 retains the remaining handles, actual staging or direct registration/allocation
-lease, its real shared device reference and budgets; later RDMA admission is rejected. Even dropping the engine cannot
-destroy a context/PD still retained by an endpoint.
+lease, its real shared device reference and budgets; later RDMA admission is
+rejected. Even dropping the engine cannot destroy a context/PD still retained
+by an endpoint.
 
 `TransferEngine::close(timeout)` locks source then requester admission, fences
 both before waiting, and gives their accepted operations one shared drain
@@ -267,6 +268,44 @@ outside the checkout at `/root/orbitte-artifacts/rdma-context-20261022/`;
 and [frozen native TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/39748938003)
 pass for that source. The latter compares the CPU contract, not native RDMA
 wire interoperability.
+
+### Direct host MR qualification
+
+Source `09fa949` in [OrbitTE #15](https://github.com/OrbitInfra/OrbitTE/pull/15)
+passes independent source/CPU review and twelve healthy native cases on the
+same two RoCE v2 hosts. Ordinary DRAM uses exact direct MRs in both roles;
+explicit staged and both mixed host policies pass separately. A's H20 also
+exchanges CUDA-pinned host direct bytes and device-staged bytes with B's DRAM
+in both roles, with CPU/GPU TCP controls. Every peer compares its complete
+buffer, noncontiguous request ranges, untouched bytes and guards. Each direct
+host RDMA peer constructs six direct endpoints; device-staged and explicit
+staging peers construct zero. Requesters observe three READ and three WRITE
+CQ successes, and all direct/staging/device/endpoint charges return to zero.
+
+The independent MSRV-built native binary differs from the implementation build
+and reruns all twelve cases against independently frozen inputs. All 48 native
+and supervisor PIDs are absent after each twelve-case run; 24 SSH starters and the controller
+return zero through actual waits. The original two RNIC locks and A GPU7 lock
+are reacquired/released, and A GPU7 returns to zero memory with no compute apps.
+All mapped libraries match their preflight path/inode/SHA profile. A maps
+compatibility `libcuda590.48.01` on kernel driver `535.161.08`; no CUDART or TENT
+is mapped, and B does not initialize CUDA. `dc77a5b` only strengthens the CPU
+assertion that successful close unlocks access before endpoint-owner drop;
+production and native harness bytes are unchanged from the hardware source.
+
+Evidence and frozen binaries stay outside the source checkout at
+`/root/orbitte-artifacts/rdma-direct-host-20261022/`:
+`implementation-hardware-review.json`,
+`independent-source-09fa949/independent-review.json` and
+`independent-hardware-09fa949/independent-review.json` record the scope.
+The implementation archive is `implementation-evidence-09fa949.tar.gz`, SHA-256
+`10822ee6c9d353563308056347a9d56235ebb6572e2afe53ce4f0e5775784e8c`.
+The [eight-job CI matrix](https://github.com/OrbitInfra/OrbitTE/actions/runs/39757218570)
+and [unmodified frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/39757218335)
+pass for the source plus test assertion. The native comparison covers selected
+CPU API behavior, not RDMA wire interoperability. This profile does not qualify
+persistent MR/endpoint caches, multirail, direct GPU MR/GDR, physical RNIC faults,
+installed OrbitKV, performance or complete P4/TENT parity.
 
 ### Run the native gate
 

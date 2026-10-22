@@ -20,9 +20,9 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus the initial P4.1/P5.1 RDMA/CUDA staging
-paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the
-consumer TCP peer path below. This code is not
+[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA and
+P4.1/P5.1 RDMA/CUDA staging paths. P1.5 adds the opt-in consumer allocation
+bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -68,9 +68,9 @@ records its exact source correspondence and deliberate safety differences.
 ## Historical OrbitKV contracts and evidence
 
 These records preserve earlier consumer requirements and accepted profiles;
-they do not set the current execution order. At OrbitKV `a9befeec596bb9064d25d34f93d07fe59077809d`, the current
-transfer owner needs stable allocator registration, P2P segment lookup, batched
-READ, authoritative source epochs, source close/drain, generation-scoped
+they do not set the current execution order. At OrbitKV
+`a9befeec596bb9064d25d34f93d07fe59077809d`, the audited transfer owner needs stable
+allocator registration, P2P segment lookup, batched READ, authoritative source epochs, source close/drain, generation-scoped
 notifications and NIC-load observations. Source authority comes from the
 source grant; a refreshed endpoint must not silently replace that epoch.
 
@@ -97,8 +97,8 @@ P1/P2/P9/P11. RDMA and CUDA development
 proceeds with these owners; no hardware qualification is inferred from CPU progress.
 Any later OrbitKV runtime switch still needs its own P10/P11 qualification.
 Native P4/P5 now proceed ahead of consumer linkage, HP-TCP/SHM and optional
-providers when their prerequisites are ready. The complete parity inventory remains the target; the delivery priority
-does not turn incomplete rows into completed features.
+providers when their prerequisites are ready. The complete parity inventory
+remains the target; the current order does not reduce the required scope.
 
 ## Delivery sequence
 
@@ -108,7 +108,7 @@ does not turn incomplete rows into completed features.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1/P4.2 implemented; P4.3 direct host MR implemented, qualification open; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.3 implemented with scoped native acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -416,9 +416,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   This does not add pooled endpoints/MRs, application registrations, GDR,
   multirail or a performance claim. OrbitKV's pinned earlier implementation
   and shutdown receipt must be migrated and qualified separately.
-- [x] **P4.3 — direct application host MR (Implemented; native qualification
-  and independent acceptance pending).** RDMA registers the exact requested
-  DRAM or CUDA-pinned host range in the engine's shared PD. Canonical allocation
+- [x] **P4.3 — direct application host MR (Implemented; scoped source/CPU and
+  healthy native gates independently Accepted).** RDMA registers the exact
+  requested DRAM or CUDA-pinned host range in the engine's shared PD. Canonical allocation
   range leases retain the real registration, allocation and budget across
   aliases/engines; overlapping CPU or DMA accesses fail while disjoint ranges
   remain usable. Native teardown must succeed before CPU access and source ACK.
@@ -427,8 +427,14 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Wire v5 rejects earlier peers: WRITE attempts can change application bytes
   before DONE/ACK, and a failed direct READ can already have changed its target.
   CPU fault controls cover mixed policies, exact MR extents, retained teardown,
-  unregister and running cancel/detach/close. This is per-request registration,
-  not TENT's persistent MR cache, endpoint pooling, GDR or complete P4.
+  unregister and running cancel/detach/close. Source `09fa949` passes independent
+  CPU reruns and twelve native two-host DRAM, CUDA-pinned host direct,
+  mixed/explicit staging and A-H20 device-staging/TCP cases; full bytes/guards,
+  actual direct/CQ counts, frozen libraries and complete normal release pass.
+  `dc77a5b` adds only the close-before-drop assertion. See the scoped
+  [qualification and external evidence](rdma-cuda.md#direct-host-mr-qualification).
+  This is per-request registration, not TENT's persistent MR cache, endpoint
+  pooling, GDR or complete P4.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -708,10 +714,12 @@ and independent acceptance remain separate states.
 
 Keep implementation and acceptance centered on native OrbitTE. P4.2b's shared
 context/PD and whole-engine close have scoped independent CPU and healthy native
-acceptance. P4.3 establishes direct application host registration; qualify exact
-DRAM and CUDA-pinned host READ/WRITE bytes on the two physical RNIC hosts, plus
-explicit staging and mixed-policy controls. Preserve failed runs and ownership
-controls. Missing fault or hardware gates remain unqualified.
+acceptance. P4.3 adds scoped independent source/CPU and twelve healthy native
+cases for exact DRAM/CUDA-pinned host direct, mixed/explicit staging and A-H20
+device-staging/TCP bytes. Its per-request registration and healthy normal release
+are accepted for that declared profile; physical faults and complete P4 remain
+open. Preserve failed runs and ownership controls. Missing fault or hardware
+gates remain unqualified.
 
 Continue within P4 to persistent MR and endpoint-store ownership, fragmented
 work and CQ progress, device/topology discovery and multirail. Follow the frozen
