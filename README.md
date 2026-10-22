@@ -54,7 +54,9 @@ open.
 P4.5 separates persistent host registration from exact per-request DMA exclusion.
 Idle cached MRs allow CPU access; final unregister retires the registration,
 and failed deregistration retains the actual backing, device and budget.
-Endpoint reuse and shared progress remain open in P4.
+Independent CPU review and two separately built fourteen-case native runs
+accept the declared MR reuse and normal-close profile. Endpoint reuse and shared
+progress remain open in P4.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.4 scoped native acceptance; P4.5 implemented pending native acceptance; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.5 implemented with scoped native acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -452,7 +452,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   cases with exact CQ/byte/post counts, folded tails and windows 1/2/3/4/8.
   See the scoped [qualification and external evidence](rdma-cuda.md#bounded-slice-and-wr-progress-qualification).
 - [x] **P4.5 — persistent requester local-only host MRs (Implemented;
-  native qualification and independent acceptance pending).** Following frozen
+  source/CPU and healthy native profile independently Accepted).** Following frozen
   TENT's independent registered-buffer/PD owner, a bounded cache reuses a full
   registered HostMemory view with LOCAL_WRITE permission only. Actual identity,
   backing and device survive Creating/Ready/retiring/closing states; physical
@@ -468,8 +468,18 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   request base differs from MR base. Source remote-permission MRs stay exact
   and per request to preserve rkey revocation. This does not add source MR reuse,
   endpoint/QP/CQ pooling, shared progress, GPU MR/GDR or complete P4.
+  Source `2c4aa27` passes independent stable/MSRV CPU gates and fourteen native
+  cases from each separately built binary, with exact 1-open/5-reuse/full-view
+  idle-MR checks for direct host requesters and complete normal close before PD.
+  Physical eviction, unregister races and failed deregistration remain covered
+  only by CPU controls. See the scoped
+  [qualification and external evidence](rdma-cuda.md#persistent-local-host-mr-qualification).
 - [ ] Complete connected endpoint-store ownership and shared CQ/SQ progress,
   including source authority/revocation and endpoint incarnation contracts.
+  Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
+  context-owned CQs and worker-owned slice completion. Preserve physical SQ/CQ
+  charges and actual owners through retirement and failed cleanup; endpoint
+  lookup eviction alone must not repay debt or re-enable stale authority.
   P4.5 caches only requester local MRs; QP/CQ and source grants stay per request.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
@@ -764,7 +774,8 @@ P4.4 establishes multi-WR completion and quota ownership before resources become
 persistent. Its independent CPU controls and fourteen healthy native cases
 accept adapted/folded slices, bounded windows and complete normal release for
 the declared profile. P4.5 adds bounded requester local-only MR reuse and
-retirement; its native and independent gates must pass before dependent work.
+retirement with scoped independent CPU and healthy native acceptance. Native
+eviction/unregister/failure and the full P4 exit remain unqualified.
 Next continue within P4 to connected endpoint-store ownership, source-rkey
 authority/revocation, shared progress, device/topology discovery and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner

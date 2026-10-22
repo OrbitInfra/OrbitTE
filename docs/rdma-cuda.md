@@ -448,6 +448,53 @@ MR/endpoint stores, shared CQ/worker progress, event progress, backend abort,
 multirail, direct GPU MR/GDR, native hardware faults, installed OrbitKV and
 complete P4/TENT parity remain open. OrbitKV migration stays deferred to P11.
 
+### Persistent local host MR qualification
+
+Source `2c4aa27` in [OrbitTE #17](https://github.com/OrbitInfra/OrbitTE/pull/17)
+passes independent source/CPU review and fourteen healthy two-host cases from
+each of two separately compiled binaries. Stable and Rust 1.85 all-feature
+Clippy/tests pass: 80 unit controls, 3 notification tests, 5 TCP tests and one
+doctest. Default/RDMA-only gates, supervision controls and the maintained CPU
+trace/negative comparator controls pass separately.
+
+The native profile keeps the preceding slice/window cases, RoCE v2 hosts and
+library constraints. Eight direct host requester cases each construct exactly
+one local-only MR, reuse it five times and retain one idle MR charged for the
+entire registered view, including guards (up to 32 MiB + 128 bytes). The
+requester verifies/changes CPU bytes between READ and WRITE while that MR is
+idle. Source-grant, staged-host, device-staged and TCP peers report zero cached
+MRs. Full noncontiguous buffers/guards, notifications and exact CQ/byte/post
+counts pass. Whole-engine close returns persistent MR count/bytes and device
+count to zero before backing is released. This qualifies healthy cache reuse
+and normal whole-engine close, not physical cache eviction, unregister races
+or failed deregistration; those ownership contracts currently have CPU controls.
+
+Every fourteen-case run waits for its controller and 28 SSH starters to return
+zero, verifies all 56 owned native/supervisor PIDs are absent, reacquires/releases
+the same three original lock inodes, and checks A GPU7 has zero memory and no
+compute apps. B uses CPU memory only and no B GPU is selected or queried.
+A's 19/B's 15 frozen libraries stay unchanged; actual mapped-library identities
+are verified separately from overlay file-stat identities. A maps compatibility
+Driver API `590.48.01` on kernel driver `535.161.08`; no CUDART or TENT is mapped.
+
+Evidence stays outside the checkout at
+`/root/orbitte-artifacts/rdma-persistent-20261022/`:
+`implementation-hardware-review.json`,
+`independent-source-2c4aa27/independent-review.json` and
+`independent-hardware-2c4aa27/verification.json` record the exact source,
+binaries, frozen inputs, raw role records and acceptance checks. The independent
+acceptance receipt is `independent-hardware-2c4aa27/independent-review.json`.
+The implementation evidence archive is `implementation-evidence-2c4aa27.tar.gz`,
+SHA-256 `735bd02bf909550c247cd836da5d80b18ffb4cd780613c9b0b8fa2c911ebefd7`.
+The independent MSRV binary SHA-256 is
+`5afb95fd70740c91b63bdf38a90f82442d7e1034452004f2ff3dc7f84626faa2`.
+The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/17/checks) cover the
+stable/MSRV feature matrix and unmodified frozen TENT CPU comparison; that
+comparison covers selected CPU behavior, not native wire interoperability.
+Source remote MR reuse/revocation, endpoint/QP/CQ pooling, shared worker/event
+progress, backend abort, multirail, GPU MR/GDR, real hardware faults, performance,
+installed OrbitKV and complete P4/TENT parity remain open.
+
 ### Run the native gate
 
 The explicit native [`hardware_peer`](../examples/hardware_peer.rs) runner
