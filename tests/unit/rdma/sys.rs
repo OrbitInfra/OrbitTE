@@ -20,6 +20,7 @@ struct Posted {
     requests: Vec<SendRequest>,
     bad_index: Option<usize>,
     foreign_bad: bool,
+    bad_byte_offset: Option<usize>,
 }
 
 unsafe extern "C" fn capture_post(
@@ -52,6 +53,9 @@ unsafe extern "C" fn capture_post(
         }
         if state.foreign_bad {
             *bad = std::ptr::dangling_mut();
+        }
+        if let Some(offset) = state.bad_byte_offset {
+            *bad = wr.cast::<u8>().add(offset).cast();
         }
         state.result
     }
@@ -115,17 +119,27 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
     assert!(state.requests.is_empty());
     context.ops.post_send = Some(capture_post);
     for write in [0, 1] {
-        for (code, bad_index, foreign_bad, expected, uncertain) in [
-            (0, None, false, 3, false),
-            (libc::ENOMEM, Some(0), false, 0, false),
-            (libc::ENOMEM, Some(1), false, 1, false),
-            (libc::ENOMEM, Some(2), false, 2, false),
-            (libc::EIO, None, false, 0, true),
-            (libc::EIO, None, true, 0, true),
+        for (code, bad_index, foreign_bad, bad_byte_offset, expected, uncertain) in [
+            (0, None, false, None, 3, false),
+            (libc::ENOMEM, Some(0), false, None, 0, false),
+            (libc::ENOMEM, Some(1), false, None, 1, false),
+            (libc::ENOMEM, Some(2), false, None, 2, false),
+            (libc::EIO, None, false, None, 0, true),
+            (libc::EIO, None, true, None, 0, true),
+            (
+                libc::EIO,
+                None,
+                false,
+                Some(std::mem::size_of::<ffi::ibv_send_wr>() * requests.len()),
+                0,
+                true,
+            ),
+            (libc::EIO, None, false, Some(1), 0, true),
         ] {
             state.result = code;
             state.bad_index = bad_index;
             state.foreign_bad = foreign_bad;
+            state.bad_byte_offset = bad_byte_offset;
             assert_eq!(
                 unsafe {
                     post(

@@ -62,6 +62,31 @@ fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
                     },
                 )
                 .unwrap();
+            if requests[0].id > 1 {
+                let before = *usage.lock().unwrap();
+                for status in [0, 7] {
+                    assert!(
+                        queue
+                            .complete(
+                                sys::Completion {
+                                    id: requests[0].id - 1,
+                                    status,
+                                    opcode: 2,
+                                    length: 16,
+                                    ..Default::default()
+                                },
+                                TransferOp::Read,
+                            )
+                            .is_err()
+                    );
+                    let after = *usage.lock().unwrap();
+                    assert_eq!(queue.outstanding(), requests.len());
+                    assert_eq!(after.work_requests, before.work_requests);
+                    assert_eq!(after.completed_reads, before.completed_reads);
+                    assert_eq!(after.completed_read_bytes, before.completed_read_bytes);
+                    assert_eq!(after.completion_errors, before.completion_errors);
+                }
+            }
             for r in requests.iter().rev() {
                 queue
                     .complete(
