@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 5;
+const VERSION: u16 = 6;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -391,12 +391,18 @@ fn rdma_transfer(
             }
             let mut descriptor = [0; DESCRIPTOR_SIZE];
             channel.read_exact(&mut descriptor)?;
-            let remote = Descriptor::decode(&descriptor)?;
-            channel.write_all(&endpoint.descriptor().encode())?;
+            let connection = Descriptor::decode_connection(&descriptor)?;
+            channel.write_all(&endpoint.connection())?;
+            let remote = connection;
             endpoint.connect(&remote)?;
             let ready = Reply::read(&mut channel, peer.epoch)?;
             if ready.status != 9 {
                 return Err(Error::Protocol("RDMA missing ready response"));
+            }
+            channel.read_exact(&mut descriptor)?;
+            let remote = Descriptor::decode(&descriptor)?;
+            if remote.connection_bytes() != connection.connection_bytes() {
+                return Err(Error::Protocol("RDMA grant changed its connection"));
             }
             // A peer may expose direct application backing. Once a WRITE is
             // attempted it can change remote bytes even without DONE or ACK.
@@ -452,11 +458,13 @@ fn rdma_serve(
             endpoint.fill(memory, offset)?;
         }
         channel.reply(source, 0, DESCRIPTOR_SIZE as u64)?;
-        channel.write_all(&endpoint.descriptor().encode())?;
+        channel.write_all(&endpoint.connection())?;
         let mut bytes = [0; DESCRIPTOR_SIZE];
         channel.read_exact(&mut bytes)?;
-        endpoint.connect(&Descriptor::decode(&bytes)?)?;
+        endpoint.connect(&Descriptor::decode_connection(&bytes)?)?;
+        endpoint.bind_window()?;
         channel.reply(source, 9, 0)?;
+        channel.write_all(&endpoint.grant()?.encode())?;
         let mut done = [0];
         channel.read_exact(&mut done)?;
         if done != [1] {
@@ -464,8 +472,14 @@ fn rdma_serve(
         }
         Ok(())
     })();
+    let invalidated = if transfer.is_ok() {
+        endpoint.invalidate_window()
+    } else {
+        Ok(())
+    };
     endpoint.close()?;
     transfer?;
+    invalidated?;
     if writing {
         remaining(channel.deadline)?;
         endpoint.copy_back(memory, offset)?;

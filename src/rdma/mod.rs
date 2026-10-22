@@ -11,6 +11,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 mod cq;
 mod device;
+mod events;
 mod progress;
 mod registration;
 mod sys;
@@ -18,6 +19,7 @@ mod sys;
 use device::Device;
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
+pub(super) const WR_ID_STRIDE: u64 = 128;
 
 /// Host-memory policy. Device allocations continue to use owned host staging.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -103,10 +105,17 @@ pub struct RdmaStats {
     pub retained_devices: usize,
     /// Successful context/PD constructions during this runtime lifetime.
     pub opened_devices: u64,
+    pub active_windows: usize,
+    pub opened_windows: u64,
+    pub retained_windows: usize,
+    pub completed_window_binds: u64,
+    pub completed_window_invalidations: u64,
     pub active_cqs: usize,
     pub retained_cqs: usize,
     pub opened_cqs: u64,
     pub progress_workers: usize,
+    pub async_event_workers: usize,
+    pub acknowledged_async_events: u64,
     /// A fatal shared-lane fault permanently fences new RDMA admission.
     pub progress_failures: u64,
     pub peak_pending_qps: usize,
@@ -377,6 +386,9 @@ impl Runtime {
             buffer,
             _lease: lease,
             max_read_slices: if memory.is_cuda() { 32 } else { 64 },
+            permission,
+            window_used: false,
+            window_bound: false,
         }))?;
         let mut endpoint = Endpoint {
             record,
@@ -498,6 +510,9 @@ struct Resources {
     buffer: Buffer,
     _lease: Lease,
     max_read_slices: usize,
+    permission: u32,
+    window_used: bool,
+    window_bound: bool,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -515,8 +530,14 @@ pub(crate) struct Descriptor {
 
 impl Descriptor {
     fn validate(&self) -> Result<()> {
-        if self.address == 0
-            || self.qpn == 0
+        if self.address == 0 {
+            return Err(Error::Protocol("invalid RDMA memory grant"));
+        }
+        self.validate_connection()
+    }
+
+    fn validate_connection(&self) -> Result<()> {
+        if self.qpn == 0
             || self.qpn > 0xffffff
             || self.psn > 0xffffff
             || !(1..=5).contains(&self.mtu)
@@ -526,6 +547,15 @@ impl Descriptor {
             return Err(Error::Protocol("invalid RDMA endpoint descriptor"));
         }
         Ok(())
+    }
+
+    pub(crate) fn connection_bytes(self) -> [u8; DESCRIPTOR_SIZE] {
+        Self {
+            address: 0,
+            rkey: 0,
+            ..self
+        }
+        .encode()
     }
 
     pub(crate) fn encode(self) -> [u8; DESCRIPTOR_SIZE] {
@@ -542,6 +572,21 @@ impl Descriptor {
     }
 
     pub(crate) fn decode(bytes: &[u8; DESCRIPTOR_SIZE]) -> Result<Self> {
+        let descriptor = Self::decode_fields(bytes);
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+
+    pub(crate) fn decode_connection(bytes: &[u8; DESCRIPTOR_SIZE]) -> Result<Self> {
+        let descriptor = Self::decode_fields(bytes);
+        descriptor.validate_connection()?;
+        if descriptor.address != 0 || descriptor.rkey != 0 {
+            return Err(Error::Protocol("RDMA connection exposes memory authority"));
+        }
+        Ok(descriptor)
+    }
+
+    fn decode_fields(bytes: &[u8; DESCRIPTOR_SIZE]) -> Self {
         let mut address = [0; 8];
         address.copy_from_slice(&bytes[..8]);
         let value = |offset| {
@@ -551,7 +596,7 @@ impl Descriptor {
         };
         let mut gid = [0; 16];
         gid.copy_from_slice(&bytes[24..]);
-        let descriptor = Self {
+        Self {
             address: u64::from_be_bytes(address),
             rkey: value(8),
             qpn: value(12),
@@ -560,9 +605,7 @@ impl Descriptor {
             mtu: bytes[22],
             link_layer: bytes[23],
             gid,
-        };
-        descriptor.validate()?;
-        Ok(descriptor)
+        }
     }
 }
 
@@ -607,8 +650,34 @@ impl Endpoint {
         Ok(())
     }
 
-    pub(crate) fn descriptor(&self) -> Descriptor {
-        self.local
+    pub(crate) fn connection(&self) -> [u8; DESCRIPTOR_SIZE] {
+        Descriptor {
+            address: 0,
+            rkey: 0,
+            ..self.local
+        }
+        .encode()
+    }
+
+    pub(crate) fn grant(&self) -> Result<Descriptor> {
+        let request = self.record.lock()?;
+        request.check()?;
+        if !request.resources.as_ref().is_some_and(|r| r.window_bound)
+            || request.phase != Phase::Connected
+        {
+            return Err(Error::Unavailable("source MW has no completed bind"));
+        }
+        Ok(self.local)
+    }
+
+    pub(crate) fn bind_window(&mut self) -> Result<()> {
+        self.progress
+            .window(&self.record, progress::Operation::Bind, self.deadline)
+    }
+
+    pub(crate) fn invalidate_window(&mut self) -> Result<()> {
+        self.progress
+            .window(&self.record, progress::Operation::Invalidate, self.deadline)
     }
 
     pub(crate) fn fill(&mut self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
@@ -646,7 +715,7 @@ impl Endpoint {
     }
 
     pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
-        remote.validate()?;
+        remote.validate_connection()?;
         let mut state = self.record.lock()?;
         state.check()?;
         if state.phase != Phase::Init || remote.link_layer != self.local.link_layer {

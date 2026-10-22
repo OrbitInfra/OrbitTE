@@ -455,6 +455,16 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
         lock.lock().unwrap().1 = true;
         changed.notify_all();
         let (report, bytes) = worker.join().unwrap();
+        assert_eq!(
+            (
+                stats.completed_window_binds,
+                stats.completed_window_invalidations,
+                stats.active_windows,
+                stats.retained_windows
+            ),
+            (1, 1, 0, 0),
+            "source must consume INV CQE and close the MW before ACK"
+        );
         assert!(report.failure.is_none());
         assert_eq!(bytes, [0x42; 8]);
         assert_eq!(

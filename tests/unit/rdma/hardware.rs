@@ -51,12 +51,15 @@ unsafe extern "C" fn gated_post(
 }
 
 static VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: sys::REAL.asynchronous,
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
     register_local: sys::REAL.register_local,
     open: sys::REAL.open,
     connect: sys::REAL.connect,
     post: gated_post,
+    window: sys::REAL.window,
+    dealloc_window: sys::REAL.dealloc_window,
     poll: sys::REAL.poll,
     destroy_qp: sys::REAL.destroy_qp,
     deregister: sys::REAL.deregister,
@@ -198,21 +201,37 @@ fn shared_cq_peer() {
         let mut remote = Vec::new();
         if source {
             for endpoint in &endpoints {
-                stream.write_all(&endpoint.descriptor().encode()).unwrap();
+                stream.write_all(&endpoint.connection()).unwrap();
             }
         }
         for _ in 0..COUNT {
             let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
             stream.read_exact(&mut bytes).unwrap();
-            remote.push(Descriptor::decode(&bytes).unwrap());
+            remote.push(Descriptor::decode_connection(&bytes).unwrap());
         }
         if !source {
             for endpoint in &endpoints {
-                stream.write_all(&endpoint.descriptor().encode()).unwrap();
+                stream.write_all(&endpoint.connection()).unwrap();
             }
         }
         for (endpoint, descriptor) in endpoints.iter_mut().zip(&remote) {
             endpoint.connect(descriptor).unwrap();
+        }
+        if source {
+            for endpoint in &mut endpoints {
+                endpoint.bind_window().unwrap();
+                stream
+                    .write_all(&endpoint.grant().unwrap().encode())
+                    .unwrap();
+            }
+        } else {
+            for descriptor in &mut remote {
+                let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
+                stream.read_exact(&mut bytes).unwrap();
+                let grant = Descriptor::decode(&bytes).unwrap();
+                assert_eq!(grant.connection_bytes(), descriptor.connection_bytes());
+                *descriptor = grant;
+            }
         }
         if source {
             stream.write_all(&[1]).unwrap();
@@ -270,6 +289,9 @@ fn shared_cq_peer() {
             token(&mut stream, 3);
         }
         for endpoint in &mut endpoints {
+            if source {
+                endpoint.invalidate_window().unwrap();
+            }
             endpoint.close().unwrap();
         }
         drop(endpoints);
@@ -314,6 +336,15 @@ fn shared_cq_peer() {
         ),
         (0, 0, 0)
     );
+    assert_eq!(idle.active_windows, 0);
+    assert_eq!(
+        idle.completed_window_binds,
+        if source { (2 * COUNT) as u64 } else { 0 }
+    );
+    assert_eq!(
+        idle.completed_window_invalidations,
+        idle.completed_window_binds
+    );
     if !source {
         assert_eq!(idle.peak_work_requests, capacity);
         assert!(idle.peak_pending_qps >= capacity.div_ceil(window));
@@ -336,15 +367,20 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+    );
     assert_eq!(
         (
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
+            closed.async_event_workers,
             closed.active_endpoints,
             closed.persistent_mrs
         ),
-        (0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0)
     );
     assert_eq!(
         (
@@ -358,14 +394,194 @@ fn shared_cq_peer() {
     );
     assert_eq!(registry.usage().unwrap(), (0, 0));
     println!(
-        "{{\"role\":\"{role}\",\"status\":\"passed\",\"real_qps\":{COUNT},\"cq_capacity\":{capacity},\"sq_window\":{window},\"peak_work_requests\":{},\"peak_pending_qps\":{},\"opened_cqs\":{},\"idle_progress_workers\":{},\"opened_persistent_mrs\":{},\"reused_persistent_mrs\":{},\"completed_read_bytes\":{},\"completed_write_bytes\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
+        "{{\"role\":\"{role}\",\"status\":\"passed\",\"real_qps\":{COUNT},\"cq_capacity\":{capacity},\"sq_window\":{window},\"peak_work_requests\":{},\"peak_pending_qps\":{},\"opened_cqs\":{},\"idle_progress_workers\":{},\"opened_persistent_mrs\":{},\"reused_persistent_mrs\":{},\"completed_window_binds\":{},\"completed_window_invalidations\":{},\"completed_read_bytes\":{},\"completed_write_bytes\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
         idle.peak_work_requests,
         idle.peak_pending_qps,
         idle.opened_cqs,
         idle.progress_workers,
         idle.opened_persistent_mrs,
         idle.reused_persistent_mrs,
+        idle.completed_window_binds,
+        idle.completed_window_invalidations,
         idle.completed_read_bytes,
         idle.completed_write_bytes
+    );
+}
+
+#[test]
+#[ignore = "requires selected physical RNIC hosts and original resource locks; intentional remote-access error"]
+fn source_window_peer() {
+    println!();
+    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    assert!(matches!(role.as_str(), "source" | "requester"));
+    let source = role == "source";
+    let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
+    assert!(matches!(probe.as_str(), "revoked" | "parent"));
+    let length = 4096 + 2 * GUARD;
+    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
+    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
+    config.hop_limit = 64;
+    config.max_cqes = 1;
+    config.max_send_wr = 1;
+    let runtime = Runtime::new(config).unwrap();
+    let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
+    let expected = vec![if source { 0x5a } else { 0xc3 }; length];
+    let backing = Arc::new(HostMemory::new(expected.clone().into_boxed_slice()).unwrap());
+    let memory = registry
+        .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
+        .unwrap();
+    let mut stream = if source {
+        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        std::io::stdout().flush().unwrap();
+        let end = Instant::now() + TIMEOUT;
+        loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < end);
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    } else {
+        TcpStream::connect_timeout(
+            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    };
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    stream.set_write_timeout(Some(TIMEOUT)).unwrap();
+    let mut endpoint = runtime
+        .endpoint(
+            &memory,
+            GUARD,
+            4096,
+            if source { 2 } else { 0 },
+            Instant::now() + TIMEOUT,
+        )
+        .unwrap();
+    if source {
+        stream.write_all(&endpoint.connection()).unwrap();
+    }
+    let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
+    stream.read_exact(&mut bytes).unwrap();
+    let connection = Descriptor::decode_connection(&bytes).unwrap();
+    if !source {
+        stream.write_all(&endpoint.connection()).unwrap();
+    }
+    endpoint.connect(&connection).unwrap();
+    std::fs::write(
+        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        std::fs::read("/proc/self/maps").unwrap(),
+    )
+    .unwrap();
+    if source {
+        endpoint.bind_window().unwrap();
+        let mut grant = endpoint.grant().unwrap();
+        if probe == "revoked" {
+            endpoint.invalidate_window().unwrap();
+        } else {
+            // A deliberately hostile test peer receives the unadvertised parent key.
+            // Production bootstrap never exposes either parent key or parent address.
+            let request = endpoint.record.lock().unwrap();
+            let h = &request.resources.as_ref().unwrap().handles;
+            grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
+        }
+        stream.write_all(&grant.encode()).unwrap();
+        token(&mut stream, 4);
+        // The peer has observed REM_ACCESS_ERR and physically closed its QP.
+        let close = endpoint.close();
+        assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
+        drop(endpoint);
+        verify(&memory, &expected);
+        stream.write_all(&[5]).unwrap();
+    } else {
+        stream.read_exact(&mut bytes).unwrap();
+        let grant = Descriptor::decode(&bytes).unwrap();
+        assert_eq!(grant.connection_bytes(), connection.connection_bytes());
+        let error = endpoint
+            .transfer(&grant, TransferOp::Write, Instant::now() + TIMEOUT)
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Backend {
+                    operation: "RDMA work completion",
+                    code: 10
+                }
+            ),
+            "expected real REM_ACCESS_ERR: {error:?}"
+        );
+        let close = endpoint.close();
+        assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
+        drop(endpoint);
+        verify(&memory, &expected);
+        stream.write_all(&[4]).unwrap();
+        token(&mut stream, 5);
+    }
+    std::fs::write(
+        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        std::fs::read("/proc/self/maps").unwrap(),
+    )
+    .unwrap();
+    let idle = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            idle.active_windows,
+            idle.active_endpoints,
+            idle.work_requests,
+            idle.retained_windows
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(idle.completed_window_binds, u64::from(source));
+    assert_eq!(
+        idle.completed_window_invalidations,
+        u64::from(source && probe == "revoked")
+    );
+    assert_eq!(idle.completion_errors, u64::from(!source));
+    assert_eq!(
+        (idle.completed_write_bytes, idle.completed_read_bytes),
+        (0, 0)
+    );
+    registry.unregister(&memory).unwrap();
+    runtime.registrations.retire(&memory).unwrap();
+    drop(memory);
+    drop(backing);
+    runtime.close(Instant::now() + TIMEOUT).unwrap();
+    let closed = runtime.stats().unwrap();
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+    );
+    assert_eq!(
+        (
+            closed.active_devices,
+            closed.active_cqs,
+            closed.progress_workers,
+            closed.async_event_workers,
+            closed.active_windows,
+            closed.active_endpoints,
+            closed.persistent_mrs,
+            closed.work_requests
+        ),
+        (0, 0, 0, 0, 0, 0, 0, 0)
+    );
+    assert_eq!(
+        (
+            closed.retained_endpoints,
+            closed.retained_devices,
+            closed.retained_windows,
+            closed.retained_work_requests
+        ),
+        (0, 0, 0, 0)
+    );
+    println!(
+        "{{\"role\":\"{role}\",\"status\":\"passed\",\"probe\":\"{probe}\",\"real_remote_access_error\":{},\"completed_window_binds\":{},\"completed_window_invalidations\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
+        !source, idle.completed_window_binds, idle.completed_window_invalidations
     );
 }

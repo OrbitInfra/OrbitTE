@@ -331,3 +331,102 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         assert_eq!((output.opcode, output.length), expected);
     }
 }
+
+struct WindowPost {
+    bind: bool,
+    code: i32,
+    foreign: bool,
+    address: u64,
+    length: u64,
+    mr: *mut ffi::ibv_mr,
+    mw: *mut ffi::ibv_mw,
+}
+unsafe extern "C" fn capture_window(
+    qp: *mut ffi::ibv_qp,
+    wr: *mut ffi::ibv_send_wr,
+    bad: *mut *mut ffi::ibv_send_wr,
+) -> c_int {
+    unsafe {
+        let s = &*(*qp).qp_context.cast::<WindowPost>();
+        let w = &*wr;
+        assert_eq!(w.wr_id, 65);
+        assert_eq!(w.num_sge, 0);
+        assert!(w.sg_list.is_null() && w.next.is_null());
+        assert_eq!(w.send_flags, ffi::ibv_send_flags::IBV_SEND_SIGNALED.0);
+        if s.bind {
+            assert_eq!(w.opcode, ffi::ibv_wr_opcode::IBV_WR_BIND_MW);
+            let b = w.__bindgen_anon_2.bind_mw;
+            assert_eq!((b.mw, b.rkey, b.bind_info.mr), (s.mw, 0x123456ff, s.mr));
+            assert_eq!(
+                (b.bind_info.addr, b.bind_info.length),
+                (s.address, s.length)
+            );
+            assert_eq!(
+                b.bind_info.mw_access_flags,
+                ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0
+            );
+        } else {
+            assert_eq!(w.opcode, ffi::ibv_wr_opcode::IBV_WR_LOCAL_INV);
+            assert_eq!(w.__bindgen_anon_1.invalidate_rkey, 0x123456ff);
+        }
+        if s.code != 0 {
+            *bad = if s.foreign {
+                wr.cast::<u8>().add(1).cast()
+            } else {
+                wr
+            };
+        }
+        s.code
+    }
+}
+#[test]
+fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
+    for bind in [true, false] {
+        for (code, foreign) in [(0, false), (libc::EIO, false), (libc::EIO, true)] {
+            let mut context = Box::new(ffi::ibv_context::default());
+            context.ops.post_send = Some(capture_window);
+            let mut mr = ffi::ibv_mr::default();
+            let mut mw = ffi::ibv_mw::default();
+            let mut state = WindowPost {
+                bind,
+                code,
+                foreign,
+                address: 0x123456781000,
+                length: 4097,
+                mr: &mut mr,
+                mw: &mut mw,
+            };
+            let mut qp = ffi::ibv_qp {
+                context: &mut *context,
+                qp_context: (&mut state as *mut WindowPost).cast(),
+                ..Default::default()
+            };
+            let mut handles = Handles {
+                qp: (&mut qp as *mut ffi::ibv_qp).cast(),
+                mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+                mw: (&mut mw as *mut ffi::ibv_mw).cast(),
+                window_key: 0x123456ff,
+                ..Default::default()
+            };
+            let mut result = PostResult::default();
+            assert_eq!(
+                unsafe {
+                    window(
+                        &mut handles,
+                        65,
+                        state.address,
+                        state.length as usize,
+                        2,
+                        bind,
+                        &mut result,
+                    )
+                },
+                code
+            );
+            assert_eq!(
+                (result.accepted, result.uncertain),
+                (usize::from(code == 0), foreign)
+            );
+        }
+    }
+}

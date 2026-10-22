@@ -9,9 +9,15 @@ use super::*;
 
 pub(crate) struct FakeDevice {
     mode: String,
+    asynchronous: Option<(
+        Mutex<std::os::unix::net::UnixStream>,
+        Mutex<std::os::unix::net::UnixStream>,
+    )>,
+    async_acks: (Mutex<usize>, Condvar),
     pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
     endpoints: AtomicUsize,
     mrs: AtomicUsize,
+    windows: AtomicUsize,
     cqs: AtomicUsize,
     next_qpn: AtomicU32,
     pub(crate) pause: Arc<(Mutex<(bool, bool)>, Condvar)>,
@@ -56,17 +62,29 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     if mode == "device_missing" {
         return libc::ENODEV;
     }
+    let asynchronous = mode.starts_with("async_").then(|| {
+        let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+        read.set_nonblocking(true).unwrap();
+        (Mutex::new(read), Mutex::new(write))
+    });
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
+        asynchronous,
+        async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
         endpoints: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
+        windows: AtomicUsize::new(0),
         cqs: AtomicUsize::new(0),
         next_qpn: AtomicU32::new(9),
         pause: Arc::default(),
     }));
     unsafe {
         (*h).context = state.cast();
+        if let Some((read, _)) = &(*state).asynchronous {
+            use std::os::fd::AsRawFd;
+            (*h).async_fd = read.lock().unwrap().as_raw_fd();
+        }
         if (*state).mode.starts_with("device_open") {
             return libc::EIO;
         }
@@ -138,7 +156,7 @@ unsafe extern "C" fn open(
     _: u8,
     bytes: *mut c_void,
     length: usize,
-    _: u32,
+    permission: u32,
     psn: u32,
     _: u32,
     descriptor: *mut Descriptor,
@@ -178,9 +196,18 @@ unsafe extern "C" fn open(
             first_id: 0,
         }))
         .cast();
+        if permission != 0 && !device.mode.starts_with("open") {
+            device.events.lock().unwrap().push("alloc_window");
+            if device.mode == "window_unsupported" {
+                return libc::EOPNOTSUPP;
+            }
+            device.windows.fetch_add(1, Ordering::SeqCst);
+            (*h).mw = Box::into_raw(Box::new(false)).cast();
+            (*h).window_key = 0x102;
+        }
         *descriptor = Descriptor {
             address: bytes as u64,
-            rkey: 7,
+            rkey: if permission == 0 { 7 } else { (*h).window_key },
             qpn,
             psn,
             lid: 1,
@@ -194,6 +221,86 @@ unsafe extern "C" fn open(
     } else {
         0
     }
+}
+
+unsafe extern "C" fn window(
+    handles: *mut sys::Handles,
+    id: u64,
+    address: u64,
+    length: usize,
+    permission: u32,
+    bind: bool,
+    result: *mut sys::PostResult,
+) -> c_int {
+    let h = unsafe { &mut *handles };
+    let qp = unsafe { &*h.qp.cast::<Fake>() };
+    let device = unsafe { &*qp.device };
+    let cq = unsafe { &*qp.cq };
+    let state = unsafe { &mut *h.mw.cast::<bool>() };
+    assert_eq!(address, qp.bytes as u64);
+    assert_eq!(length, qp.length);
+    assert!(matches!(permission, 1 | 2));
+    assert_ne!(*state, bind);
+    device.events.lock().unwrap().push(if bind {
+        "bind_window"
+    } else {
+        "invalidate_window"
+    });
+    let fault = device
+        .mode
+        .strip_suffix("_close0")
+        .unwrap_or(device.mode.as_str());
+    let result = unsafe { &mut *result };
+    *result = sys::PostResult::default();
+    if (bind && fault == "window_bind_post") || (!bind && fault == "window_inv_post") {
+        return libc::ENOMEM;
+    }
+    if fault == "window_unknown_post" || (!bind && fault == "window_inv_unknown") {
+        *state = bind;
+        result.uncertain = true;
+        return libc::EIO;
+    }
+    *state = bind;
+    result.accepted = 1;
+    if (bind && fault == "window_bind_timeout") || (!bind && fault == "window_inv_timeout") {
+        return 0;
+    }
+    if (bind && fault == "window_bind_pause") || (!bind && fault == "window_inv_pause") {
+        block(device);
+    }
+    cq.completions.lock().unwrap().push_back(sys::Completion {
+        id,
+        qpn: qp.qpn,
+        opcode: if bind { 5 } else { 6 },
+        status: u32::from(
+            (bind && fault == "window_bind_error") || (!bind && fault == "window_inv_error"),
+        ),
+        ..Default::default()
+    });
+    0
+}
+
+unsafe extern "C" fn dealloc_window(handles: *mut sys::Handles) -> c_int {
+    let h = unsafe { &mut *handles };
+    if h.mw.is_null() {
+        return 0;
+    }
+    assert!(
+        h.qp.is_null(),
+        "QP barrier precedes MW and parent MR cleanup"
+    );
+    let mr = unsafe { &*h.mr.cast::<FakeMr>() };
+    let device = unsafe { &*mr.device };
+    device.events.lock().unwrap().push("dealloc_window");
+    if device.mode == "window_close" {
+        return libc::EIO;
+    }
+    unsafe {
+        drop(Box::from_raw(h.mw.cast::<bool>()));
+    }
+    h.mw = std::ptr::null_mut();
+    device.windows.fetch_sub(1, Ordering::SeqCst);
+    0
 }
 
 unsafe extern "C" fn connect(
@@ -319,6 +426,21 @@ unsafe extern "C" fn qp(h: *mut sys::Handles) -> c_int {
     let state = unsafe { &*handles.qp.cast::<Fake>() };
     let device = unsafe { &*state.device };
     device.events.lock().unwrap().push("destroy_qp");
+    if device.mode == "async_destroy" {
+        device.emit_async(3);
+        let (acks, changed) = &device.async_acks;
+        let (acks, _) = changed
+            .wait_timeout_while(acks.lock().unwrap(), Duration::from_secs(2), |n| *n == 0)
+            .unwrap();
+        if *acks != 1 {
+            return libc::ETIMEDOUT;
+        }
+        device
+            .events
+            .lock()
+            .unwrap()
+            .push("destroy_after_async_ack");
+    }
     if device.mode.contains("qp_pause") {
         block(device);
     }
@@ -400,6 +522,11 @@ unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
     assert_eq!(state.endpoints.load(Ordering::SeqCst), 0);
     assert_eq!(state.mrs.load(Ordering::SeqCst), 0, "MRs close before PD");
+    assert_eq!(
+        state.windows.load(Ordering::SeqCst),
+        0,
+        "MWs close before PD"
+    );
     assert_eq!(state.cqs.load(Ordering::SeqCst), 0, "CQs close before PD");
     state.events.lock().unwrap().push("dealloc_pd");
     if matches!(state.mode.as_str(), "close3" | "device_pd_close") {
@@ -428,12 +555,15 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     0
 }
 static VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: None,
     open_device,
     create_cq,
     register_local,
     open,
     connect,
     post,
+    window,
+    dealloc_window,
     poll,
     destroy_qp: qp,
     deregister: mr,
@@ -441,6 +571,57 @@ static VERBS: sys::Verbs = sys::Verbs {
     dealloc_pd: pd,
     close_device: ctx,
 };
+impl FakeDevice {
+    pub(crate) fn emit_async(&self, kind: u8) {
+        use std::io::Write;
+        self.asynchronous
+            .as_ref()
+            .unwrap()
+            .1
+            .lock()
+            .unwrap()
+            .write_all(&[kind])
+            .unwrap();
+    }
+}
+
+unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent) -> c_int {
+    use std::io::Read;
+    let device = unsafe { &*context.cast::<FakeDevice>() };
+    let mut kind = [0];
+    if let Err(error) = device
+        .asynchronous
+        .as_ref()
+        .unwrap()
+        .0
+        .lock()
+        .unwrap()
+        .read_exact(&mut kind)
+    {
+        return error.raw_os_error().unwrap_or(libc::EIO);
+    }
+    if kind[0] == 255 {
+        return libc::EIO;
+    }
+    unsafe {
+        (*event).kind = kind[0] as u32;
+    }
+    0
+}
+unsafe extern "C" fn async_ack(context: *mut c_void, _: *mut sys::AsyncEvent) {
+    let device = unsafe { &*context.cast::<FakeDevice>() };
+    device.events.lock().unwrap().push("async_ack");
+    *device.async_acks.0.lock().unwrap() += 1;
+    device.async_acks.1.notify_all();
+}
+static ASYNC_VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: Some(sys::AsyncVerbs {
+        get: async_get,
+        ack: async_ack,
+    }),
+    ..VERBS
+};
+
 pub(crate) fn runtime(mode: &str) -> Runtime {
     let (host_memory, mode) = match mode.strip_prefix("direct:") {
         Some(mode) => (RdmaHostMemory::Direct, mode),
@@ -456,12 +637,17 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
         ..RdmaConfig::new(mode)
     };
     let usage = Arc::default();
-    let registrations = registration::HostRegistrations::new(&config, Arc::clone(&usage), &VERBS);
+    let verbs = if mode.starts_with("async_") {
+        &ASYNC_VERBS
+    } else {
+        &VERBS
+    };
+    let registrations = registration::HostRegistrations::new(&config, Arc::clone(&usage), verbs);
     Runtime {
         config,
         usage,
         drained: Arc::default(),
-        verbs: &VERBS,
+        verbs,
         device: Mutex::default(),
         registrations,
     }
@@ -934,5 +1120,13 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
                 .close(Instant::now() + Duration::from_secs(2))
                 .unwrap();
         }
+    }
+}
+
+mod windows;
+
+impl Endpoint {
+    pub(crate) fn descriptor(&self) -> Descriptor {
+        self.local
     }
 }

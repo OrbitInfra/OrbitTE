@@ -140,6 +140,9 @@ fn unopened(runtime: &Runtime) -> Endpoint {
             is_direct: false,
         },
         max_read_slices: 64,
+        permission: 0,
+        window_used: false,
+        window_bound: false,
     });
     Endpoint {
         record: progress.register(resources).unwrap(),
@@ -466,3 +469,203 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
 
 #[path = "hardware.rs"]
 mod hardware;
+
+#[test]
+fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() {
+    let mut runtime = runtime("direct:window_inv_pause");
+    runtime.config.max_endpoints = 2;
+    runtime.config.max_direct_bytes = 16;
+    runtime.config.max_cqes = 1;
+    let registry = crate::memory::MemoryRegistry::new(crate::SourceEpoch([1; 16]), 2, 16);
+    let memory = registry
+        .register(
+            vec![0x42; 8].into_boxed_slice(),
+            crate::Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let output = registry
+        .register(
+            vec![0xcc; 8].into_boxed_slice(),
+            crate::Permission::LocalOnly,
+        )
+        .unwrap();
+    let mut source = runtime
+        .endpoint(&memory, 0, 8, 2, Instant::now() + Duration::from_secs(3))
+        .unwrap();
+    source.connect(&source.descriptor()).unwrap();
+    source.bind_window().unwrap();
+    let mut requester = runtime
+        .endpoint(&output, 0, 8, 0, Instant::now() + Duration::from_secs(3))
+        .unwrap();
+    requester.connect(&requester.descriptor()).unwrap();
+    let record = Arc::clone(&requester.record);
+    let pause = pause(&runtime);
+    let source_worker = std::thread::spawn(move || {
+        let result = source.invalidate_window();
+        (source, result)
+    });
+    let (lock, changed) = &*pause;
+    let (state, timed) = changed
+        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+        .unwrap();
+    assert!(!timed.timed_out());
+    drop(state);
+    let data_worker = std::thread::spawn(move || {
+        let remote = requester.descriptor();
+        requester
+            .transfer(
+                &remote,
+                TransferOp::Read,
+                Instant::now() + Duration::from_secs(3),
+            )
+            .unwrap();
+        requester.close().unwrap();
+    });
+    let end = Instant::now() + Duration::from_secs(2);
+    while record.lock().unwrap().work.is_none() {
+        assert!(Instant::now() < end);
+        std::thread::yield_now();
+    }
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_windows,
+            stats.work_requests,
+            stats.completed_window_binds,
+            stats.completed_window_invalidations
+        ),
+        (1, 1, 1, 0)
+    );
+    assert!(memory.write(0, &[0; 8]).is_err());
+    lock.lock().unwrap().1 = true;
+    changed.notify_all();
+    let (mut source, result) = source_worker.join().unwrap();
+    result.unwrap();
+    source.close().unwrap();
+    drop(source);
+    data_worker.join().unwrap();
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.work_requests,
+            stats.peak_work_requests,
+            stats.completed_reads,
+            stats.completed_window_invalidations
+        ),
+        (0, 1, 1, 1)
+    );
+    runtime
+        .close(Instant::now() + Duration::from_secs(1))
+        .unwrap();
+}
+
+#[test]
+fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
+    let mut runtime = runtime("direct:async_qp_pause");
+    runtime.config.max_endpoints = 2;
+    runtime.config.max_direct_bytes = 16;
+    let runtime = Arc::new(runtime);
+    let mut first = runtime.staging_endpoint(8, 2).unwrap();
+    let mut second = runtime.staging_endpoint(8, 2).unwrap();
+    let record = Arc::clone(&second.record);
+    let pause = crate::rdma::tests::pause(&runtime);
+    let events = crate::rdma::tests::events(&runtime);
+    let close_first = thread::spawn(move || first.close());
+    let (lock, changed) = &*pause;
+    let (state, timed) = changed
+        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+        .unwrap();
+    assert!(!timed.timed_out());
+    drop(state);
+    let close_second = thread::spawn(move || second.close());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while record.actions.load(Ordering::Acquire) & CLOSE == 0 {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
+    crate::rdma::device::tests::emit_async(&runtime, 255);
+    while runtime.stats().unwrap().async_event_workers != 0 {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
+    lock.lock().unwrap().1 = true;
+    changed.notify_all();
+    assert!(matches!(
+        close_first.join().unwrap(),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(matches!(
+        close_second.join().unwrap(),
+        Err(Error::Unquiesced { .. })
+    ));
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_endpoints,
+            stats.retained_endpoints,
+            stats.retained_windows,
+            stats.direct_bytes
+        ),
+        (1, 1, 1, 8)
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.iter().filter(|s| **s == "destroy_qp").count(),
+        1,
+        "no second destroy after consumer loss"
+    );
+    assert!(!events.contains(&"destroy_cq"));
+}
+
+#[test]
+fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
+    let mut runtime = runtime("direct:async_abort_lock_pause");
+    runtime.config.max_endpoints = 2;
+    runtime.config.max_direct_bytes = 16;
+    let mut first = runtime.staging_endpoint(8, 2).unwrap();
+    let mut second = runtime.staging_endpoint(8, 2).unwrap();
+    let events = crate::rdma::tests::events(&runtime);
+    let pause = crate::rdma::tests::pause(&runtime);
+    let record = Arc::clone(&second.record);
+    let constructor = record.lock().unwrap();
+    crate::rdma::device::tests::emit_async(&runtime, 3);
+    wait_blocked(&pause);
+    crate::rdma::device::tests::emit_async(&runtime, 255);
+    wait_until(|| runtime.stats().unwrap().async_event_workers == 0);
+    release(&pause);
+    drop(constructor);
+    wait_until(|| runtime.stats().unwrap().retained_endpoints == 2);
+    assert!(matches!(first.close(), Err(Error::Unquiesced { .. })));
+    assert!(matches!(second.close(), Err(Error::Unquiesced { .. })));
+    drop(first);
+    drop(second);
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_endpoints,
+            stats.retained_endpoints,
+            stats.retained_windows,
+            stats.direct_bytes
+        ),
+        (2, 2, 2, 16)
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(events.iter().filter(|s| **s == "destroy_qp").count(), 1);
+    assert!(!events.contains(&"destroy_cq"));
+    assert!(!events.contains(&"deregister"));
+}
+
+pub(super) fn before_abort_lock(shared: &Shared, record: &Record) {
+    if shared.config.device != "async_abort_lock_pause" || record.tag != 1 {
+        return;
+    }
+    let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
+    let pause = crate::rdma::device::tests::pause_device(&device);
+    let (lock, changed) = &*pause;
+    let mut state = lock.lock().unwrap();
+    state.0 = true;
+    changed.notify_all();
+    while !state.1 {
+        state = changed.wait(state).unwrap();
+    }
+}

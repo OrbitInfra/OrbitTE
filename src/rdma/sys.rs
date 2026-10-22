@@ -10,6 +10,7 @@ use super::Descriptor;
 pub(super) struct DeviceHandles {
     pub context: *mut c_void,
     pub pd: *mut c_void,
+    pub async_fd: c_int,
 }
 
 impl Default for DeviceHandles {
@@ -17,6 +18,7 @@ impl Default for DeviceHandles {
         Self {
             context: std::ptr::null_mut(),
             pd: std::ptr::null_mut(),
+            async_fd: -1,
         }
     }
 }
@@ -30,6 +32,8 @@ pub(super) struct Handles {
     pub cq: *mut c_void,
     pub qp: *mut c_void,
     pub mr: *mut c_void,
+    pub mw: *mut c_void,
+    pub window_key: u32,
 }
 
 impl Default for Handles {
@@ -38,6 +42,8 @@ impl Default for Handles {
             cq: std::ptr::null_mut(),
             qp: std::ptr::null_mut(),
             mr: std::ptr::null_mut(),
+            mw: std::ptr::null_mut(),
+            window_key: 0,
         }
     }
 }
@@ -68,8 +74,29 @@ pub(super) struct PostResult {
     pub uncertain: bool,
 }
 
+pub(super) struct AsyncEvent {
+    pub kind: u32,
+    native: std::mem::MaybeUninit<ffi::ibv_async_event>,
+}
+
+impl Default for AsyncEvent {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            native: std::mem::MaybeUninit::uninit(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AsyncVerbs {
+    pub get: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent) -> c_int,
+    pub ack: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent),
+}
+
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
+    pub asynchronous: Option<AsyncVerbs>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub create_cq: unsafe extern "C" fn(*mut Handles, *const DeviceHandles, u32) -> c_int,
     pub register_local:
@@ -106,6 +133,9 @@ pub(super) struct Verbs {
         c_int,
         *mut PostResult,
     ) -> c_int,
+    pub window:
+        unsafe extern "C" fn(*mut Handles, u64, u64, usize, u32, bool, *mut PostResult) -> c_int,
+    pub dealloc_window: Close,
     pub poll: unsafe extern "C" fn(*mut Handles, *mut Completion) -> c_int,
     pub destroy_qp: Close,
     pub deregister: Close,
@@ -146,6 +176,11 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
         ffi::ibv_free_device_list(devices);
         if error != 0 {
             return error;
+        }
+        h.async_fd = (*h.context.cast::<ffi::ibv_context>()).async_fd;
+        let flags = libc::fcntl(h.async_fd, libc::F_GETFL);
+        if flags == -1 || libc::fcntl(h.async_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
+            return failure();
         }
         h.pd = ffi::ibv_alloc_pd(h.context.cast()).cast();
         if h.pd.is_null() {
@@ -246,13 +281,19 @@ unsafe extern "C" fn open(
         if h.cq.is_null() {
             return libc::EINVAL;
         }
-        let mut access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
+        let mut remote_access = 0;
         if permission & 1 != 0 {
-            access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+            remote_access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
         }
         if permission & 2 != 0 {
-            access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+            remote_access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
         }
+        let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
+            | if permission != 0 {
+                ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
+            } else {
+                0
+            };
         if h.mr.is_null() {
             h.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
             if h.mr.is_null() {
@@ -280,7 +321,7 @@ unsafe extern "C" fn open(
         let mut qp_attr: ffi::ibv_qp_attr = std::mem::zeroed();
         qp_attr.qp_state = ffi::ibv_qp_state::IBV_QPS_INIT;
         qp_attr.port_num = port;
-        qp_attr.qp_access_flags = access & !ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
+        qp_attr.qp_access_flags = remote_access;
         let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
             | ffi::ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
             | ffi::ibv_qp_attr_mask::IBV_QP_PORT
@@ -289,9 +330,33 @@ unsafe extern "C" fn open(
         if error != 0 {
             return error;
         }
+        if permission != 0 {
+            let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
+            let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
+            if code != 0 {
+                return code;
+            }
+            if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
+                return libc::EOPNOTSUPP;
+            }
+            let context = &*device.context.cast::<ffi::ibv_context>();
+            let Some(allocate) = context.ops.alloc_mw else {
+                return libc::EOPNOTSUPP;
+            };
+            h.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
+            if h.mw.is_null() {
+                return failure();
+            }
+            let key = (*h.mw.cast::<ffi::ibv_mw>()).rkey;
+            h.window_key = (key & !255) | (key.wrapping_add(1) & 255);
+        }
         *local = Descriptor {
             address: buffer as u64,
-            rkey: (*h.mr.cast::<ffi::ibv_mr>()).rkey,
+            rkey: if permission != 0 {
+                h.window_key
+            } else {
+                (*h.mr.cast::<ffi::ibv_mr>()).rkey
+            },
             qpn: (*h.qp.cast::<ffi::ibv_qp>()).qp_num,
             psn,
             lid: attr.lid,
@@ -359,6 +424,79 @@ unsafe extern "C" fn connect(
             | ffi::ibv_qp_attr_mask::IBV_QP_SQ_PSN
             | ffi::ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
         ffi::ibv_modify_qp(h.qp.cast(), &mut attr, mask.0 as c_int)
+    }
+}
+
+unsafe extern "C" fn window(
+    handles: *mut Handles,
+    id: u64,
+    address: u64,
+    length: usize,
+    permission: u32,
+    bind: bool,
+    result: *mut PostResult,
+) -> c_int {
+    // The record retains the MW, parent MR and exact DMA loan through CQ or teardown.
+    unsafe {
+        *result = PostResult::default();
+        let h = &mut *handles;
+        if h.qp.is_null() || h.mw.is_null() || h.mr.is_null() || id == 0 {
+            return libc::EINVAL;
+        }
+        let qp = h.qp.cast::<ffi::ibv_qp>();
+        let Some(post) = (*(*qp).context).ops.post_send else {
+            return libc::EOPNOTSUPP;
+        };
+        let mut request: ffi::ibv_send_wr = std::mem::zeroed();
+        request.wr_id = id;
+        request.send_flags = ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
+        if bind {
+            request.opcode = ffi::ibv_wr_opcode::IBV_WR_BIND_MW;
+            let mut access = 0;
+            if permission & 1 != 0 {
+                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+            }
+            if permission & 2 != 0 {
+                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+            }
+            request.__bindgen_anon_2.bind_mw.mw = h.mw.cast();
+            request.__bindgen_anon_2.bind_mw.rkey = h.window_key;
+            request.__bindgen_anon_2.bind_mw.bind_info = ffi::ibv_mw_bind_info {
+                mr: h.mr.cast(),
+                addr: address,
+                length: length as u64,
+                mw_access_flags: access,
+            };
+        } else {
+            request.opcode = ffi::ibv_wr_opcode::IBV_WR_LOCAL_INV;
+            request.__bindgen_anon_1.invalidate_rkey = h.window_key;
+        }
+        let mut bad = std::ptr::null_mut();
+        let code = post(qp, &mut request, &mut bad);
+        if code == 0 {
+            (*result).accepted = 1;
+        } else if !std::ptr::eq(bad, &request) {
+            (*result).uncertain = true;
+        }
+        code
+    }
+}
+
+unsafe extern "C" fn dealloc_window(handles: *mut Handles) -> c_int {
+    unsafe {
+        let h = &mut *handles;
+        if h.mw.is_null() {
+            return 0;
+        }
+        let mw = h.mw.cast::<ffi::ibv_mw>();
+        let Some(close) = (*(*mw).context).ops.dealloc_mw else {
+            return libc::EOPNOTSUPP;
+        };
+        let code = close(mw);
+        if code == 0 {
+            h.mw = std::ptr::null_mut();
+        }
+        code
     }
 }
 
@@ -518,13 +656,37 @@ destroy!(destroy_cq, Handles, cq, ibv_destroy_cq);
 destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
+unsafe extern "C" fn get_async_event(context: *mut c_void, event: *mut AsyncEvent) -> c_int {
+    // SAFETY: the context owner keeps the native fd/context alive and is its
+    // sole consumer. The provider initializes native only on successful get.
+    unsafe {
+        if ffi::ibv_get_async_event(context.cast(), (*event).native.as_mut_ptr()) != 0 {
+            return failure();
+        }
+        (*event).kind = (*(*event).native.as_ptr()).event_type;
+        0
+    }
+}
+
+unsafe extern "C" fn ack_async_event(_: *mut c_void, event: *mut AsyncEvent) {
+    // SAFETY: each successful get is acknowledged once before touching locks;
+    // no QP/CQ pointer from this event is accessed after acknowledgment.
+    unsafe { ffi::ibv_ack_async_event((*event).native.as_mut_ptr()) };
+}
+
 pub(super) static REAL: Verbs = Verbs {
+    asynchronous: Some(AsyncVerbs {
+        get: get_async_event,
+        ack: ack_async_event,
+    }),
     open_device,
     create_cq,
     register_local,
     open,
     connect,
     post,
+    window,
+    dealloc_window,
     poll,
     destroy_qp,
     deregister,

@@ -16,7 +16,12 @@ pub(crate) fn events(runtime: &Runtime) -> Arc<Mutex<Vec<&'static str>>> {
 }
 
 pub(crate) fn pause(runtime: &Runtime) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
-    let owner = runtime.device().unwrap();
+    pause_device(&runtime.device().unwrap())
+}
+
+pub(in crate::rdma) fn pause_device(
+    owner: &Device,
+) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
     let state = owner.state.lock().unwrap();
     let State::Open(resources) = &*state else {
         panic!("device is not open");
@@ -257,4 +262,13 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
         .close(Instant::now() + Duration::from_secs(2))
         .unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
+}
+
+pub(crate) fn emit_async(runtime: &Runtime, kind: u8) {
+    let owner = runtime.device().unwrap();
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("device is not open");
+    };
+    unsafe { &*resources.handles.context.cast::<FakeDevice>() }.emit_async(kind);
 }

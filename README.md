@@ -34,7 +34,13 @@ They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 Each engine lazily reuses one RNIC context/PD. Requester local-only host MRs
 now persist across requests in a bounded registration cache, while source-grant
-MRs and QPs remain exclusive to each request. P4.6 shares one bounded CQ and
+parent MRs and QPs remain exclusive to each request. P4.7a implements one-use
+Type-2B MW source grants: parent MRs have LOCAL_WRITE/MW_BIND permissions only;
+bound MW keys become visible after a successful BIND CQE and are invalidated
+before final ACK. Independent review accepts its scoped CPU and native gates.
+A context-owned async event consumer stays alive through native QP/CQ teardown;
+lost consumption retains actual owners and loans.
+P4.6 shares one bounded CQ and
 one post/poll worker per context, with globally unique WR identities and
 separate QP/CQ quotas. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed
@@ -61,7 +67,8 @@ accept the declared MR reuse and normal-close profile. Shared CQ/progress now
 passes independent source/CPU review and six four-QP plus fourteen public
 regression cases from each separately built native binary. Single-endpoint
 RDMA regression quotas exercise immediate resource reuse. Connected endpoint
-reuse, source authorization revocation and the remaining P4 exit gates stay open.
+reuse, source authorization revocation on persistent connections and the remaining
+P4 exit gates stay open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

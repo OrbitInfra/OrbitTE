@@ -1,13 +1,16 @@
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
-use super::{Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, sys};
+use super::{
+    Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, events, sys,
+};
 use crate::{Error, RegisteredMemory, Result};
 
 /// The context/PD belongs to one runtime and outlives every CQ, QP and MR.
 pub(super) struct Device {
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
+    pub(super) asynchronous: Arc<events::State>,
 }
 
 enum State {
@@ -18,6 +21,7 @@ enum State {
 
 struct Resources {
     handles: sys::DeviceHandles,
+    events: Option<events::Events>,
     usage: Arc<Mutex<RdmaStats>>,
 }
 
@@ -45,9 +49,11 @@ impl Device {
         let owner = Arc::new(Self {
             state: Mutex::new(State::Open(Box::new(Resources {
                 handles: sys::DeviceHandles::default(),
+                events: None,
                 usage,
             }))),
             verbs,
+            asynchronous: Arc::default(),
         });
         let initialized = {
             let mut state = owner
@@ -60,6 +66,14 @@ impl Device {
             // SAFETY: Device retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
+                if let Some(asynchronous) = verbs.asynchronous {
+                    resources.events = Some(events::Events::start(
+                        &resources.handles,
+                        asynchronous,
+                        Arc::clone(&owner.asynchronous),
+                        Arc::clone(&resources.usage),
+                    )?);
+                }
                 resources
                     .usage
                     .lock()
@@ -88,6 +102,7 @@ impl Device {
         let State::Open(resources) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the MR owner retains the exact registration and actual Device.
         check("ibv_reg_mr", unsafe {
             (self.verbs.register_local)(
@@ -107,6 +122,7 @@ impl Device {
         let State::Open(resources) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the progress owner retains the real Device through CQ close.
         check("ibv_create_cq", unsafe {
             (self.verbs.create_cq)(handles, &resources.handles, capacity)
@@ -128,9 +144,10 @@ impl Device {
         let State::Open(device) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
+        self.asynchronous.check()?;
         // SAFETY: the request and progress lane retain the Device and shared CQ;
         // its mutex excludes progress/cleanup while these handles initialize.
-        check("ibverbs endpoint construction", unsafe {
+        let code = unsafe {
             (self.verbs.open)(
                 &mut resources.handles,
                 &device.handles,
@@ -143,7 +160,13 @@ impl Device {
                 config.max_send_wr as u32,
                 local,
             )
-        })
+        };
+        if !resources.handles.mw.is_null() {
+            let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.active_windows += 1;
+            usage.opened_windows += 1;
+        }
+        check("ibverbs endpoint construction", code)
     }
 
     /// Runtime calls this only after endpoint admission is fenced and drained;
@@ -166,6 +189,23 @@ impl Device {
                     ("ibv_dealloc_pd", self.verbs.dealloc_pd),
                     ("ibv_close_device", self.verbs.close_device),
                 ] {
+                    if operation == "ibv_close_device" {
+                        if let Some(events) = &mut resources.events {
+                            if let Err(Error::Unquiesced { operation, code }) = events.stop() {
+                                resources
+                                    .usage
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .retained_devices += 1;
+                                let previous = std::mem::replace(
+                                    &mut *state,
+                                    State::Retained { operation, code },
+                                );
+                                std::mem::forget(previous);
+                                return Err(Error::Unquiesced { operation, code });
+                            }
+                        }
+                    }
                     // SAFETY: no endpoint can use these handles. Successful
                     // destroys clear handles; failure keeps all dependencies.
                     let code = unsafe { close(&mut resources.handles) };
