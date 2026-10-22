@@ -25,8 +25,12 @@ CC=gcc CXX=g++ cargo test --locked --all-features
 
 The published dependency's symbol-version configure test failed with this
 host's Clang 20/LLD combination; GCC/GNU ld passes. The command and CI explicitly
-select that tested C toolchain. Only Linux native builds are tested; cross
-compilation remains unqualified.
+select that tested C toolchain. CI fixes Ubuntu 24.04 and Clang/libclang 18
+for binding generation: the moving Ubuntu 26.04 image generated invalid opaque
+layouts in `ibverbs-sys` with its default parser toolchain. Build with matching
+`CLANG_PATH=/usr/bin/clang-18` and `LIBCLANG_PATH=/usr/lib/llvm-18/lib` when using
+that CI profile; layout assertions remain enabled. Only Linux native builds
+are tested; cross compilation remains unqualified.
 
 The standard post/poll inline operations dispatch through the provider function
 table exposed by the generated bindings. Missing callbacks return an unsupported
