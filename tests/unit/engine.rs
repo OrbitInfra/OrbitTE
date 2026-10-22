@@ -278,7 +278,23 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
 #[test]
 fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners() {
     let source = rdma_fixture("ok");
-    let requester = rdma_fixture("wc_close0");
+    let requester = rdma_fixture("post_close0");
+    let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = Arc::clone(&captured);
+    crate::rdma::tests::on_requester_close(move |endpoint, transfer| {
+        assert!(matches!(
+            transfer,
+            Err(Error::Backend {
+                operation: "ibv_post_send",
+                ..
+            })
+        ));
+        // The original logical error has already been captured. Force the
+        // asynchronous native close/retention before requester reads its receipt.
+        assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
+        assert!(!endpoint.has_resources());
+        observed.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
     let remote = source
         .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
         .unwrap();
@@ -305,6 +321,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             Duration::from_secs(2),
         )
         .unwrap();
+    assert!(captured.load(std::sync::atomic::Ordering::SeqCst));
     assert!(!report.locally_drained);
     assert!(matches!(
         report.failure.unwrap().error,

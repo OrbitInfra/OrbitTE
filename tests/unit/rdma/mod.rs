@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 pub(crate) use super::device::tests::{events, pause};
@@ -21,6 +21,7 @@ struct FakeCq {
     device: *const FakeDevice,
     completions: Mutex<std::collections::VecDeque<sys::Completion>>,
     qps: AtomicUsize,
+    retiring: AtomicBool,
 }
 
 struct Fake {
@@ -91,6 +92,7 @@ unsafe extern "C" fn create_cq(
             device,
             completions: Mutex::default(),
             qps: AtomicUsize::new(0),
+            retiring: AtomicBool::new(false),
         }))
         .cast();
     }
@@ -145,6 +147,9 @@ unsafe extern "C" fn open(
     let cq = unsafe { &*(*h).cq.cast::<FakeCq>() };
     assert_eq!(cq.device, device as *const FakeDevice);
     device.events.lock().unwrap().push("open_endpoint");
+    if cq.retiring.load(Ordering::Acquire) {
+        return libc::EIO;
+    }
     device.endpoints.fetch_add(1, Ordering::SeqCst);
     cq.qps.fetch_add(1, Ordering::SeqCst);
     let qpn = device.next_qpn.fetch_add(1, Ordering::SeqCst);
@@ -231,7 +236,7 @@ unsafe extern "C" fn post(
     let uncertain = mode.contains("unknown") || mode == "copy_post";
     let accepted = if partial {
         count.min(1)
-    } else if mode == "post" {
+    } else if mode.starts_with("post") {
         0
     } else {
         count
@@ -274,7 +279,7 @@ unsafe extern "C" fn post(
             uncertain,
         };
     }
-    if partial || uncertain || mode == "post" {
+    if partial || uncertain || mode.starts_with("post") {
         libc::ENOMEM
     } else {
         0
@@ -372,6 +377,10 @@ unsafe extern "C" fn cq(h: *mut sys::Handles) -> c_int {
         "all attached QPs close before shared CQ"
     );
     device.events.lock().unwrap().push("destroy_cq");
+    state.retiring.store(true, Ordering::Release);
+    if device.mode == "cq_pause" {
+        block(device);
+    }
     if device.mode.ends_with("close2") {
         return 16;
     }
@@ -455,6 +464,21 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
         verbs: &VERBS,
         device: Mutex::default(),
         registrations,
+    }
+}
+
+type CloseHook = Box<dyn FnOnce(&mut Endpoint, &Result<()>)>;
+thread_local! { static BEFORE_REQUESTER_CLOSE: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) }; }
+
+pub(crate) fn on_requester_close(hook: impl FnOnce(&mut Endpoint, &Result<()>) + 'static) {
+    BEFORE_REQUESTER_CLOSE
+        .with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
+}
+
+pub(crate) fn before_requester_close(endpoint: &mut Endpoint, result: &Result<()>) {
+    let hook = BEFORE_REQUESTER_CLOSE.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook(endpoint, result);
     }
 }
 

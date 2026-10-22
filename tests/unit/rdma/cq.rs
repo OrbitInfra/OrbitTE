@@ -153,24 +153,49 @@ fn unopened(runtime: &Runtime) -> Endpoint {
 
 #[test]
 fn lane_abort_and_retention_fence_registered_but_unopened_qps() {
-    for mode in ["ok", "close0"] {
+    for mode in ["cq_pause", "close0"] {
         let runtime = configured(mode, 3);
         let mut opened = runtime.staging_endpoint(8, 0).unwrap();
         let mut paused = unopened(&runtime);
         let progress = Arc::clone(&opened.progress);
         let events = events(&runtime);
-        progress
-            .shared
-            .fail(Fault::Protocol("injected fatal CQ fault"));
+        let pause = pause(&runtime);
+        let paused_record = Arc::clone(&paused.record);
+        if mode == "cq_pause" {
+            progress
+                .shared
+                .fail(Fault::Protocol("injected fatal CQ fault"));
+            // All QPs have passed destroy_qp, but CQ destruction and the last
+            // abort loop have not run. A late constructor must already fail.
+            wait_blocked(&pause);
+            let before = events.lock().unwrap().clone();
+            let denied = paused.open(0, 1).is_err();
+            let unchanged = *events.lock().unwrap() == before;
+            release(&pause);
+            assert!(
+                denied && unchanged,
+                "native QP creation after the first close pass"
+            );
+        } else {
+            let guard = paused_record.lock().unwrap();
+            progress
+                .shared
+                .fail(Fault::Protocol("injected fatal CQ fault"));
+            // Retain has fenced the first record and is blocked by the last
+            // accepted constructor. It cannot publish finished before that fence.
+            wait_until(|| opened.record.lock().unwrap().phase == Phase::Retained);
+            let finished = progress.shared.control.lock().unwrap().finished;
+            drop(guard);
+            assert!(
+                !finished,
+                "retention published before fencing every constructor"
+            );
+        }
         wait_until(|| progress.shared.control.lock().unwrap().finished);
         let before = events.lock().unwrap().clone();
         assert!(paused.open(0, 1).is_err());
         assert!(paused.connect(&opened.descriptor()).is_err());
-        assert_eq!(
-            *events.lock().unwrap(),
-            before,
-            "a terminal record cannot recreate a QP"
-        );
+        assert_eq!(*events.lock().unwrap(), before);
         assert_eq!(before.iter().filter(|e| **e == "open_endpoint").count(), 1);
         let retained = mode == "close0";
         assert_eq!(
@@ -183,6 +208,7 @@ fn lane_abort_and_retention_fence_registered_but_unopened_qps() {
         );
         drop(paused);
         drop(opened);
+        drop(paused_record);
         let stats = runtime.stats().unwrap();
         assert_eq!(
             (stats.retained_endpoints, stats.retained_cqs),

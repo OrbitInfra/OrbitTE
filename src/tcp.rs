@@ -412,6 +412,8 @@ fn rdma_transfer(
             }
             Ok(())
         })();
+        #[cfg(test)]
+        crate::rdma::tests::before_requester_close(&mut endpoint, &transfer);
         endpoint.close()?;
         transfer?;
         if operation == TransferOp::Read {
