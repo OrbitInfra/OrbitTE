@@ -133,7 +133,13 @@ class Controller:
                     environment['ORBITKV_ORBITTE_REMOTE'] = json.dumps(readiness)
                 return arguments, environment
             arguments = [role, self.profile['nodes'][node]['bind'], self.profile['rnic'], str(self.profile['gid_index']), kind, str(case['payload']), str(case['seed']), case['transport']]
-            return arguments + (readiness[:3] if readiness else []), {'ORBITTE_HARDWARE_MAPS': root + '/maps.txt'}
+            host_memory = case.get(role + '_host_memory', case.get('host_memory', 'direct'))
+            if host_memory not in ['direct', 'staged']:
+                raise ValueError('RDMA host memory must be direct or staged')
+            return arguments + (readiness[:3] if readiness else []), {
+                'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
+                'ORBITTE_RDMA_HOST_MEMORY': host_memory,
+            }
 
         arguments, environment = command(source, 'source', case['source_kind'], source_root)
         self.start(source, source_root, case['source_kind'], arguments, case['transport'], environment)

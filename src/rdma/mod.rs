@@ -1,4 +1,4 @@
-//! Opt-in single-rail RC verbs transport with bounded, owned host staging.
+//! Opt-in single-rail RC verbs with owned direct host registration or staging.
 
 #![allow(unsafe_code)]
 
@@ -17,7 +17,17 @@ use device::Device;
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
 
-/// Explicit RNIC selection. This first profile creates an RC endpoint per slice.
+/// Host-memory policy. Device allocations continue to use owned host staging.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RdmaHostMemory {
+    /// Register the actual host range. Registration errors never select staging.
+    #[default]
+    Direct,
+    /// Isolate application bytes in private host staging until completion.
+    Staged,
+}
+
+/// Explicit RNIC selection. This profile creates an RC endpoint per slice.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
     pub device: String,
@@ -27,6 +37,8 @@ pub struct RdmaConfig {
     pub hop_limit: u8,
     pub max_endpoints: usize,
     pub max_staging_bytes: usize,
+    pub host_memory: RdmaHostMemory,
+    pub max_direct_bytes: usize,
 }
 
 impl RdmaConfig {
@@ -39,6 +51,8 @@ impl RdmaConfig {
             hop_limit: 1,
             max_endpoints: 64,
             max_staging_bytes: 64 << 20,
+            host_memory: RdmaHostMemory::Direct,
+            max_direct_bytes: 64 << 20,
         }
     }
 
@@ -50,6 +64,7 @@ impl RdmaConfig {
             || self.hop_limit == 0
             || self.max_endpoints == 0
             || self.max_staging_bytes == 0
+            || self.max_direct_bytes == 0
         {
             return Err(Error::InvalidConfig(
                 "RDMA needs an explicit device, port, hop limit and positive budgets",
@@ -70,6 +85,10 @@ pub struct RdmaStats {
     pub opened_devices: u64,
     pub active_endpoints: usize,
     pub staging_bytes: usize,
+    /// Direct host bytes charged through endpoint release, including retention.
+    pub direct_bytes: usize,
+    /// Successfully constructed direct host endpoints during this runtime.
+    pub opened_direct_endpoints: u64,
     pub retained_endpoints: usize,
     pub retained_bytes: usize,
     pub completed_reads: u64,
@@ -159,37 +178,65 @@ impl Runtime {
         Ok(())
     }
 
-    pub(crate) fn endpoint(&self, length: usize, permission: u32) -> Result<Endpoint> {
+    pub(crate) fn endpoint(
+        &self,
+        memory: &RegisteredMemory,
+        offset: usize,
+        length: usize,
+        permission: u32,
+    ) -> Result<Endpoint> {
         if length == 0 || length > u32::MAX as usize {
             return Err(Error::InvalidRange);
         }
+        crate::memory::checked_range(offset, length, memory.len())?;
+        let direct = if self.config.host_memory == RdmaHostMemory::Direct {
+            memory.host_dma_lease(offset, length)?
+        } else {
+            None
+        };
+        let is_direct = direct.is_some();
         let lease = {
             let mut usage = self
                 .usage
                 .lock()
                 .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-            let bytes = usage
-                .staging_bytes
+            let (charged, limit) = if is_direct {
+                (&mut usage.direct_bytes, self.config.max_direct_bytes)
+            } else {
+                (&mut usage.staging_bytes, self.config.max_staging_bytes)
+            };
+            let bytes = charged
                 .checked_add(length)
                 .ok_or(Error::ResourceExhausted)?;
+            let over_limit = bytes > limit;
             if usage.retained_endpoints != 0 || usage.retained_devices != 0 {
                 return Err(Error::Unavailable(
                     "RDMA admission is poisoned by retained native resources",
                 ));
             }
-            if usage.active_endpoints >= self.config.max_endpoints
-                || bytes > self.config.max_staging_bytes
-            {
+            if usage.active_endpoints >= self.config.max_endpoints || over_limit {
                 return Err(Error::ResourceExhausted);
             }
             usage.active_endpoints += 1;
-            usage.staging_bytes = bytes;
+            if is_direct {
+                usage.direct_bytes = bytes;
+            } else {
+                usage.staging_bytes = bytes;
+            }
             Lease {
                 usage: Arc::clone(&self.usage),
                 length,
+                is_direct,
             }
         };
-        let bytes = Staging::new(length)?;
+        let buffer = match direct {
+            Some(loan) => Buffer::Direct {
+                address: loan.address(),
+                length: loan.len(),
+                loan: Some(loan),
+            },
+            None => Buffer::Staged(Staging::new(length)?),
+        };
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         let device = self.device()?;
@@ -197,7 +244,7 @@ impl Runtime {
             resources: Some(Box::new(Resources {
                 _device: Arc::clone(&device),
                 handles: sys::Handles::default(),
-                bytes,
+                buffer,
                 lease,
             })),
             local: Descriptor::default(),
@@ -210,6 +257,12 @@ impl Runtime {
             endpoint.close()?;
             return Err(error);
         }
+        if is_direct {
+            self.usage
+                .lock()
+                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
+                .opened_direct_endpoints += 1;
+        }
         Ok(endpoint)
     }
 }
@@ -217,6 +270,7 @@ impl Runtime {
 struct Lease {
     usage: Arc<Mutex<RdmaStats>>,
     length: usize,
+    is_direct: bool,
 }
 
 impl Drop for Lease {
@@ -226,7 +280,35 @@ impl Drop for Lease {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         usage.active_endpoints -= 1;
-        usage.staging_bytes -= self.length;
+        if self.is_direct {
+            usage.direct_bytes -= self.length;
+        } else {
+            usage.staging_bytes -= self.length;
+        }
+    }
+}
+
+enum Buffer {
+    Staged(Staging),
+    Direct {
+        loan: Option<crate::memory::HostDmaLease>,
+        address: NonNull<u8>,
+        length: usize,
+    },
+}
+
+impl Buffer {
+    fn address(&self) -> NonNull<u8> {
+        match self {
+            Self::Staged(bytes) => bytes.address,
+            Self::Direct { address, .. } => *address,
+        }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Staged(bytes) => bytes.len(),
+            Self::Direct { length, .. } => *length,
+        }
     }
 }
 
@@ -275,7 +357,7 @@ impl Drop for Staging {
 struct Resources {
     _device: Arc<Device>,
     handles: sys::Handles,
-    bytes: Staging,
+    buffer: Buffer,
     lease: Lease,
 }
 
@@ -378,19 +460,24 @@ impl Endpoint {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA staging"))?;
-        memory.read(offset, resources.bytes.bytes_mut())
+        match &mut resources.buffer {
+            Buffer::Staged(bytes) => memory.read(offset, bytes.bytes_mut()),
+            Buffer::Direct { .. } => Ok(()),
+        }
     }
 
-    pub(crate) fn bytes(&self) -> Result<&[u8]> {
+    pub(crate) fn copy_back(&self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
         if self.phase != Phase::Closed {
-            return Err(Error::Internal("RDMA staging is not physically quiescent"));
+            return Err(Error::Internal("RDMA buffer is not physically quiescent"));
         }
-        Ok(self
+        let resources = self
             .resources
             .as_ref()
-            .ok_or(Error::Internal("missing RDMA staging"))?
-            .bytes
-            .bytes())
+            .ok_or(Error::Internal("missing RDMA buffer"))?;
+        match &resources.buffer {
+            Buffer::Staged(bytes) => memory.write(offset, bytes.bytes()),
+            Buffer::Direct { .. } => Ok(()),
+        }
     }
 
     pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
@@ -436,7 +523,7 @@ impl Endpoint {
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
         if remote
             .address
-            .checked_add(resources.bytes.len() as u64)
+            .checked_add(resources.buffer.len() as u64)
             .is_none()
         {
             return Err(Error::InvalidRange);
@@ -448,7 +535,7 @@ impl Endpoint {
                 &mut resources.handles,
                 remote.address,
                 remote.rkey,
-                resources.bytes.len() as u32,
+                resources.buffer.len() as u32,
                 i32::from(operation == TransferOp::Write),
             )
         };
@@ -476,7 +563,7 @@ impl Endpoint {
                 if completion.id != 1
                     || completion.opcode != expected_opcode
                     || (operation == TransferOp::Read
-                        && completion.length as usize != resources.bytes.len())
+                        && completion.length as usize != resources.buffer.len())
                 {
                     return Err(Error::Protocol("RDMA completion identity/opcode/length"));
                 }
@@ -507,6 +594,11 @@ impl Endpoint {
             self.retain();
             return Err(Error::Unquiesced { operation, code });
         }
+        if let Buffer::Direct { loan, .. } = &mut resources.buffer {
+            // Release CPU/alias exclusion before a source completion ACK. No
+            // handle can touch these bytes after all native destroys succeeded.
+            drop(loan.take());
+        }
         self.phase = Phase::Closed;
         Ok(())
     }
@@ -535,7 +627,7 @@ impl Endpoint {
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner());
                 usage.retained_endpoints += 1;
-                usage.retained_bytes += resources.bytes.len();
+                usage.retained_bytes += resources.buffer.len();
             }
             std::mem::forget(resources);
         }

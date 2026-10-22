@@ -388,3 +388,99 @@ fn batch_rejects_foreign_alias_locks_before_publication_or_reference_changes() {
         drop(existing);
     }
 }
+
+#[cfg(feature = "rdma")]
+#[test]
+fn dma_ranges_fence_aliases_across_engines_without_blocking_disjoint_bytes() {
+    for external in [false, true] {
+        let fixture = common::external_memory(&[0x55; 32]);
+        let backing = if external {
+            Arc::clone(&fixture.memory)
+        } else {
+            Arc::new(HostMemory::new(vec![0x55; 32].into_boxed_slice()).unwrap())
+        };
+        let first = MemoryRegistry::new(SourceEpoch([1; 16]), 4, 64);
+        let second = MemoryRegistry::new(SourceEpoch([2; 16]), 4, 64);
+        let full = first
+            .register_host(Arc::clone(&backing), 0, 32, Permission::RemoteReadWrite)
+            .unwrap();
+        let alias = second
+            .register_host(Arc::clone(&backing), 4, 16, Permission::RemoteReadWrite)
+            .unwrap();
+        let loan = alias.host_dma_lease(2, 6).unwrap().unwrap();
+        assert_eq!(loan.address().as_ptr() as u64, backing.base_address() + 6);
+        assert_eq!(loan.len(), 6);
+        assert!(matches!(
+            full.host_dma_lease(5, 2),
+            Err(Error::Unavailable(_))
+        ));
+        assert!(matches!(
+            full.host_dma_lease(11, 2),
+            Err(Error::Unavailable(_))
+        ));
+        assert!(matches!(
+            alias.read(1, &mut [0; 2]),
+            Err(Error::Unavailable(_))
+        ));
+        assert!(matches!(
+            backing.write(11, &[0; 2]),
+            Err(Error::Unavailable(_))
+        ));
+        let disjoint = full.host_dma_lease(12, 4).unwrap().unwrap();
+        full.write(0, &[9; 6]).unwrap();
+        full.write(16, &[7; 16]).unwrap();
+        let mut bytes = [0; 6];
+        full.read(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [9; 6]);
+        drop(loan);
+        alias.write(2, &[3; 6]).unwrap();
+        assert!(matches!(
+            full.read(12, &mut [0; 4]),
+            Err(Error::Unavailable(_))
+        ));
+        drop(disjoint);
+        let mut expected = vec![0x55; 32];
+        expected[..6].fill(9);
+        expected[6..12].fill(3);
+        expected[16..].fill(7);
+        let mut observed = vec![0; 32];
+        full.read(0, &mut observed).unwrap();
+        assert_eq!(observed, expected);
+    }
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn direct_loan_retains_registration_charge_and_actual_external_allocation() {
+    let fixture = common::external_memory(&[7; 16]);
+    let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 1, 8);
+    let memory = registry
+        .register_host(
+            Arc::clone(&fixture.memory),
+            4,
+            8,
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    for (offset, length) in [(0, 0), (7, 2), (usize::MAX, 1)] {
+        assert!(matches!(
+            memory.host_dma_lease(offset, length),
+            Err(Error::InvalidRange)
+        ));
+    }
+    let loan = memory.host_dma_lease(1, 3).unwrap().unwrap();
+    registry.unregister(&memory).unwrap();
+    drop(memory);
+    drop(fixture.memory);
+    assert_eq!(registry.usage().unwrap(), (1, 8));
+    assert!(fixture.owner.upgrade().is_some());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        registry.register(vec![0; 8].into_boxed_slice(), Permission::LocalOnly),
+        Err(Error::ResourceExhausted)
+    ));
+    drop(loan);
+    assert_eq!(registry.usage().unwrap(), (0, 0));
+    assert!(fixture.owner.upgrade().is_none());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+}
