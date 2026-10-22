@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.5 scoped acceptance; P4.6 implemented, acceptance pending; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.6 scoped acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -475,16 +475,21 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   only by CPU controls. See the scoped
   [qualification and external evidence](rdma-cuda.md#persistent-local-host-mr-qualification).
 - [x] **P4.6 — context-owned shared CQ and post/poll worker (Implemented;
-  independent/native acceptance pending).** One CQ/worker serves bounded
-  per-request QPs. Monotonic request WR identities and native QP numbers route
+  source/CPU and healthy native profile independently Accepted).** One
+  CQ/worker serves bounded per-request QPs. Monotonic request WR identities and native QP numbers route
   completion ownership; aggregate CQ and per-QP SQ quotas are reserved before
   dispatch. Fatal or ambiguous progress fences all attached constructors and
   posting, closes every QP and then the shared CQ before canceling unresolved
   debt. Failed native cleanup retains the actual remaining lane and charges,
   without retry. Request close uses its original deadline and returns
   Unquiesced before an unproven drain; both peers consume that close receipt.
-  CPU controls and a deterministic four-real-QP ignored runner cover the new
-  boundary; existing fourteen-case public probes remain regression evidence.
+  Closed resources move back to the caller before its receipt; metadata
+  snapshots cannot delay quota release. Source ACK follows output commit and
+  endpoint drop. Source `8e38447` passes independent stable/MSRV CPU review,
+  including 90 units, 30 release single-CPU concurrent runs and 35 old-logic
+  negative controls. Six four-real-QP cases and fourteen public regressions
+  pass for each separately built native binary, with exact bytes/counts,
+  single-endpoint public RDMA quotas and complete normal resource release.
   Source grants and connected QPs remain per request. No endpoint reuse,
   source-rkey reuse, event progress, multirail, GDR or complete P4 is claimed.
   See [the contract and acceptance gates](rdma-cuda.md#shared-cq-and-progress-qualification).
@@ -499,10 +504,11 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   dual-incarnation protocol before persisting connected endpoints.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
-- [ ] Complete shared polling/event progress and backend cancellation for
-  fragmented transfers. P4.4 implements adaptive READ/WRITE slices, exact CQ
-  byte/error accounting and partial-post controls in exclusive windows;
-  real partial-post/CQ/endpoint fault qualification remains open.
+- [ ] Complete event-driven progress and backend cancellation qualification for
+  fragmented transfers. P4.6 implements shared polling, aggregate CQ admission
+  and whole-lane cancellation ownership on top of P4.4's adaptive slices.
+  Event progress and real partial-post/CQ/endpoint fault qualification remain
+  open; CPU fault controls do not establish physical abort/drain support.
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
@@ -791,9 +797,13 @@ persistent. Its independent CPU controls and fourteen healthy native cases
 accept adapted/folded slices, bounded windows and complete normal release for
 the declared profile. P4.5 adds bounded requester local-only MR reuse and
 retirement with scoped independent CPU and healthy native acceptance. Native
-eviction/unregister/failure and the full P4 exit remain unqualified.
+eviction/unregister/failure and the full P4 exit remain unqualified. P4.6 adds
+one context CQ and one progress owner with scoped independent source/CPU and
+healthy native acceptance across four request QPs. Endpoint connections remain
+per request; the complete P4 exit remains open.
 Next continue within P4 to connected endpoint-store ownership, source-rkey
-authority/revocation, shared progress, device/topology discovery and multirail. Follow the frozen
+authority/revocation, dual endpoint incarnations, device/topology discovery,
+event progress and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.
