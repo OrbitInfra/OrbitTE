@@ -279,7 +279,7 @@ exchanges CUDA-pinned host direct bytes and device-staged bytes with B's DRAM
 in both roles, with CPU/GPU TCP controls. Every peer compares its complete
 buffer, noncontiguous request ranges, untouched bytes and guards. Each direct
 host RDMA peer constructs six direct endpoints; device-staged and explicit
-staging peers construct zero. Requesters observe three READ and three WRITE
+staging peers construct zero. RDMA requesters observe three READ and three WRITE
 CQ successes, and all direct/staging/device/endpoint charges return to zero.
 
 The independent MSRV-built native binary differs from the implementation build
