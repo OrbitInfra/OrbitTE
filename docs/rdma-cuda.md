@@ -779,9 +779,10 @@ nonrepeating per-grant WR identities and terminal store retirement. Full P4
 and OrbitKV linkage remain open.
 
 Independent source review passes stable/Rust 1.85 strict Clippy, the relevant
-feature and package/comparator/supervision gates, 110 CPU units plus
-notification/TCP/doc tests, and 20 release single-CPU runs with 16 test threads
-from each build. Thirty-eight old-logic executions across 19 fault families
+feature/comparator/supervision gates and 110 CPU units plus notification/TCP/doc
+tests. Implementation gates also pass package verification. The implementation
+stable and independent MSRV release builds each pass 20 single-CPU runs with
+16 test threads. Thirty-eight old-logic executions across 19 fault families
 must fail assertions rather than timeout or fail compilation. Real control
 sockets keep malformed peers alive and check rejection before ACCEPT/connect,
 BIND/data, DONE or staged output commit. Source permission and both physical
@@ -789,7 +790,7 @@ QP barriers remain unchanged.
 
 Each separately built native set passes four real invalidated/parent-key
 probes, six four-QP shared-CQ cases and fourteen public DRAM/pinned-host/mixed/
-staged/A-H20 GPU-staging/TCP regressions. The public source records six burned
+staged/A-H20 GPU-staging/TCP regressions. The public RDMA source records six burned
 keys across one historical native index; the four-QP source records eight
 burns across four indices. History survives request resource close and reaches
 zero only at actual shared device close. Every set verifies 48 actual SSH waits
