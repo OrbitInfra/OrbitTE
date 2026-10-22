@@ -311,15 +311,17 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         ),
     ] {
         // libibverbs' native ibv_wc prefix: wr_id, status, opcode, vendor_err,
-        // byte_len. Its remaining fields are zero in this deterministic fixture.
+        // byte_len, plus the error-valid QP number used by shared CQ routing.
         state.bytes[..8].copy_from_slice(&7u64.to_ne_bytes());
         for (index, field) in [status, opcode, vendor, length].into_iter().enumerate() {
             state.bytes[8 + index * 4..12 + index * 4].copy_from_slice(&field.to_ne_bytes());
         }
+        let qpn = std::mem::offset_of!(ffi::ibv_wc, qp_num);
+        state.bytes[qpn..qpn + 4].copy_from_slice(&0x12345u32.to_ne_bytes());
         assert_eq!(unsafe { poll(&mut handles, &mut output) }, 1);
         assert_eq!(
-            (output.id, output.status, output.vendor_error),
-            (7, status, vendor)
+            (output.id, output.status, output.vendor_error, output.qpn),
+            (7, status, vendor, 0x12345)
         );
         let expected = if status == 0 {
             (opcode, length)

@@ -224,10 +224,7 @@ fn creating_mr_can_be_retired_without_blocking_unregister_or_resurrecting_an_idl
     assert_eq!(stats.opened_persistent_mrs, 0);
     registry.unregister(&memory).unwrap();
     runtime.registrations.retire(&memory).unwrap();
-    assert!(matches!(
-        runtime.close(Instant::now() + Duration::from_secs(2)),
-        Err(Error::Timeout)
-    ));
+    assert!(matches!(runtime.close(Instant::now()), Err(Error::Timeout)));
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
     memory.write(0, &[7]).unwrap();
     assert!(memory.read(4, &mut [0; 4]).is_err());

@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
-use super::{Endpoint, RdmaConfig, RdmaStats, check, sys};
+use super::{Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, sys};
 use crate::{Error, RegisteredMemory, Result};
 
 /// The context/PD belongs to one runtime and outlives every CQ, QP and MR.
@@ -99,11 +99,27 @@ impl Device {
         })
     }
 
+    pub(super) fn create_cq(&self, handles: &mut sys::Handles, capacity: u32) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        // SAFETY: the progress owner retains the real Device through CQ close.
+        check("ibv_create_cq", unsafe {
+            (self.verbs.create_cq)(handles, &resources.handles, capacity)
+        })
+    }
+
     pub(super) fn open_endpoint(
         &self,
-        endpoint: &mut Endpoint,
+        resources: &mut EndpointResources,
+        config: &RdmaConfig,
         permission: u32,
         psn: u32,
+        local: &mut Descriptor,
     ) -> Result<()> {
         let state = self
             .state
@@ -112,27 +128,22 @@ impl Device {
         let State::Open(device) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
-        let resources = endpoint
-            .resources
-            .as_mut()
-            .ok_or(Error::Internal("missing RDMA endpoint"))?;
-        // SAFETY: this endpoint retains the actual Device, whose handles remain
-        // live through endpoint destruction. Its stable bytes remain exclusive.
-        let code = unsafe {
+        // SAFETY: the request and progress lane retain the Device and shared CQ;
+        // its mutex excludes progress/cleanup while these handles initialize.
+        check("ibverbs endpoint construction", unsafe {
             (self.verbs.open)(
                 &mut resources.handles,
                 &device.handles,
-                endpoint.config.port,
-                endpoint.config.gid_index,
+                config.port,
+                config.gid_index,
                 resources.buffer.address().as_ptr().cast(),
                 resources.buffer.len(),
                 permission,
                 psn,
-                endpoint.config.max_send_wr as u32,
-                &mut endpoint.local,
+                config.max_send_wr as u32,
+                local,
             )
-        };
-        check("ibverbs endpoint construction", code)
+        })
     }
 
     /// Runtime calls this only after endpoint admission is fenced and drained;

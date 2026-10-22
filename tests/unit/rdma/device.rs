@@ -243,10 +243,7 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     let runtime = runtime("ok");
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     let events = events(&runtime);
-    assert!(matches!(
-        runtime.close(Instant::now() + Duration::from_secs(2)),
-        Err(Error::Timeout)
-    ));
+    assert!(matches!(runtime.close(Instant::now()), Err(Error::Timeout)));
     assert!(matches!(
         runtime.staging_endpoint(1, 0),
         Err(Error::Unavailable(_)) | Err(Error::ResourceExhausted)
@@ -254,10 +251,7 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
     endpoint.close().unwrap();
     // Closed endpoints still retain their stable output and the device until drop.
-    assert!(matches!(
-        runtime.close(Instant::now() + Duration::from_secs(2)),
-        Err(Error::Timeout)
-    ));
+    assert!(matches!(runtime.close(Instant::now()), Err(Error::Timeout)));
     drop(endpoint);
     runtime
         .close(Instant::now() + Duration::from_secs(2))

@@ -276,6 +276,50 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
 
 #[cfg(feature = "rdma")]
 #[test]
+fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners() {
+    let source = rdma_fixture("ok");
+    let requester = rdma_fixture("wc_close0");
+    let remote = source
+        .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(
+            source.endpoint(),
+            source.source_epoch(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    let report = requester
+        .submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[TransferRequest {
+                transport: Transport::Rdma,
+                local_address: local.base_address(),
+                remote_address: remote.base_address(),
+                length: 8,
+            }],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(!report.locally_drained);
+    assert!(matches!(
+        report.failure.unwrap().error,
+        Error::Unquiesced { .. }
+    ));
+    let stats = requester.stats().unwrap();
+    let rdma = stats.rdma.unwrap();
+    assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 1));
+    assert_eq!(stats.inflight_batches, 1);
+    assert!(requester.close(Duration::from_millis(10)).is_err());
+    source.close(Duration::from_secs(2)).unwrap();
+}
+
+#[cfg(feature = "rdma")]
+#[test]
 fn whole_close_timeout_preserves_shared_device_and_can_continue_waiting() {
     let engine = rdma_fixture("ok");
     let runtime = engine.source.rdma.as_ref().unwrap();
@@ -290,7 +334,7 @@ fn whole_close_timeout_preserves_shared_device_and_can_continue_waiting() {
     assert!(matches!(engine.close(Duration::ZERO), Err(Error::Timeout)));
     assert_eq!(runtime.stats().unwrap().active_devices, 1);
     drop(requester);
-    engine.close(Duration::ZERO).unwrap();
+    engine.close(Duration::from_secs(2)).unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
 }
 
@@ -311,7 +355,7 @@ fn directional_close_keeps_other_direction_and_shared_device_available() {
         runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
         assert_eq!(runtime.stats().unwrap().opened_devices, 1);
         assert_eq!(runtime.stats().unwrap().active_devices, 1);
-        engine.close(Duration::ZERO).unwrap();
+        engine.close(Duration::from_secs(2)).unwrap();
         assert_eq!(runtime.stats().unwrap().active_devices, 0);
     }
 }
@@ -324,7 +368,7 @@ fn whole_close_reports_device_failure_without_retrying_from_another_close() {
     runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
     for _ in 0..2 {
         assert!(matches!(
-            engine.close(Duration::ZERO),
+            engine.close(Duration::from_secs(2)),
             Err(Error::Unquiesced {
                 operation: "ibv_dealloc_pd",
                 code: 16

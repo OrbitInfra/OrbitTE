@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, c_char, c_int, c_void};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::time::Duration;
 
 pub(crate) use super::device::tests::{events, pause};
 use super::*;
@@ -8,20 +10,43 @@ use super::*;
 pub(crate) struct FakeDevice {
     mode: String,
     pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
-    endpoints: std::sync::atomic::AtomicUsize,
-    local_mrs: std::sync::atomic::AtomicUsize,
-    pub(crate) pause: Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>,
+    endpoints: AtomicUsize,
+    mrs: AtomicUsize,
+    cqs: AtomicUsize,
+    next_qpn: AtomicU32,
+    pub(crate) pause: Arc<(Mutex<(bool, bool)>, Condvar)>,
+}
+
+struct FakeCq {
+    device: *const FakeDevice,
+    completions: Mutex<std::collections::VecDeque<sys::Completion>>,
+    qps: AtomicUsize,
 }
 
 struct Fake {
-    mode: String,
     device: *const FakeDevice,
+    cq: *const FakeCq,
     length: usize,
     bytes: *mut u8,
-    operation: i32,
-    closed: usize,
-    completions: std::collections::VecDeque<sys::Completion>,
-    borrowed_mr: bool,
+    qpn: u32,
+    first_id: u64,
+}
+
+struct FakeMr {
+    device: *const FakeDevice,
+    address: usize,
+    length: usize,
+    local_only: bool,
+}
+
+fn block(device: &FakeDevice) {
+    let (lock, changed) = &*device.pause;
+    let mut state = lock.lock().unwrap();
+    state.0 = true;
+    changed.notify_all();
+    while !state.1 {
+        state = changed.wait(state).unwrap();
+    }
 }
 
 // CPU ABI controls, not a device emulator or proof that DMA completed.
@@ -33,8 +58,10 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
         events: Arc::new(Mutex::new(vec!["open_device"])),
-        endpoints: std::sync::atomic::AtomicUsize::new(0),
-        local_mrs: std::sync::atomic::AtomicUsize::new(0),
+        endpoints: AtomicUsize::new(0),
+        mrs: AtomicUsize::new(0),
+        cqs: AtomicUsize::new(0),
+        next_qpn: AtomicU32::new(9),
         pause: Arc::default(),
     }));
     unsafe {
@@ -51,39 +78,49 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     0
 }
 
-struct FakeMr {
-    device: *const FakeDevice,
-    address: usize,
-    length: usize,
+unsafe extern "C" fn create_cq(
+    h: *mut sys::Handles,
+    handles: *const sys::DeviceHandles,
+    _: u32,
+) -> c_int {
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    device.events.lock().unwrap().push("create_cq");
+    device.cqs.fetch_add(1, Ordering::SeqCst);
+    unsafe {
+        (*h).cq = Box::into_raw(Box::new(FakeCq {
+            device,
+            completions: Mutex::default(),
+            qps: AtomicUsize::new(0),
+        }))
+        .cast();
+    }
+    if device.mode.starts_with("cq_create") {
+        libc::EIO
+    } else {
+        0
+    }
 }
 
 unsafe extern "C" fn register_local(
     h: *mut sys::Handles,
-    device: *const sys::DeviceHandles,
+    handles: *const sys::DeviceHandles,
     address: *mut c_void,
     length: usize,
 ) -> c_int {
-    let device = unsafe { &*(*device).context.cast::<FakeDevice>() };
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push("register_local");
-    device
-        .local_mrs
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    device.mrs.fetch_add(1, Ordering::SeqCst);
     unsafe {
         (*h).mr = Box::into_raw(Box::new(FakeMr {
             device,
             address: address as usize,
             length,
+            local_only: true,
         }))
         .cast();
     }
     if device.mode == "register_pause" {
-        let (lock, changed) = &*device.pause;
-        let mut state = lock.lock().unwrap();
-        state.0 = true;
-        changed.notify_all();
-        while !state.1 {
-            state = changed.wait(state).unwrap();
-        }
+        block(device);
     }
     if device.mode.starts_with("register_fail") {
         libc::EIO
@@ -94,7 +131,7 @@ unsafe extern "C" fn register_local(
 
 unsafe extern "C" fn open(
     h: *mut sys::Handles,
-    device: *const sys::DeviceHandles,
+    handles: *const sys::DeviceHandles,
     _: u8,
     _: u8,
     bytes: *mut c_void,
@@ -104,39 +141,42 @@ unsafe extern "C" fn open(
     _: u32,
     descriptor: *mut Descriptor,
 ) -> c_int {
-    let device = unsafe { &*(*device).context.cast::<FakeDevice>() };
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    let cq = unsafe { &*(*h).cq.cast::<FakeCq>() };
+    assert_eq!(cq.device, device as *const FakeDevice);
     device.events.lock().unwrap().push("open_endpoint");
-    device
-        .endpoints
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let failing = device.mode.starts_with("open");
-    let borrowed_mr = unsafe { !(*h).mr.is_null() };
-    if borrowed_mr {
-        let mr = unsafe { &*(*h).mr.cast::<FakeMr>() };
-        assert!(
-            bytes as usize >= mr.address && (bytes as usize + length) <= mr.address + mr.length
-        );
-    }
-    let state = Box::into_raw(Box::new(Fake {
-        mode: device.mode.clone(),
-        device,
-        length,
-        bytes: bytes.cast(),
-        operation: 0,
-        closed: 0,
-        completions: std::collections::VecDeque::new(),
-        borrowed_mr,
-    }));
+    device.endpoints.fetch_add(1, Ordering::SeqCst);
+    cq.qps.fetch_add(1, Ordering::SeqCst);
+    let qpn = device.next_qpn.fetch_add(1, Ordering::SeqCst);
     unsafe {
-        (*h).cq = state.cast();
-        (*h).qp = std::ptr::dangling_mut::<u8>().cast();
-        if !borrowed_mr {
-            (*h).mr = std::ptr::dangling_mut::<u8>().cast();
+        if (*h).mr.is_null() {
+            device.mrs.fetch_add(1, Ordering::SeqCst);
+            (*h).mr = Box::into_raw(Box::new(FakeMr {
+                device,
+                address: bytes as usize,
+                length,
+                local_only: false,
+            }))
+            .cast();
+        } else {
+            let mr = &*(*h).mr.cast::<FakeMr>();
+            assert!(
+                bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
+            );
         }
+        (*h).qp = Box::into_raw(Box::new(Fake {
+            device,
+            cq,
+            length,
+            bytes: bytes.cast(),
+            qpn,
+            first_id: 0,
+        }))
+        .cast();
         *descriptor = Descriptor {
             address: bytes as u64,
             rkey: 7,
-            qpn: 9,
+            qpn,
             psn,
             lid: 1,
             mtu: 3,
@@ -144,8 +184,13 @@ unsafe extern "C" fn open(
             gid: [0; 16],
         };
     }
-    if failing { 5 } else { 0 }
+    if device.mode.starts_with("open") {
+        5
+    } else {
+        0
+    }
 }
+
 unsafe extern "C" fn connect(
     h: *mut sys::Handles,
     _: *const Descriptor,
@@ -155,8 +200,12 @@ unsafe extern "C" fn connect(
     _: u8,
     _: u8,
 ) -> c_int {
-    i32::from(unsafe { &*(*h).cq.cast::<Fake>() }.mode == "connect")
+    let state = unsafe { &*(*h).qp.cast::<Fake>() };
+    let device = unsafe { &*state.device };
+    device.events.lock().unwrap().push("connect");
+    i32::from(device.mode == "connect")
 }
+
 unsafe extern "C" fn post(
     h: *mut sys::Handles,
     requests: *const sys::WorkRequest,
@@ -168,23 +217,28 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
-    let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
-    state.operation = write;
+    let state = unsafe { &mut *(*h).qp.cast::<Fake>() };
+    let device = unsafe { &*state.device };
+    let cq = unsafe { &*state.cq };
+    let mode = device.mode.as_str();
     assert_eq!(local, state.bytes as u64);
     assert_eq!(local_length, state.length);
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
-    let partial = state.mode.starts_with("partial");
-    let uncertain = state.mode.contains("unknown") || state.mode == "copy_post";
+    if state.first_id == 0 {
+        state.first_id = requests[0].id;
+    }
+    let partial = mode.starts_with("partial");
+    let uncertain = mode.contains("unknown") || mode == "copy_post";
     let accepted = if partial {
         count.min(1)
-    } else if state.mode == "post" {
+    } else if mode == "post" {
         0
     } else {
         count
     };
     for request in &requests[..accepted] {
         assert!(request.offset as usize + request.length as usize <= state.length);
-        if state.mode.contains("copy") {
+        if mode.contains("copy") {
             // CPU mutation under production leases, not a DMA receipt.
             unsafe {
                 let local = state.bytes.add(request.offset as usize);
@@ -196,31 +250,23 @@ unsafe extern "C" fn post(
                 }
             }
         }
-        state.completions.push_back(sys::Completion {
-            id: if state.mode == "identity" {
+        cq.completions.lock().unwrap().push_back(sys::Completion {
+            id: if mode == "identity" {
                 u64::MAX
+            } else if mode == "duplicate" {
+                state.first_id
             } else {
                 request.id
             },
+            qpn: state.qpn + u32::from(mode == "wrong_qpn"),
             opcode: if write == 1 { 1 } else { 2 },
-            length: if state.mode == "length" {
-                request.length - 1
-            } else {
-                request.length
-            },
-            status: u32::from(state.mode == "wc"),
+            length: request.length - u32::from(mode == "length"),
+            status: u32::from(mode == "wc" || mode == "wc_close0"),
             vendor_error: 0,
         });
     }
-    if state.mode == "pause_copy" {
-        let device = unsafe { &*state.device };
-        let (lock, ready) = &*device.pause;
-        let mut state = lock.lock().unwrap();
-        state.0 = true;
-        ready.notify_all();
-        while !state.1 {
-            state = ready.wait(state).unwrap();
-        }
+    if mode == "pause_copy" || mode.starts_with("pause_post") {
+        block(device);
     }
     unsafe {
         *result = sys::PostResult {
@@ -228,29 +274,29 @@ unsafe extern "C" fn post(
             uncertain,
         };
     }
-    if partial || uncertain || state.mode == "post" {
+    if partial || uncertain || mode == "post" {
         libc::ENOMEM
     } else {
         0
     }
 }
+
 unsafe extern "C" fn poll(h: *mut sys::Handles, completion: *mut sys::Completion) -> c_int {
-    let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
-    if state.mode.starts_with("timeout") {
+    let state = unsafe { &*(*h).cq.cast::<FakeCq>() };
+    let device = unsafe { &*state.device };
+    if device.mode.starts_with("timeout") {
         return 0;
     }
-    if state.mode == "poll" {
+    if device.mode == "poll" {
         return -1;
     }
-    let value = if state.mode == "reverse" {
-        state.completions.pop_back()
+    let mut queue = state.completions.lock().unwrap();
+    let value = if device.mode.contains("reverse") {
+        queue.pop_back()
     } else {
-        state.completions.pop_front()
+        queue.pop_front()
     };
-    if let Some(mut value) = value {
-        if state.mode == "duplicate" {
-            value.id = 1;
-        }
+    if let Some(value) = value {
         unsafe {
             *completion = value;
         }
@@ -260,101 +306,92 @@ unsafe extern "C" fn poll(h: *mut sys::Handles, completion: *mut sys::Completion
     }
 }
 
-unsafe fn close(h: *mut sys::Handles, index: usize) -> c_int {
+unsafe extern "C" fn qp(h: *mut sys::Handles) -> c_int {
     let handles = unsafe { &mut *h };
-    let state_pointer = handles.cq.cast::<Fake>();
-    let handle = match index {
-        0 => &mut handles.qp,
-        1 => &mut handles.mr,
-        _ => &mut handles.cq,
-    };
-    if handle.is_null() {
+    if handles.qp.is_null() {
         return 0;
     }
-    let state = unsafe { &mut *state_pointer };
-    assert_eq!(
-        state.closed,
-        if state.borrowed_mr && index == 2 {
-            1
-        } else {
-            index
-        },
-        "endpoint dependencies close in order"
-    );
-    if index == 1 {
-        assert!(!state.borrowed_mr);
-    }
+    let state = unsafe { &*handles.qp.cast::<Fake>() };
     let device = unsafe { &*state.device };
-    device
-        .events
-        .lock()
-        .unwrap()
-        .push(["destroy_qp", "deregister", "destroy_cq"][index]);
-    if state.mode.ends_with(&format!("close{index}")) {
+    device.events.lock().unwrap().push("destroy_qp");
+    if device.mode.contains("qp_pause") {
+        block(device);
+    }
+    if device.mode.ends_with("close0") {
         return 16;
     }
-    *handle = std::ptr::null_mut();
-    state.closed += 1;
-    if index == 2 {
-        device
-            .endpoints
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        let state = state as *mut Fake;
-        unsafe {
-            drop(Box::from_raw(state));
-        }
+    let cq = unsafe { &*state.cq };
+    cq.qps.fetch_sub(1, Ordering::SeqCst);
+    device.endpoints.fetch_sub(1, Ordering::SeqCst);
+    unsafe {
+        drop(Box::from_raw(handles.qp.cast::<Fake>()));
     }
+    handles.qp = std::ptr::null_mut();
     0
 }
-unsafe extern "C" fn qp(h: *mut sys::Handles) -> c_int {
-    unsafe { close(h, 0) }
-}
+
 unsafe extern "C" fn mr(h: *mut sys::Handles) -> c_int {
-    if unsafe { (*h).cq.is_null() } {
-        if unsafe { (*h).mr.is_null() } {
-            return 0;
-        }
-        let state = unsafe { &*(*h).mr.cast::<FakeMr>() };
-        let device = unsafe { &*state.device };
-        device.events.lock().unwrap().push("deregister_local");
-        if device.mode.ends_with("close1") || device.mode == "mr_close" {
-            return 16;
-        }
-        if device.mode == "mr_close_pause" {
-            let (lock, changed) = &*device.pause;
-            let mut state = lock.lock().unwrap();
-            state.0 = true;
-            changed.notify_all();
-            while !state.1 {
-                state = changed.wait(state).unwrap();
-            }
-        }
-        unsafe {
-            device
-                .local_mrs
-                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            drop(Box::from_raw((*h).mr.cast::<FakeMr>()));
-            (*h).mr = std::ptr::null_mut();
-        }
+    let handles = unsafe { &mut *h };
+    if handles.mr.is_null() {
         return 0;
     }
-    unsafe { close(h, 1) }
+    let state = unsafe { &*handles.mr.cast::<FakeMr>() };
+    let device = unsafe { &*state.device };
+    device.events.lock().unwrap().push(if state.local_only {
+        "deregister_local"
+    } else {
+        "deregister"
+    });
+    if !state.local_only {
+        assert!(handles.qp.is_null());
+    }
+    if device.mode.ends_with("close1") || device.mode == "mr_close" {
+        return 16;
+    }
+    if device.mode == "mr_close_pause" {
+        block(device);
+    }
+    device.mrs.fetch_sub(1, Ordering::SeqCst);
+    unsafe {
+        drop(Box::from_raw(handles.mr.cast::<FakeMr>()));
+    }
+    handles.mr = std::ptr::null_mut();
+    0
 }
+
 unsafe extern "C" fn cq(h: *mut sys::Handles) -> c_int {
-    unsafe { close(h, 2) }
+    let handles = unsafe { &mut *h };
+    if handles.cq.is_null() {
+        return 0;
+    }
+    let state = unsafe { &*handles.cq.cast::<FakeCq>() };
+    let device = unsafe { &*state.device };
+    assert_eq!(
+        state.qps.load(Ordering::SeqCst),
+        0,
+        "all attached QPs close before shared CQ"
+    );
+    device.events.lock().unwrap().push("destroy_cq");
+    if device.mode.ends_with("close2") {
+        return 16;
+    }
+    device.cqs.fetch_sub(1, Ordering::SeqCst);
+    unsafe {
+        drop(Box::from_raw(handles.cq.cast::<FakeCq>()));
+    }
+    handles.cq = std::ptr::null_mut();
+    0
 }
+
 unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
     let h = unsafe { &mut *h };
     if h.pd.is_null() {
         return 0;
     }
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
-    assert_eq!(state.endpoints.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert_eq!(
-        state.local_mrs.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "MRs close before PD"
-    );
+    assert_eq!(state.endpoints.load(Ordering::SeqCst), 0);
+    assert_eq!(state.mrs.load(Ordering::SeqCst), 0, "MRs close before PD");
+    assert_eq!(state.cqs.load(Ordering::SeqCst), 0, "CQs close before PD");
     state.events.lock().unwrap().push("dealloc_pd");
     if matches!(state.mode.as_str(), "close3" | "device_pd_close") {
         return 16;
@@ -362,6 +399,7 @@ unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
     h.pd = std::ptr::null_mut();
     0
 }
+
 unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     let h = unsafe { &mut *h };
     if h.context.is_null() {
@@ -369,7 +407,7 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     }
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
     assert!(h.pd.is_null(), "PD closes before context");
-    assert_eq!(state.endpoints.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(state.endpoints.load(Ordering::SeqCst), 0);
     state.events.lock().unwrap().push("close_device");
     if matches!(state.mode.as_str(), "close4" | "device_open_close") {
         return 16;
@@ -382,6 +420,7 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
 }
 static VERBS: sys::Verbs = sys::Verbs {
     open_device,
+    create_cq,
     register_local,
     open,
     connect,
@@ -412,6 +451,7 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
     Runtime {
         config,
         usage,
+        drained: Arc::default(),
         verbs: &VERBS,
         device: Mutex::default(),
         registrations,
@@ -567,11 +607,19 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
                 )
             });
             assert_eq!(result.is_ok(), mode == "ok", "{mode}");
-            endpoint.close().unwrap();
-            endpoint.copy_back(&output, 0).unwrap();
-            let mut observed = [0; 8];
-            output.read(0, &mut observed).unwrap();
-            assert_eq!(observed, [0; 8]);
+            let closed = endpoint.close();
+            assert!(
+                !matches!(closed, Err(Error::Unquiesced { .. })),
+                "{mode}: {closed:?}"
+            );
+            if mode == "ok" || mode == "connect" {
+                endpoint.copy_back(&output, 0).unwrap();
+                let mut observed = [0; 8];
+                output.read(0, &mut observed).unwrap();
+                assert_eq!(observed, [0; 8]);
+            } else {
+                assert!(endpoint.copy_back(&output, 0).is_err());
+            }
         });
         assert_eq!(result.is_ok(), mode != "open", "{mode}");
         let stats = runtime.stats().unwrap();
@@ -589,7 +637,7 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
 
 #[test]
 fn teardown_failure_retains_exact_staging_and_blocks_new_admission() {
-    for index in 0..3 {
+    for index in 0..2 {
         let runtime = runtime(&format!("close{index}"));
         let mut endpoint = runtime.staging_endpoint(8, 2).unwrap();
         assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
@@ -641,12 +689,15 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
         .unwrap();
     assert_eq!(first.descriptor().address, memory.base_address() + 3);
     assert_eq!(second.descriptor().address, memory.base_address() + 13);
-    let resources = first.resources.as_ref().unwrap();
-    let fake = unsafe { &*resources.handles.cq.cast::<Fake>() };
-    assert_eq!(
-        (fake.bytes as u64, fake.length),
-        (memory.base_address() + 3, 5)
-    );
+    {
+        let state = first.record.lock().unwrap();
+        let resources = state.resources.as_ref().unwrap();
+        let fake = unsafe { &*resources.handles.qp.cast::<Fake>() };
+        assert_eq!(
+            (fake.bytes as u64, fake.length),
+            (memory.base_address() + 3, 5)
+        );
+    }
     assert!(matches!(
         runtime.endpoint(&memory, 9, 1, 0, Instant::now() + Duration::from_secs(2)),
         Err(Error::ResourceExhausted)
@@ -693,7 +744,6 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
         "open_close1",
         "close0",
         "close1",
-        "close2",
     ] {
         let fixture = test_support::external_memory(&[0x33; 16]);
         let allocation = Arc::clone(&fixture.memory);
@@ -792,7 +842,7 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         runtime.config.block_size = 16;
         runtime.config.max_send_wr = 4;
         let mut endpoint = runtime
-            .endpoint(&memory, 0, 128, 0, Instant::now() + Duration::from_secs(2))
+            .endpoint(&memory, 0, 128, 1, Instant::now() + Duration::from_secs(2))
             .unwrap();
         let remote = endpoint.descriptor();
         endpoint.connect(&remote).unwrap();
@@ -802,19 +852,20 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
             Instant::now() + Duration::from_millis(2),
         );
         assert_eq!(result.is_ok(), mode == "reverse", "{mode}: {result:?}");
-        assert!(
-            matches!(memory.read(0, &mut [0; 1]), Err(Error::Unavailable(_))),
-            "all request bytes remain leased until native close"
-        );
         let stats = runtime.stats().unwrap();
-        assert_eq!(stats.work_requests, owed, "{mode}");
         assert_eq!(stats.peak_work_requests, 4);
         assert_eq!(stats.post_calls, if mode == "reverse" { 2 } else { 1 });
         if mode.ends_with("close1") {
             registry.unregister(&memory).unwrap();
         }
-        assert_eq!(endpoint.close().is_err(), retained, "{mode}");
+        let closed = endpoint.close();
+        assert_eq!(
+            matches!(closed, Err(Error::Unquiesced { .. })),
+            retained,
+            "{mode}: {closed:?}"
+        );
         let stats = runtime.stats().unwrap();
+        let owed = if mode.ends_with("close1") { 0 } else { owed };
         assert_eq!(stats.work_requests, if retained { owed } else { 0 });
         assert_eq!(
             stats.retained_work_requests,

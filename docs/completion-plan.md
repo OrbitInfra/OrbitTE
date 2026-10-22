@@ -20,7 +20,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA, P4.4 slice progress, P4.5 local MR reuse and
+[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA, P4.4 slice progress, P4.5 local MR reuse, P4.6 shared CQ/progress and
 P4.1/P5.1 RDMA/CUDA staging paths. P1.5 adds the opt-in consumer allocation
 bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.5 implemented with scoped native acceptance; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.5 scoped acceptance; P4.6 implemented, acceptance pending; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -474,13 +474,29 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Physical eviction, unregister races and failed deregistration remain covered
   only by CPU controls. See the scoped
   [qualification and external evidence](rdma-cuda.md#persistent-local-host-mr-qualification).
-- [ ] Complete connected endpoint-store ownership and shared CQ/SQ progress,
+- [x] **P4.6 — context-owned shared CQ and post/poll worker (Implemented;
+  independent/native acceptance pending).** One CQ/worker serves bounded
+  per-request QPs. Monotonic request WR identities and native QP numbers route
+  completion ownership; aggregate CQ and per-QP SQ quotas are reserved before
+  dispatch. Fatal or ambiguous progress fences all attached constructors and
+  posting, closes every QP and then the shared CQ before canceling unresolved
+  debt. Failed native cleanup retains the actual remaining lane and charges,
+  without retry. Request close uses its original deadline and returns
+  Unquiesced before an unproven drain; both peers consume that close receipt.
+  CPU controls and a deterministic four-real-QP ignored runner cover the new
+  boundary; existing fourteen-case public probes remain regression evidence.
+  Source grants and connected QPs remain per request. No endpoint reuse,
+  source-rkey reuse, event progress, multirail, GDR or complete P4 is claimed.
+  See [the contract and acceptance gates](rdma-cuda.md#shared-cq-and-progress-qualification).
+- [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
   Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
   context-owned CQs and worker-owned slice completion. Preserve physical SQ/CQ
   charges and actual owners through retirement and failed cleanup; endpoint
   lookup eviction alone must not repay debt or re-enable stale authority.
-  P4.5 caches only requester local MRs; QP/CQ and source grants stay per request.
+  P4.5 caches requester local MRs; P4.6 shares the context CQ/worker. QPs and
+  source grants remain per request. Safe reuse needs a source revocation and
+  dual-incarnation protocol before persisting connected endpoints.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete shared polling/event progress and backend cancellation for
@@ -490,8 +506,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
-- [ ] Extend P4.4's exclusive-window WR accounting to shared CQ/SQ quotas,
-  persistent owners and multiple rails. Optional adaptive/deadline policies
+- [ ] Extend P4.6's single-lane shared CQ/SQ quotas and persistent local MR
+  owners to multiple rails. Optional adaptive/deadline policies
   remain disabled until P6 passes.
 - [ ] Establish the real source/requester quiescence contract for each verbs
   operation. Prevent stale rkeys, endpoints or remote accesses from reaching a

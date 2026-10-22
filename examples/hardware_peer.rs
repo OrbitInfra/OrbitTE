@@ -124,7 +124,11 @@ fn finish(
         .stats()?
         .rdma
         .ok_or(Error::Internal("missing RDMA counters"))?;
-    if idle.persistent_mrs != usize::from(cached)
+    if idle.active_cqs != usize::from(transport == Transport::Rdma)
+        || idle.opened_cqs != u64::from(transport == Transport::Rdma)
+        || idle.progress_workers != usize::from(transport == Transport::Rdma)
+        || idle.progress_failures != 0
+        || idle.persistent_mrs != usize::from(cached)
         || idle.persistent_mr_bytes != if cached { memory.len() } else { 0 }
         || idle.opened_persistent_mrs != u64::from(cached)
         || idle.reused_persistent_mrs != if cached { 5 } else { 0 }
@@ -144,6 +148,10 @@ fn finish(
         || stats.allocated_batches != 0
         || stats.requester_workers != 0
         || stats.active_source_operations != 0
+        || rdma.active_cqs != 0
+        || rdma.retained_cqs != 0
+        || rdma.progress_workers != 0
+        || rdma.progress_failures != 0
         || rdma.active_devices != 0
         || rdma.retained_devices != 0
         || rdma.persistent_mrs != 0
@@ -171,6 +179,10 @@ fn finish(
     {
         return Err(Error::Internal("CUDA resources were retained"));
     }
+    println!(
+        "ORBITTE_SHARED_STATS {{\"opened_cqs\":{},\"idle_progress_workers\":{},\"peak_pending_qps\":{},\"active_cqs\":0,\"progress_workers\":0,\"retained_cqs\":0,\"progress_failures\":0}}",
+        rdma.opened_cqs, idle.progress_workers, rdma.peak_pending_qps
+    );
     println!(
         "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"persistent_mrs\":0,\"persistent_mr_bytes\":0,\"retained_persistent_mrs\":0,\"idle_persistent_mrs\":{},\"idle_persistent_mr_bytes\":{},\"opened_persistent_mrs\":{},\"reused_persistent_mrs\":{},\"evicted_persistent_mrs\":{},\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{},\"completed_rdma_read_bytes\":{},\"completed_rdma_write_bytes\":{},\"work_requests\":0,\"retained_work_requests\":0,\"peak_work_requests\":{},\"posted_work_requests\":{},\"post_calls\":{},\"partial_posts\":0,\"uncertain_posts\":0,\"completion_errors\":0}}",
         idle.persistent_mrs,
@@ -210,6 +222,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     if let Ok(value) = env::var("ORBITTE_RDMA_MAX_SEND_WR") {
         rdma.max_send_wr = value.parse()?;
+    }
+    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_CQES") {
+        rdma.max_cqes = value.parse()?;
     }
     let kind = &args[5];
     let payload: usize = args[6].parse()?;

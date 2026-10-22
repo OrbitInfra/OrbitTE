@@ -412,9 +412,7 @@ fn rdma_transfer(
             }
             Ok(())
         })();
-        if endpoint.has_resources() {
-            endpoint.close()?;
-        }
+        endpoint.close()?;
         transfer?;
         if operation == TransferOp::Read {
             remaining(deadline)?;
