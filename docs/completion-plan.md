@@ -850,11 +850,14 @@ healthy native acceptance across four request QPs. Endpoint connections remain
 per request; the complete P4 exit remains open.
 P4.7a adds accepted one-use source MW authority, shared control-WR debt and
 context async-event ownership for its declared source/CPU/native profiles.
-It retains the per-request QP barrier; persistent key domains and connected
-endpoint-store ownership remain open.
-Next continue within P4 to connected endpoint-store ownership, source-rkey
-authority/revocation on persistent connections, dual endpoint incarnations, device/topology discovery,
-event progress and multirail. Follow the frozen
+P4.7b adds accepted PD-lifetime full-rkey history, bilateral connection
+incarnations and independent grant generations for its declared source/CPU/native
+profiles. Both retain the per-request QP barriers; connected endpoint-store
+ownership and the complete P4 exit remain open.
+Next continue within P4 by splitting persistent connection and per-grant owners,
+establishing incoming-DMA drain and terminal endpoint-store retirement before
+connected reuse, then device/topology discovery, event progress and multirail.
+Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.
