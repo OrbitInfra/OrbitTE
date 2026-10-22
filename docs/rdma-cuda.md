@@ -354,8 +354,9 @@ each of the implementation and independently MSRV-built binaries. The native pro
 single-rail RoCE v2 with window limits 1/2/3/4/8, explicit small and adaptive
 blocks, folded short tails, ordinary/pinned host direct MRs, both mixed host
 policies, explicit staging, A-H20 device staging in both roles and TCP controls.
-Each requester compares exact, independently specified slice CQ counts, post
-calls and high-water WR charges in addition to completed bytes. A 12,305-byte
+Each requester's slice CQ counts, post calls and high-water WR charges are
+checked against independently specified values by the external postflight gate,
+alongside exact byte comparisons. A 12,305-byte
 request folds its 17-byte tail into three slices; a large host-local READ uses
 64 slices while WRITE/device-local READ caps at 32. Complete buffers,
 noncontiguous ranges, untouched bytes, guards, notifications and final normal
