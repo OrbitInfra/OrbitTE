@@ -37,6 +37,9 @@ connects source grants, epochs and generation-scoped gRPC completion to actual
 Manager GPU Save/Restore. Two H20 source/grant and GPU byte gates passed with
 a private CUDA 12.2 runtime and were independently rerun; installed
 Manager/serving qualification remains open. Track these consumer candidates as P1.5/P2.3 in the plan.
+An explicit OrbitKV RDMA consumer candidate now shares those owners and uses
+single-rail RC host staging without payload fallback. Its host-only component
+and CUDA 13 Manager/GPU gates are separate; see P4.2a in the plan.
 The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
 coverage, GPUDirect, NVLink and SSD remain open. These source substages await
 independent acceptance and complete hardware/installed qualification.

@@ -514,4 +514,4 @@ fn check(operation: &'static str, code: i32) -> Result<()> {
 
 #[cfg(test)]
 #[path = "../../tests/unit/rdma/mod.rs"]
-mod tests;
+pub(crate) mod tests;

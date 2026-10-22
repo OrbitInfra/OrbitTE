@@ -146,7 +146,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     dealloc_pd: pd,
     close_device: ctx,
 };
-fn runtime(mode: &str) -> Runtime {
+pub(crate) fn runtime(mode: &str) -> Runtime {
     Runtime {
         config: RdmaConfig {
             max_endpoints: 1,

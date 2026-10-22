@@ -25,8 +25,12 @@ CC=gcc CXX=g++ cargo test --locked --all-features
 
 The published dependency's symbol-version configure test failed with this
 host's Clang 20/LLD combination; GCC/GNU ld passes. The command and CI explicitly
-select that tested C toolchain. Only Linux native builds are tested; cross
-compilation remains unqualified.
+select that tested C toolchain. CI fixes Ubuntu 24.04 and Clang/libclang 18
+for binding generation: the moving Ubuntu 26.04 image generated invalid opaque
+layouts in `ibverbs-sys` with its default parser toolchain. Build with matching
+`CLANG_PATH=/usr/bin/clang-18` and `LIBCLANG_PATH=/usr/lib/llvm-18/lib` when using
+that CI profile; layout assertions remain enabled. Only Linux native builds
+are tested; cross compilation remains unqualified.
 
 The standard post/poll inline operations dispatch through the provider function
 table exposed by the generated bindings. Missing callbacks return an unsupported
@@ -189,6 +193,57 @@ connection fails cleanup qualification even when native peers finish, because
 a non-reaping container init can retain an orphaned supervisor zombie. Raw commands, failures, stdout/stderr and manifests
 remain in the selected external output directory; keys/tokens never enter a
 bundle. The runner does not reconfigure a platform job or its duration.
+
+For OrbitKV's registered-host component, the same controller accepts
+`runner: "orbitkv-peer-host"`. Deploy the consumer core test executable built
+with `--no-default-features --features cuda-13,orbitte-rdma`; the runner invokes
+its ignored exact `peer::orbitte::tests::rdma_host::registered_host_rdma_peer`
+filter and passes role/endpoint/device/port/GID/payload/seed through environment.
+Set `rdma_port`, keep both memory kinds `cpu` and transport `rdma`, and use
+128 bytes..8 MiB payloads. Identity, supervision and RNIC leases are the same as
+for the native runner; CUDA is never initialized and no GPU lock is requested.
+Source/requester maps are collected. It checks consumer READ selection and
+execution, not its PinnedAllocator, Manager grants/GPU restore or installed
+serving. Current OrbitKV consumer builds require CUDA 13. Kernel R535 alone
+is not an exclusion: the supplied H20 nodes also install `cuda-compat-13-1`
+user-mode driver 590.48.01, a combination supported by NVIDIA's
+[forward-compatibility matrix](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html).
+Check mapped user-mode libraries and actual feature gates instead of inferring
+support from the kernel driver version.
+
+The consumer `660f893d` host component and `ff30ee1` runner/source-retention
+controls have independent source review and reruns. The physical RoCE pilot
+covers A-to-B 4 KiB and B-to-A 1 MiB payload regions with 64-byte guards at both
+ends, fragmented READs with three requester CQ completions each, unchanged
+guards/unrequested bytes and zero normal-close registration/endpoint/staging
+charges. Maps contain real `libibverbs`/`libmlx5`
+and no CUDA/TENT. All owned native and supervisor processes exit and RNIC leases
+are released. The initial readiness coordination failure stays with successful
+reruns in the external evidence. See
+[OrbitTE #12](https://github.com/OrbitInfra/OrbitTE/pull/12) and
+[OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305) for frozen source,
+binary hashes and independent review locations. This is component correctness,
+not a throughput claim or pinned Manager/GPU acceptance.
+
+A separate A-node CUDA 13.1 source profile at consumer `660f893d` passes pinned
+source-grant controls, embedded Manager TCP GPU Save/Restore and embedded Manager
+same-RNIC RDMA staging GPU Save/Restore. It uses installed `libcudart.so.13.1.80`
+and compatibility `libcuda.so.590.48.01`; the RDMA run maps real verbs/mlx5 and
+no TENT. Test-owned source/service workers drain and native/supervisor/coordinator
+processes are reaped; the fixture kills its private etcd, so graceful-etcd
+qualification is separate. External evidence remains outside the checkouts and is indexed in
+[OrbitKV #306](https://github.com/OrbitInfra/OrbitKV/pull/306).
+This is neither an installed Manager nor cross-process CUDA IPC/cross-host
+Manager/GPU or GDR qualification. B-node compute remains untested while all
+canonical GPU leases are busy; do not take another workload's GPU.
+
+The CPU `remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained`
+control drives actual TCP framing with verbs fault callbacks. After a source
+MR teardown failure, requester QP/MR cleanup can succeed while the remote error
+loses its Unquiesced detail on the wire. The test checks zero published READ
+bytes, actual source backing retention, endpoint/staging/registration charges,
+rejected native admission and a source-close timeout. It does not prove a
+physical device failure or provide a remote termination receipt.
 
 Before calling a hardware profile Qualified, additionally run actual delayed
 completion/cancel/timeout, endpoint/native teardown faults, restart/reuse and
