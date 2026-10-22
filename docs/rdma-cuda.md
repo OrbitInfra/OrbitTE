@@ -190,6 +190,27 @@ a non-reaping container init can retain an orphaned supervisor zombie. Raw comma
 remain in the selected external output directory; keys/tokens never enter a
 bundle. The runner does not reconfigure a platform job or its duration.
 
+For OrbitKV's registered-host component, the same controller accepts
+`runner: "orbitkv-peer-host"`. Deploy the consumer core test executable built
+with `--no-default-features --features cuda-13,orbitte-rdma`; the runner invokes
+its ignored exact `peer::orbitte::tests::rdma_host::registered_host_rdma_peer`
+filter and passes role/endpoint/device/port/GID/payload/seed through environment.
+Set `rdma_port`, keep both memory kinds `cpu` and transport `rdma`, and use
+128 bytes..8 MiB payloads. Identity, supervision and RNIC leases are the same as
+for the native runner; CUDA is never initialized and no GPU lock is requested.
+Source/requester maps are collected. It checks consumer READ selection and
+execution, not its PinnedAllocator, Manager grants/GPU restore or installed
+serving. Current OrbitKV consumer builds require CUDA 13; driver535 nodes are
+usable for this host-only gate but cannot qualify its full Manager/GPU path.
+
+The CPU `remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained`
+control drives actual TCP framing with verbs fault callbacks. After a source
+MR teardown failure, requester QP/MR cleanup can succeed while the remote error
+loses its Unquiesced detail on the wire. The test checks zero published READ
+bytes, actual source backing retention, endpoint/staging/registration charges,
+rejected native admission and a source-close timeout. It does not prove a
+physical device failure or provide a remote termination receipt.
+
 Before calling a hardware profile Qualified, additionally run actual delayed
 completion/cancel/timeout, endpoint/native teardown faults, restart/reuse and
 installed-artifact controls, alongside an independently built frozen TENT oracle

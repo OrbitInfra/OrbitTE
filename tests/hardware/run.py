@@ -50,15 +50,15 @@ class Controller:
         self.ssh(node, ['ldd', self.remote + '/hardware_peer'])
 
     def collect(self, node, root):
-        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in ['running.json','stdout.log','stderr.log','result.json','supervisor.log']}))"
+        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in ['running.json','stdout.log','stderr.log','result.json','supervisor.log','maps.txt']}))"
         return json.loads(self.ssh(node, ['python3', '-c', script]))
 
-    def start(self, node, root, kind, arguments):
+    def start(self, node, root, kind, arguments, transport, environment=None):
         target = self.profile['nodes'][node]
         locks = []
-        if arguments[7] == 'rdma':
+        if transport == 'rdma':
             locks.append(target['nic_lock'])
-        environment = {}
+        environment = dict(environment or {})
         if kind != 'cpu':
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
@@ -108,8 +108,35 @@ class Controller:
         source, requester = case['source'], case['requester']
         source_root = self.remote + f'/{index:02}-source'
         requester_root = self.remote + f'/{index:02}-requester'
-        prefix = lambda node, role, kind: [role, self.profile['nodes'][node]['bind'], self.profile['rnic'], str(self.profile['gid_index']), kind, str(case['payload']), str(case['seed']), case['transport']]
-        self.start(source, source_root, case['source_kind'], prefix(source, 'source', case['source_kind']))
+        consumer = self.profile.get('runner') == 'orbitkv-peer-host'
+        if self.profile.get('runner') not in [None, 'orbitkv-peer-host']:
+            raise ValueError('unsupported hardware runner')
+        if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
+            raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
+
+        def command(node, role, kind, root, readiness=None):
+            if consumer:
+                arguments = ['peer::orbitte::tests::rdma_host::registered_host_rdma_peer', '--exact', '--ignored', '--test-threads=1', '--nocapture']
+                environment = {
+                    'ORBITKV_ORBITTE_ROLE': role,
+                    'ORBITKV_ORBITTE_BIND': self.profile['nodes'][node]['bind'],
+                    'ORBITKV_ORBITTE_RDMA_DEVICE': self.profile['rnic'],
+                    'ORBITKV_ORBITTE_RDMA_PORT': str(self.profile.get('rdma_port', 1)),
+                    'ORBITKV_ORBITTE_RDMA_GID_INDEX': str(self.profile['gid_index']),
+                    'ORBITKV_ORBITTE_PAYLOAD': str(case['payload']),
+                    'ORBITKV_ORBITTE_SEED': str(case['seed']),
+                    'ORBITKV_ORBITTE_MAPS': root + '/maps.txt',
+                }
+                if readiness is not None:
+                    if len(readiness) != 4 or not readiness[0].startswith('orbitte+rdma://'):
+                        raise ValueError('invalid OrbitKV RDMA readiness')
+                    environment['ORBITKV_ORBITTE_REMOTE'] = json.dumps(readiness)
+                return arguments, environment
+            arguments = [role, self.profile['nodes'][node]['bind'], self.profile['rnic'], str(self.profile['gid_index']), kind, str(case['payload']), str(case['seed']), case['transport']]
+            return arguments + (readiness[:3] if readiness else []), {}
+
+        arguments, environment = command(source, 'source', case['source_kind'], source_root)
+        self.start(source, source_root, case['source_kind'], arguments, case['transport'], environment)
         started = time.monotonic()
         readiness = None
         while time.monotonic() - started < 25:
@@ -124,8 +151,8 @@ class Controller:
             time.sleep(0.2)
         if readiness is None:
             raise RuntimeError('source readiness timeout; supervisor will collect and reap its own child')
-        arguments = prefix(requester, 'requester', case['requester_kind']) + readiness[:3]
-        self.start(requester, requester_root, case['requester_kind'], arguments)
+        arguments, environment = command(requester, 'requester', case['requester_kind'], requester_root, readiness)
+        self.start(requester, requester_root, case['requester_kind'], arguments, case['transport'], environment)
         while time.monotonic() - started < 65:
             evidence = {role: self.collect(node, root) for role, node, root in [('source', source, source_root), ('requester', requester, requester_root)]}
             if all(record['result.json'] is not None for record in evidence.values()):

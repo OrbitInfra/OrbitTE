@@ -104,3 +104,129 @@ fn invalid_configuration_fails_before_binding_or_spawning_threads() {
         ));
     }
 }
+
+#[cfg(feature = "rdma")]
+fn rdma_fixture(mode: &str) -> TransferEngine {
+    let config = EngineConfig::default();
+    let epoch = SourceEpoch::generate().unwrap();
+    let source = Arc::new(Source {
+        epoch,
+        rdma: Some(Arc::new(crate::rdma::tests::runtime(mode))),
+        registry: MemoryRegistry::new(epoch, 8, 4096),
+        notifications: NotificationInbox::new(8, 4096, 1024),
+        admission: Mutex::new(SourceAdmission {
+            open: true,
+            active: 0,
+        }),
+        drained: Condvar::new(),
+    });
+    let transport = TcpTransport::start(Arc::clone(&source), &config).unwrap();
+    TransferEngine {
+        config,
+        source,
+        transport,
+        batches: Arc::default(),
+        allocations: Arc::new(AllocationBudget::new()),
+    }
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained() {
+    // Actual control sockets and owners; verbs are a CPU ABI fault fixture.
+    // No DMA success or physical RNIC termination is claimed.
+    let source = rdma_fixture("close1");
+    let requester = rdma_fixture("normal");
+    let backing = Arc::new(HostMemory::new(vec![0x42; 8].into_boxed_slice()).unwrap());
+    let weak = Arc::downgrade(&backing);
+    let remote = source
+        .register_host_memory(Arc::clone(&backing), 0, 8, Permission::RemoteRead)
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(
+            source.endpoint(),
+            source.source_epoch(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    let report = requester
+        .submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[TransferRequest {
+                transport: Transport::Rdma,
+                local_address: local.base_address(),
+                remote_address: remote.base_address(),
+                length: 8,
+            }],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(
+        report.locally_drained,
+        "only the requester QP/MR was destroyed"
+    );
+    assert_eq!(
+        (report.completed_requests, report.transferred_bytes),
+        (0, 0)
+    );
+    let failure = report.failure.unwrap().error;
+    assert!(
+        matches!(
+            failure,
+            Error::Backend {
+                operation: "remote backend",
+                code: -1
+            }
+        ),
+        "unexpected remote failure: {failure:?}"
+    );
+    let mut bytes = [0; 8];
+    local.read(0, &mut bytes).unwrap();
+    assert_eq!(
+        bytes, [0xcc; 8],
+        "failed source receipt must not publish READ staging"
+    );
+    source.unregister_memory(&remote).unwrap();
+    drop(remote);
+    drop(backing);
+    let stats = source.stats().unwrap();
+    let rdma = stats.rdma.unwrap();
+    assert_eq!(
+        (
+            stats.active_source_operations,
+            stats.retained_regions,
+            stats.retained_bytes
+        ),
+        (1, 1, 8)
+    );
+    assert_eq!(
+        (
+            rdma.active_endpoints,
+            rdma.staging_bytes,
+            rdma.retained_endpoints,
+            rdma.retained_bytes
+        ),
+        (1, 8, 1, 8)
+    );
+    assert!(weak.upgrade().is_some());
+    assert!(matches!(
+        source.close_source(Duration::from_millis(5)),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(
+        source.source.rdma.as_ref().unwrap().endpoint(8, 0),
+        Err(Error::Unavailable(_))
+    ));
+    requester.close_requester(Duration::from_secs(1)).unwrap();
+    let local_stats = requester.stats().unwrap().rdma.unwrap();
+    assert_eq!(
+        (local_stats.active_endpoints, local_stats.retained_endpoints),
+        (0, 0)
+    );
+    requester.unregister_memory(&local).unwrap();
+    drop(local);
+}

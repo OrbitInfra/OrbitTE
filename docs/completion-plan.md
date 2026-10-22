@@ -92,7 +92,7 @@ does not turn incomplete rows into completed features.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging implemented; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1 staging and P4.2a consumer candidate implemented; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -355,6 +355,24 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   The binding maintenance substage reuses published `ibverbs-sys` rather
   than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
   and retained DMA owners; the backend's qualification limits still apply.
+- [x] **P4.2a — OrbitKV RDMA selection and registered-host execution candidate
+  (Implemented; pinned Manager/physical-fault qualification open).** The consumer
+  explicitly enables `orbitte-rdma`, configures one RNIC/port/GID and advertises
+  `orbitte+rdma://`. It reuses allocation registration, grant epoch and completion
+  owners; each request selects RDMA without a TCP/TENT payload fallback. The
+  first path uses P4.1's private host staging, not application/GPU MRs. A shared
+  hardware runner executes the consumer's actual registered-read body with
+  ordinary host backing, epoch/namespace controls, fragmented bytes/guards,
+  native CQ counts and zero resource charges. The host component is separate
+  from the full pinned Manager/GPU gate. A CPU verbs fault control uses actual
+  TCP framing to show that a source MR-destroy failure can arrive as an ordinary
+  backend error while the requester is locally drained: source backing,
+  admission/staging charges and pending source close remain retained.
+  The source/CPU and two-node host results still require independent acceptance;
+  current consumer Manager/GPU qualification needs CUDA 13. Supplied driver535
+  nodes cannot supply that gate, and old CUDA 12.2 consumer pilots remain
+  historical. Source/requester physical RNIC faults, lost DONE/ACK qualification,
+  installed serving, endpoint caching, zero-copy, GDR and multirail stay open.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -621,9 +639,10 @@ and independent acceptance remain separate states.
 ## Immediate next delivery
 
 P2.3's source/H20 TCP pilot has independent review and rerun evidence; installed
-consumer qualification remains open. Next connect the host-RDMA consumer path to these same
-allocation, source-grant and completion owners, including real fault/drain gates;
-review P4.1/P5.1 staging on P1.4's owners before extending its hardware claims.
+consumer qualification remains open. Review P4.2a's explicit RDMA consumer and
+its source/host component evidence before accepting dependent work. Then close
+its CUDA 13 pinned Manager and physical native-fault/drain gates; preserve
+P4.1/P5.1 owners before expanding registrations, endpoints or hardware claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
 [CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
 the transfer notification mailbox remains a separate API contract.
