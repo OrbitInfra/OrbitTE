@@ -20,7 +20,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA and
+[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA, P4.4 slice progress, P4.5 local MR reuse and
 P4.1/P5.1 RDMA/CUDA staging paths. P1.5 adds the opt-in consumer allocation
 bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.4 implemented with scoped native acceptance; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.4 scoped native acceptance; P4.5 implemented pending native acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -451,9 +451,28 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Source `e04e381` passes independent CPU gates and fourteen two-host native
   cases with exact CQ/byte/post counts, folded tails and windows 1/2/3/4/8.
   See the scoped [qualification and external evidence](rdma-cuda.md#bounded-slice-and-wr-progress-qualification).
-- [ ] Complete automatic device/port/GID and topology discovery plus persistent
-  MR/endpoint-store ownership. Explicit provider FFI, shared context/PD,
-  per-request MR/QP/CQ lifecycle and fenced bootstrap are implemented above.
+- [x] **P4.5 — persistent requester local-only host MRs (Implemented;
+  native qualification and independent acceptance pending).** Following frozen
+  TENT's independent registered-buffer/PD owner, a bounded cache reuses a full
+  registered HostMemory view with LOCAL_WRITE permission only. Actual identity,
+  backing and device survive Creating/Ready/retiring/closing states; physical
+  count/full-view byte limits include in-flight creation and closing. Same-view
+  creation is single-flight, idle entries use LRU eviction, and each borrower
+  separately retains its exact allocation-relative DMA range. Idle MRs allow
+  CPU access. Final unregister revokes lookup before retirement; accepted work
+  can finish without resurrecting an idle entry. Deregistration failure retains
+  real owners/charges and poisons admission without retry. Shared-deadline close
+  drains cached MRs before PD; waits on other creators/closers remain bounded.
+  CPU controls cover real-owner release/retention, aliases, duplicate refs,
+  unregister/creation races, timeout, capacity, concurrent close and SGEs whose
+  request base differs from MR base. Source remote-permission MRs stay exact
+  and per request to preserve rkey revocation. This does not add source MR reuse,
+  endpoint/QP/CQ pooling, shared progress, GPU MR/GDR or complete P4.
+- [ ] Complete connected endpoint-store ownership and shared CQ/SQ progress,
+  including source authority/revocation and endpoint incarnation contracts.
+  P4.5 caches only requester local MRs; QP/CQ and source grants stay per request.
+- [ ] Complete automatic device/port/GID and topology discovery. Explicit
+  provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete shared polling/event progress and backend cancellation for
   fragmented transfers. P4.4 implements adaptive READ/WRITE slices, exact CQ
   byte/error accounting and partial-post controls in exclusive windows;
@@ -744,8 +763,10 @@ gates remain unqualified.
 P4.4 establishes multi-WR completion and quota ownership before resources become
 persistent. Its independent CPU controls and fourteen healthy native cases
 accept adapted/folded slices, bounded windows and complete normal release for
-the declared profile. Next continue within P4 to persistent MR and endpoint-store
-ownership, shared progress, device/topology discovery and multirail. Follow the frozen
+the declared profile. P4.5 adds bounded requester local-only MR reuse and
+retirement; its native and independent gates must pass before dependent work.
+Next continue within P4 to connected endpoint-store ownership, source-rkey
+authority/revocation, shared progress, device/topology discovery and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.

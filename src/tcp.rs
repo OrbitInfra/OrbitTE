@@ -359,8 +359,13 @@ fn rdma_transfer(
             .rdma
             .as_ref()
             .ok_or(Error::Unavailable("RDMA is not configured"))?;
-        let mut endpoint =
-            runtime.endpoint(&request.local, request.local_offset, request.length, 0)?;
+        let mut endpoint = runtime.endpoint(
+            &request.local,
+            request.local_offset,
+            request.length,
+            0,
+            deadline,
+        )?;
         let transfer = (|| {
             if operation == TransferOp::Write {
                 endpoint.fill(&request.local, request.local_offset)?;
@@ -435,7 +440,13 @@ fn rdma_serve(
         .as_ref()
         .ok_or(Error::Unavailable("RDMA is not configured"))?;
     let writing = request.operation == Operation::RdmaWrite;
-    let mut endpoint = runtime.endpoint(memory, offset, length, if writing { 2 } else { 1 })?;
+    let mut endpoint = runtime.endpoint(
+        memory,
+        offset,
+        length,
+        if writing { 2 } else { 1 },
+        channel.deadline,
+    )?;
     let transfer = (|| {
         if !writing {
             endpoint.fill(memory, offset)?;

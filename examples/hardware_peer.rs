@@ -119,6 +119,20 @@ fn finish(
     let expect_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
+    let cached = role == "requester" && expect_direct;
+    let idle = engine
+        .stats()?
+        .rdma
+        .ok_or(Error::Internal("missing RDMA counters"))?;
+    if idle.persistent_mrs != usize::from(cached)
+        || idle.persistent_mr_bytes != if cached { memory.len() } else { 0 }
+        || idle.opened_persistent_mrs != u64::from(cached)
+        || idle.reused_persistent_mrs != if cached { 5 } else { 0 }
+        || idle.evicted_persistent_mrs != 0
+        || idle.retained_persistent_mrs != 0
+    {
+        return Err(Error::Internal("persistent MR reuse counters differ"));
+    }
     engine.close(TIMEOUT)?;
     engine.unregister_memory(&memory)?;
     drop(memory);
@@ -132,6 +146,9 @@ fn finish(
         || stats.active_source_operations != 0
         || rdma.active_devices != 0
         || rdma.retained_devices != 0
+        || rdma.persistent_mrs != 0
+        || rdma.persistent_mr_bytes != 0
+        || rdma.retained_persistent_mrs != 0
         || rdma.active_endpoints != 0
         || rdma.staging_bytes != 0
         || rdma.direct_bytes != 0
@@ -155,7 +172,12 @@ fn finish(
         return Err(Error::Internal("CUDA resources were retained"));
     }
     println!(
-        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{},\"completed_rdma_read_bytes\":{},\"completed_rdma_write_bytes\":{},\"work_requests\":0,\"retained_work_requests\":0,\"peak_work_requests\":{},\"posted_work_requests\":{},\"post_calls\":{},\"partial_posts\":0,\"uncertain_posts\":0,\"completion_errors\":0}}",
+        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"persistent_mrs\":0,\"persistent_mr_bytes\":0,\"retained_persistent_mrs\":0,\"idle_persistent_mrs\":{},\"idle_persistent_mr_bytes\":{},\"opened_persistent_mrs\":{},\"reused_persistent_mrs\":{},\"evicted_persistent_mrs\":{},\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{},\"completed_rdma_read_bytes\":{},\"completed_rdma_write_bytes\":{},\"work_requests\":0,\"retained_work_requests\":0,\"peak_work_requests\":{},\"posted_work_requests\":{},\"post_calls\":{},\"partial_posts\":0,\"uncertain_posts\":0,\"completion_errors\":0}}",
+        idle.persistent_mrs,
+        idle.persistent_mr_bytes,
+        rdma.opened_persistent_mrs,
+        rdma.reused_persistent_mrs,
+        rdma.evicted_persistent_mrs,
         rdma.opened_devices,
         rdma.opened_direct_endpoints,
         rdma.completed_reads,

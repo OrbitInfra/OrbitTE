@@ -262,9 +262,17 @@ impl TransferEngine {
     /// Removes one explicit registration reference; the final reference removes
     /// visibility for new remote requests. Already admitted requests and
     /// local handles keep the allocation and its budget charge until last use.
+    /// Final unregister also retires a cached local RDMA MR. An idle MR is
+    /// destroyed here; failure returns `Unquiesced` after lookup visibility has
+    /// already been removed. Admitted borrowers finish retiring it on release.
     /// Call `close_source` to establish source-handler quiescence first.
     pub fn unregister_memory(&self, memory: &RegisteredMemory) -> Result<()> {
-        self.source.registry.unregister(memory)
+        self.source.registry.unregister(memory)?;
+        #[cfg(feature = "rdma")]
+        if let Some(runtime) = &self.source.rdma {
+            runtime.registrations.retire(memory)?;
+        }
+        Ok(())
     }
 
     /// Open/refresh using an epoch supplied by the authoritative source owner.
@@ -339,7 +347,10 @@ impl TransferEngine {
                         .as_ref()
                         .ok_or(Error::Unavailable("RDMA is not configured"))?;
                     let usage = runtime.stats()?;
-                    if usage.retained_endpoints != 0 || usage.retained_devices != 0 {
+                    if usage.retained_endpoints != 0
+                        || usage.retained_devices != 0
+                        || usage.retained_persistent_mrs != 0
+                    {
                         return Err(Error::Unavailable("RDMA retained native resources"));
                     }
                 }
@@ -631,7 +642,7 @@ impl TransferEngine {
         self.close_requester_until(deadline)?;
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
-            runtime.close()?;
+            runtime.close(deadline)?;
         }
         Ok(())
     }

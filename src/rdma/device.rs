@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 use super::{Endpoint, RdmaConfig, RdmaStats, check, sys};
-use crate::{Error, Result};
+use crate::{Error, RegisteredMemory, Result};
 
 /// The context/PD belongs to one runtime and outlives every CQ, QP and MR.
 pub(super) struct Device {
@@ -73,6 +73,30 @@ impl Device {
             return Err(error);
         }
         Ok(owner)
+    }
+
+    pub(super) fn register_local(
+        &self,
+        handles: &mut sys::Handles,
+        memory: &RegisteredMemory,
+    ) -> Result<()> {
+        let address = memory.host_address()?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        // SAFETY: the MR owner retains the exact registration and actual Device.
+        check("ibv_reg_mr", unsafe {
+            (self.verbs.register_local)(
+                handles,
+                &resources.handles,
+                address.as_ptr().cast(),
+                memory.len(),
+            )
+        })
     }
 
     pub(super) fn open_endpoint(

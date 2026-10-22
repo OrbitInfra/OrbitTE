@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use super::*;
 use crate::rdma::{Runtime, tests::FakeDevice, tests::runtime};
 use std::sync::Barrier;
@@ -50,11 +52,15 @@ fn slices_reuse_one_device_and_explicit_close_is_permanent() {
         1
     );
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
-    runtime.close().unwrap();
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
     let closed = events.lock().unwrap().clone();
     assert_eq!(&closed[closed.len() - 2..], &["dealloc_pd", "close_device"]);
-    runtime.close().unwrap();
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
     assert!(matches!(
         runtime.staging_endpoint(8, 0),
         Err(Error::Unavailable(_))
@@ -121,7 +127,9 @@ fn concurrent_slices_and_closers_construct_and_destroy_device_once() {
     let mut closers = Vec::new();
     for _ in 0..8 {
         let runtime = Arc::clone(&runtime);
-        closers.push(thread::spawn(move || runtime.close()));
+        closers.push(thread::spawn(move || {
+            runtime.close(Instant::now() + Duration::from_secs(2))
+        }));
     }
     for closer in closers {
         closer.join().unwrap().unwrap();
@@ -143,7 +151,9 @@ fn device_teardown_failures_are_retained_without_retry_from_close_or_drop() {
         let mut closers = Vec::new();
         for _ in 0..4 {
             let runtime = Arc::clone(&runtime);
-            closers.push(thread::spawn(move || runtime.close()));
+            closers.push(thread::spawn(move || {
+                runtime.close(Instant::now() + Duration::from_secs(2))
+            }));
         }
         for closer in closers {
             assert!(
@@ -216,9 +226,14 @@ fn partial_device_construction_cleans_up_or_poison_retains_its_charge() {
                 runtime.staging_endpoint(8, 0),
                 Err(Error::Unavailable(_))
             ));
-            assert!(matches!(runtime.close(), Err(Error::Unquiesced { .. })));
+            assert!(matches!(
+                runtime.close(Instant::now() + Duration::from_secs(2)),
+                Err(Error::Unquiesced { .. })
+            ));
         } else {
-            runtime.close().unwrap();
+            runtime
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
         }
     }
 }
@@ -228,7 +243,10 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     let runtime = runtime("ok");
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     let events = events(&runtime);
-    assert!(matches!(runtime.close(), Err(Error::Timeout)));
+    assert!(matches!(
+        runtime.close(Instant::now() + Duration::from_secs(2)),
+        Err(Error::Timeout)
+    ));
     assert!(matches!(
         runtime.staging_endpoint(1, 0),
         Err(Error::Unavailable(_)) | Err(Error::ResourceExhausted)
@@ -236,8 +254,13 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
     endpoint.close().unwrap();
     // Closed endpoints still retain their stable output and the device until drop.
-    assert!(matches!(runtime.close(), Err(Error::Timeout)));
+    assert!(matches!(
+        runtime.close(Instant::now() + Duration::from_secs(2)),
+        Err(Error::Timeout)
+    ));
     drop(endpoint);
-    runtime.close().unwrap();
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
 }

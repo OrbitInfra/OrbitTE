@@ -9,6 +9,7 @@ pub(crate) struct FakeDevice {
     mode: String,
     pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
     endpoints: std::sync::atomic::AtomicUsize,
+    local_mrs: std::sync::atomic::AtomicUsize,
     pub(crate) pause: Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>,
 }
 
@@ -20,6 +21,7 @@ struct Fake {
     operation: i32,
     closed: usize,
     completions: std::collections::VecDeque<sys::Completion>,
+    borrowed_mr: bool,
 }
 
 // CPU ABI controls, not a device emulator or proof that DMA completed.
@@ -32,6 +34,7 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
         mode,
         events: Arc::new(Mutex::new(vec!["open_device"])),
         endpoints: std::sync::atomic::AtomicUsize::new(0),
+        local_mrs: std::sync::atomic::AtomicUsize::new(0),
         pause: Arc::default(),
     }));
     unsafe {
@@ -46,6 +49,47 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
         }
     }
     0
+}
+
+struct FakeMr {
+    device: *const FakeDevice,
+    address: usize,
+    length: usize,
+}
+
+unsafe extern "C" fn register_local(
+    h: *mut sys::Handles,
+    device: *const sys::DeviceHandles,
+    address: *mut c_void,
+    length: usize,
+) -> c_int {
+    let device = unsafe { &*(*device).context.cast::<FakeDevice>() };
+    device.events.lock().unwrap().push("register_local");
+    device
+        .local_mrs
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    unsafe {
+        (*h).mr = Box::into_raw(Box::new(FakeMr {
+            device,
+            address: address as usize,
+            length,
+        }))
+        .cast();
+    }
+    if device.mode == "register_pause" {
+        let (lock, changed) = &*device.pause;
+        let mut state = lock.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    }
+    if device.mode.starts_with("register_fail") {
+        libc::EIO
+    } else {
+        0
+    }
 }
 
 unsafe extern "C" fn open(
@@ -66,6 +110,13 @@ unsafe extern "C" fn open(
         .endpoints
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let failing = device.mode.starts_with("open");
+    let borrowed_mr = unsafe { !(*h).mr.is_null() };
+    if borrowed_mr {
+        let mr = unsafe { &*(*h).mr.cast::<FakeMr>() };
+        assert!(
+            bytes as usize >= mr.address && (bytes as usize + length) <= mr.address + mr.length
+        );
+    }
     let state = Box::into_raw(Box::new(Fake {
         mode: device.mode.clone(),
         device,
@@ -74,11 +125,14 @@ unsafe extern "C" fn open(
         operation: 0,
         closed: 0,
         completions: std::collections::VecDeque::new(),
+        borrowed_mr,
     }));
     unsafe {
         (*h).cq = state.cast();
         (*h).qp = std::ptr::dangling_mut::<u8>().cast();
-        (*h).mr = std::ptr::dangling_mut::<u8>().cast();
+        if !borrowed_mr {
+            (*h).mr = std::ptr::dangling_mut::<u8>().cast();
+        }
         *descriptor = Descriptor {
             address: bytes as u64,
             rkey: 7,
@@ -107,6 +161,8 @@ unsafe extern "C" fn post(
     h: *mut sys::Handles,
     requests: *const sys::WorkRequest,
     count: usize,
+    local: u64,
+    local_length: usize,
     remote: u64,
     _: u32,
     write: c_int,
@@ -114,6 +170,8 @@ unsafe extern "C" fn post(
 ) -> c_int {
     let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
     state.operation = write;
+    assert_eq!(local, state.bytes as u64);
+    assert_eq!(local_length, state.length);
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
     let partial = state.mode.starts_with("partial");
     let uncertain = state.mode.contains("unknown") || state.mode == "copy_post";
@@ -214,7 +272,18 @@ unsafe fn close(h: *mut sys::Handles, index: usize) -> c_int {
         return 0;
     }
     let state = unsafe { &mut *state_pointer };
-    assert_eq!(state.closed, index, "endpoint dependencies close in order");
+    assert_eq!(
+        state.closed,
+        if state.borrowed_mr && index == 2 {
+            1
+        } else {
+            index
+        },
+        "endpoint dependencies close in order"
+    );
+    if index == 1 {
+        assert!(!state.borrowed_mr);
+    }
     let device = unsafe { &*state.device };
     device
         .events
@@ -241,6 +310,34 @@ unsafe extern "C" fn qp(h: *mut sys::Handles) -> c_int {
     unsafe { close(h, 0) }
 }
 unsafe extern "C" fn mr(h: *mut sys::Handles) -> c_int {
+    if unsafe { (*h).cq.is_null() } {
+        if unsafe { (*h).mr.is_null() } {
+            return 0;
+        }
+        let state = unsafe { &*(*h).mr.cast::<FakeMr>() };
+        let device = unsafe { &*state.device };
+        device.events.lock().unwrap().push("deregister_local");
+        if device.mode.ends_with("close1") || device.mode == "mr_close" {
+            return 16;
+        }
+        if device.mode == "mr_close_pause" {
+            let (lock, changed) = &*device.pause;
+            let mut state = lock.lock().unwrap();
+            state.0 = true;
+            changed.notify_all();
+            while !state.1 {
+                state = changed.wait(state).unwrap();
+            }
+        }
+        unsafe {
+            device
+                .local_mrs
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            drop(Box::from_raw((*h).mr.cast::<FakeMr>()));
+            (*h).mr = std::ptr::null_mut();
+        }
+        return 0;
+    }
     unsafe { close(h, 1) }
 }
 unsafe extern "C" fn cq(h: *mut sys::Handles) -> c_int {
@@ -253,6 +350,11 @@ unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
     }
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
     assert_eq!(state.endpoints.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        state.local_mrs.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "MRs close before PD"
+    );
     state.events.lock().unwrap().push("dealloc_pd");
     if matches!(state.mode.as_str(), "close3" | "device_pd_close") {
         return 16;
@@ -280,6 +382,7 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
 }
 static VERBS: sys::Verbs = sys::Verbs {
     open_device,
+    register_local,
     open,
     connect,
     post,
@@ -295,19 +398,23 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
         Some(mode) => (RdmaHostMemory::Direct, mode),
         None => (RdmaHostMemory::Staged, mode),
     };
+    let config = RdmaConfig {
+        max_endpoints: 1,
+        max_staging_bytes: 8,
+        host_memory,
+        max_direct_bytes: 8,
+        block_size: if mode == "pause_copy" { 2 } else { 64 << 10 },
+        max_send_wr: if mode == "pause_copy" { 2 } else { 16 },
+        ..RdmaConfig::new(mode)
+    };
+    let usage = Arc::default();
+    let registrations = registration::HostRegistrations::new(&config, Arc::clone(&usage), &VERBS);
     Runtime {
-        config: RdmaConfig {
-            max_endpoints: 1,
-            max_staging_bytes: 8,
-            host_memory,
-            max_direct_bytes: 8,
-            block_size: if mode == "pause_copy" { 2 } else { 64 << 10 },
-            max_send_wr: if mode == "pause_copy" { 2 } else { 16 },
-            ..RdmaConfig::new(mode)
-        },
-        usage: Arc::default(),
+        config,
+        usage,
         verbs: &VERBS,
         device: Mutex::default(),
+        registrations,
     }
 }
 
@@ -322,7 +429,13 @@ impl Runtime {
             vec![0; length.max(1)].into_boxed_slice(),
             crate::Permission::LocalOnly,
         )?;
-        self.endpoint(&memory, 0, length, permission)
+        self.endpoint(
+            &memory,
+            0,
+            length,
+            permission,
+            Instant::now() + Duration::from_secs(2),
+        )
     }
 }
 
@@ -386,6 +499,14 @@ fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
     for config in [
         RdmaConfig::new(""),
         RdmaConfig::new("x\0y"),
+        RdmaConfig {
+            max_cached_mrs: 0,
+            ..RdmaConfig::new("x")
+        },
+        RdmaConfig {
+            max_cached_mr_bytes: 0,
+            ..RdmaConfig::new("x")
+        },
         RdmaConfig {
             max_endpoints: 0,
             ..RdmaConfig::new("x")
@@ -488,7 +609,11 @@ fn teardown_failure_retains_exact_staging_and_blocks_new_admission() {
             runtime.staging_endpoint(1, 0),
             Err(Error::Unavailable(_))
         ));
-        assert!(runtime.close().is_err());
+        assert!(
+            runtime
+                .close(Instant::now() + Duration::from_secs(2))
+                .is_err()
+        );
         let events = super::device::tests::events(&runtime);
         let usage = Arc::clone(&runtime.usage);
         drop(runtime);
@@ -508,8 +633,12 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
         .unwrap();
     let mut runtime = runtime("direct:ok");
     runtime.config.max_endpoints = 3;
-    let mut first = runtime.endpoint(&memory, 3, 5, 1).unwrap();
-    let mut second = runtime.endpoint(&memory, 13, 3, 2).unwrap();
+    let mut first = runtime
+        .endpoint(&memory, 3, 5, 1, Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    let mut second = runtime
+        .endpoint(&memory, 13, 3, 2, Instant::now() + Duration::from_secs(2))
+        .unwrap();
     assert_eq!(first.descriptor().address, memory.base_address() + 3);
     assert_eq!(second.descriptor().address, memory.base_address() + 13);
     let resources = first.resources.as_ref().unwrap();
@@ -519,7 +648,7 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
         (memory.base_address() + 3, 5)
     );
     assert!(matches!(
-        runtime.endpoint(&memory, 9, 1, 0),
+        runtime.endpoint(&memory, 9, 1, 0, Instant::now() + Duration::from_secs(2)),
         Err(Error::ResourceExhausted)
     ));
     memory.write(9, &[7]).unwrap();
@@ -548,7 +677,9 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
     second.close().unwrap();
     drop(second);
     assert_eq!(runtime.stats().unwrap().direct_bytes, 0);
-    runtime.close().unwrap();
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
 }
 
 #[test]
@@ -571,7 +702,7 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
             .register_host(allocation.clone(), 4, 8, crate::Permission::RemoteReadWrite)
             .unwrap();
         let runtime = runtime(&format!("direct:{mode}"));
-        let result = runtime.endpoint(&memory, 2, 4, 2);
+        let result = runtime.endpoint(&memory, 2, 4, 2, Instant::now() + Duration::from_secs(2));
         let retained = mode.contains("close");
         match result {
             Ok(mut endpoint) => {
@@ -608,14 +739,20 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
                 .register(vec![0; 8].into_boxed_slice(), crate::Permission::LocalOnly)
                 .unwrap();
             assert!(matches!(
-                runtime.endpoint(&probe, 0, 1, 0),
+                runtime.endpoint(&probe, 0, 1, 0, Instant::now() + Duration::from_secs(2)),
                 Err(Error::Unavailable(_))
             ));
-            assert!(runtime.close().is_err());
+            assert!(
+                runtime
+                    .close(Instant::now() + Duration::from_secs(2))
+                    .is_err()
+            );
         } else {
             assert_eq!(registry.usage().unwrap(), (0, 0));
             allocation.write(6, &[9; 4]).unwrap();
-            runtime.close().unwrap();
+            runtime
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
         }
         drop(allocation);
         drop(runtime);
@@ -654,7 +791,9 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         runtime.config.max_direct_bytes = 128;
         runtime.config.block_size = 16;
         runtime.config.max_send_wr = 4;
-        let mut endpoint = runtime.endpoint(&memory, 0, 128, 0).unwrap();
+        let mut endpoint = runtime
+            .endpoint(&memory, 0, 128, 0, Instant::now() + Duration::from_secs(2))
+            .unwrap();
         let remote = endpoint.descriptor();
         endpoint.connect(&remote).unwrap();
         let result = endpoint.transfer(
@@ -671,6 +810,9 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         assert_eq!(stats.work_requests, owed, "{mode}");
         assert_eq!(stats.peak_work_requests, 4);
         assert_eq!(stats.post_calls, if mode == "reverse" { 2 } else { 1 });
+        if mode.ends_with("close1") {
+            registry.unregister(&memory).unwrap();
+        }
         assert_eq!(endpoint.close().is_err(), retained, "{mode}");
         let stats = runtime.stats().unwrap();
         assert_eq!(stats.work_requests, if retained { owed } else { 0 });
@@ -683,11 +825,17 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
                 memory.write(127, &[9]),
                 Err(Error::Unavailable(_))
             ));
-            assert!(runtime.close().is_err());
+            assert!(
+                runtime
+                    .close(Instant::now() + Duration::from_secs(2))
+                    .is_err()
+            );
         } else {
             memory.write(127, &[9]).unwrap();
             drop(endpoint);
-            runtime.close().unwrap();
+            runtime
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
         }
     }
 }

@@ -71,7 +71,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         qp_context: (&mut state as *mut Posted).cast(),
         ..ffi::ibv_qp::default()
     };
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; 64];
     let mut mr = ffi::ibv_mr {
         addr: bytes.as_mut_ptr().cast(),
         length: bytes.len(),
@@ -107,6 +107,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                 &mut handles,
                 requests.as_ptr(),
                 requests.len(),
+                bytes.as_ptr() as u64 + 16,
+                32,
                 0x123456789,
                 0xabcdef,
                 0,
@@ -146,6 +148,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                         &mut handles,
                         requests.as_ptr(),
                         requests.len(),
+                        bytes.as_ptr() as u64 + 16,
+                        32,
                         0x123456789,
                         0xabcdef,
                         write,
@@ -167,7 +171,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                             ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
                         },
                         flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
-                        address: bytes.as_ptr() as u64 + u64::from(request.offset),
+                        address: bytes.as_ptr() as u64 + 16 + u64::from(request.offset),
                         length: request.length,
                         lkey: mr.lkey,
                         remote_address: 0x123456789 + u64::from(request.offset),
@@ -191,7 +195,44 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         },
     ] {
         assert_eq!(
-            unsafe { post(&mut handles, &invalid, 1, 0x100, 7, 0, &mut result) },
+            unsafe {
+                post(
+                    &mut handles,
+                    &invalid,
+                    1,
+                    bytes.as_ptr() as u64 + 16,
+                    32,
+                    0x100,
+                    7,
+                    0,
+                    &mut result,
+                )
+            },
+            libc::EINVAL
+        );
+        assert_eq!((result.accepted, result.uncertain), (0, false));
+        assert!(state.requests.is_empty());
+    }
+    for (base, length) in [
+        (bytes.as_ptr() as u64 - 1, 32),
+        (bytes.as_ptr() as u64 + 48, 32),
+        (bytes.as_ptr() as u64 + 16, 0),
+    ] {
+        state.requests.clear();
+        assert_eq!(
+            unsafe {
+                post(
+                    &mut handles,
+                    requests.as_ptr(),
+                    requests.len(),
+                    base,
+                    length,
+                    0x100,
+                    7,
+                    0,
+                    &mut result,
+                )
+            },
             libc::EINVAL
         );
         assert_eq!((result.accepted, result.uncertain), (0, false));

@@ -70,6 +70,8 @@ pub(super) struct PostResult {
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
+    pub register_local:
+        unsafe extern "C" fn(*mut Handles, *const DeviceHandles, *mut c_void, usize) -> c_int,
     pub open: unsafe extern "C" fn(
         *mut Handles,
         *const DeviceHandles,
@@ -94,6 +96,8 @@ pub(super) struct Verbs {
     pub post: unsafe extern "C" fn(
         *mut Handles,
         *const WorkRequest,
+        usize,
+        u64,
         usize,
         u64,
         u32,
@@ -146,6 +150,30 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
             return failure();
         }
         0
+    }
+}
+
+unsafe extern "C" fn register_local(
+    handles: *mut Handles,
+    device: *const DeviceHandles,
+    buffer: *mut c_void,
+    length: usize,
+) -> c_int {
+    // SAFETY: the MR owner retains the device and entire host registration.
+    // LOCAL_WRITE permits local READ destinations without any remote access.
+    unsafe {
+        (*handles).mr = ffi::ibv_reg_mr(
+            (*device).pd.cast(),
+            buffer,
+            length,
+            ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0 as c_int,
+        )
+        .cast();
+        if (*handles).mr.is_null() {
+            failure()
+        } else {
+            0
+        }
     }
 }
 
@@ -209,9 +237,13 @@ unsafe extern "C" fn open(
         if permission & 2 != 0 {
             access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
         }
-        h.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
         if h.mr.is_null() {
-            return failure();
+            h.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
+            if h.mr.is_null() {
+                return failure();
+            }
+        } else if permission != 0 {
+            return libc::EINVAL;
         }
         let mut init: ffi::ibv_qp_init_attr = std::mem::zeroed();
         init.send_cq = h.cq.cast();
@@ -318,6 +350,8 @@ unsafe extern "C" fn post(
     h: *mut Handles,
     requests: *const WorkRequest,
     count: usize,
+    local_address: u64,
+    local_length: usize,
     address: u64,
     rkey: u32,
     write: c_int,
@@ -336,6 +370,17 @@ unsafe extern "C" fn post(
             return libc::EOPNOTSUPP;
         };
         let mr = &*h.mr.cast::<ffi::ibv_mr>();
+        let Some(local_offset) = local_address.checked_sub(mr.addr as u64) else {
+            return libc::EINVAL;
+        };
+        if local_length == 0
+            || local_address.checked_add(local_length as u64).is_none()
+            || local_offset
+                .checked_add(local_length as u64)
+                .is_none_or(|end| end > mr.length as u64)
+        {
+            return libc::EINVAL;
+        }
         let requests = std::slice::from_raw_parts(requests, count);
         let mut sges = Vec::new();
         let mut wrs = Vec::new();
@@ -346,11 +391,11 @@ unsafe extern "C" fn post(
             if request.length == 0
                 || (request.offset as usize)
                     .checked_add(request.length as usize)
-                    .is_none_or(|end| end > mr.length)
+                    .is_none_or(|end| end > local_length)
             {
                 return libc::EINVAL;
             }
-            let Some(local) = (mr.addr as u64).checked_add(u64::from(request.offset)) else {
+            let Some(local) = local_address.checked_add(u64::from(request.offset)) else {
                 return libc::EINVAL;
             };
             let Some(remote) = address.checked_add(u64::from(request.offset)) else {
@@ -458,6 +503,7 @@ destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
     open_device,
+    register_local,
     open,
     connect,
     post,

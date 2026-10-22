@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.4/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.5/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -61,7 +61,9 @@ NVLink, device MR support or a new completed parity row.
 Set `EngineConfig.rdma = Some(RdmaConfig::new("mlx5_0"))` and explicitly choose
 the port/GID index, traffic class, hop limit and endpoint/direct/staging budgets.
 `RdmaConfig.host_memory` defaults to `RdmaHostMemory::Direct`: actual DRAM and
-CUDA-pinned host ranges become exact per-request native MRs. Set it to `Staged`
+CUDA-pinned host ranges use actual application backing. Requesters reuse a
+local-only MR for the full registered view; source grants register only the
+requested range for each request. Set it to `Staged`
 for private host copies. `max_direct_bytes` and `max_staging_bytes` separately
 bound each engine's charged native bytes (64 MiB each by default); both share
 `max_endpoints`. A failed host MR registration is an error, never a staging
@@ -98,9 +100,10 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
-engines do not share PDs. Every request still owns its CQ/QP/MR and stable host
-staging or exact direct host range, with independent permissions, rkey, QP and
-PSN. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
+engines do not share PDs. Every request owns its CQ/QP, exact direct range
+lease or stable staging. Source-grant and staging MRs remain per request, with
+independent permissions, rkey, QP and PSN. P4.5 requester local-only host MRs
+outlive the request QP/CQ and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
 
 This follows the frozen TENT `e2d6e8e0` hierarchy in
@@ -109,9 +112,49 @@ outlive their endpoints and memory registrations. `LocalBufferManager` passes
 application buffer addresses and lengths to each context's `registerMemReg`;
 P4.3 establishes that direct host path with stricter exact-request MR extents
 and retained failure owners. It does not copy TENT's removal behavior that can
-erase an owner after failed deregistration. TENT's persistent MRs, pooled CQs
-and endpoint store remain future P4 work. Each request currently registers and
-destroys its own MR/QP/CQ. Resource reuse alone is no performance result.
+erase an owner after failed deregistration. P4.5 follows TENT's independent
+registered-buffer owner and separates local MR lifetime from endpoint lifetime.
+Pooled CQs, connected endpoint reuse and shared worker progress remain future
+P4 work. Resource reuse alone is no performance result.
+
+The persistent cache uses actual `RegisteredMemory` identity within one PD,
+registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` only, and
+retains its real allocation and device. `max_cached_mrs` and
+`max_cached_mr_bytes` bound physical count and full-view bytes (defaults 64 and
+64 MiB), independently of exact active DMA bytes. Creating, closing and retained
+MRs remain charged. Idle entries are evicted in least-recently-used order;
+borrowed or creating entries cannot be evicted. A view larger than the byte
+budget or a cache full of busy owners returns `ResourceExhausted`; registration
+errors never trigger staging. Concurrent callers share one in-progress
+registration. Waiting for another creator uses the existing request deadline;
+a timed-out waiter returns only its own reservation and exact DMA lease.
+Native register/deregister executes outside the cache lock.
+
+An idle MR holds no DMA exclusion lease, so normal CPU access stays available.
+Each request independently retains its exact allocation-relative range through
+all slices and successful native teardown. QP destruction precedes return of
+its cached-MR borrow; CPU exclusion is released only after the complete endpoint
+close succeeds. Posting validates the request-local base and length inside the
+larger MR, and constructs local SGEs relative to that request base. Remote
+addresses remain relative to the source grant.
+
+Final explicit unregister removes lookup visibility and marks the identity
+inactive before retiring its cached MR. Duplicate registration references keep
+it active until the final unregister. Already resolved work may finish with its
+retained identity; an in-progress or borrowed MR becomes retiring and cannot
+return to idle residency. A new registration at the same address has a distinct
+identity. Idle retirement performs native deregistration immediately, so
+`unregister_memory` can return `Unquiesced` after visibility was already removed.
+That error does not restore visibility or authorize a second unregister to retry
+native cleanup. Failed deregistration retains the real MR/backing/device and
+full physical charge, poisons further RDMA admission, and is never retried by
+close or Drop.
+
+Source-grant MRs deliberately retain exact per-request remote permissions and
+revocation through native deregistration. A requester cached MR has no remote
+read/write permission. Persisting source remote rkeys requires its own authority
+and revocation contract before endpoint reuse; a local reference count is not
+that proof.
 
 Canonical `HostMemory` owns raw stable backing and a range-access authority.
 Direct leases use allocation-relative ranges and retain the exact
@@ -130,7 +173,8 @@ select host direct or staging. Device pointers always use declared staging.
 The requester exchanges validated descriptors, connects its RC QP and posts
 bounded windows of signaled slice WRs. After all required CQ identities,
 opcodes/statuses and READ byte counts pass, it destroys
-QP/MR/CQ and releases any direct range lease before sending DONE. The source
+its QP, returns the local cached-MR borrow (or destroys its private MR), then
+closes its CQ and releases any direct range lease before sending DONE. The source
 then destroys its own handles and releases its direct lease, or commits WRITE
 staging, before its final ACK. Requester READ staging copies back after ACK.
 
@@ -148,7 +192,7 @@ QP capabilities must cover that many signaled WRs. One window must finish
 before the next is posted. WR IDs remain unique across the entire request.
 RDMA READ credit stays at one; SQ/CQ capacity is not a claim of simultaneous
 READ credit or throughput. Window metadata is bounded to at most 64 slices.
-Port/rail discovery, shared progress and persistent resources remain open.
+Port/rail discovery, connected endpoint reuse and shared progress remain open.
 
 Before a post dispatch, all window slots become charged. A known `bad_wr`
 identity proves only an accepted prefix and an unposted suffix. A null/foreign
@@ -194,7 +238,8 @@ staging and context. Failed native frees retain resources and their driver.
 ## Failure, drain and resource ownership
 
 Endpoint count, registered direct host bytes and staging bytes stay bounded
-per engine. Each request tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+per engine. Each request tears down QP -> MR borrow/private MR -> CQ, stopping
+on the first error. Failed teardown
 retains the remaining handles, actual staging or direct registration/allocation
 lease, its real shared device reference and budgets; later RDMA admission is
 rejected. Even dropping the engine cannot destroy a context/PD still retained
@@ -204,7 +249,10 @@ by an endpoint.
 both before waiting, and gives their accepted operations one shared drain
 deadline. Already accepted work can still create its endpoints during this drain;
 closing admission does not cancel it. Once both owners are drained, the runtime
-permanently closes device admission, then explicitly destroys PD -> context.
+permanently closes device admission, drains and destroys cached local MRs,
+then explicitly destroys PD -> context. Waiting for another MR creator or
+closer uses the same absolute deadline. Timeout preserves the actual owner,
+its charge and the PD; a later close can continue waiting.
 Concurrent/repeated callers serialize native destruction. A timeout leaves both
 admissions closed and the device live; another call can continue waiting.
 Native teardown failure retains the actual resources, remains charged, returns
@@ -229,6 +277,11 @@ of application commit/notification results. `direct_bytes` remains charged
 through endpoint-owner release (or forever on unquiesced retention);
 `opened_direct_endpoints` counts successfully constructed direct host endpoints.
 Staging-only or device-staged peers report zero direct opens.
+`persistent_mrs`/`persistent_mr_bytes` count cached local-only physical owners,
+including creation/closing/retention; `retained_persistent_mrs` records failed
+cleanup. Successful creation, cache reuse and idle eviction have separate
+cumulative counters. These do not count source-grant or staging MRs. Successful
+whole-engine close requires zero remaining persistent MRs before PD release.
 
 `Error::Unquiesced` means a backend could not prove termination/teardown. A
 synchronous report or async task/group can be logically failed with
@@ -405,6 +458,9 @@ bytes and successful requester WR counts, closes the whole engine, then
 unregisters/releases memory and checks zero remaining registrations, workers,
 shared RDMA devices, endpoints, direct/staging bytes, WR debt and retained CUDA
 resources.
+A direct host requester must create one persistent full-view MR and reuse it
+five times, with one idle MR before shutdown and none after shutdown. Source,
+device-staged, explicit-staging and TCP peers must report zero cached MRs.
 Direct host peers must construct exactly six direct endpoints; device-staged or
 explicit-staging peers must construct zero. These counters accompany real CQ
 counts and full byte comparisons rather than replacing them. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.

@@ -24,7 +24,7 @@ Host registration batches preflight every range before publishing changes.
 Transfers accept absolute addresses and retain the resolved backing during I/O;
 local and remote lookup follows TENT's containing-buffer order.
 
-Opt-in `rdma` and `cuda` features add single-rail RC verbs with exact application
+Opt-in `rdma` and `cuda` features add single-rail RC verbs with actual application
 host MRs or explicit private staging, retained NVIDIA device/pinned allocations
 and synchronized CUDA copies. Direct host DMA leases retain actual registration
 owners and exclude conflicting access across aliases; disjoint ranges remain
@@ -32,8 +32,9 @@ usable. Failed native cleanup retains those owners and charges. Device
 allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
-Each engine lazily reuses one RNIC context/PD while requests keep exclusive
-CQ/QP/MR and direct-lease or staging owners. Whole-engine `close(timeout)`
+Each engine lazily reuses one RNIC context/PD. Requester local-only host MRs
+now persist across requests in a bounded registration cache, while source-grant
+MRs and all QP/CQ owners remain exclusive to each request. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed
 teardown stays retained. Independent review accepts its CPU ownership gates and
 a scoped two-host DRAM/A-H20 GPU-staging native profile. Consumer dependency and
@@ -50,6 +51,10 @@ review and fourteen healthy two-host cases from both separately built native
 binaries pass exact fragment CQ/byte/post counts for DRAM, pinned-host and
 device-staged transfers. This accepts the declared P4.4 profile; full P4 remains
 open.
+P4.5 separates persistent host registration from exact per-request DMA exclusion.
+Idle cached MRs allow CPU access; final unregister retires the registration,
+and failed deregistration retains the actual backing, device and budget.
+Endpoint reuse and shared progress remain open in P4.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates
