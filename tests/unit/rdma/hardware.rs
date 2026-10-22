@@ -88,6 +88,8 @@ fn verify(memory: &crate::RegisteredMemory, expected: &[u8]) {
 #[test]
 #[ignore = "requires an explicitly selected two-host RNIC profile and original resource locks"]
 fn shared_cq_peer() {
+    // Keep readiness and JSON on their own lines after libtest's name prefix.
+    println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
