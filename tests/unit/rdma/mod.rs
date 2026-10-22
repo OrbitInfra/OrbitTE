@@ -468,8 +468,10 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
         Err(Error::Unavailable(_))
     ));
     first.close().unwrap();
-    drop(first);
     memory.write(3, &[9; 5]).unwrap();
+    assert_eq!(runtime.stats().unwrap().direct_bytes, 8);
+    drop(first);
+    assert_eq!(runtime.stats().unwrap().direct_bytes, 3);
     assert!(matches!(
         memory.write(13, &[0; 1]),
         Err(Error::Unavailable(_))
