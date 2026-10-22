@@ -377,19 +377,23 @@ unsafe extern "C" fn post(
             wr.wr.rdma.rkey = rkey;
             wrs.push(wr);
         }
+        let sges_ptr = sges.as_mut_ptr();
+        let wrs_ptr = wrs.as_mut_ptr();
         for index in 0..count {
-            wrs[index].sg_list = &mut sges[index];
-            wrs[index].next = if index + 1 == count {
+            let wr = wrs_ptr.add(index);
+            (*wr).sg_list = sges_ptr.add(index);
+            (*wr).next = if index + 1 == count {
                 std::ptr::null_mut()
             } else {
-                &mut wrs[index + 1]
+                wrs_ptr.add(index + 1)
             };
         }
         let mut bad = std::ptr::null_mut();
-        let code = post_send(qp, wrs.as_mut_ptr(), &mut bad);
+        let code = post_send(qp, wrs_ptr, &mut bad);
         if code == 0 {
             (*result).accepted = count;
-        } else if let Some(index) = wrs.iter_mut().position(|wr| std::ptr::eq(wr, bad)) {
+        } else if let Some(index) = (0..count).find(|index| std::ptr::eq(wrs_ptr.add(*index), bad))
+        {
             (*result).accepted = index;
         } else {
             // A missing/foreign bad_wr cannot prove an unposted suffix. Do not
