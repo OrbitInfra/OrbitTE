@@ -385,6 +385,7 @@ impl Runtime {
             config: self.config.clone(),
             verbs: self.verbs,
             deadline,
+            resources: None,
         };
         let initialized = endpoint.open(permission, psn);
         if let Err(error) = initialized {
@@ -585,6 +586,7 @@ pub(crate) struct Endpoint {
     config: RdmaConfig,
     verbs: &'static sys::Verbs,
     deadline: Instant,
+    resources: Option<Box<Resources>>,
 }
 
 impl Endpoint {
@@ -603,13 +605,6 @@ impl Endpoint {
         self.local.validate()?;
         state.qpn = self.local.qpn;
         Ok(())
-    }
-
-    pub(crate) fn has_resources(&self) -> bool {
-        self.record
-            .lock()
-            .map(|state| !matches!(state.phase, Phase::Closed | Phase::Retained))
-            .unwrap_or(true)
     }
 
     pub(crate) fn descriptor(&self) -> Descriptor {
@@ -639,7 +634,7 @@ impl Endpoint {
         if state.phase != Phase::Closed {
             return Err(Error::Internal("RDMA buffer is not physically quiescent"));
         }
-        match &state
+        match &self
             .resources
             .as_ref()
             .ok_or(Error::Internal("missing RDMA buffer"))?
@@ -687,15 +682,20 @@ impl Endpoint {
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {
-        self.progress.close_record(&self.record, self.deadline)
+        let result = self.progress.close_record(&self.record, self.deadline);
+        let mut request = self.record.lock()?;
+        if request.phase == Phase::Closed {
+            if let Some(resources) = request.resources.take() {
+                self.resources = Some(resources);
+            }
+        }
+        result
     }
 }
 
 impl Drop for Endpoint {
     fn drop(&mut self) {
-        if self.has_resources() {
-            let _ = self.close();
-        }
+        let _ = self.close();
     }
 }
 

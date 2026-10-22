@@ -148,6 +148,7 @@ fn unopened(runtime: &Runtime) -> Endpoint {
         config: runtime.config.clone(),
         verbs: runtime.verbs,
         deadline: deadline(),
+        resources: None,
     }
 }
 
@@ -185,6 +186,18 @@ fn lane_abort_and_retention_fence_registered_but_unopened_qps() {
             // accepted constructor. It cannot publish finished before that fence.
             wait_until(|| opened.record.lock().unwrap().phase == Phase::Retained);
             let finished = progress.shared.control.lock().unwrap().finished;
+            opened.deadline = Instant::now() + Duration::from_millis(20);
+            assert!(
+                matches!(
+                    opened.close(),
+                    Err(Error::Unquiesced {
+                        code: libc::ETIMEDOUT,
+                        ..
+                    })
+                ),
+                "retention receipt must wait for all record fences and accounting"
+            );
+            assert_eq!(runtime.stats().unwrap().retained_endpoints, 0);
             drop(guard);
             assert!(
                 !finished,
@@ -290,6 +303,42 @@ fn a_retained_record_always_returns_unquiesced_after_a_logical_transfer_failure(
     let stats = runtime.stats().unwrap();
     assert_eq!((stats.retained_endpoints, stats.retained_cqs), (1, 1));
     assert!(stats.retained_bytes > 0);
+}
+
+#[test]
+fn completed_outputs_and_quota_move_to_endpoint_despite_live_progress_snapshots() {
+    for mode in ["ok", "post"] {
+        let runtime = runtime(mode);
+        let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
+        if mode == "post" {
+            endpoint.connect(&endpoint.descriptor()).unwrap();
+            assert!(
+                endpoint
+                    .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                    .is_err()
+            );
+        }
+        let snapshot = Arc::clone(&endpoint.record);
+        assert_eq!(endpoint.close().is_err(), mode == "post");
+        assert!(snapshot.lock().unwrap().resources.is_none());
+        assert_eq!(
+            runtime.stats().unwrap().active_endpoints,
+            1,
+            "caller still owns output"
+        );
+        drop(endpoint);
+        assert_eq!(
+            runtime.stats().unwrap().active_endpoints,
+            0,
+            "worker snapshots own no closed resources"
+        );
+        let mut next = runtime.staging_endpoint(8, 0).unwrap();
+        next.close().unwrap();
+        drop(next);
+        // Even an arbitrarily delayed snapshot cannot defer native-runtime close.
+        runtime.close(deadline()).unwrap();
+        drop(snapshot);
+    }
 }
 
 #[test]

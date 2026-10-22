@@ -411,6 +411,20 @@ impl Progress {
                     .0;
             }
         }
+        if request.phase == Phase::Retained {
+            drop(request);
+            return match self.close(deadline) {
+                Err(error @ Error::Unquiesced { .. }) => Err(error),
+                Err(Error::Timeout) => Err(Error::Unquiesced {
+                    operation: "RDMA retention receipt deadline",
+                    code: libc::ETIMEDOUT,
+                }),
+                _ => Err(Error::Unquiesced {
+                    operation: "RDMA retained progress lane",
+                    code: libc::EIO,
+                }),
+            };
+        }
         request.check()
     }
 
@@ -596,13 +610,13 @@ impl Shared {
             return Err(("ibv_destroy_qp", code));
         }
         self.close_mr(resources)?;
-        Self::unlock(&mut request);
-        drop(request);
         self.control
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .records
             .retain(|entry| !Arc::ptr_eq(entry, record));
+        Self::unlock(&mut request);
+        drop(request);
         record.changed.notify_all();
         Ok(true)
     }

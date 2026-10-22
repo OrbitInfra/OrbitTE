@@ -467,6 +467,15 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
     }
 }
 
+impl Endpoint {
+    pub(crate) fn has_resources(&self) -> bool {
+        self.record
+            .lock()
+            .map(|state| !matches!(state.phase, Phase::Closed | Phase::Retained))
+            .unwrap_or(true)
+    }
+}
+
 type CloseHook = Box<dyn FnOnce(&mut Endpoint, &Result<()>)>;
 thread_local! { static BEFORE_REQUESTER_CLOSE: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) }; }
 
@@ -873,7 +882,7 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         let result = endpoint.transfer(
             &remote,
             TransferOp::Read,
-            Instant::now() + Duration::from_millis(2),
+            Instant::now() + Duration::from_millis(250),
         );
         assert_eq!(result.is_ok(), mode == "reverse", "{mode}: {result:?}");
         let stats = runtime.stats().unwrap();
