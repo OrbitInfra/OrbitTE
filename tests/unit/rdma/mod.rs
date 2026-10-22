@@ -204,7 +204,7 @@ unsafe extern "C" fn open(
             device.windows.fetch_add(1, Ordering::SeqCst);
             (*h).mw = Box::into_raw(Box::new(false)).cast();
             (*h).window_key = if device.mode == "key_indices" {
-                qpn << 8 | 1
+                (qpn << 8) | 1
             } else {
                 0x101
             };
