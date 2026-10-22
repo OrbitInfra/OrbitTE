@@ -384,7 +384,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   faults, lost DONE/ACK qualification, endpoint caching,
   zero-copy, GDR and multirail stay open. Old CUDA 12.2 pilots remain historical.
 - [x] **P4.2b — shared RNIC context/PD and whole-engine close (Implemented;
-  independent review and physical qualification pending).** A per-engine lazy
+  scoped source/CPU/healthy native gates independently Accepted).** A per-engine lazy
   owner reuses one context/PD across slices; CQ/QP/MR/staging stay exclusive.
   Every new endpoint re-queries port/GID addressing. Actual device references
   survive failed slice teardown. Whole-engine `close` fences both directions
@@ -392,7 +392,11 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   failure retention and no retry from concurrent close or Drop. Existing
   directional close remains independent. CPU ABI/concurrency controls and the
   physical probe require single device construction and complete normal close.
-  See [the owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
+  Source `1782771` passes independent CPU reruns and six two-host RoCE/TCP
+  DRAM/A-H20 staging native cases, with actual byte/guard/CQ checks, one device
+  open per RDMA peer and zero normal-close charges. See the scoped
+  [qualification and external evidence](rdma-cuda.md#shared-device-owner-qualification)
+  and [owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
   This does not add pooled endpoints/MRs, application registrations, GDR,
   multirail or a performance claim. OrbitKV's pinned earlier implementation
   and shutdown receipt must be migrated and qualified separately.
@@ -680,11 +684,13 @@ qualification remains open beyond the accepted scoped gates. A separate CUDA
 Manager TCP/RDMA staging GPU restores. The later single-runtime installed
 IPC/peer-byte prerequisite is recorded in P11; it does not close serving,
 cross-host, GDR or physical-fault qualification.
-P4.2b first preserves these owners while reusing the per-RNIC context/PD;
-complete its independent ownership review and native-profile gates, then qualify
-its consumer pin and whole-engine shutdown receipt before adopting it. Extend
-installed process-boundary coverage beyond the accepted profile,
-then qualify physical cross-host Manager/GPU and native-fault/drain gates.
+P4.2b preserves these owners while reusing the per-RNIC context/PD. Independent
+source/CPU and scoped two-host healthy native gates pass. Next migrate OrbitKV's
+pin and explicit whole-engine shutdown receipt in its existing transfer owner,
+then qualify that consumer change. Extend installed process-boundary coverage
+beyond the accepted profile before physical cross-host Manager/GPU and native
+fault/drain gates. The native GPU-staging result does not close those Manager
+or installed-artifact obligations.
 Preserve P4.1/P5.1 owners before expanding registrations, endpoints or hardware
 claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the

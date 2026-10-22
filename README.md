@@ -31,8 +31,9 @@ owners and conservatively retain unquiesced failures.
 Each engine lazily reuses one RNIC context/PD while slices keep exclusive
 CQ/QP/MR/staging owners. Whole-engine `close(timeout)` fences both directions,
 drains accepted work and explicitly destroys shared device resources; failed
-teardown stays retained. This new ownership substage has separate qualification
-from the earlier consumer profiles.
+teardown stays retained. Independent review accepts its CPU ownership gates and
+a scoped two-host DRAM/A-H20 GPU-staging native profile. Consumer dependency and
+shutdown migration remain separate from those native gates.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

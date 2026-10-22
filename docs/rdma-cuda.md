@@ -138,7 +138,9 @@ permanently closes device admission, then explicitly destroys PD -> context.
 Concurrent/repeated callers serialize native destruction. A timeout leaves both
 admissions closed and the device live; another call can continue waiting.
 Native teardown failure retains the actual resources, remains charged, returns
-`Unquiesced` and cannot be retried by another close caller or Drop.
+`Unquiesced` and cannot be retried by another close caller or Drop. Successful
+close does not unregister caller-held memory or free allocated batch handles;
+those owners retain their backing/capacity until explicit unregister/free/drop.
 
 `close_source` and `close_requester` preserve their independent contracts: either
 one leaves the other direction and shared device available. Neither alone nor
@@ -167,8 +169,8 @@ physical ambiguity; the remote engine owns that retention.
 Retention is conservative protection, not implemented recovery. There is no
 reclaim proof/API for quarantined operations yet; process-scoped retained CUDA
 resources are observable through `cuda::retained_resources`. A context with
-failed restore/unpin is poisoned. GPU/RNIC loss, hardware abort/drain, concurrent
-shutdown and reuse qualification remain open. Synchronous native calls/teardown
+failed restore/unpin is poisoned. GPU/RNIC loss, hardware abort/drain and physical
+concurrent shutdown/reuse qualification remain open. Synchronous native calls/teardown
 can exceed an API deadline; no hard real-time or provider interrupt is claimed.
 
 ## Verification and physical execution
@@ -180,8 +182,9 @@ close, directional close, whole-close admission fencing, drain timeout and a
 previously accepted operation opening its slice after the fence. The physical
 probe uses whole-engine close and requires exactly one device open per RDMA
 peer, zero shared devices after shutdown and all existing byte/guard/CQ checks.
-These new code paths need their own physical qualification; earlier consumer
-profiles pinned to `02d64e55` do not establish it.
+The scoped native qualification below applies to these new code paths. Earlier
+consumer profiles pinned to `02d64e55` remain separate and do not qualify a
+consumer dependency or shutdown migration.
 
 CPU-only ABI shims cover verbs descriptor layout, malformed fields, construction,
 post/poll/CQ errors, deadline and every teardown boundary; they assert exact
@@ -197,13 +200,42 @@ cargo test --locked --all-features
 cargo build --locked --release --all-features --example hardware_peer
 ```
 
+### Shared device owner qualification
+
+At `1782771` in [OrbitTE #14](https://github.com/OrbitInfra/OrbitTE/pull/14),
+independent source/CPU review and six healthy native cases pass: two physical
+RoCE v2 hosts exchange DRAM READ/WRITE in both roles; A's H20 exchanges CUDA
+staging bytes with B's DRAM through RDMA and TCP controls. Complete buffers,
+noncontiguous ranges, untouched bytes and guards are compared. Each RDMA peer
+opens one shared device across its slices, then whole-engine close returns
+active/retained device, endpoint and staging charges to zero.
+
+The explicit GPU Driver API profile maps compatibility `libcuda590.48.01` on
+kernel driver `535.161.08`, with no CUDART or TENT mapped. B uses CPU memory only.
+Actual mapped libraries are frozen before the accepted GPU run and their
+identities/bytes are unchanged after exit. Independent native peers, supervisors,
+SSH starters and controller finish normally; original RNIC/A-GPU lock inodes
+are reacquired/released and A GPU7 returns to zero memory with no compute apps.
+This is native-engine healthy-path qualification, not an OrbitKV Manager,
+installed wheel, serving, direct GPU MR/GDR, physical fault or performance result.
+
+Evidence, source/binary manifests, failed profiles and checker controls remain
+outside the checkout at `/root/orbitte-artifacts/rdma-context-20261022/`;
+`independent-hardware-1782771/independent-review.json` records the accepted scope.
+[The eight-job CI matrix](https://github.com/OrbitInfra/OrbitTE/actions/runs/39748938048)
+and [frozen native TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/39748938003)
+pass for that source. The latter compares the CPU contract, not native RDMA
+wire interoperability.
+
+### Run the native gate
+
 The explicit native [`hardware_peer`](../examples/hardware_peer.rs) runner
 performs three noncontiguous READs across two appended submissions, then three
 WRITEs, generation-specific notifications and complete source/destination/guard
 comparisons. Each run varies a deterministic seed. It checks exact completion
-bytes and successful requester WR counts, then unregisters, drains and checks
-zero remaining registrations, workers, shared RDMA devices, endpoints, staging and retained CUDA
-resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
+bytes and successful requester WR counts, closes the whole engine, then
+unregisters/releases memory and checks zero remaining registrations, workers,
+shared RDMA devices, endpoints, staging and retained CUDA resources. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
 This is a correctness pilot, not a benchmark or a full fault qualification.
 
 Use [`tests/hardware/run.py`](../tests/hardware/run.py) with an externally stored
