@@ -368,10 +368,14 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   TCP framing to show that a source MR-destroy failure can arrive as an ordinary
   backend error while the requester is locally drained: source backing,
   admission/staging charges and pending source close remain retained.
-  The source/CPU and two-node host results still require independent acceptance;
-  current consumer Manager/GPU qualification needs CUDA 13. Supplied driver535
-  nodes cannot supply that gate, and old CUDA 12.2 consumer pilots remain
-  historical. Source/requester physical RNIC faults, lost DONE/ACK qualification,
+  Independent source/CPU review and two-node host reruns pass at consumer
+  `660f893d` and test harness `ff30ee1`: both RoCE directions, native CQ counts,
+  bytes/guards and zero normal-close resource charges, with no CUDA/TENT mapped.
+  Frozen source, binary and external evidence locations are linked in
+  [OrbitTE #12](https://github.com/OrbitInfra/OrbitTE/pull/12) and
+  [OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305). Current consumer
+  Manager/GPU qualification needs CUDA 13. Supplied driver535 nodes cannot supply
+  that gate, and old CUDA 12.2 consumer pilots remain historical. Source/requester physical RNIC faults, lost DONE/ACK qualification,
   installed serving, endpoint caching, zero-copy, GDR and multirail stay open.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
@@ -638,11 +642,11 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-P2.3's source/H20 TCP pilot has independent review and rerun evidence; installed
-consumer qualification remains open. Review P4.2a's explicit RDMA consumer and
-its source/host component evidence before accepting dependent work. Then close
-its CUDA 13 pinned Manager and physical native-fault/drain gates; preserve
-P4.1/P5.1 owners before expanding registrations, endpoints or hardware claims.
+P2.3's source/H20 TCP pilot and P4.2a's registered-host RDMA component have
+independent source/CPU review and rerun acceptance; installed consumer
+qualification remains open. Next close P4.2a's CUDA 13 pinned Manager and physical
+native-fault/drain gates; preserve P4.1/P5.1 owners before expanding
+registrations, endpoints or hardware claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
 [CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
 the transfer notification mailbox remains a separate API contract.

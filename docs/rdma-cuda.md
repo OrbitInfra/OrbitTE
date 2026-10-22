@@ -207,6 +207,19 @@ execution, not its PinnedAllocator, Manager grants/GPU restore or installed
 serving. Current OrbitKV consumer builds require CUDA 13; driver535 nodes are
 usable for this host-only gate but cannot qualify its full Manager/GPU path.
 
+The consumer `660f893d` host component and `ff30ee1` runner/source-retention
+controls have independent source review and reruns. The physical RoCE pilot
+covers A-to-B 4 KiB and B-to-A 1 MiB backing buffers, fragmented READs with three
+requester CQ completions each, whole-buffer guards and zero normal-close
+registration/endpoint/staging charges. Maps contain real `libibverbs`/`libmlx5`
+and no CUDA/TENT. All owned native and supervisor processes exit and RNIC leases
+are released. The initial readiness coordination failure stays with successful
+reruns in the external evidence. See
+[OrbitTE #12](https://github.com/OrbitInfra/OrbitTE/pull/12) and
+[OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305) for frozen source,
+binary hashes and independent review locations. This is component correctness,
+not a throughput claim or pinned Manager/GPU acceptance.
+
 The CPU `remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained`
 control drives actual TCP framing with verbs fault callbacks. After a source
 MR teardown failure, requester QP/MR cleanup can succeed while the remote error
