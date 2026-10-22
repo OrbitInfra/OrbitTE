@@ -97,7 +97,7 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 ```
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
-Overlapping and successive slices retain that actual shared owner; separate
+Overlapping and successive requests retain that actual shared owner; separate
 engines do not share PDs. Every request still owns its CQ/QP/MR and stable host
 staging or exact direct host range, with independent permissions, rkey, QP and
 PSN. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
@@ -202,7 +202,7 @@ by an endpoint.
 
 `TransferEngine::close(timeout)` locks source then requester admission, fences
 both before waiting, and gives their accepted operations one shared drain
-deadline. Already accepted work can still create its slices during this drain;
+deadline. Already accepted work can still create its endpoints during this drain;
 closing admission does not cancel it. Once both owners are drained, the runtime
 permanently closes device admission, then explicitly destroys PD -> context.
 Concurrent/repeated callers serialize native destruction. A timeout leaves both
@@ -345,6 +345,54 @@ pass for the source plus test assertion. The native comparison covers selected
 CPU API behavior, not RDMA wire interoperability. This profile does not qualify
 persistent MR/endpoint caches, multirail, direct GPU MR/GDR, physical RNIC faults,
 installed OrbitKV, performance or complete P4/TENT parity.
+
+### Bounded slice and WR progress qualification
+
+Source `e04e381` in [OrbitTE #16](https://github.com/OrbitInfra/OrbitTE/pull/16)
+passes independent source/CPU review and fourteen healthy two-host cases from
+each of the implementation and independently MSRV-built binaries. The native profile covers
+single-rail RoCE v2 with window limits 1/2/3/4/8, explicit small and adaptive
+blocks, folded short tails, ordinary/pinned host direct MRs, both mixed host
+policies, explicit staging, A-H20 device staging in both roles and TCP controls.
+Each requester compares exact, independently specified slice CQ counts, post
+calls and high-water WR charges in addition to completed bytes. A 12,305-byte
+request folds its 17-byte tail into three slices; a large host-local READ uses
+64 slices while WRITE/device-local READ caps at 32. Complete buffers,
+noncontiguous ranges, untouched bytes, guards, notifications and final normal
+resource release pass. Other window capacities remain physically unqualified.
+These runs do not measure performance.
+
+CPU controls cover accepted post prefixes and unknown/malformed `bad_wr`,
+including null, foreign, one-past and interior pointers. Reordered, duplicate,
+previous-window and malformed CQ entries cannot invent completion or repay
+unidentified WR debt. Error CQ fields, timeout, failed QP/MR/CQ teardown and
+multi-window cancel/detach keep actual owners until the required close boundary.
+The WR/SGE chain uses stable raw bases without reborrowing the vector storage;
+the independent source review identified this pointer contract before any
+accepted hardware run. These controls do not inject real RNIC/GPU faults.
+
+Each fourteen-case run waits for all 28 SSH starters and its controller to return
+zero, then verifies all 56 native/supervisor PIDs are absent.
+The original two RNIC locks and A GPU7 lock are reacquired/released; A GPU7
+returns to zero memory with no compute apps. Actual mapped libraries match the
+frozen path/inode/SHA profile. A maps compatibility `libcuda590.48.01` on kernel
+driver `535.161.08`; no CUDART or TENT is mapped, and B uses CPU memory only.
+
+Evidence and frozen source/binaries stay outside the checkout at
+`/root/orbitte-artifacts/rdma-slices-20261022/`.
+`implementation-hardware-review.json`,
+`independent-source-e04e381/independent-review.json` and
+`independent-hardware-e04e381/independent-review.json` record the accepted scope.
+`implementation-evidence-e04e381.tar.gz` has SHA-256
+`f77bbe0099d500322ddbf5d94e7848a2e89c169f8c29fe1cfc485bfe49cd4e8f`;
+`independent-hardware-e04e381-evidence.tar.gz` has SHA-256
+`b353de06a633b51b1a5b8e429a849ccc5ea20e694a4b5265072f5bbd5f0e2c59`.
+The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/16/checks) run the eight-job
+Rust/feature matrix and unmodified frozen TENT CPU comparison. That comparison
+covers selected CPU behavior, not native RDMA wire interoperability. Persistent
+MR/endpoint stores, shared CQ/worker progress, event progress, backend abort,
+multirail, direct GPU MR/GDR, native hardware faults, installed OrbitKV and
+complete P4/TENT parity remain open. OrbitKV migration stays deferred to P11.
 
 ### Run the native gate
 

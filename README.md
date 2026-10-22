@@ -32,7 +32,7 @@ usable. Failed native cleanup retains those owners and charges. Device
 allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
-Each engine lazily reuses one RNIC context/PD while slices keep exclusive
+Each engine lazily reuses one RNIC context/PD while requests keep exclusive
 CQ/QP/MR and direct-lease or staging owners. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed
 teardown stays retained. Independent review accepts its CPU ownership gates and
@@ -45,9 +45,11 @@ larger stage boundary.
 Native requests now follow TENT's adaptive/folded slice geometry and bounded
 signaled-WR windows. Per-slice CQ identities and accepted post prefixes own
 physical WR charges independently of whole-request success; failed native
-teardown retains the real backing and outstanding debt. This new substage's
-physical qualification remains pending; the earlier single-WR evidence does
-not qualify it.
+teardown retains the real backing and outstanding debt. Independent source/CPU
+review and fourteen healthy two-host cases from both separately built native
+binaries pass exact fragment CQ/byte/post counts for DRAM, pinned-host and
+device-staged transfers. This accepts the declared P4.4 profile; full P4 remains
+open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

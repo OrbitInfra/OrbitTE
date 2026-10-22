@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.3 scoped acceptance; P4.4 fragmented WR windows implemented, qualification pending; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.4 implemented with scoped native acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -436,7 +436,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   This is per-request registration, not TENT's persistent MR cache, endpoint
   pooling, GDR or complete P4.
 - [x] **P4.4 — bounded native slice submission and completion debt
-  (Implemented; native qualification and independent acceptance pending).**
+  (Implemented; source/CPU and healthy native profile independently Accepted).**
   The frozen TENT slice geometry uses a 64 KiB base, adaptive CPU READ cap64 or
   WRITE/device cap32 and quarter-block short-tail folding. One request retains
   its complete MR/DMA lease across bounded, all-signaled WR windows, with unique
@@ -448,15 +448,22 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   retains real owners and debt. This prerequisite precedes persistent MR and
   endpoint-store reuse. It does not add pooled CQs/QPs, backend abort, multirail,
   asynchronous event progress, direct GPU registration or complete P4.
-- [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
-  MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
-- [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
-  propagation, polling/event progress, cancellation and partial post handling.
+  Source `e04e381` passes independent CPU gates and fourteen two-host native
+  cases with exact CQ/byte/post counts, folded tails and windows 1/2/3/4/8.
+  See the scoped [qualification and external evidence](rdma-cuda.md#bounded-slice-and-wr-progress-qualification).
+- [ ] Complete automatic device/port/GID and topology discovery plus persistent
+  MR/endpoint-store ownership. Explicit provider FFI, shared context/PD,
+  per-request MR/QP/CQ lifecycle and fenced bootstrap are implemented above.
+- [ ] Complete shared polling/event progress and backend cancellation for
+  fragmented transfers. P4.4 implements adaptive READ/WRITE slices, exact CQ
+  byte/error accounting and partial-post controls in exclusive windows;
+  real partial-post/CQ/endpoint fault qualification remains open.
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
-- [ ] Implement quota and work-request accounting needed for the healthy path;
-  leave optional adaptive/deadline policies explicitly disabled until P6 passes.
+- [ ] Extend P4.4's exclusive-window WR accounting to shared CQ/SQ quotas,
+  persistent owners and multiple rails. Optional adaptive/deadline policies
+  remain disabled until P6 passes.
 - [ ] Establish the real source/requester quiescence contract for each verbs
   operation. Prevent stale rkeys, endpoints or remote accesses from reaching a
   reused allocation; local reference counts alone cannot establish this.
@@ -734,10 +741,11 @@ are accepted for that declared profile; physical faults and complete P4 remain
 open. Preserve failed runs and ownership controls. Missing fault or hardware
 gates remain unqualified.
 
-P4.4 first establishes multi-WR completion and quota ownership before resources
-become persistent: qualify bounded native windows, adapted/folded slices and
-partial-post/CQ/teardown controls. Then continue within P4 to persistent MR and
-endpoint-store ownership, device/topology discovery and multirail. Follow the frozen
+P4.4 establishes multi-WR completion and quota ownership before resources become
+persistent. Its independent CPU controls and fourteen healthy native cases
+accept adapted/folded slices, bounded windows and complete normal release for
+the declared profile. Next continue within P4 to persistent MR and endpoint-store
+ownership, shared progress, device/topology discovery and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.
