@@ -164,7 +164,7 @@ class Controller:
                 'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
                 'ORBITTE_RDMA_HOST_MEMORY': host_memory,
             }
-            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096)]:
+            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITTE_RDMA_MAX_ENDPOINTS', 4096)]:
                 value = case.get(key)
                 if value is not None:
                     if type(value) is not int or not 1 <= value <= limit:

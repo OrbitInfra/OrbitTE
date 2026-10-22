@@ -400,6 +400,81 @@ fn whole_close_reports_device_failure_without_retrying_from_another_close() {
 
 #[cfg(feature = "rdma")]
 #[test]
+fn source_ack_follows_output_drop_and_native_quota_reuse() {
+    for mode in ["ack_pause", "direct:ack_pause"] {
+        let source = rdma_fixture(mode);
+        let requester = rdma_fixture("copy");
+        let runtime = source.source.rdma.as_ref().unwrap();
+        let pause = crate::rdma::tests::pause(runtime);
+        let remote = source
+            .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
+            .unwrap();
+        let local = requester
+            .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        let address = remote.base_address();
+        let worker = std::thread::spawn(move || {
+            let report = requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address(),
+                        remote_address: address,
+                        length: 8,
+                    }],
+                    Duration::from_secs(2),
+                )
+                .unwrap();
+            let mut bytes = [0; 8];
+            local.read(0, &mut bytes).unwrap();
+            requester.close(Duration::from_secs(2)).unwrap();
+            (report, bytes)
+        });
+        let (lock, changed) = &*pause;
+        let (state, timed) = changed
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+            .unwrap();
+        assert!(!timed.timed_out());
+        drop(state);
+        let stats = runtime.stats().unwrap();
+        let mut next = runtime.endpoint(&remote, 0, 8, 1, Instant::now() + Duration::from_secs(2));
+        if let Ok(endpoint) = &mut next {
+            endpoint.close().unwrap();
+        }
+        let reusable = next.is_ok();
+        drop(next);
+        lock.lock().unwrap().1 = true;
+        changed.notify_all();
+        let (report, bytes) = worker.join().unwrap();
+        assert!(report.failure.is_none());
+        assert_eq!(bytes, [0x42; 8]);
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.staging_bytes,
+                stats.direct_bytes
+            ),
+            (0, 0, 0)
+        );
+        assert!(
+            reusable,
+            "source endpoint/byte quota must be reusable before ACK"
+        );
+        source.close(Duration::from_secs(2)).unwrap();
+    }
+}
+
+#[cfg(feature = "rdma")]
+#[test]
 fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
     // Actual control sockets with CPU mutation at the verbs boundary. This is
     // protocol/owner evidence; physical RNIC qualification is a separate gate.

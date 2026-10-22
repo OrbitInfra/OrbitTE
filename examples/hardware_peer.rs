@@ -226,6 +226,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if let Ok(value) = env::var("ORBITTE_RDMA_MAX_CQES") {
         rdma.max_cqes = value.parse()?;
     }
+    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_ENDPOINTS") {
+        rdma.max_endpoints = value.parse()?;
+    }
     let kind = &args[5];
     let payload: usize = args[6].parse()?;
     let seed: u64 = args[7].parse()?;

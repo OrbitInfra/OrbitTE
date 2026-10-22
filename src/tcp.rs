@@ -470,6 +470,9 @@ fn rdma_serve(
         remaining(channel.deadline)?;
         endpoint.copy_back(memory, offset)?;
     }
+    drop(endpoint);
+    #[cfg(test)]
+    crate::rdma::tests::before_source_ack(runtime);
     channel.reply(source, 0, 0)
 }
 

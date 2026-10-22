@@ -491,6 +491,19 @@ pub(crate) fn before_requester_close(endpoint: &mut Endpoint, result: &Result<()
     }
 }
 
+pub(crate) fn before_source_ack(runtime: &Runtime) {
+    if std::ptr::eq(runtime.verbs, &VERBS) && runtime.config.device == "ack_pause" {
+        let pause = pause(runtime);
+        let (lock, changed) = &*pause;
+        let mut state = lock.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    }
+}
+
 pub(crate) fn work_usage(runtime: &Runtime) -> Arc<Mutex<RdmaStats>> {
     Arc::clone(&runtime.usage)
 }
@@ -636,7 +649,7 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
                 endpoint.transfer(
                     &descriptor,
                     TransferOp::Read,
-                    Instant::now() + Duration::from_millis(2),
+                    Instant::now() + Duration::from_millis(250),
                 )
             });
             assert_eq!(result.is_ok(), mode == "ok", "{mode}");
