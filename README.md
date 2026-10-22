@@ -30,19 +30,20 @@ They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
-retains real CUDA-pinned allocator slots across cancellation and detached batches;
-its two H20 TCP ownership controls passed. The subsequent opt-in
-[OrbitKV TCP peer candidate](https://github.com/OrbitInfra/OrbitKV/pull/304)
-connects source grants, epochs and generation-scoped gRPC completion to actual
-Manager GPU Save/Restore. Two H20 source/grant and GPU byte gates passed with
-a private CUDA 12.2 runtime and were independently rerun; installed
-Manager/serving qualification remains open. Track these consumer candidates as P1.5/P2.3 in the plan.
-An explicit OrbitKV RDMA consumer candidate now shares those owners and uses
-single-rail RC host staging without payload fallback. Its host-only component
-and CUDA 13 Manager/GPU gates are separate; see P4.2a in the plan.
-The protocol remains OrbitTE-only. TENT API/wire compatibility, full RDMA/GPU
-coverage, GPUDirect, NVLink and SSD remain open. These source substages await
-independent acceptance and complete hardware/installed qualification.
+retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates
+connect source grants, epochs and generation-scoped completion to actual
+Manager GPU Save/Restore. Independent CUDA 13.1 source gates and an installed
+CPython 3.11 client/Manager fixture now pass in their explicit H20 profiles.
+The installed fixture uses one selected Torch CUDA 13.0.96 runtime and checks
+cross-process IPC Publish plus TCP/same-RNIC RDMA bytes and normal ownership
+retirement. See the [runtime profiles](docs/rdma-cuda.md) and
+[OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307).
+The default OrbitKV provider remains TENT.
+
+The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
+coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault
+qualification remain open. Accepted evidence is scoped in the completion plan;
+no complete numbered parity stage is qualified.
 See the [CPU TCP contract and recipe](docs/cpu-tcp.md) for behavior and limits.
 
 ## Try the source

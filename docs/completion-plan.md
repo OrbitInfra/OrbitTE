@@ -276,7 +276,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   pass. The original substage used OrbitTE wire v3 (now v4); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
-  scoped source/H20 pilot independently reviewed; installed qualification open).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
+  scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
   at `5a50d092c651d28ff3f79f6de661c9da8120b2b3` pins OrbitTE `02d64e55`.
   An explicit `orbitte-tcp` provider shares Manager discovery, source admission,
   planning and gRPC generation completion. The standalone build excludes
@@ -356,7 +356,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
   and retained DMA owners; the backend's qualification limits still apply.
 - [x] **P4.2a — OrbitKV RDMA selection and registered-host execution candidate
-  (Implemented; installed Manager/physical-fault qualification open).** The consumer
+  (Implemented; scoped installed consumer gate accepted, broader faults open).** The consumer
   explicitly enables `orbitte-rdma`, configures one RNIC/port/GID and advertises
   `orbitte+rdma://`. It reuses allocation registration, grant epoch and completion
   owners; each request selects RDMA without a TCP/TENT payload fallback. The
@@ -378,8 +378,10 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Manager TCP/RDMA staging GPU Save/Restore at `660f893d`; R535 alone does not
   exclude CUDA 13 when supported compatibility libraries are loaded. See the
   [runtime profile](rdma-cuda.md). B-node compute awaits free GPU leases.
-  Installed serving, cross-process CUDA IPC, physical cross-host Manager/GPU,
-  source/requester RNIC faults, lost DONE/ACK qualification, endpoint caching,
+  The later installed IPC/peer-byte gate at consumer `eb1cc90f` is independently
+  accepted for the explicit single-runtime H20 profile in [the runtime contract](rdma-cuda.md).
+  Installed serving, physical cross-host Manager/GPU, source/requester RNIC
+  faults, lost DONE/ACK qualification, endpoint caching,
   zero-copy, GDR and multirail stay open. Old CUDA 12.2 pilots remain historical.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
@@ -561,7 +563,19 @@ Requirements: F22 and applicable accepted backend/compatibility profiles.
   transfer owner. Audit the old patched ABI first; preserve still-needed source
   epoch and source-close contracts. Keep cache semantics in OrbitKV. Record its
   migration under the existing OrbitKV S3/S4/S8 queue and do not modify that
-  runtime dependency merely because this plan exists.
+  runtime dependency merely because this plan exists. A scoped installed
+  prerequisite is independently accepted at consumer `eb1cc90f` in
+  [OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307): the complete
+  CPython 3.11 wheel runs two separate Managers and an installed client, with
+  CUDA IPC registration/Publish, 16,384 GPU bytes through TCP and same-RNIC RDMA,
+  four original IPC slots repaid per case and normal client/Manager exit. The
+  frozen profile explicitly selects Torch CUDA 13.0.96 with an ordinary private
+  unversioned alias and compatibility driver 590.48.01 on H20/R535. The private
+  etcd fixture is killed/reaped. See [the runtime profile](rdma-cuda.md).
+  Default/natural loader configurations, uniform installed CUDA 13.1, inference
+  serving, cross-host Manager/GPU, GDR, physical faults and full adoption remain
+  open. The default complete consumer wheel still bundles TENT; selecting
+  OrbitTE does not map or use it for payloads.
 - [ ] Establish a separate consumer contract before claiming DeepInfer support.
   Engine allocation/readiness and P/D ownership are not replaced by TE parity.
 - [ ] Compare frozen TENT and OrbitTE with equal bytes, budgets, topology,
@@ -648,11 +662,15 @@ and independent acceptance remain separate states.
 
 P2.3's source/H20 TCP pilot and P4.2a's registered-host RDMA component have
 independent source/CPU review and rerun acceptance; installed consumer
-qualification remains open. A separate CUDA 13.1 compatibility profile passes
-A-node pinned source grants and embedded Manager TCP/RDMA staging GPU restores.
-Next qualify installed process boundaries/CUDA IPC, physical cross-host
-Manager/GPU and native-fault/drain gates; preserve P4.1/P5.1 owners before
-expanding registrations, endpoints or hardware claims.
+qualification remains open beyond the accepted scoped gates. A separate CUDA
+13.1 compatibility profile passes A-node pinned source grants and embedded
+Manager TCP/RDMA staging GPU restores. The later single-runtime installed
+IPC/peer-byte prerequisite is recorded in P11; it does not close serving,
+cross-host, GDR or physical-fault qualification.
+Next extend installed process-boundary coverage beyond this accepted profile,
+then qualify physical cross-host Manager/GPU and native-fault/drain gates.
+Preserve P4.1/P5.1 owners before expanding registrations, endpoints or hardware
+claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
 [CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
 the transfer notification mailbox remains a separate API contract.

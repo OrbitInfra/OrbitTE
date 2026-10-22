@@ -237,6 +237,36 @@ This is neither an installed Manager nor cross-process CUDA IPC/cross-host
 Manager/GPU or GDR qualification. B-node compute remains untested while all
 canonical GPU leases are busy; do not take another workload's GPU.
 
+A later installed consumer fixture at `eb1cc90f` is independently accepted in
+[OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307). The complete
+CPython 3.11 wheel contains matching native client and Manager artifacts. Two
+separate Managers and an installed client exercise CUDA IPC registration and
+Publish, inventory fencing, TCP and same-RNIC RDMA peer READ, then client-local
+DRAM H2D Restore. Each provider compares 16,384 GPU bytes and untouched pages,
+checks exact Save/remote/H2D counters, repays four original held IPC slots and
+normally exits the client/Managers, supervisors and outer waiters. The private
+etcd fixture is killed and reaped. Canonical leases are released and GPU memory
+returns to zero; no producer-exit warning is accepted.
+
+That installed profile uses Torch 2.13.0+cu130, one real CUDA 13.0.96 runtime,
+compatibility driver 590.48.01 and kernel driver 535.161.08 on H20. The CUDA 13.1
+compiler does not establish a loaded CUDA 13.1 runtime. Frozen `cudarc` tries
+unversioned `libcudart.so` first; the profile explicitly freezes a private normal
+alias to Torch's actual `.so.13`, its directory/target and preload. Full loader
+order CPU controls preserve the mixed-runtime negative cases. Every actual
+client/Manager mapping must match frozen files and the single selected CUDART;
+`RTLD_NOLOAD` observes the version without loading another runtime. See the
+[consumer recipe](https://github.com/OrbitInfra/OrbitKV/blob/main/docs/transport.md#installed-client-and-manager-profile).
+Source/wheel manifests, raw runs, independent review and failed attempts remain
+outside the checkouts at `/root/orbitte-artifacts/installed-rdma-20261022/`.
+
+This accepts that healthy installed prerequisite, not a complete numbered
+parity stage. Default/natural runtime configurations, uniform installed CUDA
+13.1, Manager IPC Restore, inference serving, physical cross-host Manager/GPU,
+GDR and native faults remain open. The earlier CUDA 13.1 source evidence stays
+separate. Default OrbitKV wheels retain TENT; these selected payload providers
+map no TENT libraries.
+
 The CPU `remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained`
 control drives actual TCP framing with verbs fault callbacks. After a source
 MR teardown failure, requester QP/MR cleanup can succeed while the remote error
