@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.6/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.7a/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -613,9 +613,10 @@ boundary. OrbitKV linkage remains deferred to the accepted complete P4 exit.
 
 ### One-use source memory window qualification
 
-P4.7a implements source MW authority; independent source/native acceptance is
-pending. This is a prerequisite of connected endpoint reuse. QPs and parent
-MRs still close for each request. One MW binds once, so this profile does not
+P4.7a is independently accepted for the source/CPU and declared native profiles
+at `fc9717f63066137a01f0a13d08934d2685fb43ff`. This closes the one-use source
+MW prerequisite of connected endpoint reuse. QPs and parent MRs still close for
+each request. One MW binds once, so this profile does not
 rotate a key on a persistent QP or establish a reusable key namespace.
 
 The layering follows frozen TENT's context/PD, registered buffers, context CQ
@@ -658,14 +659,42 @@ require eight binds/INVs over READ and WRITE phases.
 The ignored `rdma::cq::tests::hardware::source_window_peer` gate, selected by
 `runner: orbitte-window`, accepts `window_probe: revoked` or `parent` on CPU
 RDMA peers. It intentionally submits one WRITE with an invalidated key or the
-unadvertised non-remote parent key while the source QP stays alive. Acceptance
-requires a real REM_ACCESS_ERR, unchanged complete backing/guards, physical
+unadvertised non-remote parent key after successful source BIND. The source
+caller explicitly closes after the peer observes the error and closes, while
+async-driven QP retirement may occur earlier. Acceptance requires a real
+REM_ACCESS_ERR, unchanged complete backing/guards, physical
 close and no remaining owners. It does not qualify arbitrary device/CQ teardown
 faults, persistent key reuse, connected reuse, GDR or the complete P4 exit.
 
-Evidence belongs outside the checkout under
-`/root/orbitte-artifacts/rdma-windows-20261022/`. Missing or failed native gates
-remain unqualified. OrbitKV linkage stays deferred until the complete P4 exit.
+The independent source review passes 22 gates with stable/Rust 1.85, 100 unit
+tests, notification/TCP/doc tests, strict Clippy and supervision/comparator
+controls. Both implementation and independent MSRV release builds pass 30
+single-CPU runs with 16 test threads. Sixty deliberate old-logic controls
+reject skipped source INV, missing/late async ACK, lost-consumer teardown,
+PORT_ACTIVE health restoration, the old pre-lock abort fence and other source
+window/CQ ownership regressions. These CPU fault controls do not establish
+physical port/device/CQ teardown-failure qualification.
+
+Each independently built native set passes 24 cases: four real invalid-key
+probes in both directions, six four-QP shared-CQ profiles, and fourteen public
+DRAM/CUDA-pinned host/direct/mixed/staged/A-H20 GPU-staging/TCP regressions.
+The probes observe requester REM_ACCESS_ERR, source async-event acknowledgment,
+unchanged complete buffers/guards and normal cleanup; the numeric source event
+kind is not recorded. Every set checks 48 actual SSH wait results, absence of
+all 96 owned native/supervisor PIDs, unchanged frozen libraries and mapped file
+identities, reacquisition/release of the three original resource locks, and
+zero memory on A GPU 7. B GPUs remain unselected and unqueried. No direct GPU
+MR/GDR, connected endpoint reuse, multirail or performance result is inferred.
+
+Evidence remains outside the checkout under
+`/root/orbitte-artifacts/rdma-windows-20261022/`: source review and controls are
+in `independent-source-fc9717f/independent-review.json`; implementation artifacts,
+input hashes and receipts are in `native-fc9717f/implementation-hardware-review.json`;
+the independent native receipt is `independent-hardware-fc9717f/independent-review.json`.
+Earlier 986c8b5/9372eb0 reports and native attempts are preserved as intermediate
+results, with their unresolved findings. Native provider calls already entered
+remain non-preemptible. Missing physical fault gates stay unqualified. OrbitKV
+linkage stays deferred until independent acceptance of the complete P4 exit.
 
 ### Run the native gate
 

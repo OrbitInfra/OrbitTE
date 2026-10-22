@@ -37,7 +37,9 @@ now persist across requests in a bounded registration cache, while source-grant
 parent MRs and QPs remain exclusive to each request. P4.7a implements one-use
 Type-2B MW source grants: parent MRs have LOCAL_WRITE/MW_BIND permissions only;
 bound MW keys become visible after a successful BIND CQE and are invalidated
-before final ACK. Its independent/native acceptance remains pending.
+before final ACK. Independent review accepts its scoped CPU and native gates.
+A context-owned async event consumer stays alive through native QP/CQ teardown;
+lost consumption retains actual owners and loans.
 P4.6 shares one bounded CQ and
 one post/poll worker per context, with globally unique WR identities and
 separate QP/CQ quotas. Whole-engine `close(timeout)`

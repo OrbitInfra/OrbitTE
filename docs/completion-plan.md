@@ -20,7 +20,7 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
 tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA, P4.4 slice progress, P4.5 local MR reuse, P4.6 shared CQ/progress and
+[the CPU TCP contract](cpu-tcp.md), plus the P4.3 direct host RDMA, P4.4 slice progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a source MW authority and
 P4.1/P5.1 RDMA/CUDA staging paths. P1.5 adds the opt-in consumer allocation
 bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.6 scoped acceptance; P4.7a implemented, acceptance pending; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7a scoped acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -493,8 +493,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Source grants and connected QPs remain per request. No endpoint reuse,
   source-rkey reuse, event progress, multirail, GDR or complete P4 is claimed.
   See [the contract and acceptance gates](rdma-cuda.md#shared-cq-and-progress-qualification).
-- [x] **P4.7a — one-use source MW authority (Implemented; independent/native
-  acceptance pending).** Exact per-request parent MRs use LOCAL_WRITE|MW_BIND,
+- [x] **P4.7a — one-use source MW authority (Accepted for the declared
+  CPU/native profiles).** Exact per-request parent MRs use LOCAL_WRITE|MW_BIND,
   with no remote access flags. Type-2B support is required explicitly; there is
   no fallback to publishing a parent MR key. QP-only bootstrap carries zero
   memory address/key. Successful BIND CQE precedes a source grant; requester
@@ -509,9 +509,12 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   QP/CQ destruction; fatal/unknown events fence the lane before ACK without
   request locks, and loss of the consumer retains actual owners. CPU controls
   also require the real TCP source to consume INV CQE before final ACK.
-  The ignored native window probe requires real old-key/parent-key
-  rejection while the source QP is alive, plus full guards and normal cleanup.
-  See [the scope and gates](rdma-cuda.md#one-use-source-memory-window-qualification).
+  The ignored native window probe requires real old-key/parent-key remote-access
+  errors, plus full guards and normal cleanup.
+  Source `fc9717f63066137a01f0a13d08934d2685fb43ff` passes independent source/CPU
+  review and two independently built 24-case native runs. Scope, exact artifacts
+  and open physical fault gates are recorded in
+  [the qualification](rdma-cuda.md#one-use-source-memory-window-qualification).
 - [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
   Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
@@ -520,8 +523,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   lookup eviction alone must not repay debt or re-enable stale authority.
   P4.5 caches requester local MRs; P4.6 shares the context CQ/worker. QPs and
   source grants remain per request. P4.7a adds one-use MW authority; its
-  acceptance and a key-generation/reuse domain plus dual-incarnation protocol
-  remain prerequisites before persisting connected endpoints.
+  scoped acceptance is complete. A persistent key-generation/reuse domain and
+  dual-incarnation protocol remain prerequisites before persisting connected endpoints.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete event-driven progress and backend cancellation qualification for
@@ -821,9 +824,10 @@ eviction/unregister/failure and the full P4 exit remain unqualified. P4.6 adds
 one context CQ and one progress owner with scoped independent source/CPU and
 healthy native acceptance across four request QPs. Endpoint connections remain
 per request; the complete P4 exit remains open.
-P4.7a implements one-use source MW authority; exact native artifacts and
-independent acceptance are pending. Finish that substage before dependent
-connection-store work is accepted.
+P4.7a adds accepted one-use source MW authority, shared control-WR debt and
+context async-event ownership for its declared source/CPU/native profiles.
+It retains the per-request QP barrier; persistent key domains and connected
+endpoint-store ownership remain open.
 Next continue within P4 to connected endpoint-store ownership, source-rkey
 authority/revocation, dual endpoint incarnations, device/topology discovery,
 event progress and multirail. Follow the frozen
