@@ -209,9 +209,10 @@ usable for this host-only gate but cannot qualify its full Manager/GPU path.
 
 The consumer `660f893d` host component and `ff30ee1` runner/source-retention
 controls have independent source review and reruns. The physical RoCE pilot
-covers A-to-B 4 KiB and B-to-A 1 MiB backing buffers, fragmented READs with three
-requester CQ completions each, whole-buffer guards and zero normal-close
-registration/endpoint/staging charges. Maps contain real `libibverbs`/`libmlx5`
+covers A-to-B 4 KiB and B-to-A 1 MiB payload regions with 64-byte guards at both
+ends, fragmented READs with three requester CQ completions each, unchanged
+guards/unrequested bytes and zero normal-close registration/endpoint/staging
+charges. Maps contain real `libibverbs`/`libmlx5`
 and no CUDA/TENT. All owned native and supervisor processes exit and RNIC leases
 are released. The initial readiness coordination failure stays with successful
 reruns in the external evidence. See
