@@ -356,7 +356,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
   and retained DMA owners; the backend's qualification limits still apply.
 - [x] **P4.2a — OrbitKV RDMA selection and registered-host execution candidate
-  (Implemented; pinned Manager/physical-fault qualification open).** The consumer
+  (Implemented; installed Manager/physical-fault qualification open).** The consumer
   explicitly enables `orbitte-rdma`, configures one RNIC/port/GID and advertises
   `orbitte+rdma://`. It reuses allocation registration, grant epoch and completion
   owners; each request selects RDMA without a TCP/TENT payload fallback. The
@@ -364,7 +364,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   hardware runner executes the consumer's actual registered-read body with
   ordinary host backing, epoch/namespace controls, fragmented bytes/guards,
   native CQ counts and zero resource charges. The host component is separate
-  from the full pinned Manager/GPU gate. A CPU verbs fault control uses actual
+  from the embedded pinned Manager/GPU gate. A CPU verbs fault control uses actual
   TCP framing to show that a source MR-destroy failure can arrive as an ordinary
   backend error while the requester is locally drained: source backing,
   admission/staging charges and pending source close remain retained.

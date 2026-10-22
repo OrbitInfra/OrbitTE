@@ -231,7 +231,8 @@ same-RNIC RDMA staging GPU Save/Restore. It uses installed `libcudart.so.13.1.80
 and compatibility `libcuda.so.590.48.01`; the RDMA run maps real verbs/mlx5 and
 no TENT. Test-owned source/service workers drain and native/supervisor/coordinator
 processes are reaped; the fixture kills its private etcd, so graceful-etcd
-qualification is separate. External evidence remains outside the checkouts.
+qualification is separate. External evidence remains outside the checkouts and is indexed in
+[OrbitKV #306](https://github.com/OrbitInfra/OrbitKV/pull/306).
 This is neither an installed Manager nor cross-process CUDA IPC/cross-host
 Manager/GPU or GDR qualification. B-node compute remains untested while all
 canonical GPU leases are busy; do not take another workload's GPU.
