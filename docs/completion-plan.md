@@ -289,7 +289,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   leaves queued messages readable. Data results remain intact if notification
   delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
   malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. The original substage used OrbitTE wire v3 (now v5); native C allocation/free, asynchronous
+  pass. The original substage used OrbitTE wire v3 (now v6); native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
   scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
@@ -424,7 +424,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   remain usable. Native teardown must succeed before CPU access and source ACK.
   Explicit staging remains selectable; device allocations keep the declared
   staging path, and a failed host registration never falls back to staging.
-  Wire v5 rejects earlier peers: WRITE attempts can change application bytes
+  This substage used wire v5 (now v6), rejecting earlier peers: WRITE attempts can change application bytes
   before DONE/ACK, and a failed direct READ can already have changed its target.
   CPU fault controls cover mixed policies, exact MR extents, retained teardown,
   unregister and running cancel/detach/close. Source `09fa949` passes independent

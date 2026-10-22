@@ -238,7 +238,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v5 explicitly rejects v1-v4; it is OrbitTE-only. A WRITE attempt is marked
+Wire v6 explicitly rejects v1-v5; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have

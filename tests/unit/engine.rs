@@ -446,6 +446,15 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
         assert!(!timed.timed_out());
         drop(state);
         let stats = runtime.stats().unwrap();
+        let mut next = runtime.endpoint(&remote, 0, 8, 1, Instant::now() + Duration::from_secs(2));
+        if let Ok(endpoint) = &mut next {
+            endpoint.close().unwrap();
+        }
+        let reusable = next.is_ok();
+        drop(next);
+        lock.lock().unwrap().1 = true;
+        changed.notify_all();
+        let (report, bytes) = worker.join().unwrap();
         assert_eq!(
             (
                 stats.completed_window_binds,
@@ -456,15 +465,6 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
             (1, 1, 0, 0),
             "source must consume INV CQE and close the MW before ACK"
         );
-        let mut next = runtime.endpoint(&remote, 0, 8, 1, Instant::now() + Duration::from_secs(2));
-        if let Ok(endpoint) = &mut next {
-            endpoint.close().unwrap();
-        }
-        let reusable = next.is_ok();
-        drop(next);
-        lock.lock().unwrap().1 = true;
-        changed.notify_all();
-        let (report, bytes) = worker.join().unwrap();
         assert!(report.failure.is_none());
         assert_eq!(bytes, [0x42; 8]);
         assert_eq!(
