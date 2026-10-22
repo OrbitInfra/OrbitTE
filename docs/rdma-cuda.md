@@ -703,9 +703,10 @@ linkage stays deferred until independent acceptance of the complete P4 exit.
 
 ### Persistent key domain and bilateral incarnation qualification
 
-P4.7b implements the next connected-reuse prerequisites. Source/CPU and native
-qualification are pending. Each request still physically closes its QP, MW and
-parent MR; this stage does not enable a connected endpoint cache or MW rebind.
+P4.7b is independently accepted for the source/CPU and declared native profiles
+at `4d94410e56aa192a268fe75cc6d7cbe46c639f3a`. Each request still physically
+closes its QP, MW and parent MR; this stage does not enable a connected endpoint
+cache or MW rebind.
 
 The context's actual PD owner retains a bitmap for every native MW index it
 has used. A source constructor takes the provider's actual initial rkey,
@@ -776,6 +777,39 @@ QP/MW/MR close before releasing memory or ACK. Persistent connections still
 need a separately proven drain protocol, split connection/grant owners,
 nonrepeating per-grant WR identities and terminal store retirement. Full P4
 and OrbitKV linkage remain open.
+
+Independent source review passes stable/Rust 1.85 strict Clippy, the relevant
+feature and package/comparator/supervision gates, 110 CPU units plus
+notification/TCP/doc tests, and 20 release single-CPU runs with 16 test threads
+from each build. Thirty-eight old-logic executions across 19 fault families
+must fail assertions rather than timeout or fail compilation. Real control
+sockets keep malformed peers alive and check rejection before ACCEPT/connect,
+BIND/data, DONE or staged output commit. Source permission and both physical
+QP barriers remain unchanged.
+
+Each separately built native set passes four real invalidated/parent-key
+probes, six four-QP shared-CQ cases and fourteen public DRAM/pinned-host/mixed/
+staged/A-H20 GPU-staging/TCP regressions. The public source records six burned
+keys across one historical native index; the four-QP source records eight
+burns across four indices. History survives request resource close and reaches
+zero only at actual shared device close. Every set verifies 48 actual SSH waits
+and three controller waits, absence of all 96 owned native/supervisor PIDs,
+unchanged A19/B16 frozen libraries and mapped-file identities, reacquisition/
+release of the three original resource locks, and zero memory/no compute apps
+on A GPU7. B GPUs are never selected or queried.
+
+Evidence is external under `/root/orbitte-artifacts/rdma-key-domains-20261023/`:
+`independent-source-4d94410/independent-review.json` accepts source/CPU;
+`native-4d94410/implementation-hardware-review.json` records the implementation
+run; `independent-hardware-4d94410/independent-review.json` accepts the independent
+native profile. Initial MSRV/fixture failures, surviving old controls and the
+1884e74 interim native run remain preserved and do not qualify the final head.
+The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/20/checks) include the
+stable/MSRV feature matrix and the unmodified frozen TENT CPU comparison.
+Physical tag/index exhaustion, stale-key replay across native MW reallocation,
+delayed/replayed native completions, arbitrary cleanup/device/port faults and
+full P4 remain unqualified. No connected reuse,
+GDR, multirail, performance advantage or OrbitKV qualification is inferred.
 
 ### Run the native gate
 

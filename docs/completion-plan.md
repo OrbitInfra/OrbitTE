@@ -515,19 +515,23 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   review and two independently built 24-case native runs. Scope, exact artifacts
   and open physical fault gates are recorded in
   [the qualification](rdma-cuda.md#one-use-source-memory-window-qualification).
-- [ ] **P4.7b — persistent PD key domain and bilateral incarnations
-  (Implemented; qualification pending).** The actual PD owns a bounded,
+- [x] **P4.7b — persistent PD key domain and bilateral incarnations
+  (Accepted for the declared CPU/native profiles).** The actual PD owns a bounded,
   non-evicting bitmap of burned full MW rkeys across native MW destruction and
   reallocation. Tag/index-capacity exhaustion refuses authority before BIND;
-  failures retain the actual owners and history. Separate checked PD-owned
+  failed cleanup retains the actual owners and history. Separate checked PD-owned
   connection/grant counters and a random PD nonce drive OrbitTE wire v7.
   All RDMA phases bind both process/PD/connection identities, the exact request
   and an independent grant generation; no old-version fallback exists.
   Connections, MWs and parent MRs remain per request with both physical QP
   barriers. CPU controls cover all 256 tags, index limits, concurrent burns,
   unused grants, retained PDs, counter overflow and real control-socket replay
-  rejection before connect/BIND/data or staged output commit. Qualification
-  and remaining reuse limits are tracked in
+  rejection before connect/BIND/data or staged output commit. Source
+  `4d94410e56aa192a268fe75cc6d7cbe46c639f3a` passes independent stable/MSRV
+  review, 38 old-logic controls, 20 release single-CPU runs per build and two
+  independently built 24-case native regressions with complete resource close.
+  Native tag/index exhaustion and physical replay/fault injection remain
+  unqualified. Qualification and remaining reuse limits are tracked in
   [the contract](rdma-cuda.md#persistent-key-domain-and-bilateral-incarnation-qualification).
 - [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
@@ -538,11 +542,13 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   P4.5 caches requester local MRs; P4.6 shares the context CQ/worker. QPs and
   source grants remain per request. P4.7a adds one-use MW authority; its
   scoped acceptance is complete. P4.7b implements the persistent key domain and
-  bilateral incarnation/grant protocol above; its acceptance is pending.
+  bilateral incarnation/grant protocol above; its scoped acceptance is complete.
   Split persistent connection QP ownership from per-grant MW/MR/loan/charges,
   add terminal endpoint-store publication/detached retirement and nonrepeating
   per-grant WR namespaces, and establish the physical incoming-DMA drain
-  contract before persisting connected endpoints.
+  contract before persisting connected endpoints. Domain exhaustion requires
+  successful physical retirement before replacing a PD; never reset a live
+  PD's key history to recover capacity.
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete event-driven progress and backend cancellation qualification for

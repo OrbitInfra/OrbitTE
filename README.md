@@ -44,8 +44,10 @@ P4.7b implements a PD-lifetime full-rkey burn ledger: MW destruction cannot
 reset key history, and exhausted tags or historical-index capacity refuse new
 authority. OrbitTE wire v7 binds both process/PD/connection identities, an
 independent grant generation and the exact request through bootstrap, grant,
-DONE and ACK. Its qualification is pending. Connected QPs and grants remain
-per request while connection/grant ownership and physical drain are completed.
+DONE and ACK. Independent source/CPU review and two independently built
+24-case native runs accept this scoped prerequisite stage. Connected QPs and
+grants remain per request while connection/grant ownership and physical drain
+are completed.
 P4.6 shares one bounded CQ and
 one post/poll worker per context, with globally unique WR identities and
 separate QP/CQ quotas. Whole-engine `close(timeout)`
