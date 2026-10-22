@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use ibverbs_sys as ffi;
+
 use super::*;
 use crate::rdma::{
     Runtime,
@@ -62,15 +64,18 @@ fn context_consumer_acks_while_native_destroy_holds_request_lock() {
 fn context_consumer_acks_information_then_fences_unknown_events() {
     let runtime = runtime("async_ok");
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
-    for (index, kind) in [4, 5, 9].into_iter().enumerate() {
-        crate::rdma::device::tests::emit_async(&runtime, kind);
+    for (index, kind) in [ffi::IBV_EVENT_COMM_EST, ffi::IBV_EVENT_SQ_DRAINED]
+        .into_iter()
+        .enumerate()
+    {
+        crate::rdma::device::tests::emit_async(&runtime, kind as u8);
         wait(&runtime, |s| {
             s.acknowledged_async_events == index as u64 + 1
         });
         assert!(runtime.device().unwrap().asynchronous.check().is_ok());
     }
     crate::rdma::device::tests::emit_async(&runtime, 254);
-    wait(&runtime, |s| s.acknowledged_async_events == 4);
+    wait(&runtime, |s| s.acknowledged_async_events == 3);
     assert!(matches!(
         runtime.device().unwrap().asynchronous.check(),
         Err(Error::Backend {
@@ -86,23 +91,24 @@ fn context_consumer_acks_information_then_fences_unknown_events() {
         .unwrap();
     assert_eq!(runtime.stats().unwrap().async_event_workers, 0);
     for kind in [
-        0,
-        1,
-        2,
-        3,
-        6,
-        7,
-        8,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
+        ffi::IBV_EVENT_CQ_ERR,
+        ffi::IBV_EVENT_QP_FATAL,
+        ffi::IBV_EVENT_QP_REQ_ERR,
+        ffi::IBV_EVENT_QP_ACCESS_ERR,
+        ffi::IBV_EVENT_PATH_MIG,
+        ffi::IBV_EVENT_PATH_MIG_ERR,
+        ffi::IBV_EVENT_DEVICE_FATAL,
+        ffi::IBV_EVENT_PORT_ACTIVE,
+        ffi::IBV_EVENT_PORT_ERR,
+        ffi::IBV_EVENT_LID_CHANGE,
+        ffi::IBV_EVENT_PKEY_CHANGE,
+        ffi::IBV_EVENT_SM_CHANGE,
+        ffi::IBV_EVENT_SRQ_ERR,
+        ffi::IBV_EVENT_SRQ_LIMIT_REACHED,
+        ffi::IBV_EVENT_QP_LAST_WQE_REACHED,
+        ffi::IBV_EVENT_CLIENT_REREGISTER,
+        ffi::IBV_EVENT_GID_CHANGE,
+        ffi::IBV_EVENT_WQ_FATAL,
         u32::MAX,
     ] {
         let state = State::default();

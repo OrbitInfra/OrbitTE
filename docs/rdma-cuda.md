@@ -641,8 +641,8 @@ The context owns a separate nonblocking asynchronous event consumer through
 all affiliated QP/CQ destruction. It publishes a terminal atomic fence before
 ACK without acquiring a request/device lock; after ACK it never dereferences
 the event's native object. QP/CQ errors, port/topology/device changes and unknown
-events fence the shared lane. COMM_EST, SQ_DRAINED and PORT_ACTIVE are only
-informational; they never clear an existing failure. Lost event consumption
+events fence the shared lane, including PORT_ACTIVE. Only COMM_EST and
+SQ_DRAINED are informational; they never clear an existing failure. Lost event consumption
 retains actual children and loans rather than attempting a destroy that may
 wait forever for an unacknowledged event. Only after all QPs/CQs are closed does
 the context stop/join this consumer and close the PD/context. This is scoped

@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
+use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
+
 use super::{RdmaStats, cq, sys};
 use crate::{Error, Result};
 
@@ -57,7 +59,7 @@ impl State {
     fn event(&self, kind: u32) {
         // Only transport-independent informational events keep this fixed route
         // healthy. Unknown, port, topology and device changes fence the lane.
-        if !matches!(kind, 4 | 5 | 9) {
+        if !matches!(kind, IBV_EVENT_COMM_EST | IBV_EVENT_SQ_DRAINED) {
             let code = kind.min(i32::MAX as u32 - 1) as i32 + 1;
             let _ = self
                 .fault
