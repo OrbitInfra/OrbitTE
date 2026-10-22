@@ -113,6 +113,9 @@ fn finish(
     payload: usize,
     bytes: usize,
 ) -> Result<()> {
+    if let Some(path) = std::env::var_os("ORBITTE_HARDWARE_MAPS") {
+        std::fs::write(path, std::fs::read_to_string("/proc/self/maps")?)?;
+    }
     engine.close(TIMEOUT)?;
     engine.unregister_memory(&memory)?;
     drop(memory);

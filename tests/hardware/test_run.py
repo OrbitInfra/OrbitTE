@@ -17,7 +17,7 @@ class ResourceSelection(unittest.TestCase):
             root = Path(directory)
             binary = root / 'fixture'
             binary.write_bytes(b'not-executed')
-            profile = {'ssh_config': 'fixture-ssh', 'nodes': {'a': {'alias': 'fixture', 'hostname': 'fixture', 'boot_id': 'fixture', 'nic_lock': '/fixture/nic', 'gpu_lock': '/fixture/gpu', 'gpu_uuid': 'fixture-gpu'}}}
+            profile = {'ssh_config': 'fixture-ssh', 'nodes': {'a': {'alias': 'fixture', 'hostname': 'fixture', 'boot_id': 'fixture', 'nic_lock': '/fixture/nic', 'gpu_lock': '/fixture/gpu', 'gpu_uuid': 'fixture-gpu', 'env': {'LD_LIBRARY_PATH': '/fixture/compat', 'ROLE': 'node-default'}}}}
             controller = runner.Controller(profile, binary, root)
             controller.ssh = lambda *args: None
             controller.copy = lambda *args: None
@@ -25,7 +25,7 @@ class ResourceSelection(unittest.TestCase):
                 controller.start('a', '/fixture/case', 'cpu', ['one::exact::test'], 'rdma', {'ROLE': 'source'})
             config = json.loads((root / 'case.json').read_text())
             self.assertEqual(config['locks'], ['/fixture/nic'])
-            self.assertEqual(config['env'], {'ROLE': 'source'})
+            self.assertEqual(config['env'], {'ROLE': 'source', 'LD_LIBRARY_PATH': '/fixture/compat'})
             self.assertEqual(config['arguments'], ['one::exact::test'])
             self.assertNotIn('CUDA_VISIBLE_DEVICES', config['env'])
 

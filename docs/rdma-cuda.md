@@ -217,7 +217,11 @@ python3 tests/hardware/run.py --profile /external/profile.json \
 
 The profile supplies `ssh_config`, `rnic`, `gid_index`, `nodes` and `cases`.
 Each node has an existing SSH `alias`, exact `hostname`/`boot_id`, `bind` address,
-`nic_lock`, and (when GPU memory is used) `gpu_lock`/`gpu_uuid`. Each case has
+`nic_lock`, and (when GPU memory is used) `gpu_lock`/`gpu_uuid`. Optional node
+`env` selects explicit native library paths, such as a CUDA forward-compatibility
+library; role-specific environment and the selected GPU UUID take precedence.
+The controller collects actual native `/proc/self/maps` from both peers and
+requires them alongside successful supervision. Each case has
 `source`, `requester` node keys, `source_kind`, `requester_kind`, `transport`,
 `payload` (128 bytes..32 MiB), and `seed`. GPU cases expose only the selected UUID
 through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock paths
