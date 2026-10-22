@@ -109,8 +109,9 @@ class Controller:
         source_root = self.remote + f'/{index:02}-source'
         requester_root = self.remote + f'/{index:02}-requester'
         consumer = self.profile.get('runner') == 'orbitkv-peer-host'
-        shared = self.profile.get('runner') == 'orbitte-shared-cq'
-        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq']:
+        window_probe = self.profile.get('runner') == 'orbitte-window'
+        shared = self.profile.get('runner') in ['orbitte-shared-cq', 'orbitte-window']
+        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq', 'orbitte-window']:
             raise ValueError('unsupported hardware runner')
         if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
             raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
@@ -122,7 +123,8 @@ class Controller:
                 capacity, window = case['rdma_max_cqes'], case['rdma_max_send_wr']
                 if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= 2:
                     raise ValueError('invalid shared CQ/SQ profile')
-                arguments = ['rdma::cq::tests::hardware::shared_cq_peer', '--exact', '--ignored', '--test-threads=1', '--nocapture']
+                test = 'source_window_peer' if window_probe else 'shared_cq_peer'
+                arguments = ['rdma::cq::tests::hardware::' + test, '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
                     'ORBITTE_SHARED_ROLE': role,
                     'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
@@ -134,6 +136,10 @@ class Controller:
                     'ORBITTE_SHARED_WINDOW': str(window),
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
+                if window_probe:
+                    if case.get('window_probe') not in ['revoked', 'parent']:
+                        raise ValueError('invalid MW probe')
+                    environment['ORBITTE_WINDOW_PROBE'] = case['window_probe']
                 if readiness is not None:
                     if len(readiness) != 1:
                         raise ValueError('invalid shared CQ readiness')

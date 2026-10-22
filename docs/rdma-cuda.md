@@ -102,8 +102,9 @@ P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
 engines do not share PDs. P4.6 gives that context one shared CQ and one
 post/poll worker. Every request retains its own QP, exact direct range lease or
-stable staging. Source-grant and staging MRs remain per request, with
-independent permissions, rkey, QP and PSN. P4.5 requester local-only host MRs
+stable staging. P4.7a source parent MRs and MWs remain per request; parent
+MRs have LOCAL_WRITE|MW_BIND only. One-use Type-2B MWs grant exact READ or WRITE
+access after a successful BIND CQE. QPs and PSNs remain per request. P4.5 requester local-only host MRs
 outlive the request QP and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
 
@@ -153,11 +154,13 @@ native cleanup. Failed deregistration retains the real MR/backing/device and
 full physical charge, poisons further RDMA admission, and is never retried by
 close or Drop.
 
-Source-grant MRs deliberately retain exact per-request remote permissions and
-revocation through native deregistration. A requester cached MR has no remote
-read/write permission. Persisting source remote rkeys requires its own authority
-and revocation contract before endpoint reuse; a local reference count is not
-that proof.
+Source parent MRs deliberately have no remote read/write permission. Their
+one-use Type-2B MWs grant only the exact requested range and direction. The
+provider must advertise Type-2B MW support; unsupported allocation is an error,
+never a fallback to a remote-enabled parent MR. A requester cached MR remains
+local-only. Persisting QPs/MWs still requires a bounded key-generation/reuse
+domain and both endpoint incarnations before connected reuse; a local reference
+count is not that proof.
 
 Canonical `HostMemory` owns raw stable backing and a range-access authority.
 Direct leases use allocation-relative ranges and retain the exact
@@ -173,14 +176,17 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-The requester exchanges validated descriptors, connects its RC QP and posts
-bounded windows of signaled slice WRs. After all required CQ identities,
+Protocol v6 exchanges QP-only descriptors with zero memory address/key. Both
+RC QPs connect; the source posts BIND_MW through the shared worker and consumes
+its exact successful CQE before publishing the MW grant. The requester checks
+that the grant preserves that QP/PSN/GID and then posts bounded signaled slices. After all required CQ identities,
 opcodes/statuses and READ byte counts pass, it destroys
 its QP, returns the local cached-MR borrow (or destroys its private MR), and
 releases its direct range lease before sending DONE. The shared CQ continues
 serving other request QPs. The source
-then destroys its own handles and releases its direct lease, or commits WRITE
-staging, and drops the source endpoint/output charge before its final ACK.
+then posts LOCAL_INV and consumes its exact successful CQE. It destroys QP,
+MW and parent MR, releases its direct lease or commits WRITE staging, and drops
+the source endpoint/output charge before its final ACK.
 That ACK permits the next request to reuse the native endpoint/byte quota.
 Requester READ staging copies back after ACK.
 
@@ -604,6 +610,51 @@ multirail/discovery, event progress, actual native failures and full P4 remain
 open. Endpoint reuse must establish remote authorization revocation and both
 endpoint incarnations before replacing the per-request QP/MR authority
 boundary. OrbitKV linkage remains deferred to the accepted complete P4 exit.
+
+### One-use source memory window qualification
+
+P4.7a implements source MW authority; independent source/native acceptance is
+pending. This is a prerequisite of connected endpoint reuse. QPs and parent
+MRs still close for each request. One MW binds once, so this profile does not
+rotate a key on a persistent QP or establish a reusable key namespace.
+
+The layering follows frozen TENT's context/PD, registered buffers, context CQ
+and worker-owned completions. The MW boundary is a deliberate stricter source
+authority contract, rather than a claim that frozen TENT uses this handshake.
+The selected `ibverbs-sys` vendored rdma-core v55 manpages require a successful
+BIND CQE before publishing a key over a different channel; deallocating a MW
+unbinds it, and a bound MW prevents parent MR deregistration. Upstream's
+[parent MR and Type-2 tests](https://github.com/linux-rdma/rdma-core/blob/a758c7ba0d5e49fef3a6b62b153b3ffd29a7f7f3/tests/test_mr.py#L256)
+exercise LOCAL_WRITE|MW_BIND without parent remote flags and invalidated-key
+remote-access rejection.
+
+BIND/INV reserve the same physical SQ/CQ budget as data, use distinct never-
+recycled WR slots, validate QP identity/status/opcode and count no payload bytes.
+A grant can be exported only while its successful bind is live. INV completion
+revokes a key; it does not independently prove completion of arbitrary incoming
+DMA. The normal path still requires requester data completions, requester QP
+close and DONE, followed by INV completion and source QP/MW/MR cleanup. EOF,
+timeout or unknown BIND/INV post/completion uses the real QP/CQ barrier before
+releasing a loan. Failed cleanup retains actual owners/charges without retry.
+
+`active_windows` includes every allocated native MW until successful deallocation;
+`retained_windows` counts remaining actual MWs after failed cleanup. Successful
+bind/invalidation counters are separate from read/write CQ/byte counters. The
+six-request public RDMA source profile requires six allocations/binds/INVs and
+zero remaining MWs. TCP/requester peers have zero MWs. Four-QP source profiles
+require eight binds/INVs over READ and WRITE phases.
+
+The ignored `rdma::cq::tests::hardware::source_window_peer` gate, selected by
+`runner: orbitte-window`, accepts `window_probe: revoked` or `parent` on CPU
+RDMA peers. It intentionally submits one WRITE with an invalidated key or the
+unadvertised non-remote parent key while the source QP stays alive. Acceptance
+requires a real REM_ACCESS_ERR, unchanged complete backing/guards, physical
+close and no remaining owners. It does not qualify arbitrary device/CQ teardown
+faults, persistent key reuse, connected reuse, GDR or the complete P4 exit.
+
+Evidence belongs outside the checkout under
+`/root/orbitte-artifacts/rdma-windows-20261022/`. Missing or failed native gates
+remain unqualified. OrbitKV linkage stays deferred until the complete P4 exit.
 
 ### Run the native gate
 

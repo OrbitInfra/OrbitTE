@@ -124,6 +124,19 @@ fn finish(
         .stats()?
         .rdma
         .ok_or(Error::Internal("missing RDMA counters"))?;
+    let windows = if role == "source" && transport == Transport::Rdma {
+        6
+    } else {
+        0
+    };
+    if idle.active_windows != 0
+        || idle.retained_windows != 0
+        || idle.opened_windows != windows
+        || idle.completed_window_binds != windows
+        || idle.completed_window_invalidations != windows
+    {
+        return Err(Error::Internal("source MW lifecycle counters differ"));
+    }
     if idle.active_cqs != usize::from(transport == Transport::Rdma)
         || idle.opened_cqs != u64::from(transport == Transport::Rdma)
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
@@ -148,6 +161,8 @@ fn finish(
         || stats.allocated_batches != 0
         || stats.requester_workers != 0
         || stats.active_source_operations != 0
+        || rdma.active_windows != 0
+        || rdma.retained_windows != 0
         || rdma.active_cqs != 0
         || rdma.retained_cqs != 0
         || rdma.progress_workers != 0
@@ -179,6 +194,10 @@ fn finish(
     {
         return Err(Error::Internal("CUDA resources were retained"));
     }
+    println!(
+        "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
+        rdma.opened_windows, rdma.completed_window_binds, rdma.completed_window_invalidations
+    );
     println!(
         "ORBITTE_SHARED_STATS {{\"opened_cqs\":{},\"idle_progress_workers\":{},\"peak_pending_qps\":{},\"active_cqs\":0,\"progress_workers\":0,\"retained_cqs\":0,\"progress_failures\":0}}",
         rdma.opened_cqs, idle.progress_workers, rdma.peak_pending_qps

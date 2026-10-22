@@ -3,6 +3,22 @@ use std::sync::{Arc, Mutex};
 use super::{RdmaStats, sys};
 use crate::{Error, Result, TransferOp};
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum Operation {
+    Read,
+    Write,
+    Bind,
+    Invalidate,
+}
+impl From<TransferOp> for Operation {
+    fn from(value: TransferOp) -> Self {
+        match value {
+            TransferOp::Read => Self::Read,
+            TransferOp::Write => Self::Write,
+        }
+    }
+}
+
 /// Owns the signaled-WR debt until validated CQ completion or native teardown.
 pub(super) struct SendQueue {
     requests: Vec<sys::WorkRequest>,
@@ -55,6 +71,29 @@ impl SendQueue {
         Ok(Self {
             requests,
             first_id,
+            cursor: 0,
+            window_start: 0,
+            pending: 0,
+            usage,
+        })
+    }
+
+    pub(super) fn control(usage: Arc<Mutex<RdmaStats>>, id: u64) -> Result<Self> {
+        if id == 0 {
+            return Err(Error::InvalidRange);
+        }
+        let mut requests = Vec::new();
+        requests
+            .try_reserve_exact(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        requests.push(sys::WorkRequest {
+            id,
+            offset: 0,
+            length: 0,
+        });
+        Ok(Self {
+            requests,
+            first_id: id,
             cursor: 0,
             window_start: 0,
             pending: 0,
@@ -126,8 +165,9 @@ impl SendQueue {
     pub(super) fn complete(
         &mut self,
         completion: sys::Completion,
-        operation: TransferOp,
+        operation: impl Into<Operation>,
     ) -> Result<()> {
+        let operation = operation.into();
         let index = completion
             .id
             .checked_sub(self.first_id)
@@ -139,10 +179,15 @@ impl SendQueue {
             return Err(Error::Protocol("RDMA duplicate completion"));
         }
         let request = &self.requests[index];
-        let expected_opcode = if operation == TransferOp::Write { 1 } else { 2 };
+        let expected_opcode = match operation {
+            Operation::Write => 1,
+            Operation::Read => 2,
+            Operation::Bind => 5,
+            Operation::Invalidate => 6,
+        };
         if completion.status == 0
             && (completion.opcode != expected_opcode
-                || (operation == TransferOp::Read && completion.length != request.length))
+                || (operation == Operation::Read && completion.length != request.length))
         {
             return Err(Error::Protocol("RDMA completion opcode/length"));
         }
@@ -159,12 +204,16 @@ impl SendQueue {
                 code: completion.status as i32,
             });
         }
-        if operation == TransferOp::Read {
+        if operation == Operation::Read {
             usage.completed_reads += 1;
             usage.completed_read_bytes += u64::from(request.length);
-        } else {
+        } else if operation == Operation::Write {
             usage.completed_writes += 1;
             usage.completed_write_bytes += u64::from(request.length);
+        } else if operation == Operation::Bind {
+            usage.completed_window_binds += 1;
+        } else {
+            usage.completed_window_invalidations += 1;
         }
         Ok(())
     }

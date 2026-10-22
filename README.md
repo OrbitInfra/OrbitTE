@@ -34,7 +34,11 @@ They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 Each engine lazily reuses one RNIC context/PD. Requester local-only host MRs
 now persist across requests in a bounded registration cache, while source-grant
-MRs and QPs remain exclusive to each request. P4.6 shares one bounded CQ and
+parent MRs and QPs remain exclusive to each request. P4.7a implements one-use
+Type-2B MW source grants: parent MRs have LOCAL_WRITE/MW_BIND permissions only;
+bound MW keys become visible after a successful BIND CQE and are invalidated
+before final ACK. Its independent/native acceptance remains pending.
+P4.6 shares one bounded CQ and
 one post/poll worker per context, with globally unique WR identities and
 separate QP/CQ quotas. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed

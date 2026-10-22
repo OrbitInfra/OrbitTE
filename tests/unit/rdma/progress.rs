@@ -217,3 +217,59 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
     assert_eq!(usage.lock().unwrap().work_requests, 3);
     queue.quiesce();
 }
+
+#[test]
+fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
+    for (operation, opcode) in [(Operation::Bind, 5), (Operation::Invalidate, 6)] {
+        let usage = usage();
+        let mut queue = SendQueue::control(Arc::clone(&usage), 65).unwrap();
+        assert_eq!(queue.reserve(1, 1).unwrap().len(), 1);
+        queue
+            .posted(
+                0,
+                sys::PostResult {
+                    accepted: 1,
+                    uncertain: false,
+                },
+            )
+            .unwrap();
+        assert!(
+            queue
+                .complete(
+                    sys::Completion {
+                        id: 65,
+                        opcode: 2,
+                        ..Default::default()
+                    },
+                    operation
+                )
+                .is_err()
+        );
+        assert_eq!(usage.lock().unwrap().work_requests, 1);
+        queue
+            .complete(
+                sys::Completion {
+                    id: 65,
+                    opcode,
+                    ..Default::default()
+                },
+                operation,
+            )
+            .unwrap();
+        let s = *usage.lock().unwrap();
+        assert_eq!(
+            (
+                s.work_requests,
+                s.completed_reads,
+                s.completed_writes,
+                s.completed_read_bytes,
+                s.completed_write_bytes
+            ),
+            (0, 0, 0, 0, 0)
+        );
+        assert_eq!(
+            s.completed_window_binds + s.completed_window_invalidations,
+            1
+        );
+    }
+}

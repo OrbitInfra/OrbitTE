@@ -65,7 +65,7 @@ pub(super) struct Request {
 
 struct Work {
     queue: progress::SendQueue,
-    operation: TransferOp,
+    operation: progress::Operation,
     remote: Descriptor,
     deadline: Instant,
 }
@@ -281,7 +281,7 @@ impl Progress {
         let tag = control.next_tag;
         let next = tag
             .checked_add(1)
-            .filter(|next| next.checked_mul(64).is_some())
+            .filter(|next| next.checked_mul(super::WR_ID_STRIDE).is_some())
             .ok_or(Error::ResourceExhausted)?;
         control.next_tag = next;
         let record = Arc::new(Record {
@@ -338,16 +338,67 @@ impl Progress {
                 self.shared.config.block_size,
                 cap,
                 Arc::clone(&self.shared.usage),
-                record.tag * 64 + 1,
+                record.tag * super::WR_ID_STRIDE + 1,
             )?;
             request.work = Some(Work {
                 queue,
+                operation: operation.into(),
+                remote,
+                deadline,
+            });
+            request.phase = Phase::Queued;
+        }
+        self.wait(record, deadline)
+    }
+
+    pub(super) fn window(
+        &self,
+        record: &Arc<Record>,
+        operation: progress::Operation,
+        deadline: Instant,
+    ) -> Result<()> {
+        remaining(deadline)?;
+        {
+            let mut request = record.lock()?;
+            request.check()?;
+            if request.phase != Phase::Connected {
+                return Err(Error::Internal("MW QP is not ready"));
+            }
+            let resources = request
+                .resources
+                .as_mut()
+                .ok_or(Error::Internal("missing MW owner"))?;
+            if resources.handles.mw.is_null() {
+                return Err(Error::Unavailable("source MW is unavailable"));
+            }
+            let slot = match operation {
+                progress::Operation::Bind if !resources.window_used => {
+                    resources.window_used = true;
+                    65
+                }
+                progress::Operation::Invalidate if resources.window_bound => 66,
+                _ => return Err(Error::Internal("MW authorization state")),
+            };
+            let remote = Descriptor {
+                address: resources.buffer.address().as_ptr() as u64,
+                rkey: resources.handles.window_key,
+                ..Default::default()
+            };
+            request.work = Some(Work {
+                queue: progress::SendQueue::control(
+                    Arc::clone(&self.shared.usage),
+                    record.tag * super::WR_ID_STRIDE + slot,
+                )?,
                 operation,
                 remote,
                 deadline,
             });
             request.phase = Phase::Queued;
         }
+        self.wait(record, deadline)
+    }
+
+    fn wait(&self, record: &Arc<Record>, deadline: Instant) -> Result<()> {
         record.actions.fetch_or(WORK, Ordering::Release);
         self.shared.signal();
         let mut request = record.lock()?;
@@ -526,12 +577,19 @@ impl Shared {
         let mut count = 0;
         let mut bytes = 0;
         let mut debt = 0;
+        let mut windows = 0;
         for record in &records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if request.phase != Phase::Retained {
                 count += 1;
                 bytes += request.resources.as_ref().map_or(0, |r| r.buffer.len());
                 debt += request.work.as_ref().map_or(0, |w| w.queue.outstanding());
+                windows += usize::from(
+                    request
+                        .resources
+                        .as_ref()
+                        .is_some_and(|r| !r.handles.mw.is_null()),
+                );
                 request.phase = Phase::Retained;
                 request.failure = Some(Fault::Unquiesced(operation, code));
             }
@@ -546,6 +604,7 @@ impl Shared {
             usage.retained_bytes += bytes;
             usage.retained_work_requests += debt;
             usage.retained_cqs += usize::from(cq.is_some());
+            usage.retained_windows += windows;
             control.finished = true;
             cq
         };
@@ -556,6 +615,16 @@ impl Shared {
     }
 
     fn close_mr(&self, resources: &mut Resources) -> std::result::Result<(), (&'static str, i32)> {
+        if !resources.handles.mw.is_null() {
+            let code = unsafe { (self.verbs.dealloc_window)(&mut resources.handles) };
+            if code != 0 {
+                return Err(("ibv_dealloc_mw", code));
+            }
+            self.usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .active_windows -= 1;
+        }
         if let Some(cached) = &mut resources.cached_mr {
             cached.release().map_err(|error| match error {
                 Error::Unquiesced { operation, code } => (operation, code),
@@ -715,17 +784,28 @@ impl Shared {
         let mut posted = sys::PostResult::default();
         *phase = Phase::Posted;
         let code = unsafe {
-            (self.verbs.post)(
-                &mut resources.handles,
-                requests.as_ptr(),
-                requests.len(),
-                resources.buffer.address().as_ptr() as u64,
-                resources.buffer.len(),
-                work.remote.address,
-                work.remote.rkey,
-                i32::from(work.operation == TransferOp::Write),
-                &mut posted,
-            )
+            match work.operation {
+                progress::Operation::Read | progress::Operation::Write => (self.verbs.post)(
+                    &mut resources.handles,
+                    requests.as_ptr(),
+                    requests.len(),
+                    resources.buffer.address().as_ptr() as u64,
+                    resources.buffer.len(),
+                    work.remote.address,
+                    work.remote.rkey,
+                    i32::from(work.operation == progress::Operation::Write),
+                    &mut posted,
+                ),
+                progress::Operation::Bind | progress::Operation::Invalidate => (self.verbs.window)(
+                    &mut resources.handles,
+                    requests[0].id,
+                    resources.buffer.address().as_ptr() as u64,
+                    resources.buffer.len(),
+                    resources.permission,
+                    work.operation == progress::Operation::Bind,
+                    &mut posted,
+                ),
+            }
         };
         if let Err(error) = work.queue.posted(code, posted) {
             let fault = Fault::from_error(error);
@@ -743,7 +823,11 @@ impl Shared {
     }
 
     fn complete(&self, completion: sys::Completion) {
-        let Some(tag) = completion.id.checked_sub(1).map(|id| id / 64) else {
+        let Some(tag) = completion
+            .id
+            .checked_sub(1)
+            .map(|id| id / super::WR_ID_STRIDE)
+        else {
             self.fail(Fault::Protocol("RDMA completion identity"));
             return;
         };
@@ -767,6 +851,18 @@ impl Shared {
         } else {
             Err(Error::Protocol("RDMA completion before submission"))
         };
+        if result.is_ok() {
+            let operation = request.work.as_ref().map(|w| w.operation);
+            if matches!(
+                operation,
+                Some(progress::Operation::Bind | progress::Operation::Invalidate)
+            ) {
+                if let Some(resources) = &mut request.resources {
+                    resources.window_bound = operation == Some(progress::Operation::Bind);
+                }
+                request.phase = Phase::Connected;
+            }
+        }
         if let Err(error) = result {
             let fault = Fault::from_error(error);
             request.failure = Some(fault);

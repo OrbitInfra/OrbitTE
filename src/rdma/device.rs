@@ -130,7 +130,7 @@ impl Device {
         };
         // SAFETY: the request and progress lane retain the Device and shared CQ;
         // its mutex excludes progress/cleanup while these handles initialize.
-        check("ibverbs endpoint construction", unsafe {
+        let code = unsafe {
             (self.verbs.open)(
                 &mut resources.handles,
                 &device.handles,
@@ -143,7 +143,13 @@ impl Device {
                 config.max_send_wr as u32,
                 local,
             )
-        })
+        };
+        if !resources.handles.mw.is_null() {
+            let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.active_windows += 1;
+            usage.opened_windows += 1;
+        }
+        check("ibverbs endpoint construction", code)
     }
 
     /// Runtime calls this only after endpoint admission is fenced and drained;
