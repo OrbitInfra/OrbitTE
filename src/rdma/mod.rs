@@ -12,6 +12,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 mod device;
 mod progress;
+mod registration;
 mod sys;
 
 use device::Device;
@@ -44,6 +45,8 @@ pub struct RdmaConfig {
     pub block_size: usize,
     /// Maximum signaled work requests in one exclusive QP/CQ window (1..=64).
     pub max_send_wr: usize,
+    pub max_cached_mrs: usize,
+    pub max_cached_mr_bytes: usize,
 }
 
 impl RdmaConfig {
@@ -60,6 +63,8 @@ impl RdmaConfig {
             max_direct_bytes: 64 << 20,
             block_size: 64 << 10,
             max_send_wr: 16,
+            max_cached_mrs: 64,
+            max_cached_mr_bytes: 64 << 20,
         }
     }
 
@@ -69,6 +74,8 @@ impl RdmaConfig {
             || self.device.contains('\0')
             || self.port == 0
             || self.hop_limit == 0
+            || self.max_cached_mrs == 0
+            || self.max_cached_mr_bytes == 0
             || self.max_endpoints == 0
             || self.max_staging_bytes == 0
             || self.max_direct_bytes == 0
@@ -100,6 +107,13 @@ pub struct RdmaStats {
     pub opened_direct_endpoints: u64,
     pub retained_endpoints: usize,
     pub retained_bytes: usize,
+    /// Local-only MR owners, including creation, closing and retained failures.
+    pub persistent_mrs: usize,
+    pub persistent_mr_bytes: usize,
+    pub retained_persistent_mrs: usize,
+    pub opened_persistent_mrs: u64,
+    pub reused_persistent_mrs: u64,
+    pub evicted_persistent_mrs: u64,
     pub completed_reads: u64,
     pub completed_writes: u64,
     pub completed_read_bytes: u64,
@@ -120,6 +134,7 @@ pub(crate) struct Runtime {
     usage: Arc<Mutex<RdmaStats>>,
     verbs: &'static sys::Verbs,
     device: Mutex<DeviceCache>,
+    pub(crate) registrations: Arc<registration::HostRegistrations>,
 }
 
 #[derive(Default)]
@@ -132,11 +147,15 @@ struct DeviceCache {
 impl Runtime {
     pub(crate) fn new(config: RdmaConfig) -> Result<Arc<Self>> {
         config.validate()?;
+        let usage = Arc::default();
+        let registrations =
+            registration::HostRegistrations::new(&config, Arc::clone(&usage), &sys::REAL);
         Ok(Arc::new(Self {
             config,
-            usage: Arc::default(),
+            usage,
             verbs: &sys::REAL,
             device: Mutex::default(),
+            registrations,
         }))
     }
 
@@ -175,26 +194,33 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn close(&self) -> Result<()> {
-        let mut cache = self
-            .device
-            .lock()
-            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-        cache.closed = true;
-        if let Some((operation, code)) = cache.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        let usage = self.stats()?;
-        if usage.retained_endpoints != 0 {
-            return Err(Error::Unavailable("RDMA endpoints retain native resources"));
-        }
-        if usage.active_endpoints != 0 {
-            return Err(Error::Timeout);
-        }
-        if let Some(owner) = &cache.owner {
+    pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
+        let owner = {
+            let mut cache = self
+                .device
+                .lock()
+                .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
+            cache.closed = true;
+            if let Some((operation, code)) = cache.failure {
+                return Err(Error::Unquiesced { operation, code });
+            }
+            let usage = self.stats()?;
+            if usage.retained_endpoints != 0 {
+                return Err(Error::Unavailable("RDMA endpoints retain native resources"));
+            }
+            if usage.active_endpoints != 0 {
+                return Err(Error::Timeout);
+            }
+            cache.owner.clone()
+        };
+        self.registrations.close(deadline)?;
+        if let Some(owner) = owner {
             owner.close()?;
         }
-        cache.owner = None;
+        self.device
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?
+            .owner = None;
         Ok(())
     }
 
@@ -204,6 +230,7 @@ impl Runtime {
         offset: usize,
         length: usize,
         permission: u32,
+        deadline: Instant,
     ) -> Result<Endpoint> {
         if length == 0 || length > u32::MAX as usize {
             return Err(Error::InvalidRange);
@@ -229,7 +256,10 @@ impl Runtime {
                 .checked_add(length)
                 .ok_or(Error::ResourceExhausted)?;
             let over_limit = bytes > limit;
-            if usage.retained_endpoints != 0 || usage.retained_devices != 0 {
+            if usage.retained_endpoints != 0
+                || usage.retained_devices != 0
+                || usage.retained_persistent_mrs != 0
+            {
                 return Err(Error::Unavailable(
                     "RDMA admission is poisoned by retained native resources",
                 ));
@@ -260,10 +290,23 @@ impl Runtime {
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         let device = self.device()?;
+        let cached_mr = if is_direct && permission == 0 {
+            Some(
+                self.registrations
+                    .acquire(Arc::clone(&device), memory, deadline)?,
+            )
+        } else {
+            None
+        };
+        let mut handles = sys::Handles::default();
+        if let Some(registration) = &cached_mr {
+            handles.mr = registration.handle()?;
+        }
         let mut endpoint = Endpoint {
             resources: Some(Box::new(Resources {
                 _device: Arc::clone(&device),
-                handles: sys::Handles::default(),
+                handles,
+                cached_mr,
                 buffer,
                 lease,
                 progress: None,
@@ -379,6 +422,7 @@ impl Drop for Staging {
 struct Resources {
     _device: Arc<Device>,
     handles: sys::Handles,
+    cached_mr: Option<registration::MrLease>,
     buffer: Buffer,
     lease: Lease,
     progress: Option<progress::SendQueue>,
@@ -578,6 +622,8 @@ impl Endpoint {
                     &mut resources.handles,
                     requests.as_ptr(),
                     requests.len(),
+                    resources.buffer.address().as_ptr() as u64,
+                    resources.buffer.len(),
                     remote.address,
                     remote.rkey,
                     i32::from(operation == TransferOp::Write),
@@ -612,11 +658,20 @@ impl Endpoint {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
-        if let Err(Error::Backend { operation, code }) =
-            close_handles(self.verbs, &mut resources.handles)
-        {
+        if let Err(error) = close_handles(
+            self.verbs,
+            &mut resources.handles,
+            resources.cached_mr.as_mut(),
+        ) {
             self.retain();
-            return Err(Error::Unquiesced { operation, code });
+            return Err(match error {
+                Error::Backend { operation, code } => Error::Unquiesced { operation, code },
+                error @ Error::Unquiesced { .. } => error,
+                _ => Error::Unquiesced {
+                    operation: "RDMA endpoint close",
+                    code: libc::EIO,
+                },
+            });
         }
         if let Some(queue) = &mut resources.progress {
             queue.quiesce();
@@ -631,17 +686,20 @@ impl Endpoint {
     }
 }
 
-fn close_handles(verbs: &sys::Verbs, handles: &mut sys::Handles) -> Result<()> {
-    for (operation, close) in [
-        ("ibv_destroy_qp", verbs.destroy_qp),
-        ("ibv_dereg_mr", verbs.deregister),
-        ("ibv_destroy_cq", verbs.destroy_cq),
-    ] {
-        // SAFETY: each bridge checks for a null handle and clears only on native
-        // success. Stop on error so dependent resources cannot be freed early.
-        check(operation, unsafe { close(handles) })?;
+fn close_handles(
+    verbs: &sys::Verbs,
+    handles: &mut sys::Handles,
+    cached: Option<&mut registration::MrLease>,
+) -> Result<()> {
+    // SAFETY: stop on the first error, retaining every remaining dependency.
+    check("ibv_destroy_qp", unsafe { (verbs.destroy_qp)(handles) })?;
+    if let Some(cached) = cached {
+        cached.release()?;
+        handles.mr = std::ptr::null_mut();
+    } else {
+        check("ibv_dereg_mr", unsafe { (verbs.deregister)(handles) })?;
     }
-    Ok(())
+    check("ibv_destroy_cq", unsafe { (verbs.destroy_cq)(handles) })
 }
 
 impl Endpoint {

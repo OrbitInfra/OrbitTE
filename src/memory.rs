@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 use std::ptr::NonNull;
+#[cfg(feature = "rdma")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::{Error, RemoteRegion, Result, SourceEpoch};
@@ -294,6 +296,36 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "rdma")]
+    pub(crate) fn is_active(&self) -> bool {
+        self.0.active.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "rdma")]
+    #[allow(unsafe_code)]
+    pub(crate) fn host_address(&self) -> Result<NonNull<u8>> {
+        #[cfg(not(feature = "cuda"))]
+        let Allocation::Host(memory) = &self.0.allocation;
+        #[cfg(feature = "cuda")]
+        let Allocation::Host(memory) = &self.0.allocation else {
+            return Err(Error::Unavailable("persistent MR requires host memory"));
+        };
+        let backing = memory
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        // SAFETY: registration retains this exact stable allocation range.
+        Ok(unsafe {
+            NonNull::new_unchecked(
+                backing
+                    .bytes
+                    .address()
+                    .as_ptr()
+                    .add(self.0.allocation_offset),
+            )
+        })
+    }
+
+    #[cfg(feature = "rdma")]
     pub(crate) fn is_cuda(&self) -> bool {
         match &self.0.allocation {
             Allocation::Host(_) => false,
@@ -425,6 +457,8 @@ pub(crate) struct Registration {
     pub(crate) descriptor: RemoteRegion,
     allocation: Allocation,
     allocation_offset: usize,
+    #[cfg(feature = "rdma")]
+    active: AtomicBool,
     budget: Arc<Mutex<MemoryUsage>>,
 }
 
@@ -678,6 +712,8 @@ impl MemoryRegistry {
                     },
                     allocation: allocation.clone(),
                     allocation_offset: *offset,
+                    #[cfg(feature = "rdma")]
+                    active: AtomicBool::new(true),
                     budget: Arc::clone(&self.budget),
                 }));
                 entries.retained.push(RetainedRange {
@@ -714,6 +750,8 @@ impl MemoryRegistry {
             .ok_or(Error::RegionNotFound)?;
         entry.references -= 1;
         if entry.references == 0 {
+            #[cfg(feature = "rdma")]
+            entry.memory.0.active.store(false, Ordering::Release);
             entries.regions.remove(&memory.id());
         }
         Ok(())
