@@ -11,6 +11,7 @@ use crate::engine::remaining;
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 mod device;
+mod progress;
 mod sys;
 
 use device::Device;
@@ -27,7 +28,7 @@ pub enum RdmaHostMemory {
     Staged,
 }
 
-/// Explicit RNIC selection. This profile creates an RC endpoint per slice.
+/// Explicit RNIC selection. This profile creates an RC endpoint per request.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
     pub device: String,
@@ -39,6 +40,10 @@ pub struct RdmaConfig {
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
     pub max_direct_bytes: usize,
+    /// TENT's base slice size. Large requests adapt to a bounded slice count.
+    pub block_size: usize,
+    /// Maximum signaled work requests in one exclusive QP/CQ window (1..=64).
+    pub max_send_wr: usize,
 }
 
 impl RdmaConfig {
@@ -53,6 +58,8 @@ impl RdmaConfig {
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             max_direct_bytes: 64 << 20,
+            block_size: 64 << 10,
+            max_send_wr: 16,
         }
     }
 
@@ -65,6 +72,8 @@ impl RdmaConfig {
             || self.max_endpoints == 0
             || self.max_staging_bytes == 0
             || self.max_direct_bytes == 0
+            || !(1..=64 << 20).contains(&self.block_size)
+            || !(1..=64).contains(&self.max_send_wr)
         {
             return Err(Error::InvalidConfig(
                 "RDMA needs an explicit device, port, hop limit and positive budgets",
@@ -93,6 +102,17 @@ pub struct RdmaStats {
     pub retained_bytes: usize,
     pub completed_reads: u64,
     pub completed_writes: u64,
+    pub completed_read_bytes: u64,
+    pub completed_write_bytes: u64,
+    /// Reserved or possibly posted WR slots pending CQ validation or teardown.
+    pub work_requests: usize,
+    pub retained_work_requests: usize,
+    pub peak_work_requests: usize,
+    pub posted_work_requests: u64,
+    pub post_calls: u64,
+    pub partial_posts: u64,
+    pub uncertain_posts: u64,
+    pub completion_errors: u64,
 }
 
 pub(crate) struct Runtime {
@@ -246,6 +266,8 @@ impl Runtime {
                 handles: sys::Handles::default(),
                 buffer,
                 lease,
+                progress: None,
+                max_read_slices: if memory.is_cuda() { 32 } else { 64 },
             })),
             local: Descriptor::default(),
             config: self.config.clone(),
@@ -359,6 +381,8 @@ struct Resources {
     handles: sys::Handles,
     buffer: Buffer,
     lease: Lease,
+    progress: Option<progress::SendQueue>,
+    max_read_slices: usize,
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -528,59 +552,59 @@ impl Endpoint {
         {
             return Err(Error::InvalidRange);
         }
-        // SAFETY: the MR, QP and bytes remain owned until successful destruction,
-        // including errors or timeout after this one signaled WR is attempted.
-        let code = unsafe {
-            (self.verbs.post)(
-                &mut resources.handles,
-                remote.address,
-                remote.rkey,
-                resources.buffer.len() as u32,
-                i32::from(operation == TransferOp::Write),
-            )
+        let cap = if operation == TransferOp::Write {
+            32
+        } else {
+            resources.max_read_slices
         };
-        self.phase = Phase::Posted;
-        check("ibv_post_send", code)?;
-        loop {
+        resources.progress = Some(progress::SendQueue::new(
+            resources.buffer.len(),
+            self.config.block_size,
+            cap,
+            Arc::clone(&resources.lease.usage),
+        )?);
+        let queue = resources
+            .progress
+            .as_mut()
+            .ok_or(Error::Internal("missing RDMA send queue"))?;
+        while !queue.finished() {
             remaining(deadline)?;
-            let mut completion = sys::Completion::default();
-            // SAFETY: the CQ is live and only this thread polls this endpoint.
-            let count = unsafe { (self.verbs.poll)(&mut resources.handles, &mut completion) };
-            if count < 0 {
-                return Err(Error::Backend {
-                    operation: "ibv_poll_cq",
-                    code: count,
-                });
+            let requests = queue.reserve(self.config.max_send_wr)?;
+            let mut posted = sys::PostResult::default();
+            // SAFETY: Resources owns stable MR/QP/backing and this queue. The
+            // native call consumes descriptors but may retain access to bytes.
+            let code = unsafe {
+                (self.verbs.post)(
+                    &mut resources.handles,
+                    requests.as_ptr(),
+                    requests.len(),
+                    remote.address,
+                    remote.rkey,
+                    i32::from(operation == TransferOp::Write),
+                    &mut posted,
+                )
+            };
+            self.phase = Phase::Posted;
+            queue.posted(code, posted)?;
+            while queue.pending() {
+                remaining(deadline)?;
+                let mut completion = sys::Completion::default();
+                // SAFETY: this thread exclusively polls its live endpoint CQ.
+                let count = unsafe { (self.verbs.poll)(&mut resources.handles, &mut completion) };
+                match count {
+                    0 => thread::sleep(remaining(deadline)?.min(Duration::from_micros(50))),
+                    1 => queue.complete(completion, operation)?,
+                    count if count < 0 => {
+                        return Err(Error::Backend {
+                            operation: "ibv_poll_cq",
+                            code: count,
+                        });
+                    }
+                    _ => return Err(Error::Protocol("RDMA poll returned more than one CQE")),
+                }
             }
-            if count == 1 {
-                if completion.status != 0 {
-                    return Err(Error::Backend {
-                        operation: "RDMA work completion",
-                        code: completion.status as i32,
-                    });
-                }
-                let expected_opcode = if operation == TransferOp::Write { 1 } else { 2 };
-                if completion.id != 1
-                    || completion.opcode != expected_opcode
-                    || (operation == TransferOp::Read
-                        && completion.length as usize != resources.buffer.len())
-                {
-                    return Err(Error::Protocol("RDMA completion identity/opcode/length"));
-                }
-                let mut usage = resources
-                    .lease
-                    .usage
-                    .lock()
-                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-                if operation == TransferOp::Read {
-                    usage.completed_reads += 1;
-                } else {
-                    usage.completed_writes += 1;
-                }
-                return Ok(());
-            }
-            thread::sleep(remaining(deadline)?.min(Duration::from_micros(50)));
         }
+        Ok(())
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {
@@ -593,6 +617,9 @@ impl Endpoint {
         {
             self.retain();
             return Err(Error::Unquiesced { operation, code });
+        }
+        if let Some(queue) = &mut resources.progress {
+            queue.quiesce();
         }
         if let Buffer::Direct { loan, .. } = &mut resources.buffer {
             // Release CPU/alias exclusion before a source completion ACK. No
@@ -628,6 +655,10 @@ impl Endpoint {
                     .unwrap_or_else(|poison| poison.into_inner());
                 usage.retained_endpoints += 1;
                 usage.retained_bytes += resources.buffer.len();
+                usage.retained_work_requests += resources
+                    .progress
+                    .as_ref()
+                    .map_or(0, |queue| queue.outstanding());
             }
             std::mem::forget(resources);
         }

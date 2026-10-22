@@ -104,6 +104,7 @@ impl Device {
                 resources.buffer.len(),
                 permission,
                 psn,
+                endpoint.config.max_send_wr as u32,
                 &mut endpoint.local,
             )
         };

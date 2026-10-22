@@ -19,6 +19,7 @@ struct Fake {
     bytes: *mut u8,
     operation: i32,
     closed: usize,
+    completions: std::collections::VecDeque<sys::Completion>,
 }
 
 // CPU ABI controls, not a device emulator or proof that DMA completed.
@@ -56,6 +57,7 @@ unsafe extern "C" fn open(
     length: usize,
     _: u32,
     psn: u32,
+    _: u32,
     descriptor: *mut Descriptor,
 ) -> c_int {
     let device = unsafe { &*(*device).context.cast::<FakeDevice>() };
@@ -71,6 +73,7 @@ unsafe extern "C" fn open(
         bytes: bytes.cast(),
         operation: 0,
         closed: 0,
+        completions: std::collections::VecDeque::new(),
     }));
     unsafe {
         (*h).cq = state.cast();
@@ -102,23 +105,54 @@ unsafe extern "C" fn connect(
 }
 unsafe extern "C" fn post(
     h: *mut sys::Handles,
+    requests: *const sys::WorkRequest,
+    count: usize,
     remote: u64,
     _: u32,
-    length: u32,
     write: c_int,
+    result: *mut sys::PostResult,
 ) -> c_int {
     let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
     state.operation = write;
-    if state.mode.contains("copy") {
-        // CPU mutation under the production lease; not a simulated DMA receipt.
-        let remote = remote as usize as *mut u8;
-        unsafe {
-            if write != 0 {
-                std::ptr::copy(state.bytes, remote, length as usize);
-            } else {
-                std::ptr::copy(remote, state.bytes, length as usize);
+    let requests = unsafe { std::slice::from_raw_parts(requests, count) };
+    let partial = state.mode.starts_with("partial");
+    let uncertain = state.mode.contains("unknown") || state.mode == "copy_post";
+    let accepted = if partial {
+        count.min(1)
+    } else if state.mode == "post" {
+        0
+    } else {
+        count
+    };
+    for request in &requests[..accepted] {
+        assert!(request.offset as usize + request.length as usize <= state.length);
+        if state.mode.contains("copy") {
+            // CPU mutation under production leases, not a DMA receipt.
+            unsafe {
+                let local = state.bytes.add(request.offset as usize);
+                let remote = (remote as usize as *mut u8).add(request.offset as usize);
+                if write != 0 {
+                    std::ptr::copy(local, remote, request.length as usize);
+                } else {
+                    std::ptr::copy(remote, local, request.length as usize);
+                }
             }
         }
+        state.completions.push_back(sys::Completion {
+            id: if state.mode == "identity" {
+                u64::MAX
+            } else {
+                request.id
+            },
+            opcode: if write == 1 { 1 } else { 2 },
+            length: if state.mode == "length" {
+                request.length - 1
+            } else {
+                request.length
+            },
+            status: u32::from(state.mode == "wc"),
+            vendor_error: 0,
+        });
     }
     if state.mode == "pause_copy" {
         let device = unsafe { &*state.device };
@@ -130,27 +164,44 @@ unsafe extern "C" fn post(
             state = ready.wait(state).unwrap();
         }
     }
-    i32::from(state.mode == "post" || state.mode == "copy_post")
+    unsafe {
+        *result = sys::PostResult {
+            accepted: if uncertain { 0 } else { accepted },
+            uncertain,
+        };
+    }
+    if partial || uncertain || state.mode == "post" {
+        libc::ENOMEM
+    } else {
+        0
+    }
 }
 unsafe extern "C" fn poll(h: *mut sys::Handles, completion: *mut sys::Completion) -> c_int {
-    let state = unsafe { &*(*h).cq.cast::<Fake>() };
-    if state.mode == "timeout" {
+    let state = unsafe { &mut *(*h).cq.cast::<Fake>() };
+    if state.mode.starts_with("timeout") {
         return 0;
     }
     if state.mode == "poll" {
         return -1;
     }
-    unsafe {
-        *completion = sys::Completion {
-            id: if state.mode == "identity" { 2 } else { 1 },
-            opcode: if state.operation == 1 { 1 } else { 2 },
-            length: state.length as u32,
-            status: u32::from(state.mode == "wc"),
-            vendor_error: 0,
-        };
+    let value = if state.mode == "reverse" {
+        state.completions.pop_back()
+    } else {
+        state.completions.pop_front()
+    };
+    if let Some(mut value) = value {
+        if state.mode == "duplicate" {
+            value.id = 1;
+        }
+        unsafe {
+            *completion = value;
+        }
+        1
+    } else {
+        0
     }
-    1
 }
+
 unsafe fn close(h: *mut sys::Handles, index: usize) -> c_int {
     let handles = unsafe { &mut *h };
     let state_pointer = handles.cq.cast::<Fake>();
@@ -170,7 +221,7 @@ unsafe fn close(h: *mut sys::Handles, index: usize) -> c_int {
         .lock()
         .unwrap()
         .push(["destroy_qp", "deregister", "destroy_cq"][index]);
-    if state.mode == format!("close{index}") || (state.mode == "open_close1" && index == 1) {
+    if state.mode.ends_with(&format!("close{index}")) {
         return 16;
     }
     *handle = std::ptr::null_mut();
@@ -250,12 +301,18 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
             max_staging_bytes: 8,
             host_memory,
             max_direct_bytes: 8,
+            block_size: if mode == "pause_copy" { 2 } else { 64 << 10 },
+            max_send_wr: if mode == "pause_copy" { 2 } else { 16 },
             ..RdmaConfig::new(mode)
         },
         usage: Arc::default(),
         verbs: &VERBS,
         device: Mutex::default(),
     }
+}
+
+pub(crate) fn work_usage(runtime: &Runtime) -> Arc<Mutex<RdmaStats>> {
+    Arc::clone(&runtime.usage)
 }
 
 impl Runtime {
@@ -335,6 +392,18 @@ fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
         },
         RdmaConfig {
             port: 0,
+            ..RdmaConfig::new("x")
+        },
+        RdmaConfig {
+            max_send_wr: 0,
+            ..RdmaConfig::new("x")
+        },
+        RdmaConfig {
+            max_send_wr: 65,
+            ..RdmaConfig::new("x")
+        },
+        RdmaConfig {
+            block_size: 0,
             ..RdmaConfig::new("x")
         },
     ] {
@@ -556,5 +625,69 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
             usize::from(!retained),
             "{mode}"
         );
+    }
+}
+
+#[test]
+fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only_after_close() {
+    for (mode, owed, retained) in [
+        ("reverse", 0, false),
+        ("partial", 1, false),
+        ("unknown", 4, false),
+        ("identity", 4, false),
+        ("duplicate", 3, false),
+        ("length", 4, false),
+        ("wc", 3, false),
+        ("timeout", 4, false),
+        ("partial_close0", 1, true),
+        ("unknown_close1", 4, true),
+        ("timeout_close2", 4, true),
+    ] {
+        let registry = crate::memory::MemoryRegistry::new(SourceEpoch([1; 16]), 1, 128);
+        let memory = registry
+            .register(
+                vec![0x55; 128].into_boxed_slice(),
+                crate::Permission::LocalOnly,
+            )
+            .unwrap();
+        let mut runtime = runtime(&format!("direct:{mode}"));
+        runtime.config.max_direct_bytes = 128;
+        runtime.config.block_size = 16;
+        runtime.config.max_send_wr = 4;
+        let mut endpoint = runtime.endpoint(&memory, 0, 128, 0).unwrap();
+        let remote = endpoint.descriptor();
+        endpoint.connect(&remote).unwrap();
+        let result = endpoint.transfer(
+            &remote,
+            TransferOp::Read,
+            Instant::now() + Duration::from_millis(2),
+        );
+        assert_eq!(result.is_ok(), mode == "reverse", "{mode}: {result:?}");
+        assert!(
+            matches!(memory.read(0, &mut [0; 1]), Err(Error::Unavailable(_))),
+            "all request bytes remain leased until native close"
+        );
+        let stats = runtime.stats().unwrap();
+        assert_eq!(stats.work_requests, owed, "{mode}");
+        assert_eq!(stats.peak_work_requests, 4);
+        assert_eq!(stats.post_calls, if mode == "reverse" { 2 } else { 1 });
+        assert_eq!(endpoint.close().is_err(), retained, "{mode}");
+        let stats = runtime.stats().unwrap();
+        assert_eq!(stats.work_requests, if retained { owed } else { 0 });
+        assert_eq!(
+            stats.retained_work_requests,
+            if retained { owed } else { 0 }
+        );
+        if retained {
+            assert!(matches!(
+                memory.write(127, &[9]),
+                Err(Error::Unavailable(_))
+            ));
+            assert!(runtime.close().is_err());
+        } else {
+            memory.write(127, &[9]).unwrap();
+            drop(endpoint);
+            runtime.close().unwrap();
+        }
     }
 }

@@ -42,6 +42,12 @@ host profile now passes independent CPU review and twelve two-host ordinary
 DRAM/CUDA-pinned host direct, mixed/staged and A-H20 device-staging/TCP cases.
 The complete native P4 stage remains open; consumer linkage resumes after its
 larger stage boundary.
+Native requests now follow TENT's adaptive/folded slice geometry and bounded
+signaled-WR windows. Per-slice CQ identities and accepted post prefixes own
+physical WR charges independently of whole-request success; failed native
+teardown retains the real backing and outstanding debt. This new substage's
+physical qualification remains pending; the earlier single-WR evidence does
+not qualify it.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

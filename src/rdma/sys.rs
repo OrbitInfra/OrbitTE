@@ -52,6 +52,21 @@ pub(super) struct Completion {
     pub vendor_error: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(super) struct WorkRequest {
+    pub id: u64,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Default)]
+#[repr(C)]
+pub(super) struct PostResult {
+    pub accepted: usize,
+    pub uncertain: bool,
+}
+
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
@@ -62,6 +77,7 @@ pub(super) struct Verbs {
         u8,
         *mut c_void,
         usize,
+        u32,
         u32,
         u32,
         *mut Descriptor,
@@ -75,7 +91,15 @@ pub(super) struct Verbs {
         u8,
         u8,
     ) -> c_int,
-    pub post: unsafe extern "C" fn(*mut Handles, u64, u32, u32, c_int) -> c_int,
+    pub post: unsafe extern "C" fn(
+        *mut Handles,
+        *const WorkRequest,
+        usize,
+        u64,
+        u32,
+        c_int,
+        *mut PostResult,
+    ) -> c_int,
     pub poll: unsafe extern "C" fn(*mut Handles, *mut Completion) -> c_int,
     pub destroy_qp: Close,
     pub deregister: Close,
@@ -134,6 +158,7 @@ unsafe extern "C" fn open(
     length: usize,
     permission: u32,
     psn: u32,
+    max_send_wr: u32,
     local: *mut Descriptor,
 ) -> c_int {
     // SAFETY: Endpoint retains the shared Device and exclusive stable bytes.
@@ -165,7 +190,7 @@ unsafe extern "C" fn open(
         }
         h.cq = ffi::ibv_create_cq(
             device.context.cast(),
-            4,
+            max_send_wr as c_int,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             0,
@@ -173,6 +198,9 @@ unsafe extern "C" fn open(
         .cast();
         if h.cq.is_null() {
             return failure();
+        }
+        if (*h.cq.cast::<ffi::ibv_cq>()).cqe < max_send_wr as c_int {
+            return libc::EOPNOTSUPP;
         }
         let mut access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
         if permission & 1 != 0 {
@@ -190,13 +218,16 @@ unsafe extern "C" fn open(
         init.recv_cq = h.cq.cast();
         init.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
         init.sq_sig_all = 1;
-        init.cap.max_send_wr = 1;
+        init.cap.max_send_wr = max_send_wr;
         init.cap.max_recv_wr = 1;
         init.cap.max_send_sge = 1;
         init.cap.max_recv_sge = 1;
         h.qp = ffi::ibv_create_qp(device.pd.cast(), &mut init).cast();
         if h.qp.is_null() {
             return failure();
+        }
+        if init.cap.max_send_wr < max_send_wr || init.cap.max_send_sge < 1 {
+            return libc::EOPNOTSUPP;
         }
         let mut qp_attr: ffi::ibv_qp_attr = std::mem::zeroed();
         qp_attr.qp_state = ffi::ibv_qp_state::IBV_QPS_INIT;
@@ -285,39 +316,87 @@ unsafe extern "C" fn connect(
 
 unsafe extern "C" fn post(
     h: *mut Handles,
+    requests: *const WorkRequest,
+    count: usize,
     address: u64,
     rkey: u32,
-    length: u32,
     write: c_int,
+    result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: Endpoint holds the MR/QP and exclusive staging until close.
-    // libibverbs consumes the stack WR/SGE during post; only MR bytes outlive it.
+    // SAFETY: Endpoint owns the MR/QP and bytes until successful teardown. The
+    // provider consumes these WR/SGE descriptors synchronously during post.
     unsafe {
-        let h = &*h;
-        let mr = &*h.mr.cast::<ffi::ibv_mr>();
-        let mut sge = ffi::ibv_sge {
-            addr: mr.addr as u64,
-            length,
-            lkey: mr.lkey,
-        };
-        let mut wr: ffi::ibv_send_wr = std::mem::zeroed();
-        wr.wr_id = 1;
-        wr.sg_list = &mut sge;
-        wr.num_sge = 1;
-        wr.opcode = if write != 0 {
-            ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
-        } else {
-            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
-        };
-        wr.send_flags = ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
-        wr.wr.rdma.remote_addr = address;
-        wr.wr.rdma.rkey = rkey;
-        let mut bad = std::ptr::null_mut();
-        let qp = h.qp.cast::<ffi::ibv_qp>();
-        match (*(*qp).context).ops.post_send {
-            Some(post_send) => post_send(qp, &mut wr, &mut bad),
-            None => libc::EOPNOTSUPP,
+        *result = PostResult::default();
+        if count == 0 || count > 64 {
+            return libc::EINVAL;
         }
+        let h = &*h;
+        let qp = h.qp.cast::<ffi::ibv_qp>();
+        let Some(post_send) = (*(*qp).context).ops.post_send else {
+            return libc::EOPNOTSUPP;
+        };
+        let mr = &*h.mr.cast::<ffi::ibv_mr>();
+        let requests = std::slice::from_raw_parts(requests, count);
+        let mut sges = Vec::new();
+        let mut wrs = Vec::new();
+        if sges.try_reserve_exact(count).is_err() || wrs.try_reserve_exact(count).is_err() {
+            return libc::ENOMEM;
+        }
+        for request in requests {
+            if request.length == 0
+                || (request.offset as usize)
+                    .checked_add(request.length as usize)
+                    .is_none_or(|end| end > mr.length)
+            {
+                return libc::EINVAL;
+            }
+            let Some(local) = (mr.addr as u64).checked_add(u64::from(request.offset)) else {
+                return libc::EINVAL;
+            };
+            let Some(remote) = address.checked_add(u64::from(request.offset)) else {
+                return libc::EINVAL;
+            };
+            if remote.checked_add(u64::from(request.length)).is_none() {
+                return libc::EINVAL;
+            }
+            sges.push(ffi::ibv_sge {
+                addr: local,
+                length: request.length,
+                lkey: mr.lkey,
+            });
+            let mut wr: ffi::ibv_send_wr = std::mem::zeroed();
+            wr.wr_id = request.id;
+            wr.num_sge = 1;
+            wr.opcode = if write != 0 {
+                ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+            } else {
+                ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
+            };
+            wr.send_flags = ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
+            wr.wr.rdma.remote_addr = remote;
+            wr.wr.rdma.rkey = rkey;
+            wrs.push(wr);
+        }
+        for index in 0..count {
+            wrs[index].sg_list = &mut sges[index];
+            wrs[index].next = if index + 1 == count {
+                std::ptr::null_mut()
+            } else {
+                &mut wrs[index + 1]
+            };
+        }
+        let mut bad = std::ptr::null_mut();
+        let code = post_send(qp, wrs.as_mut_ptr(), &mut bad);
+        if code == 0 {
+            (*result).accepted = count;
+        } else if let Some(index) = wrs.iter_mut().position(|wr| std::ptr::eq(wr, bad)) {
+            (*result).accepted = index;
+        } else {
+            // A missing/foreign bad_wr cannot prove an unposted suffix. Do not
+            // dereference it or subtract it from an unrelated allocation.
+            (*result).uncertain = true;
+        }
+        code
     }
 }
 

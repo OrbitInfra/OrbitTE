@@ -544,6 +544,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     let runtime = requester.source.rdma.as_ref().unwrap();
     let pause = crate::rdma::tests::pause(runtime);
     let events = crate::rdma::tests::events(runtime);
+    let usage = crate::rdma::tests::work_usage(runtime);
     let remote = source
         .register_memory(vec![0x44; 8].into_boxed_slice(), Permission::RemoteRead)
         .unwrap();
@@ -583,6 +584,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
         local.read(0, &mut [0; 8]),
         Err(Error::Unavailable(_))
     ));
+    assert_eq!(usage.lock().unwrap().work_requests, 2);
     fixture.memory.write(0, &[9; 4]).unwrap();
     assert!(batch.cancel(0).unwrap());
     assert!(matches!(
@@ -631,5 +633,15 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     source.close(Duration::from_secs(2)).unwrap();
     assert!(events.lock().unwrap().contains(&"dealloc_pd"));
     assert!(events.lock().unwrap().contains(&"close_device"));
+    let stats = usage.lock().unwrap();
+    assert_eq!(
+        (
+            stats.post_calls,
+            stats.completed_reads,
+            stats.completed_read_bytes,
+            stats.work_requests
+        ),
+        (2, 4, 8, 0)
+    );
     assert_eq!(fixture.drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.3/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.4/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -98,7 +98,7 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive slices retain that actual shared owner; separate
-engines do not share PDs. Every slice still owns its CQ/QP/MR and stable host
+engines do not share PDs. Every request still owns its CQ/QP/MR and stable host
 staging or exact direct host range, with independent permissions, rkey, QP and
 PSN. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
@@ -127,11 +127,50 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-The requester exchanges validated descriptors, connects its RC QP and posts one
-signaled WR. It checks CQ identity/opcode/status and READ byte count, destroys
+The requester exchanges validated descriptors, connects its RC QP and posts
+bounded windows of signaled slice WRs. After all required CQ identities,
+opcodes/statuses and READ byte counts pass, it destroys
 QP/MR/CQ and releases any direct range lease before sending DONE. The source
 then destroys its own handles and releases its direct lease, or commits WRITE
 staging, before its final ACK. Requester READ staging copies back after ACK.
+
+P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
+`endpoint.cpp::submitSlices` and `workers.cpp` completion ownership. The base
+`RdmaConfig.block_size` defaults to 64 KiB. Requests adapt to at most 64 slices
+for host-local READ or 32 for WRITE/device-local READ; CUDA-pinned host memory
+counts as host. A final tail shorter than one quarter of the chosen block folds
+into the preceding slice. The entire requested range remains leased even after
+a window's CQEs have arrived. This is one exclusive request/QP/CQ, not TENT's
+shared worker and CQ pools.
+
+`max_send_wr` defaults to 16 and accepts 1..64; native CQ capacity and returned
+QP capabilities must cover that many signaled WRs. One window must finish
+before the next is posted. WR IDs remain unique across the entire request.
+RDMA READ credit stays at one; SQ/CQ capacity is not a claim of simultaneous
+READ credit or throughput. Window metadata is bounded to at most 64 slices.
+Port/rail discovery, shared progress and persistent resources remain open.
+
+Before a post dispatch, all window slots become charged. A known `bad_wr`
+identity proves only an accepted prefix and an unposted suffix. A null/foreign
+pointer on post failure leaves the whole window potentially posted; the engine
+never dereferences or subtracts that pointer. Post failure stops the request
+and sends no DONE. Unknown/duplicate CQ identity, wrong success opcode/READ
+length, CQ errors and deadline expiry also stop progress. A logical failure
+clears no unproven native debt. Normal QP/MR/CQ teardown clears whatever remains;
+failed teardown retains the actual queue metadata, allocation, registration and
+charges. TENT's pre-destroy cancellation of quota is not a release proof here.
+
+`completed_reads`/`completed_writes` count successful slice CQEs;
+`completed_read_bytes`/`completed_write_bytes` count their exact payload bytes.
+`posted_work_requests` counts the proven accepted prefix, `post_calls` counts
+verbs-post dispatch calls, and `partial_posts`/`uncertain_posts` distinguish
+error receipts. `work_requests` counts reserved or possibly posted slots;
+`retained_work_requests` survives failed teardown, and `peak_work_requests`
+records the runtime high-water charge. A completed CQE can release its WR slot,
+while the complete request's DMA lease remains until native close. Application
+batch completion/bytes still require the whole request and final source receipt;
+physical CQ progress alone cannot publish or roll back application data.
+Running cancellation remains logical and does not interrupt accepted windows.
 
 Wire v5 explicitly rejects v1-v4; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
@@ -155,7 +194,7 @@ staging and context. Failed native frees retain resources and their driver.
 ## Failure, drain and resource ownership
 
 Endpoint count, registered direct host bytes and staging bytes stay bounded
-per engine. Each slice tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
+per engine. Each request tears down QP -> MR -> CQ, stopping on the first error. Failed teardown
 retains the remaining handles, actual staging or direct registration/allocation
 lease, its real shared device reference and budgets; later RDMA admission is
 rejected. Even dropping the engine cannot destroy a context/PD still retained
@@ -315,7 +354,8 @@ WRITEs, generation-specific notifications and complete source/destination/guard
 comparisons. Each run varies a deterministic seed. It checks exact completion
 bytes and successful requester WR counts, closes the whole engine, then
 unregisters/releases memory and checks zero remaining registrations, workers,
-shared RDMA devices, endpoints, direct/staging bytes and retained CUDA resources.
+shared RDMA devices, endpoints, direct/staging bytes, WR debt and retained CUDA
+resources.
 Direct host peers must construct exactly six direct endpoints; device-staged or
 explicit-staging peers must construct zero. These counters accompany real CQ
 counts and full byte comparisons rather than replacing them. It supports `cpu`, `pinned:N` and `cuda:N` memory on either peer.
@@ -341,8 +381,12 @@ requires them alongside successful supervision. Each case has
 `payload` (128 bytes..32 MiB), and `seed`. Optional `host_memory` selects
 `direct` (default) or `staged`; `source_host_memory`/`requester_host_memory`
 override that per peer. The example receives the explicit policy through
-`ORBITTE_RDMA_HOST_MEMORY`; the library itself uses per-engine Rust config.
-GPU cases expose only the selected UUID
+`ORBITTE_RDMA_HOST_MEMORY`. Optional `rdma_block_size` and `rdma_max_send_wr`
+select positive bounded values through the example's `ORBITTE_RDMA_BLOCK_SIZE`
+and `ORBITTE_RDMA_MAX_SEND_WR`; the library itself uses per-engine Rust config.
+Current probes record exact slice CQ/byte/debt/post counters. The older scoped
+qualification above used one WR per request and its 3/3 CQ counts apply only to
+those frozen sources. GPU cases expose only the selected UUID
 through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock paths
 must match the resource owner's existing convention.
 

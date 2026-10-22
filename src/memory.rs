@@ -294,6 +294,15 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "rdma")]
+    pub(crate) fn is_cuda(&self) -> bool {
+        match &self.0.allocation {
+            Allocation::Host(_) => false,
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(_) => true,
+        }
+    }
+
+    #[cfg(feature = "rdma")]
     #[allow(unsafe_code)]
     pub(crate) fn host_dma_lease(
         &self,

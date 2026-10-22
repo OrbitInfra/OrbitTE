@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.3 implemented with scoped native acceptance; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.3 scoped acceptance; P4.4 fragmented WR windows implemented, qualification pending; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -435,6 +435,19 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   [qualification and external evidence](rdma-cuda.md#direct-host-mr-qualification).
   This is per-request registration, not TENT's persistent MR cache, endpoint
   pooling, GDR or complete P4.
+- [x] **P4.4 — bounded native slice submission and completion debt
+  (Implemented; native qualification and independent acceptance pending).**
+  The frozen TENT slice geometry uses a 64 KiB base, adaptive CPU READ cap64 or
+  WRITE/device cap32 and quarter-block short-tail folding. One request retains
+  its complete MR/DMA lease across bounded, all-signaled WR windows, with unique
+  IDs, exact local/remote offsets and CQ status/opcode/READ-length checks.
+  Known accepted prefixes release only an unposted suffix; unknown `bad_wr`
+  preserves the entire possible debt without dereferencing an untrusted pointer
+  or replay. Physical slice bytes/CQs and whole-request completion are distinct.
+  Successful QP/MR/CQ teardown clears remaining WR charges; failed teardown
+  retains real owners and debt. This prerequisite precedes persistent MR and
+  endpoint-store reuse. It does not add pooled CQs/QPs, backend abort, multirail,
+  asynchronous event progress, direct GPU registration or complete P4.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -721,8 +734,10 @@ are accepted for that declared profile; physical faults and complete P4 remain
 open. Preserve failed runs and ownership controls. Missing fault or hardware
 gates remain unqualified.
 
-Continue within P4 to persistent MR and endpoint-store ownership, fragmented
-work and CQ progress, device/topology discovery and multirail. Follow the frozen
+P4.4 first establishes multi-WR completion and quota ownership before resources
+become persistent: qualify bounded native windows, adapted/folded slices and
+partial-post/CQ/teardown controls. Then continue within P4 to persistent MR and
+endpoint-store ownership, device/topology discovery and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.

@@ -135,6 +135,11 @@ fn finish(
         || rdma.active_endpoints != 0
         || rdma.staging_bytes != 0
         || rdma.direct_bytes != 0
+        || rdma.work_requests != 0
+        || rdma.retained_work_requests != 0
+        || rdma.partial_posts != 0
+        || rdma.uncertain_posts != 0
+        || rdma.completion_errors != 0
         || rdma.opened_direct_endpoints != if expect_direct { 6 } else { 0 }
         || rdma.retained_endpoints != 0
         || rdma.retained_bytes != 0
@@ -150,11 +155,16 @@ fn finish(
         return Err(Error::Internal("CUDA resources were retained"));
     }
     println!(
-        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{}}}",
+        "{{\"role\":\"{role}\",\"transport\":\"{transport:?}\",\"status\":\"passed\",\"payload_bytes\":{payload},\"completed_bytes\":{bytes},\"full_buffer_and_guards\":true,\"locally_drained\":true,\"registered_regions\":0,\"active_devices\":0,\"retained_devices\":0,\"opened_rdma_devices\":{},\"active_endpoints\":0,\"staging_bytes\":0,\"direct_bytes\":0,\"opened_direct_endpoints\":{},\"completed_rdma_reads\":{},\"completed_rdma_writes\":{},\"completed_rdma_read_bytes\":{},\"completed_rdma_write_bytes\":{},\"work_requests\":0,\"retained_work_requests\":0,\"peak_work_requests\":{},\"posted_work_requests\":{},\"post_calls\":{},\"partial_posts\":0,\"uncertain_posts\":0,\"completion_errors\":0}}",
         rdma.opened_devices,
         rdma.opened_direct_endpoints,
         rdma.completed_reads,
-        rdma.completed_writes
+        rdma.completed_writes,
+        rdma.completed_read_bytes,
+        rdma.completed_write_bytes,
+        rdma.peak_work_requests,
+        rdma.posted_work_requests,
+        rdma.post_calls
     );
     Ok(())
 }
@@ -173,6 +183,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
         _ => return Err("ORBITTE_RDMA_HOST_MEMORY must be direct or staged".into()),
     };
+    if let Ok(value) = env::var("ORBITTE_RDMA_BLOCK_SIZE") {
+        rdma.block_size = value.parse()?;
+    }
+    if let Ok(value) = env::var("ORBITTE_RDMA_MAX_SEND_WR") {
+        rdma.max_send_wr = value.parse()?;
+    }
     let kind = &args[5];
     let payload: usize = args[6].parse()?;
     let seed: u64 = args[7].parse()?;
@@ -317,7 +333,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         verify(&memory, &expected)?;
         batch.free()?;
         let rdma = engine.stats()?.rdma.ok_or("missing RDMA stats")?;
-        if transport == Transport::Rdma && (rdma.completed_reads != 3 || rdma.completed_writes != 3)
+        if transport == Transport::Rdma
+            && (rdma.completed_reads < 3
+                || rdma.completed_writes < 3
+                || rdma.completed_read_bytes != transferred as u64
+                || rdma.completed_write_bytes != transferred as u64
+                || rdma.posted_work_requests != rdma.completed_reads + rdma.completed_writes
+                || rdma.peak_work_requests == 0)
         {
             return Err("no actual RDMA completion counters".into());
         }
