@@ -373,10 +373,14 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   bytes/guards and zero normal-close resource charges, with no CUDA/TENT mapped.
   Frozen source, binary and external evidence locations are linked in
   [OrbitTE #12](https://github.com/OrbitInfra/OrbitTE/pull/12) and
-  [OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305). Current consumer
-  Manager/GPU qualification needs CUDA 13. Supplied driver535 nodes cannot supply
-  that gate, and old CUDA 12.2 consumer pilots remain historical. Source/requester physical RNIC faults, lost DONE/ACK qualification,
-  installed serving, endpoint caching, zero-copy, GDR and multirail stay open.
+  [OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305). A separate A-node
+  CUDA 13.1 compatibility profile passes pinned source grants and embedded
+  Manager TCP/RDMA staging GPU Save/Restore at `660f893d`; R535 alone does not
+  exclude CUDA 13 when supported compatibility libraries are loaded. See the
+  [runtime profile](rdma-cuda.md). B-node compute awaits free GPU leases.
+  Installed serving, cross-process CUDA IPC, physical cross-host Manager/GPU,
+  source/requester RNIC faults, lost DONE/ACK qualification, endpoint caching,
+  zero-copy, GDR and multirail stay open. Old CUDA 12.2 pilots remain historical.
 - [ ] Implement explicit verbs/provider FFI, device/port/GID discovery, topology,
   MR/PD/CQ/QP registration and lifecycle, bootstrap and endpoint caching.
 - [ ] Implement fragmented/large READ and WRITE, actual completion byte/error
@@ -644,9 +648,11 @@ and independent acceptance remain separate states.
 
 P2.3's source/H20 TCP pilot and P4.2a's registered-host RDMA component have
 independent source/CPU review and rerun acceptance; installed consumer
-qualification remains open. Next close P4.2a's CUDA 13 pinned Manager and physical
-native-fault/drain gates; preserve P4.1/P5.1 owners before expanding
-registrations, endpoints or hardware claims.
+qualification remains open. A separate CUDA 13.1 compatibility profile passes
+A-node pinned source grants and embedded Manager TCP/RDMA staging GPU restores.
+Next qualify installed process boundaries/CUDA IPC, physical cross-host
+Manager/GPU and native-fault/drain gates; preserve P4.1/P5.1 owners before
+expanding registrations, endpoints or hardware claims.
 Retain the [native CPU comparison](cpu-oracle.md#run-the-gates) alongside the
 [CPU gates](cpu-tcp.md#verification). The Manager uses gRPC generation completion;
 the transfer notification mailbox remains a separate API contract.

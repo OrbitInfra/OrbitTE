@@ -204,8 +204,12 @@ Set `rdma_port`, keep both memory kinds `cpu` and transport `rdma`, and use
 for the native runner; CUDA is never initialized and no GPU lock is requested.
 Source/requester maps are collected. It checks consumer READ selection and
 execution, not its PinnedAllocator, Manager grants/GPU restore or installed
-serving. Current OrbitKV consumer builds require CUDA 13; driver535 nodes are
-usable for this host-only gate but cannot qualify its full Manager/GPU path.
+serving. Current OrbitKV consumer builds require CUDA 13. Kernel R535 alone
+is not an exclusion: the supplied H20 nodes also install `cuda-compat-13-1`
+user-mode driver 590.48.01, a combination supported by NVIDIA's
+[forward-compatibility matrix](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html).
+Check mapped user-mode libraries and actual feature gates instead of inferring
+support from the kernel driver version.
 
 The consumer `660f893d` host component and `ff30ee1` runner/source-retention
 controls have independent source review and reruns. The physical RoCE pilot
@@ -220,6 +224,17 @@ reruns in the external evidence. See
 [OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305) for frozen source,
 binary hashes and independent review locations. This is component correctness,
 not a throughput claim or pinned Manager/GPU acceptance.
+
+A separate A-node CUDA 13.1 source profile at consumer `660f893d` passes pinned
+source-grant controls, embedded Manager TCP GPU Save/Restore and embedded Manager
+same-RNIC RDMA staging GPU Save/Restore. It uses installed `libcudart.so.13.1.80`
+and compatibility `libcuda.so.590.48.01`; the RDMA run maps real verbs/mlx5 and
+no TENT. Test-owned source/service workers drain and native/supervisor/coordinator
+processes are reaped; the fixture kills its private etcd, so graceful-etcd
+qualification is separate. External evidence remains outside the checkouts.
+This is neither an installed Manager nor cross-process CUDA IPC/cross-host
+Manager/GPU or GDR qualification. B-node compute remains untested while all
+canonical GPU leases are busy; do not take another workload's GPU.
 
 The CPU `remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained`
 control drives actual TCP framing with verbs fault callbacks. After a source
