@@ -136,10 +136,17 @@ class Controller:
             host_memory = case.get(role + '_host_memory', case.get('host_memory', 'direct'))
             if host_memory not in ['direct', 'staged']:
                 raise ValueError('RDMA host memory must be direct or staged')
-            return arguments + (readiness[:3] if readiness else []), {
+            environment = {
                 'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
                 'ORBITTE_RDMA_HOST_MEMORY': host_memory,
             }
+            for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64)]:
+                value = case.get(key)
+                if value is not None:
+                    if type(value) is not int or not 1 <= value <= limit:
+                        raise ValueError('invalid ' + key)
+                    environment[variable] = str(value)
+            return arguments + (readiness[:3] if readiness else []), environment
 
         arguments, environment = command(source, 'source', case['source_kind'], source_root)
         self.start(source, source_root, case['source_kind'], arguments, case['transport'], environment)

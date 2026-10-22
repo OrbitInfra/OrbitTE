@@ -17,35 +17,53 @@ struct SendRequest {
 #[derive(Default)]
 struct Posted {
     result: i32,
-    request: Option<SendRequest>,
+    requests: Vec<SendRequest>,
+    bad_index: Option<usize>,
+    foreign_bad: bool,
+    bad_byte_offset: Option<usize>,
 }
 
 unsafe extern "C" fn capture_post(
     qp: *mut ffi::ibv_qp,
     wr: *mut ffi::ibv_send_wr,
-    _: *mut *mut ffi::ibv_send_wr,
+    bad: *mut *mut ffi::ibv_send_wr,
 ) -> c_int {
-    // This callback consumes only stack descriptors; it never starts DMA.
+    // CPU ABI control: consume only stable linked descriptors, never DMA.
     unsafe {
         let state = &mut *(*qp).qp_context.cast::<Posted>();
-        let wr = &*wr;
-        let sge = &*wr.sg_list;
-        state.request = Some(SendRequest {
-            id: wr.wr_id,
-            opcode: wr.opcode,
-            flags: wr.send_flags,
-            address: sge.addr,
-            length: sge.length,
-            lkey: sge.lkey,
-            remote_address: wr.wr.rdma.remote_addr,
-            rkey: wr.wr.rdma.rkey,
-        });
+        state.requests.clear();
+        let mut pointer = wr;
+        while !pointer.is_null() {
+            let request = &*pointer;
+            let sge = &*request.sg_list;
+            if state.bad_index == Some(state.requests.len()) {
+                *bad = pointer;
+            }
+            state.requests.push(SendRequest {
+                id: request.wr_id,
+                opcode: request.opcode,
+                flags: request.send_flags,
+                address: sge.addr,
+                length: sge.length,
+                lkey: sge.lkey,
+                remote_address: request.wr.rdma.remote_addr,
+                rkey: request.wr.rdma.rkey,
+            });
+            pointer = request.next;
+        }
+        if state.foreign_bad {
+            *bad = std::ptr::dangling_mut();
+        }
+        if let Some(offset) = state.bad_byte_offset {
+            *bad = wr.cast::<u8>().add(offset).cast();
+        }
         state.result
     }
 }
 
 #[test]
-fn post_dispatch_uses_generated_provider_abi_and_returns_native_errors() {
+fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_dereferencing_bad_wr()
+ {
     let mut context = Box::new(ffi::ibv_context::default());
     let mut state = Posted::default();
     let mut qp = ffi::ibv_qp {
@@ -53,9 +71,10 @@ fn post_dispatch_uses_generated_provider_abi_and_returns_native_errors() {
         qp_context: (&mut state as *mut Posted).cast(),
         ..ffi::ibv_qp::default()
     };
-    let mut bytes = [0u8; 16];
+    let mut bytes = [0u8; 32];
     let mut mr = ffi::ibv_mr {
         addr: bytes.as_mut_ptr().cast(),
+        length: bytes.len(),
         lkey: 0x01234567,
         ..ffi::ibv_mr::default()
     };
@@ -64,34 +83,119 @@ fn post_dispatch_uses_generated_provider_abi_and_returns_native_errors() {
         mr: (&mut mr as *mut ffi::ibv_mr).cast(),
         ..Handles::default()
     };
+    let requests = [
+        WorkRequest {
+            id: 4,
+            offset: 0,
+            length: 7,
+        },
+        WorkRequest {
+            id: 5,
+            offset: 7,
+            length: 9,
+        },
+        WorkRequest {
+            id: 6,
+            offset: 16,
+            length: 16,
+        },
+    ];
+    let mut result = PostResult::default();
     assert_eq!(
-        unsafe { post(&mut handles, 0x123456789, 0xabcdef, 16, 0) },
+        unsafe {
+            post(
+                &mut handles,
+                requests.as_ptr(),
+                requests.len(),
+                0x123456789,
+                0xabcdef,
+                0,
+                &mut result,
+            )
+        },
         libc::EOPNOTSUPP
     );
-    assert!(state.request.is_none());
+    assert_eq!((result.accepted, result.uncertain), (0, false));
+    assert!(state.requests.is_empty());
     context.ops.post_send = Some(capture_post);
-    for (write, error, opcode) in [
-        (0, 0, ffi::ibv_wr_opcode::IBV_WR_RDMA_READ),
-        (1, libc::ENOMEM, ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE),
+    for write in [0, 1] {
+        for (code, bad_index, foreign_bad, bad_byte_offset, expected, uncertain) in [
+            (0, None, false, None, 3, false),
+            (libc::ENOMEM, Some(0), false, None, 0, false),
+            (libc::ENOMEM, Some(1), false, None, 1, false),
+            (libc::ENOMEM, Some(2), false, None, 2, false),
+            (libc::EIO, None, false, None, 0, true),
+            (libc::EIO, None, true, None, 0, true),
+            (
+                libc::EIO,
+                None,
+                false,
+                Some(std::mem::size_of::<ffi::ibv_send_wr>() * requests.len()),
+                0,
+                true,
+            ),
+            (libc::EIO, None, false, Some(1), 0, true),
+        ] {
+            state.result = code;
+            state.bad_index = bad_index;
+            state.foreign_bad = foreign_bad;
+            state.bad_byte_offset = bad_byte_offset;
+            assert_eq!(
+                unsafe {
+                    post(
+                        &mut handles,
+                        requests.as_ptr(),
+                        requests.len(),
+                        0x123456789,
+                        0xabcdef,
+                        write,
+                        &mut result,
+                    )
+                },
+                code
+            );
+            assert_eq!((result.accepted, result.uncertain), (expected, uncertain));
+            assert_eq!(state.requests.len(), 3);
+            for (request, actual) in requests.iter().zip(&state.requests) {
+                assert_eq!(
+                    actual,
+                    &SendRequest {
+                        id: request.id,
+                        opcode: if write == 0 {
+                            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
+                        } else {
+                            ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+                        },
+                        flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+                        address: bytes.as_ptr() as u64 + u64::from(request.offset),
+                        length: request.length,
+                        lkey: mr.lkey,
+                        remote_address: 0x123456789 + u64::from(request.offset),
+                        rkey: 0xabcdef
+                    }
+                );
+            }
+        }
+    }
+    state.requests.clear();
+    for invalid in [
+        WorkRequest {
+            id: 1,
+            offset: 31,
+            length: 2,
+        },
+        WorkRequest {
+            id: 1,
+            offset: 0,
+            length: 0,
+        },
     ] {
-        state.result = error;
         assert_eq!(
-            unsafe { post(&mut handles, 0x123456789, 0xabcdef, 16, write) },
-            error
+            unsafe { post(&mut handles, &invalid, 1, 0x100, 7, 0, &mut result) },
+            libc::EINVAL
         );
-        assert_eq!(
-            state.request,
-            Some(SendRequest {
-                id: 1,
-                opcode,
-                flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
-                address: bytes.as_ptr() as u64,
-                length: 16,
-                lkey: mr.lkey,
-                remote_address: 0x123456789,
-                rkey: 0xabcdef,
-            })
-        );
+        assert_eq!((result.accepted, result.uncertain), (0, false));
+        assert!(state.requests.is_empty());
     }
 }
 

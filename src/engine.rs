@@ -282,8 +282,9 @@ impl TransferEngine {
 
     /// Validates the entire batch before sending any request. Admission and
     /// validation failures return `Err`; execution failures are in the report.
-    /// READ commits each local slice only after its full response arrives.
-    /// WRITE uses a final source acknowledgement and never retries automatically.
+    /// TCP/staged READ commits a local request after its complete response.
+    /// Direct RDMA can change bytes before a final receipt, including on failure.
+    /// WRITE success requires source acknowledgement. No automatic retries.
     pub fn submit_and_wait(
         &self,
         operation: TransferOp,
