@@ -3,7 +3,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::{Buffer, Descriptor, Device, Phase, RdmaConfig, RdmaStats, Resources, progress, sys};
+use super::{
+    Buffer, Descriptor, Device, Phase, RdmaConfig, RdmaStats, Resources, events, progress, sys,
+};
 use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
 
@@ -74,7 +76,10 @@ impl Request {
     pub(super) fn check(&self) -> Result<()> {
         match self.failure {
             Some(fault) => Err(fault.error()),
-            None => Ok(()),
+            None => self
+                .resources
+                .as_ref()
+                .map_or(Ok(()), |resources| resources.device.asynchronous.check()),
         }
     }
 }
@@ -93,7 +98,8 @@ pub(super) struct Progress {
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-struct Shared {
+pub(super) struct Shared {
+    asynchronous: Arc<events::State>,
     control: Mutex<Control>,
     wake: Condvar,
     usage: Arc<Mutex<RdmaStats>>,
@@ -187,6 +193,7 @@ impl Progress {
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
             .opened_cqs += 1;
         let shared = Arc::new(Shared {
+            asynchronous: Arc::clone(&device.asynchronous),
             control: Mutex::new(Control {
                 cq: Some(cq),
                 records,
@@ -202,6 +209,7 @@ impl Progress {
             verbs,
             config: config.clone(),
         });
+        device.asynchronous.attach(Arc::downgrade(&shared));
         let owner = Arc::new(Self {
             shared: Arc::clone(&shared),
             worker: Mutex::default(),
@@ -248,6 +256,7 @@ impl Progress {
     }
 
     pub(super) fn handle(&self) -> Result<*mut std::ffi::c_void> {
+        self.shared.asynchronous.check()?;
         let control = self
             .shared
             .control
@@ -264,6 +273,7 @@ impl Progress {
     }
 
     pub(super) fn register(&self, resources: Box<Resources>) -> Result<Arc<Record>> {
+        self.shared.asynchronous.check()?;
         let mut control = self
             .shared
             .control
@@ -311,6 +321,7 @@ impl Progress {
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
+        self.shared.asynchronous.check()?;
         {
             let mut request = record.lock()?;
             request.check()?;
@@ -358,6 +369,7 @@ impl Progress {
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
+        self.shared.asynchronous.check()?;
         {
             let mut request = record.lock()?;
             request.check()?;
@@ -525,7 +537,7 @@ impl Drop for Progress {
 }
 
 impl Shared {
-    fn signal(&self) {
+    pub(super) fn signal(&self) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         control.dirty = true;
         self.wake.notify_one();
@@ -550,6 +562,10 @@ impl Shared {
             control.cq.take()
         };
         if let Some(owner) = &mut cq {
+            if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
+                self.control.lock().unwrap_or_else(|p| p.into_inner()).cq = cq.take();
+                return Err((operation, code));
+            }
             let code = unsafe { (self.verbs.destroy_cq)(&mut owner.handles) };
             if code != 0 {
                 self.control.lock().unwrap_or_else(|p| p.into_inner()).cq = cq.take();
@@ -674,6 +690,9 @@ impl Shared {
             .resources
             .as_mut()
             .ok_or(("RDMA resources missing", libc::EIO))?;
+        if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
+            return Err((operation, code));
+        }
         let code = unsafe { (self.verbs.destroy_qp)(&mut resources.handles) };
         if code != 0 {
             return Err(("ibv_destroy_qp", code));
@@ -694,6 +713,10 @@ impl Shared {
         // Fence accepted constructors under the same lock as native QP creation.
         // No other thread polls or submits native WRs.
         for record in records {
+            if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
+                self.retain(operation, code);
+                return;
+            }
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             request.failure.get_or_insert(fault);
             let Some(resources) = &mut request.resources else {
@@ -737,6 +760,10 @@ impl Shared {
     }
 
     fn post(&self, record: &Arc<Record>) -> bool {
+        if let Err(error) = self.asynchronous.check() {
+            self.fail(Fault::from_error(error));
+            return false;
+        }
         if record.actions.load(Ordering::Acquire) & WORK == 0 {
             return false;
         }
@@ -886,6 +913,15 @@ impl Shared {
         let mut records = Vec::with_capacity(self.config.max_endpoints);
         let mut cursor = 0usize;
         loop {
+            if let Err(error) = self.asynchronous.check() {
+                match error {
+                    Error::Unquiesced { operation, code } => {
+                        self.retain(operation, code);
+                        return;
+                    }
+                    error => self.fail(Fault::from_error(error)),
+                }
+            }
             let (fault, stopping, cq) = {
                 let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
                 records.clear();

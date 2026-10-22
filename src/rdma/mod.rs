@@ -11,6 +11,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 mod cq;
 mod device;
+mod events;
 mod progress;
 mod registration;
 mod sys;
@@ -113,6 +114,8 @@ pub struct RdmaStats {
     pub retained_cqs: usize,
     pub opened_cqs: u64,
     pub progress_workers: usize,
+    pub async_event_workers: usize,
+    pub acknowledged_async_events: u64,
     /// A fatal shared-lane fault permanently fences new RDMA admission.
     pub progress_failures: u64,
     pub peak_pending_qps: usize,

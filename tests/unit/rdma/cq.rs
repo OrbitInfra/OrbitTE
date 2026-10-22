@@ -558,3 +558,61 @@ fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() 
         .close(Instant::now() + Duration::from_secs(1))
         .unwrap();
 }
+
+#[test]
+fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
+    let mut runtime = runtime("direct:async_qp_pause");
+    runtime.config.max_endpoints = 2;
+    runtime.config.max_direct_bytes = 16;
+    let runtime = Arc::new(runtime);
+    let mut first = runtime.staging_endpoint(8, 2).unwrap();
+    let mut second = runtime.staging_endpoint(8, 2).unwrap();
+    let record = Arc::clone(&second.record);
+    let pause = crate::rdma::tests::pause(&runtime);
+    let events = crate::rdma::tests::events(&runtime);
+    let close_first = thread::spawn(move || first.close());
+    let (lock, changed) = &*pause;
+    let (state, timed) = changed
+        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+        .unwrap();
+    assert!(!timed.timed_out());
+    drop(state);
+    let close_second = thread::spawn(move || second.close());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while record.actions.load(Ordering::Acquire) & CLOSE == 0 {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
+    crate::rdma::device::tests::emit_async(&runtime, 255);
+    while runtime.stats().unwrap().async_event_workers != 0 {
+        assert!(Instant::now() < deadline);
+        thread::yield_now();
+    }
+    lock.lock().unwrap().1 = true;
+    changed.notify_all();
+    assert!(matches!(
+        close_first.join().unwrap(),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(matches!(
+        close_second.join().unwrap(),
+        Err(Error::Unquiesced { .. })
+    ));
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_endpoints,
+            stats.retained_endpoints,
+            stats.retained_windows,
+            stats.direct_bytes
+        ),
+        (1, 1, 1, 8)
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.iter().filter(|s| **s == "destroy_qp").count(),
+        1,
+        "no second destroy after consumer loss"
+    );
+    assert!(!events.contains(&"destroy_cq"));
+}

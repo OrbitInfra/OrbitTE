@@ -258,3 +258,12 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
         .unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
 }
+
+pub(crate) fn emit_async(runtime: &Runtime, kind: u8) {
+    let owner = runtime.device().unwrap();
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("device is not open");
+    };
+    unsafe { &*resources.handles.context.cast::<FakeDevice>() }.emit_async(kind);
+}

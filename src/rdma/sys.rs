@@ -10,6 +10,7 @@ use super::Descriptor;
 pub(super) struct DeviceHandles {
     pub context: *mut c_void,
     pub pd: *mut c_void,
+    pub async_fd: c_int,
 }
 
 impl Default for DeviceHandles {
@@ -17,6 +18,7 @@ impl Default for DeviceHandles {
         Self {
             context: std::ptr::null_mut(),
             pd: std::ptr::null_mut(),
+            async_fd: -1,
         }
     }
 }
@@ -72,8 +74,29 @@ pub(super) struct PostResult {
     pub uncertain: bool,
 }
 
+pub(super) struct AsyncEvent {
+    pub kind: u32,
+    native: std::mem::MaybeUninit<ffi::ibv_async_event>,
+}
+
+impl Default for AsyncEvent {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            native: std::mem::MaybeUninit::uninit(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AsyncVerbs {
+    pub get: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent) -> c_int,
+    pub ack: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent),
+}
+
 type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
 pub(super) struct Verbs {
+    pub asynchronous: Option<AsyncVerbs>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub create_cq: unsafe extern "C" fn(*mut Handles, *const DeviceHandles, u32) -> c_int,
     pub register_local:
@@ -153,6 +176,11 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
         ffi::ibv_free_device_list(devices);
         if error != 0 {
             return error;
+        }
+        h.async_fd = (*h.context.cast::<ffi::ibv_context>()).async_fd;
+        let flags = libc::fcntl(h.async_fd, libc::F_GETFL);
+        if flags == -1 || libc::fcntl(h.async_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
+            return failure();
         }
         h.pd = ffi::ibv_alloc_pd(h.context.cast()).cast();
         if h.pd.is_null() {
@@ -628,7 +656,29 @@ destroy!(destroy_cq, Handles, cq, ibv_destroy_cq);
 destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
+unsafe extern "C" fn get_async_event(context: *mut c_void, event: *mut AsyncEvent) -> c_int {
+    // SAFETY: the context owner keeps the native fd/context alive and is its
+    // sole consumer. The provider initializes native only on successful get.
+    unsafe {
+        if ffi::ibv_get_async_event(context.cast(), (*event).native.as_mut_ptr()) != 0 {
+            return failure();
+        }
+        (*event).kind = (*(*event).native.as_ptr()).event_type;
+        0
+    }
+}
+
+unsafe extern "C" fn ack_async_event(_: *mut c_void, event: *mut AsyncEvent) {
+    // SAFETY: each successful get is acknowledged once before touching locks;
+    // no QP/CQ pointer from this event is accessed after acknowledgment.
+    unsafe { ffi::ibv_ack_async_event((*event).native.as_mut_ptr()) };
+}
+
 pub(super) static REAL: Verbs = Verbs {
+    asynchronous: Some(AsyncVerbs {
+        get: get_async_event,
+        ack: ack_async_event,
+    }),
     open_device,
     create_cq,
     register_local,

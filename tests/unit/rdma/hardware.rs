@@ -51,6 +51,7 @@ unsafe extern "C" fn gated_post(
 }
 
 static VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: sys::REAL.asynchronous,
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
     register_local: sys::REAL.register_local,
@@ -366,15 +367,20 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+    );
     assert_eq!(
         (
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
+            closed.async_event_workers,
             closed.active_endpoints,
             closed.persistent_mrs
         ),
-        (0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0)
     );
     assert_eq!(
         (
@@ -468,6 +474,11 @@ fn source_window_peer() {
         stream.write_all(&endpoint.connection()).unwrap();
     }
     endpoint.connect(&connection).unwrap();
+    std::fs::write(
+        env::var("ORBITTE_SHARED_MAPS").unwrap(),
+        std::fs::read("/proc/self/maps").unwrap(),
+    )
+    .unwrap();
     if source {
         endpoint.bind_window().unwrap();
         let mut grant = endpoint.grant().unwrap();
@@ -483,7 +494,8 @@ fn source_window_peer() {
         stream.write_all(&grant.encode()).unwrap();
         token(&mut stream, 4);
         // The peer has observed REM_ACCESS_ERR and physically closed its QP.
-        endpoint.close().unwrap();
+        let close = endpoint.close();
+        assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
         drop(endpoint);
         verify(&memory, &expected);
         stream.write_all(&[5]).unwrap();
@@ -542,17 +554,22 @@ fn source_window_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+    );
     assert_eq!(
         (
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
+            closed.async_event_workers,
             closed.active_windows,
             closed.active_endpoints,
             closed.persistent_mrs,
             closed.work_requests
         ),
-        (0, 0, 0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0, 0, 0)
     );
     assert_eq!(
         (

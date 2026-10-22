@@ -505,7 +505,11 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   barrier/actual-owner retention contract. One MW binds once; connections and
   parent MRs remain per request. CPU controls cover source grant export, mixed
   data/control capacity, opcode routing and failed cleanup with unresolved
-  control debt. The ignored native window probe requires real old-key/parent-key
+  control debt. A context-owned async event thread remains alive through native
+  QP/CQ destruction; fatal/unknown events fence the lane before ACK without
+  request locks, and loss of the consumer retains actual owners. CPU controls
+  also require the real TCP source to consume INV CQE before final ACK.
+  The ignored native window probe requires real old-key/parent-key
   rejection while the source QP is alive, plus full guards and normal cleanup.
   See [the scope and gates](rdma-cuda.md#one-use-source-memory-window-qualification).
 - [ ] Complete connected endpoint-store ownership,

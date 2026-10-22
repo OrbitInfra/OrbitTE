@@ -140,6 +140,7 @@ fn finish(
     if idle.active_cqs != usize::from(transport == Transport::Rdma)
         || idle.opened_cqs != u64::from(transport == Transport::Rdma)
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
+        || idle.async_event_workers != usize::from(transport == Transport::Rdma)
         || idle.progress_failures != 0
         || idle.persistent_mrs != usize::from(cached)
         || idle.persistent_mr_bytes != if cached { memory.len() } else { 0 }
@@ -166,6 +167,7 @@ fn finish(
         || rdma.active_cqs != 0
         || rdma.retained_cqs != 0
         || rdma.progress_workers != 0
+        || rdma.async_event_workers != 0
         || rdma.progress_failures != 0
         || rdma.active_devices != 0
         || rdma.retained_devices != 0
@@ -194,6 +196,10 @@ fn finish(
     {
         return Err(Error::Internal("CUDA resources were retained"));
     }
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, rdma.async_event_workers, rdma.acknowledged_async_events
+    );
     println!(
         "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
         rdma.opened_windows, rdma.completed_window_binds, rdma.completed_window_invalidations

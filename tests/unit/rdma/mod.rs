@@ -9,6 +9,11 @@ use super::*;
 
 pub(crate) struct FakeDevice {
     mode: String,
+    asynchronous: Option<(
+        Mutex<std::os::unix::net::UnixStream>,
+        Mutex<std::os::unix::net::UnixStream>,
+    )>,
+    async_acks: (Mutex<usize>, Condvar),
     pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
     endpoints: AtomicUsize,
     mrs: AtomicUsize,
@@ -57,8 +62,15 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     if mode == "device_missing" {
         return libc::ENODEV;
     }
+    let asynchronous = mode.starts_with("async_").then(|| {
+        let (read, write) = std::os::unix::net::UnixStream::pair().unwrap();
+        read.set_nonblocking(true).unwrap();
+        (Mutex::new(read), Mutex::new(write))
+    });
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
+        asynchronous,
+        async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
         endpoints: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
@@ -69,6 +81,10 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     }));
     unsafe {
         (*h).context = state.cast();
+        if let Some((read, _)) = &(*state).asynchronous {
+            use std::os::fd::AsRawFd;
+            (*h).async_fd = read.lock().unwrap().as_raw_fd();
+        }
         if (*state).mode.starts_with("device_open") {
             return libc::EIO;
         }
@@ -410,6 +426,21 @@ unsafe extern "C" fn qp(h: *mut sys::Handles) -> c_int {
     let state = unsafe { &*handles.qp.cast::<Fake>() };
     let device = unsafe { &*state.device };
     device.events.lock().unwrap().push("destroy_qp");
+    if device.mode == "async_destroy" {
+        device.emit_async(3);
+        let (acks, changed) = &device.async_acks;
+        let (acks, _) = changed
+            .wait_timeout_while(acks.lock().unwrap(), Duration::from_secs(2), |n| *n == 0)
+            .unwrap();
+        if *acks != 1 {
+            return libc::ETIMEDOUT;
+        }
+        device
+            .events
+            .lock()
+            .unwrap()
+            .push("destroy_after_async_ack");
+    }
     if device.mode.contains("qp_pause") {
         block(device);
     }
@@ -524,6 +555,7 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     0
 }
 static VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: None,
     open_device,
     create_cq,
     register_local,
@@ -539,6 +571,57 @@ static VERBS: sys::Verbs = sys::Verbs {
     dealloc_pd: pd,
     close_device: ctx,
 };
+impl FakeDevice {
+    pub(crate) fn emit_async(&self, kind: u8) {
+        use std::io::Write;
+        self.asynchronous
+            .as_ref()
+            .unwrap()
+            .1
+            .lock()
+            .unwrap()
+            .write_all(&[kind])
+            .unwrap();
+    }
+}
+
+unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent) -> c_int {
+    use std::io::Read;
+    let device = unsafe { &*context.cast::<FakeDevice>() };
+    let mut kind = [0];
+    if let Err(error) = device
+        .asynchronous
+        .as_ref()
+        .unwrap()
+        .0
+        .lock()
+        .unwrap()
+        .read_exact(&mut kind)
+    {
+        return error.raw_os_error().unwrap_or(libc::EIO);
+    }
+    if kind[0] == 255 {
+        return libc::EIO;
+    }
+    unsafe {
+        (*event).kind = kind[0] as u32;
+    }
+    0
+}
+unsafe extern "C" fn async_ack(context: *mut c_void, _: *mut sys::AsyncEvent) {
+    let device = unsafe { &*context.cast::<FakeDevice>() };
+    device.events.lock().unwrap().push("async_ack");
+    *device.async_acks.0.lock().unwrap() += 1;
+    device.async_acks.1.notify_all();
+}
+static ASYNC_VERBS: sys::Verbs = sys::Verbs {
+    asynchronous: Some(sys::AsyncVerbs {
+        get: async_get,
+        ack: async_ack,
+    }),
+    ..VERBS
+};
+
 pub(crate) fn runtime(mode: &str) -> Runtime {
     let (host_memory, mode) = match mode.strip_prefix("direct:") {
         Some(mode) => (RdmaHostMemory::Direct, mode),
@@ -554,12 +637,17 @@ pub(crate) fn runtime(mode: &str) -> Runtime {
         ..RdmaConfig::new(mode)
     };
     let usage = Arc::default();
-    let registrations = registration::HostRegistrations::new(&config, Arc::clone(&usage), &VERBS);
+    let verbs = if mode.starts_with("async_") {
+        &ASYNC_VERBS
+    } else {
+        &VERBS
+    };
+    let registrations = registration::HostRegistrations::new(&config, Arc::clone(&usage), verbs);
     Runtime {
         config,
         usage,
         drained: Arc::default(),
-        verbs: &VERBS,
+        verbs,
         device: Mutex::default(),
         registrations,
     }
