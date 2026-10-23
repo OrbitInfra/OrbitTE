@@ -11,6 +11,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch};
 mod buffers;
 mod context;
 mod cq;
+mod discovery;
 mod endpoint;
 mod endpoint_store;
 mod events;
@@ -41,12 +42,20 @@ pub enum RdmaHostMemory {
     Staged,
 }
 
-/// Explicit RNIC selection. Host Direct peers can retain role-specific RC QPs.
+/// Automatic or pinned single-rail selection. Direct host peers can retain RC QPs.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
-    pub device: String,
-    pub port: u8,
-    pub gid_index: u8,
+    /// None discovers an accessible provider device; Some is a strict pin.
+    pub device: Option<String>,
+    /// None discovers an active port; port zero is never valid.
+    pub port: Option<u8>,
+    /// None ranks valid GIDs; Some(0) explicitly selects GID zero.
+    pub gid_index: Option<u8>,
+    /// Applied before opening a device. A nonempty whitelist supersedes blacklist.
+    pub rdma_whitelist: Vec<String>,
+    pub rdma_blacklist: Vec<String>,
+    /// Explicit memory-location hint; discovery never assumes allocation placement.
+    pub preferred_numa_node: Option<u32>,
     pub traffic_class: u8,
     pub hop_limit: u8,
     pub max_endpoints: usize,
@@ -65,12 +74,15 @@ pub struct RdmaConfig {
     pub max_window_key_indices: usize,
 }
 
-impl RdmaConfig {
-    pub fn new(device: impl Into<String>) -> Self {
+impl Default for RdmaConfig {
+    fn default() -> Self {
         Self {
-            device: device.into(),
-            port: 1,
-            gid_index: 0,
+            device: None,
+            port: None,
+            gid_index: None,
+            rdma_whitelist: Vec::new(),
+            rdma_blacklist: Vec::new(),
+            preferred_numa_node: None,
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
@@ -85,12 +97,37 @@ impl RdmaConfig {
             max_window_key_indices: 65_536,
         }
     }
+}
+
+impl RdmaConfig {
+    /// Preserve explicit device/port 1/GID 0 selection. Use Default for discovery.
+    pub fn new(device: impl Into<String>) -> Self {
+        Self {
+            device: Some(device.into()),
+            port: Some(1),
+            gid_index: Some(0),
+            ..Self::default()
+        }
+    }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.device.is_empty()
-            || self.device.len() > 128
-            || self.device.contains('\0')
-            || self.port == 0
+        let valid_name = |name: &str| {
+            !name.is_empty()
+                && name.len() <= 128
+                && !name.contains(['\0', '/'])
+                && !matches!(name, "." | "..")
+        };
+        if self.device.as_deref().is_some_and(|name| !valid_name(name))
+            || self
+                .rdma_whitelist
+                .iter()
+                .chain(&self.rdma_blacklist)
+                .any(|name| !valid_name(name))
+            || self
+                .device
+                .as_deref()
+                .is_some_and(|name| !discovery::permitted(self, name))
+            || self.port == Some(0)
             || self.hop_limit == 0
             || self.max_cached_mrs == 0
             || self.max_cached_mr_bytes == 0
@@ -103,7 +140,7 @@ impl RdmaConfig {
             || !(1..=64).contains(&self.max_send_wr)
         {
             return Err(Error::InvalidConfig(
-                "RDMA needs an explicit device, port, hop limit and positive budgets",
+                "RDMA needs valid selectors, a nonzero hop limit and positive budgets",
             ));
         }
         Ok(())
@@ -232,6 +269,18 @@ impl RdmaTransport {
             .lock()
             .map(|usage| *usage)
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))
+    }
+
+    pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
+        let cache = self
+            .device
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
+        cache
+            .owner
+            .as_ref()
+            .map(|owner| owner.topology())
+            .transpose()
     }
 
     fn device(&self) -> Result<Arc<RdmaContext>> {
@@ -513,7 +562,6 @@ impl RdmaTransport {
                 local: Descriptor::default(),
                 incarnation: None,
                 config: self.config.clone(),
-                verbs: self.verbs,
                 deadline,
                 output: None,
                 claim: 1,

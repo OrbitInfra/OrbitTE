@@ -17,12 +17,17 @@ pub(super) struct State {
     // Positive: event type + 1; negative: the consumer can no longer ACK.
     fault: AtomicI32,
     stopping: AtomicBool,
+    route_fault: AtomicBool,
     progress: Mutex<Weak<workers::Shared>>,
 }
 
 impl State {
     pub(super) fn check(&self) -> Result<()> {
         match self.fault.load(Ordering::Acquire) {
+            0 if self.route_fault.load(Ordering::Acquire) => Err(Error::Backend {
+                operation: "RDMA route changed",
+                code: libc::ESTALE,
+            }),
             0 => Ok(()),
             code if code > 0 => Err(Error::Backend {
                 operation: "RDMA asynchronous event",
@@ -40,7 +45,11 @@ impl State {
         self.notify();
     }
 
-    fn notify(&self) {
+    pub(super) fn fence_route(&self) {
+        self.route_fault.store(true, Ordering::Release);
+    }
+
+    pub(super) fn notify(&self) {
         let progress = self
             .progress
             .lock()

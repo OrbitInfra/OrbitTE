@@ -41,6 +41,8 @@ mod engine;
 mod error;
 mod memory;
 mod notification;
+#[cfg(feature = "rdma")]
+mod platform;
 mod runtime;
 mod segment;
 pub mod transport;
@@ -62,3 +64,8 @@ pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod test_support;
+
+#[cfg(feature = "rdma")]
+pub use runtime::topology::{
+    DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
+};

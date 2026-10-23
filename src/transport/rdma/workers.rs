@@ -912,7 +912,6 @@ impl Workers {
             local,
             incarnation,
             config: self.shared.config.clone(),
-            verbs: self.shared.verbs,
             deadline,
             output: None,
             claim,
@@ -978,7 +977,17 @@ impl Workers {
             return Ok(false);
         };
         let claim = record.lock()?.claim;
-        self.close_record(&record, claim, deadline)?;
+        match self.close_record(&record, claim, deadline) {
+            Err(error @ Error::Unquiesced { .. }) => return Err(error),
+            Err(error) => {
+                // Eviction releases capacity after the actual barrier, even if
+                // the lane records a logical fault during native retirement.
+                if record.lock()?.phase != Phase::Closed {
+                    return Err(error);
+                }
+            }
+            Ok(()) => {}
+        }
         Ok(true)
     }
 

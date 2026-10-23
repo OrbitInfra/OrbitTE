@@ -155,6 +155,18 @@ impl TransferEngine {
         self.source.epoch
     }
 
+    /// Snapshot of the selected RDMA topology; None before lazy RDMA initialization.
+    /// This never probes devices or refreshes an existing context's route.
+    #[cfg(feature = "rdma")]
+    pub fn topology(&self) -> Result<Option<crate::Topology>> {
+        self.source
+            .rdma
+            .as_ref()
+            .map(|runtime| runtime.topology())
+            .transpose()
+            .map(Option::flatten)
+    }
+
     pub fn stats(&self) -> Result<EngineStats> {
         let (retained_regions, retained_bytes) = self.source.registry.usage()?;
         let (queued_notifications, retained_notifications, retained_notification_bytes) =

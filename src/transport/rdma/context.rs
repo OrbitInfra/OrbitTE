@@ -3,8 +3,8 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    ConnectionId, Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, events,
-    keys, sys,
+    ConnectionId, Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check,
+    discovery::RdmaAddress, events, keys, sys,
 };
 use crate::{Error, RegisteredMemory, Result};
 
@@ -29,6 +29,8 @@ struct Resources {
     next_connection: u64,
     next_grant: u64,
     keys: keys::Keys,
+    address: RdmaAddress,
+    topology: crate::Topology,
 }
 
 impl Drop for Resources {
@@ -48,7 +50,27 @@ impl RdmaContext {
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
     ) -> Result<Arc<Self>> {
-        let name = CString::new(config.device.as_str())
+        let (topology, candidates) = (verbs.discover)(config)?;
+        let mut last_error = Error::Unavailable("no RDMA discovery candidate");
+        for address in candidates {
+            match Self::open_selected(config, verbs, Arc::clone(&usage), address, topology.clone())
+            {
+                Ok(owner) => return Ok(owner),
+                Err(error @ Error::Unquiesced { .. }) => return Err(error),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+
+    fn open_selected(
+        config: &RdmaConfig,
+        verbs: &'static sys::Verbs,
+        usage: Arc<Mutex<RdmaStats>>,
+        address: RdmaAddress,
+        topology: crate::Topology,
+    ) -> Result<Arc<Self>> {
+        let name = CString::new(address.device.as_str())
             .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
         let domain = ConnectionId::new_domain()?;
         usage
@@ -64,6 +86,8 @@ impl RdmaContext {
                 next_connection: 1,
                 next_grant: 1,
                 keys: keys::Keys::new(config.max_window_key_indices),
+                address,
+                topology,
             }))),
             verbs,
             asynchronous: Arc::default(),
@@ -79,6 +103,18 @@ impl RdmaContext {
             // SAFETY: RdmaContext retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
+                let observed =
+                    unsafe { (verbs.query_address)(&resources.handles, &resources.address) }?;
+                let mut expected = resources.address.clone();
+                expected.descriptor.lid = observed.descriptor.lid;
+                expected.descriptor.mtu = observed.descriptor.mtu;
+                if observed != expected {
+                    return Err(Error::Unavailable(
+                        "RDMA discovery route changed during construction",
+                    ));
+                }
+                resources.address = observed;
+                resources.address.publish(&mut resources.topology)?;
                 if let Some(asynchronous) = verbs.asynchronous {
                     resources.events = Some(events::Events::start(
                         &resources.handles,
@@ -100,6 +136,76 @@ impl RdmaContext {
             return Err(error);
         }
         Ok(owner)
+    }
+
+    pub(super) fn topology(&self) -> Result<crate::Topology> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        match &*state {
+            State::Open(resources) => Ok(resources.topology.clone()),
+            State::Closed => Err(Error::Unavailable("RDMA device is closed")),
+            State::Retained { operation, code } => Err(Error::Unquiesced {
+                operation,
+                code: *code,
+            }),
+        }
+    }
+
+    fn verify_address(&self, resources: &Resources) -> Result<()> {
+        self.asynchronous.check()?;
+        let observed =
+            unsafe { (self.verbs.query_address)(&resources.handles, &resources.address) };
+        if !observed.is_ok_and(|address| address == resources.address) {
+            self.asynchronous.fence_route();
+        }
+        self.asynchronous.check()
+    }
+
+    pub(super) fn check_address(&self) -> Result<()> {
+        let result = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+            match &*state {
+                State::Open(resources) => self.verify_address(resources),
+                _ => Err(Error::Unavailable("RDMA device is closed or retained")),
+            }
+        };
+        if result.is_err() {
+            self.asynchronous.notify();
+        }
+        result
+    }
+
+    pub(super) fn connect(
+        &self,
+        handles: &mut sys::ConnectionHandles,
+        local: &Descriptor,
+        remote: &Descriptor,
+        config: &RdmaConfig,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        self.verify_address(resources)?;
+        check("ibv_modify_qp RTR/RTS", unsafe {
+            (self.verbs.connect)(
+                handles,
+                local,
+                remote,
+                resources.address.port,
+                resources.address.gid_index,
+                config.traffic_class,
+                config.hop_limit,
+            )
+        })
     }
 
     pub(super) fn register_memory(
@@ -189,7 +295,7 @@ impl RdmaContext {
         let State::Open(device) = &mut *state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
-        self.asynchronous.check()?;
+        self.verify_address(device)?;
         let reused = resources.connection.incarnation.is_some();
         let incarnation = match resources.connection.incarnation {
             Some(id) => id,
@@ -228,8 +334,9 @@ impl RdmaContext {
                     &mut connection.handles,
                     &mut grant.handles,
                     &device.handles,
-                    config.port,
-                    config.gid_index,
+                    device.address.port,
+                    device.address.gid_index,
+                    &device.address.descriptor,
                     buffer,
                     length,
                     permission,
@@ -251,6 +358,9 @@ impl RdmaContext {
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.active_windows += 1;
             usage.opened_windows += 1;
+        }
+        if code == libc::ESTALE {
+            self.asynchronous.fence_route();
         }
         check("ibverbs grant/endpoint construction", code)?;
         if permission != 0 {

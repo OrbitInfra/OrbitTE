@@ -1481,3 +1481,102 @@ constraints above remain required to reproduce the profile.
 GDR, arbitrary physical device/cleanup faults, multirail/topology discovery,
 SIEVE policy, concurrent grants or role reversal on one QP, relaxed ordering,
 performance, complete P4 and OrbitKV linkage remain unqualified.
+
+
+## Device, port, GID and host topology discovery
+
+P4.8 implements automatic **single-rail Linux host discovery**. Source/CPU and
+physical qualification are tracked in the completion plan. This does not close
+full P4, add multirail failover or infer an allocation's NUMA placement.
+
+The frozen reference remains Mooncake/TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`. Responsibilities follow its existing
+owners rather than adding topology policy to TCP:
+
+| Frozen TENT | OrbitTE | Responsibility |
+| --- | --- | --- |
+| `runtime/topology.h`, `topology.cpp` | `runtime/topology.rs` | `Topology`, `NicEntry`, `MemEntry`, three NIC priority ranks; transport attributes remain namespaced metadata |
+| `platform/cpu_probe.cpp` | `platform/cpu_probe.rs` | CPU node inventory, RNIC PCI BDF and known/unknown NUMA node; local rank 0 and fallback rank 2 |
+| `CpuProbe::listInfiniBandDevices` | `rdma::sys::devices`, `rdma::discovery` | Intersect provider-visible RNICs with readable/writable uverbs character nodes; apply device filters before native open |
+| RDMA `Context::getBestGidIndex`, `openDevice` | `rdma::discovery`, `RdmaContext` | Enumerate/rank active ports and nonzero GIDs; validate the chosen route against the actual native context |
+| RDMA context address ownership | `RdmaContext::Resources` | Freeze selected device/port/GID/type/netdev/ifindex/LID/MTU/link layer with its actual PD and key domain |
+| Existing RDMA event and endpoint owners | `events`, `Workers`, `EndpointStore` | A changed/unqueryable route fences admission; actual QP/MW/MR owners supply retirement and retention |
+
+`RdmaConfig::default()` discovers device, port and GID. Each `Some` selector is a
+strict pin; `gid_index: Some(0)` selects zero explicitly and `port: Some(0)` is
+invalid. `RdmaConfig::new("mlx5_0")` preserves its explicit device/port 1/GID 0
+behavior. Setting one field to `None` only frees that selection dimension.
+A nonempty `rdma_whitelist` takes precedence over `rdma_blacklist`, matching
+TENT; it always intersects an explicit device pin. A pin excluded by the filter
+is rejected, not silently replaced.
+
+```rust,ignore
+use orbit_te::transport::rdma::RdmaConfig;
+
+let rdma = RdmaConfig {
+    rdma_whitelist: vec!["mlx5_0".into(), "mlx5_1".into()],
+    preferred_numa_node: Some(1), // Explicit caller hint, not allocation detection.
+    ..RdmaConfig::default()
+};
+```
+
+Discovery lists kernel `nodeN` host locations plus the wildcard `*`. An unknown
+NIC NUMA node remains `None`, never node zero. Without an explicit NUMA hint the
+wildcard ordering is deterministic. The snapshot contains candidate inventory;
+only the NIC with `rdma.selected=true` has a native-validated selected route.
+Other entries do not assert successful native context construction. GPU ordinal
+mapping, PCIe link distances and per-allocation page location belong to later
+platform/GPU work.
+
+Within locality rank, selection prefers IB or RoCEv2, an associated physical
+netdev, and a globally usable GID before link-local. A valid nonzero RoCEv1 GID
+can remain a fallback. IPv4-mapped and true IPv6 RoCEv2 are both preferred:
+TENT's frozen implementation prioritizes IPv4-mapped RoCEv2 and reaches true
+IPv6 through its nonzero fallback. OrbitTE deliberately makes true IPv6
+first-class. It does not infer GID family from the TCP control bind address,
+and does not classify private IPv4 address ranges as overlay networks. The
+kernel's virtual-netdev inventory supplies the overlay preference.
+
+The Linux [stable sysfs ABI](https://www.kernel.org/doc/html/v6.8/admin-guide/abi-stable.html)
+provides GID type and associated netdev metadata. Native validation uses
+`ibv_query_port`, `ibv_query_gid`, and rdma-core v55's `_ibv_query_gid_ex` binding
+with flags zero and the actual generated entry size. Bytes, port, index, GID
+type, netdev ifindex and resolved interface name must agree. Missing associated
+netdev metadata is allowed with native ifindex zero, including IB; malformed
+or inconsistent metadata is rejected. A provider without the required extended
+GID query returns an explicit error. It does not receive a fabricated type.
+The public selected-path attributes include `rdma.port`, `rdma.gid_index`,
+`rdma.gid`, `rdma.gid_type`, `rdma.net_device`, `rdma.net_device_index`,
+`rdma.lid`, `rdma.mtu_bytes` and `rdma.link_layer`.
+
+Candidate fallback is allowed only during the first lazy context construction.
+Every failed actual context/PD must close completely before the next candidate
+opens. If native cleanup fails, the real owner and statistics remain retained
+and the cache stores `Unquiesced`; later calls cannot retry cleanup or switch
+candidates. Once a context is published, no discovery refresh replaces its PD,
+key ledger, MR cache or connection incarnations.
+
+Both public requester and source paths re-query the frozen route **before**
+claiming a READY connection. `open_endpoint` and fresh/reused `connect` recheck
+it as well. The second native port/GID check before constructing a QP must
+match the frozen descriptor. Any observed change or query failure permanently
+fences that lane; restoring the same tuple does not clear the fence or reset
+its burned rkeys. A lost async-event consumer still takes precedence as
+`Unquiesced`. Synthetic route faults do not invent native event ACKs. Worker
+notification occurs outside context/record locks. Pure owner lookup stays free
+of native route queries so it does not block registration retirement behind
+another MR construction.
+
+`TransferEngine::topology()` returns the immutable snapshot after first RDMA
+use; it returns `None` before initialization, without an RDMA transport, or
+after successful engine close. Reading it neither opens hardware nor rescans or
+heals an existing route. It describes the selected route at construction,
+not a live health monitor.
+
+For the physical runner, set a case's `rdma_auto` to `true`. Both peers then
+use automatic device/port/GID selection with the profile RNIC as the sole
+whitelist entry. The existing supervisor acquires its original NIC lock before
+starting the binary; discovery cannot open another RNIC. Connected/public
+peers emit `ORBITTE_TOPOLOGY` alongside byte/guard, QP-continuity and close
+proofs. Retain explicit-pin regressions separately. Physical IB, route/device
+fault injection, multirail selection and hot route rebuild remain unqualified.

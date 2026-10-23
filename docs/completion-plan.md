@@ -605,8 +605,16 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   35-case profile, with actual QP continuity, all process waits and resource
   close verified. This accepts that scope; complete P4 remains open. See
   [the scope and architecture correspondence](rdma-cuda.md#connected-qp-reuse).
-- [ ] Complete automatic device/port/GID and topology discovery. Explicit
-  provider FFI, shared context/PD and fenced bootstrap are implemented above.
+- [ ] **P4.8 — device/port/GID and host topology discovery (Implemented;
+  qualification pending).** `Topology`/`CpuProbe` inventory and rank host/RNIC
+  locations; the actual `RdmaContext` validates and freezes one route. Automatic
+  selectors coexist with strict pins and pre-open whitelist filtering. Both
+  peers check the frozen route before READY claims; changes fence the existing
+  lane without replacing its PD/key history. Failed candidate cleanup retains
+  the actual owner and stops fallback. Source/CPU and physical IPv6 RoCEv2 gates
+  plus independent acceptance are required before checking this row. Physical
+  IB, route/device faults and complete P4 remain open. See
+  [the contract and TENT correspondence](rdma-cuda.md#device-port-gid-and-host-topology-discovery).
 - [ ] Complete event-driven progress and backend cancellation qualification for
   fragmented transfers. P4.6 implements shared polling, aggregate CQ admission
   and whole-lane cancellation ownership on top of P4.4's adaptive slices.
