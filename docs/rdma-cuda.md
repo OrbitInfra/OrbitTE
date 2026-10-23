@@ -123,8 +123,8 @@ erase an owner after failed deregistration. P4.5 follows TENT's independent
 registered-buffer owner and separates local MR lifetime from endpoint lifetime.
 P4.6 follows context-owned `cq.cpp` and worker-owned `workers.cpp` progress,
 including quota reservation and retaining a completion owner through the end
-of its handler. Connected endpoint reuse remains future P4 work. Resource reuse
-alone is no performance result.
+of its handler. P4.7f adds the [scoped connected reuse](#connected-qp-reuse)
+described below. Resource reuse alone is no performance result.
 
 The persistent cache uses actual `RegisteredMemory` identity within one PD,
 registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
@@ -1322,8 +1322,8 @@ performance and OrbitKV integration remain open.
 
 P4.7f is implemented for negotiated, coherent host Direct RC peers, fixed source
 or requester role and fixed READ/WRITE capability. Each physical QP admits one
-grant at a time. Source/CPU checks pass; native qualification and independent
-acceptance are pending. This is F02/F03/F07/F08/F15/F18 groundwork and a scoped
+grant at a time. The declared source/CPU and native profiles have independent
+acceptance. This is F02/F03/F07/F08/F15/F18 groundwork and a scoped
 B04 profile, not the complete P4 exit or native TENT wire interoperability.
 
 ### Correspondence with frozen TENT
@@ -1444,8 +1444,40 @@ duplex and DRAM/pinned/NVIDIA staging/TCP profiles remain required. Public
 runner profiles set `ORBITTE_EXPECT_QP_REUSE` from both peers' actual selected
 memory/policy, rather than deriving expected behavior from observed counters.
 
-Raw evidence belongs under
-`/root/orbitte-artifacts/rdma-connection-reuse-20261023/`. Native execution and
-independent acceptance are pending. GDR, arbitrary device/cleanup faults,
-multirail/topology discovery, SIEVE policy, concurrent grants or role reversal on
-one QP, performance, complete P4 and OrbitKV linkage remain unqualified.
+Source `371d804763251337ca4e1ca93dac3df7c87dc5ca` passes independent stable
+1.99.1/MSRV 1.85 four-feature gates, 140 unit tests and 40 single-CPU release
+runs. Twenty reverse controls for ten new contracts all reject the removed
+guard; the unchanged baseline passes. Earlier controls that survived before
+test strengthening, interrupted runs and actual failures remain preserved.
+
+The implementation stable build at `71861df` and independently built MSRV
+source `371d804` each pass 35 native cases: four connected public duplex cases,
+eight actual key/range rejection probes, six shared-progress, three earlier
+duplex and fourteen public DRAM/pinned/GPU-staging/TCP regressions. The later
+source changes only CPU tests; the independent carry receipt verifies every
+production and selected native-fixture blob, and the public peer binary is
+byte-identical. This is a verified carry, not a claim that the implementation
+reran native work at the later source commit.
+
+Each connected peer retains four actual QPs through four rounds, claims them
+twelve more times and cleans sixteen grants. Final unregister deregisters its
+old parents and frees the old backing while those QPs remain live; new views
+reuse the same QPN/PSN/routing/incarnations. Each peer opens four full-view MRs and
+reuses them twelve times, including two source parents/six source reuses, with
+eight completed SENDs, receives, MW binds and invalidations. Every full buffer
+and guard matches. Each native set verifies all 70 SSH starter waits and the
+absence of all 140 native/supervisor PIDs, reacquires the original resource
+locks, verifies frozen/mapped DSOs and returns A GPU7 memory to zero. B GPUs
+are not selected.
+
+Raw evidence remains outside Git at
+`/root/orbitte-artifacts/rdma-connection-reuse-20261023/`.
+`native-71861df/implementation-hardware-review.json` records the implementation
+run. `review/independent-scoped-acceptance-371d804.json` records independent scoped acceptance
+(SHA-256 `b099fe7677c594976c34dbbd4694127e0c35d5d3a4e1125d10657ec7ceea579d`), including the final source/native build, carry and
+resource-close evidence. The maintained commands and original lock/host
+constraints above remain required to reproduce the profile.
+
+GDR, arbitrary physical device/cleanup faults, multirail/topology discovery,
+SIEVE policy, concurrent grants or role reversal on one QP, relaxed ordering,
+performance, complete P4 and OrbitKV linkage remain unqualified.

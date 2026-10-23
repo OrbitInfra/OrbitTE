@@ -118,8 +118,8 @@ completion proof. Mandatory v9 rendezvous checks both cached identities and the
 last grant before new authority. Fresh MW/key/generation/WR identities, exact
 RQ invalidation, bound DONE/ACK/READY and actual grant cleanup precede reuse.
 Idle QPs remain charged; eviction and shutdown destroy them outside the Store
-lock. Source/CPU gates pass; native qualification and independent acceptance
-are still pending. See [connected reuse](docs/rdma-cuda.md#connected-qp-reuse).
+lock. The declared source/CPU and 35-case native profiles have independent
+acceptance. See [connected reuse](docs/rdma-cuda.md#connected-qp-reuse).
 
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault

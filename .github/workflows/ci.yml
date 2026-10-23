@@ -30,7 +30,10 @@ jobs:
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
       - name: Install RDMA binding prerequisites
         if: contains(matrix.features, 'rdma')
-        run: sudo apt-get update && sudo apt-get install -y g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
+        timeout-minutes: 10
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
       - name: Format
         run: cargo fmt --check
       - name: Check

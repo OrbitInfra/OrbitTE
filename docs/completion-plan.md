@@ -110,7 +110,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7e scoped acceptance; P4.7f implemented, native/review pending; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7f scoped acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -580,8 +580,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   31-case native runs with actual process/resource close. Native eviction,
   unregister and arbitrary cleanup/device faults remain unqualified. See
   [the contract and evidence](rdma-cuda.md#persistent-source-registration).
-- [x] **P4.7f — connected endpoint-store ownership (Implemented; source/CPU
-  passed, native qualification and independent acceptance pending).** Fixed-role,
+- [x] **P4.7f — connected endpoint-store ownership (Accepted for the declared
+  source/CPU/native profiles).** Fixed-role,
   fixed READ/WRITE host Direct peers retain the actual RC QP, routing, PSN,
   ConnectionId and physical quota. Each claim has a checked local token and new
   deadline; each grant has fresh MW/key/generation/WR namespaces. Mandatory v9
@@ -599,8 +599,11 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   reuse, capacity-one eviction, pre-open generation/async faults and deterministic
   Store/fault accounting races. The new native runner records four unchanged
   QPs through public simultaneous duplex transfers and old-parent/backing
-  retirement; it and all existing regressions still require exact-artifact
-  qualification and independent acceptance. See
+  retirement. Source `371d804` passes independent stable/MSRV gates, 140 unit
+  tests, effective protocol/claim negative controls and 40 single-CPU release
+  runs. Implementation and independent MSRV native builds pass the declared
+  35-case profile, with actual QP continuity, all process waits and resource
+  close verified. This accepts that scope; complete P4 remains open. See
   [the scope and architecture correspondence](rdma-cuda.md#connected-qp-reuse).
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
@@ -913,9 +916,10 @@ owners and terminal detached retirement, with independent source/CPU and
 healthy native profile acceptance.
 P4.7d adds accepted source receive/WR-identity ownership for its declared
 source/CPU/native profiles, retaining both physical barriers. P4.7e now accepts
-source registration owners for its declared profile. P4.7f now implements the scoped operation-level drain protocol and connected
-reuse. Qualify its exact source/native profiles and obtain independent acceptance
-before dependent device/topology discovery, event progress and multirail. Follow the frozen
+source registration owners for its declared profile. P4.7f accepts the scoped
+operation-level drain protocol and connected reuse for its declared source/CPU
+and native profiles. Continue with the remaining device/topology discovery,
+event progress, native fault qualification and multirail work. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.
