@@ -768,3 +768,79 @@ fn source_parent_cannot_bypass_shared_limits_or_release_a_failed_mw_borrow() {
         }
     }
 }
+
+#[test]
+fn retirement_marks_every_capability_before_native_failure_can_interrupt_cleanup() {
+    let registry = MemoryRegistry::new(SourceEpoch([10; 16]), 1, 24);
+    let memory = registry
+        .register(vec![10; 24].into_boxed_slice(), Permission::RemoteReadWrite)
+        .unwrap();
+    let runtime = limited_runtime("direct:mr_close", 2, 48);
+    let end = Instant::now() + Duration::from_secs(2);
+    let mut local = runtime.endpoint(&memory, 0, 4, 0, end).unwrap();
+    local.close().unwrap();
+    drop(local);
+    let mut source = runtime.endpoint(&memory, 8, 4, 2, end).unwrap();
+    registry.unregister(&memory).unwrap();
+    let log = events(&runtime);
+    assert!(matches!(
+        runtime.registrations.retire(&memory),
+        Err(Error::Unquiesced {
+            operation: "ibv_dereg_mr",
+            ..
+        })
+    ));
+    {
+        let cache = runtime.registrations.state.lock().unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        let entry = &cache.entries[0];
+        assert!(entry.owner.window_bind);
+        assert_eq!(entry.borrowers, 1);
+        assert!(
+            entry.retiring,
+            "first native failure must not leave another capability active"
+        );
+    }
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.persistent_mrs,
+            stats.persistent_source_mrs,
+            stats.persistent_mr_bytes
+        ),
+        (2, 1, 48)
+    );
+    assert_eq!(
+        (stats.retained_persistent_mrs, stats.retained_source_mrs),
+        (1, 0)
+    );
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| **e == "deregister_local")
+            .count(),
+        1
+    );
+    assert!(!log.lock().unwrap().contains(&"deregister_parent"));
+    memory.write(0, &[1; 4]).unwrap();
+    assert!(memory.write(8, &[1; 4]).is_err());
+    assert!(matches!(source.close(), Err(Error::Unquiesced { .. })));
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_windows,
+            stats.retained_persistent_mrs,
+            stats.retained_source_mrs
+        ),
+        (0, 2, 1)
+    );
+    assert!(memory.write(8, &[1; 4]).is_err());
+    let before = log.lock().unwrap().clone();
+    drop((source, runtime));
+    assert_eq!(
+        *log.lock().unwrap(),
+        before,
+        "retained parents never retry native cleanup"
+    );
+}
