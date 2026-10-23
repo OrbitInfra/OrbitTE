@@ -549,19 +549,16 @@ unsafe extern "C" fn send_completion(
         unsafe {
             std::ptr::copy_nonoverlapping(address as *const u8, receive.address as *mut u8, length);
             *(receive.window as *mut bool) = false;
-            (&*(receive.cq as *const FakeCq))
-                .completions
-                .lock()
-                .unwrap()
-                .push_back(sys::Completion {
-                    id: receive.id,
-                    qpn: receive.qpn,
-                    opcode: 128,
-                    length: length as u32,
-                    flags: sys::WITH_INVALIDATE,
-                    invalidated_rkey: rkey,
-                    ..Default::default()
-                });
+            let cq = &*(receive.cq as *const FakeCq);
+            cq.completions.lock().unwrap().push_back(sys::Completion {
+                id: receive.id,
+                qpn: receive.qpn,
+                opcode: 128,
+                length: length as u32,
+                flags: sys::WITH_INVALIDATE,
+                invalidated_rkey: rkey,
+                ..Default::default()
+            });
         }
     }
     unsafe { &*qp.cq }
