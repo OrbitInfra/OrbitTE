@@ -814,9 +814,9 @@ GDR, multirail, performance advantage or OrbitKV qualification is inferred.
 
 ### Transport boundaries and connection/grant retirement
 
-P4.7c implements the following owner and module boundaries. Source/CPU review
-and a new exact-source native run are required before accepting this delivery;
-the historical P4.7b qualification above does not qualify this changed tree.
+P4.7c implements the following owner and module boundaries. Its independent
+source/CPU and declared native regression acceptance is recorded below; the
+historical P4.7b evidence remains scoped to its own source tree.
 
 | Frozen TENT owner | Current Rust owner | Responsibility |
 | --- | --- | --- |
@@ -828,6 +828,12 @@ the historical P4.7b qualification above does not qualify this changed tree.
 | `transport/rdma/endpoint.h::RdmaEndPoint` | `src/transport/rdma/endpoint.rs::RdmaEndpoint` | Current connection/grant lifecycle and physical close handoff |
 | `transport/rdma/endpoint_store.h::EndpointStore` | `src/transport/rdma/endpoint_store.rs::EndpointStore` | Bounded live/detached ownership and exact-object retirement |
 | `transport/rdma/workers.h::Workers`, `cq.h::RdmaCQ`, `slice.h` | `src/transport/rdma/workers.rs::Workers`, `cq.rs::RdmaCq`, `slice.rs::SendQueue` | One shared-CQ worker, physical CQ ownership and bounded signaled slice debt |
+
+Frozen TENT's `LocalBufferManager` keeps registrations separate from endpoint
+connections. Its `EndpointStore::getOrInsert` reuses nonterminal endpoints and
+retains terminal endpoints in `waiting_list_` until retirement. This stage
+implements the separate owners and detached retirement; caching ready connected
+QPs remains the next contract.
 
 The engine directly selects `TcpTransport` or `RdmaTransport`. RDMA owns its
 bootstrap, binding, verbs submission, DONE/ACK and error cleanup; TCP payload
@@ -899,6 +905,49 @@ the complete operation-level ordering proof still need implementation and
 qualification. A requester SEND CQE or TCP DONE alone cannot replace the proposed
 source receive receipt. This stage continues to release source bytes only after
 actual physical QP close.
+
+### Connection/grant retirement qualification
+
+Source [`1b88240`](https://github.com/OrbitInfra/OrbitTE/commit/1b88240192822f1a80e61873d6f88a46b4764c38)
+is independently accepted for the boundaries and physical-QP-close behavior
+above. The reviewer independently reran stable and Rust 1.85 across default,
+RDMA, CUDA and combined features: check, strict all-target Clippy and tests.
+The combined profile passes 115 unit, 3 notification, 5 TCP and 1 documentation
+test; hardware-only tests remain explicit gates. Both CPU trace runs, the five
+supervision/selector controls, packaging, and 20 single-CPU/16-thread release
+runs per independent build pass. Thirty CPU old-logic/owner regressions each
+fail twice as intended (60 negative controls), with an unchanged passing control.
+Four rejected children terminate at fake-provider assertions; these remain CPU
+logic controls, not physical fault evidence.
+Initial feature-fixture/MSRV failures and the early surviving terminal-store
+control remain preserved; they do not qualify their superseded source trees.
+
+The implementation stable build and an independently built MSRV artifact each
+pass the declared 24-case native profile: four invalidated/parent-key rejection
+cases, six four-QP shared-CQ cases and fourteen public DRAM, pinned-memory,
+staged GPU and TCP regressions. Each role reports separate connection/grant
+counts at zero after drain. Each run records all 48 successful SSH waits and
+three controller waits, 96 absent owned PIDs, unchanged file/VMA identities and
+hashes, and reacquisition of both original NIC locks and A's original GPU7 lock.
+Only A's selected H20 GPU7 is used; it returns to zero memory with no compute
+applications. B's GPUs are not selected. CUDA uses the frozen 13.1 compatibility
+driver, with no mapped TENT/Mooncake/libcudart libraries.
+
+Evidence lives outside the checkout in
+`/root/orbitte-artifacts/rdma-connection-owners-20261023`.
+`implementation-source-1b88240/manifest.json` and
+`review/independent-source-1b88240/gates.json` pin source gates;
+`review/independent-source-1b88240/mutations/manifest.json` records the negative
+controls. `native-1b88240/implementation-hardware-review.json` and
+`independent-hardware-1b88240/independent-review.json` pin the two
+native runs. `review/independent-scoped-acceptance-1b88240.json` records the independent scoped
+verdict. The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/21/checks)
+cover the feature matrix and unmodified frozen TENT CPU comparison.
+
+This accepts the declared healthy and key-rejection profile with both actual
+QP-close barriers. It does not qualify failed physical teardown, arbitrary
+device/CQ faults, key exhaustion/replay, incoming DMA drain without QP close,
+connected QP reuse, GDR, multirail, performance, OrbitKV or full P4.
 
 ### Run the native gate
 

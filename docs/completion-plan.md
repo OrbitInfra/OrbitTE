@@ -108,7 +108,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7b scoped acceptance; P4.7c implemented; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7c scoped acceptance; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -534,7 +534,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   unqualified. Qualification and remaining reuse limits are tracked in
   [the contract](rdma-cuda.md#persistent-key-domain-and-bilateral-incarnation-qualification).
 - [x] **P4.7c — TENT transport boundaries and connection/grant retirement
-  (Implemented, not Accepted).** `ControlService` owns common RPC/admission;
+  (Accepted for the declared source/CPU/native profiles).** `ControlService`
+  owns common RPC/admission;
   parallel `TcpTransport` and `RdmaTransport` own their payload paths. Engine
   dispatches directly and the old `tcp::rdma` wrapper is removed. Native modules
   use `RdmaContext`, `LocalBufferManager`, `Workers`, CQ, slice, endpoint and
@@ -546,9 +547,12 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   also waits for completed outputs' memory owners. The store detaches terminal
   records before native cleanup, retains completion routing and quotas, removes
   exact owners and never performs native cleanup under its lookup lock.
-  Both per-request QP barriers remain. New source/CPU independent review and
-  exact-source native qualification are required; no connected reuse or physical
-  fault acceptance is inferred. See [the contract](rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
+  Both per-request QP barriers remain. Source
+  `1b88240192822f1a80e61873d6f88a46b4764c38` passes independent stable/MSRV
+  feature-matrix review, 60 CPU negative controls, 20 release single-CPU runs
+  per independent build and two independently built 24-case native regressions
+  with complete resource close. Connected reuse and broader physical fault
+  qualification remain open. See [the contract](rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
 - [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
   Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
@@ -560,7 +564,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   scoped acceptance is complete. P4.7b implements the persistent key domain and
   bilateral incarnation/grant protocol above; its scoped acceptance is complete.
   P4.7c implements separate connection/grant owners and terminal detached
-  retirement, with its qualification pending. Next add nonrepeating per-grant
+  retirement, with scoped source/CPU/native acceptance. Next add nonrepeating
+  per-grant
   WR namespaces on a reused connection, source receive-buffer/CQ ownership and
   the operation-level incoming-DMA drain contract before publishing idle
   connected endpoints for reuse. The fenced SEND_WITH_INV/RQ receipt route is
@@ -874,7 +879,8 @@ incarnations and independent grant generations for its declared source/CPU/nativ
 profiles. Both retain the per-request QP barriers; connected endpoint-store
 ownership and the complete P4 exit remain open.
 P4.7c implements independent TCP/RDMA transport boundaries, connection/grant
-owners and terminal detached retirement; its source/native acceptance is pending.
+owners and terminal detached retirement, with independent source/CPU and
+healthy native profile acceptance.
 Next establish receive-buffer/CQ ownership, fresh grant WR namespaces and a
 proven incoming-DMA drain protocol before connected reuse, then device/topology
 discovery, event progress and multirail. Follow the frozen
