@@ -40,9 +40,9 @@ bound MW keys become visible after a successful BIND CQE and are invalidated
 before final ACK. Independent review accepts its scoped CPU and native gates.
 A context-owned async event consumer stays alive through native QP/CQ teardown;
 lost consumption retains actual owners and loans.
-P4.7b implements a PD-lifetime full-rkey burn ledger: MW destruction cannot
+P4.7b added a PD-lifetime full-rkey burn ledger: MW destruction cannot
 reset key history, and exhausted tags or historical-index capacity refuse new
-authority. OrbitTE wire v8 retains bindings for both process/PD/connection identities, an
+authority. Its wire v7 bound both process/PD/connection identities, an
 independent grant generation and the exact request through bootstrap, grant,
 DONE and ACK. Independent source/CPU review and two independently built
 24-case native runs accept this scoped prerequisite stage. Connected QPs and
@@ -98,12 +98,13 @@ physical QP barriers. Its source/CPU and declared native regression profiles
 are independently accepted; connected QP reuse is still open. See the
 [architecture correspondence and drain contract](docs/rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
 
-P4.7d adds a private receive buffer/MR and a source RQ completion protocol.
+P4.7d adds a private receive buffer/MR and a wire v8 source RQ completion protocol.
 After payload CQ drain, the requester sends a same-QP fenced SEND_WITH_INV;
 the source validates its actual receive CQE, invalidated key and full grant
 binding before confirming completion. SQ and RQ credits are independent, even
-at capacity one. Both physical QP-close barriers remain. Qualification is
-pending for this candidate; connected reuse follows its accepted drain design.
+at capacity one. Both physical QP-close barriers remain. Independent review
+accepts the scoped source/CPU and two independently built 29-case native runs. Connected reuse
+and release of incoming-DMA owners without QP close remain open.
 
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault

@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.7a/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.7d/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -858,7 +858,8 @@ owns those byte operations. No empty transport trait or compatibility facade
 was added. The pre-1.0 configuration path is now
 `orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaStats}`; the old
 root `orbit_te::rdma` module is removed. OrbitKV remains on its existing provider.
-OrbitTE wire v7 is unchanged and is still not TENT wire interoperability.
+P4.7c retained OrbitTE wire v7. P4.7d below uses wire v8; neither establishes
+TENT wire interoperability.
 
 `ConnectionResources` owns `ConnectionHandles` (QP and shared CQ reference),
 its actual `RdmaContext`, immutable QP-only routing, connection identity and
@@ -899,7 +900,8 @@ Native peers check and report both connection and grant counts at normal drain.
 This store supplies terminal lifetime management for the current per-request
 QP model. It does not yet cache idle connected QPs, rebind a MW or remove either
 peer's physical QP close barrier. The local MR cache remains requester-only;
-`Workers` still uses one polling worker/shared CQ. Physical cleanup/replay
+P4.7c used one polling worker/shared CQ; P4.7d below separates SQ and RQ CQs
+under that one worker. Physical cleanup/replay
 faults, source persistent MRs, connected reuse and full P4 remain open.
 
 P4.7c proposed a source receive receipt as a prerequisite for connected reuse.
@@ -952,9 +954,9 @@ connected QP reuse, GDR, multirail, performance, OrbitKV or full P4.
 
 ### Source receive completion and independent WR identities
 
-P4.7d is a candidate implementation; exact-source gates and independent native
-qualification are pending. This substage keeps per-request physical QPs. It
-does not publish idle connected endpoints or claim P4 completion.
+P4.7d is independently accepted for the declared source/CPU/native profiles
+below. This substage keeps per-request physical QPs. It does not publish idle
+connected endpoints or claim P4 completion.
 
 The frozen TENT context/buffer/endpoint/store/worker/slice ownership remains the
 reference. TENT `RdmaCQ`/`Workers` own CQ progress; `RdmaEndPoint::submitSlices`
@@ -1005,6 +1007,62 @@ independently prove adversarial provider reorderings or incoming DMA drain
 without QP close. That complete operation-level proof, persistent source MRs,
 connected endpoint reuse, arbitrary native faults, GDR and full P4 remain open.
 
+### Source receive and WR identity qualification
+
+Source [`62d18ed`](https://github.com/OrbitInfra/OrbitTE/commit/62d18ed5cf72fbc3fe6df62e3e6c41b6d4555e79)
+is independently accepted for this prerequisite with both physical QP-close
+barriers. The reviewer independently reran stable and Rust 1.85 across default,
+RDMA, CUDA and combined features: check, strict all-target Clippy and tests.
+The combined profile passes 125 library tests, 3 notification, 5 TCP and one
+documentation test. CPU traces, five runner/selector controls, packaging and
+20 single-CPU/16-thread release runs per compiler pass. Sixty-two broken CPU
+variants are rejected twice (124 controls), with an unchanged passing baseline.
+Fourteen rejected processes abort at seven fake-provider/ABI assertion types;
+these are CPU controls, not physical fault injection. Earlier candidate Clippy
+and byte-oracle corrections remain in external evidence and do not qualify
+those older candidates.
+
+The implementation's stable build and the reviewer's independent Rust 1.85
+build each pass 29 native cases. Six source-key probes include the four prior
+LOCAL_INV/parent-key controls and two actual remote-invalidation probes. In
+both directions, the source observes its real successful receive CQE and keeps
+its QP/MW alive while the requester submits the invalidated old key on the same
+connected QP. The RNIC returns actual REM_ACCESS_ERR (10); full bytes and guards
+match the legitimate READ followed by the rejected access. The hostile test
+bypasses only the public one-grant submission guard, never native provider/CQ
+results. This demonstrates that scoped key rejection, not release of arbitrary
+incoming DMA without physical QP close.
+
+Six four-QP shared-progress regressions remain. Three new duplex component
+profiles use one `RdmaTransport` runtime per process, simultaneously source and
+requester, with four source/requester pairs (eight actual QPs per phase) and
+fragmented READ then WRITE. SQ/RQ capacity-one and asymmetric one/two profiles
+pass exact payload/guard comparisons, eight sends and receives per process,
+and independent bounded queue debt. These component cases complement fourteen
+public wire-v8 host/pinned/NVIDIA staging/TCP regressions; they do not replace
+public control-protocol verification or establish TENT interoperability.
+Actual message MR/byte and SQ/RQ debt counters drain to zero before handback.
+
+Each native run records four successful controller waits, 58 successful SSH
+waits and 116 absent owned native/supervisor PIDs at postflight. Both retain the
+original lock inodes, unchanged 19/16 DSO files and verified actual VMAs; A uses
+only its selected H20 GPU 7 and returns to zero memory/no applications. B never
+selects a GPU. Arbitrary physical failed teardown, partial posts, replayed CQEs
+and device faults remain unqualified. Persistent source MRs, connected reuse,
+GDR and multirail still require implementation; full P4 remains open. The
+healthy cases are correctness evidence, not a performance comparison or an
+operation-level proof for removing QP barriers.
+
+Evidence remains outside Git under
+`/root/orbitte-artifacts/rdma-receive-completion-20261023/`:
+`implementation-source-62d18ed/manifest.json`,
+`native-62d18ed/implementation-hardware-review.json`,
+`independent-hardware-62d18ed/independent-raw-audit.json` and
+`review/independent-scoped-acceptance-62d18ed.json`. The scoped acceptance receipt SHA-256 is
+`0166daf44c229e874701849a953899a08bc25e7a8800105b5be5f2c767fec413`. [PR #22 checks](https://github.com/OrbitInfra/OrbitTE/pull/22/checks)
+cover the feature matrix and frozen TENT CPU comparison separately; hardware
+acceptance stays pinned to the source above.
+
 ### Run the native gate
 
 The explicit native [`hardware_peer`](../examples/hardware_peer.rs) runner
@@ -1051,6 +1109,19 @@ qualification above used one WR per request and its 3/3 CQ counts apply only to
 those frozen sources. GPU cases expose only the selected UUID
 through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock paths
 must match the resource owner's existing convention.
+
+For the native library-test executable, `runner: "orbitte-window"` selects
+exactly `transport::rdma::workers::tests::hardware::source_window_peer`.
+`window_probe` accepts `revoked` (LOCAL_INV), `parent` (unadvertised local-only
+parent key), or `remote` (source receive of SEND_WITH_INV, then same-QP old-key
+access before source close). `runner: "orbitte-shared-cq"` selects the exact
+`shared_cq_peer` test. Both component runners require host RDMA and explicit
+`rdma_max_cqes` (1..4), `rdma_max_send_wr` (1..2). Setting `duplex: true` runs
+simultaneous source/requester ownership on each process; optional
+`source_rdma_max_cqes`/`requester_rdma_max_cqes` select asymmetric capacities
+(1..4). Duplex uses SQ window one and incrementally advertises grants after
+RQ acceptance. All cases still require the same original resource locks and
+supervision; a zero-match libtest filter is rejected before deployment.
 
 First resolve the current platform attempt and run hardware/occupation preflight.
 The controller verifies host/boot identity, deploys only the native binary and
