@@ -3,10 +3,10 @@ use super::*;
 fn source(
     mode: &str,
 ) -> (
-    Runtime,
+    RdmaTransport,
     crate::memory::MemoryRegistry,
     RegisteredMemory,
-    Endpoint,
+    RdmaEndpoint,
 ) {
     let runtime = runtime(mode);
     let registry = crate::memory::MemoryRegistry::new(SourceEpoch([1; 16]), 1, 8);
@@ -118,9 +118,10 @@ fn window_errors_abort_actual_owners_or_retain_failed_cleanup_without_retry() {
                     stats.active_windows,
                     stats.retained_windows,
                     stats.retained_endpoints,
-                    stats.direct_bytes
+                    stats.direct_bytes,
+                    stats.retained_grants
                 ),
-                (1, 1, 1, 8)
+                (1, 1, usize::from(mode.ends_with("_close0")), 8, 1)
             );
         } else {
             assert!(

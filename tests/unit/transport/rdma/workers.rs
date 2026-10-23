@@ -1,6 +1,9 @@
 use super::*;
-use crate::rdma::tests::{events, pause, runtime};
-use crate::rdma::{Endpoint, Lease, Runtime, Staging};
+use crate::transport::rdma::tests::{events, pause, runtime};
+use crate::transport::rdma::{
+    ConnectionLease, ConnectionResources, GrantLease, GrantResources, RdmaEndpoint, RdmaTransport,
+    Staging,
+};
 
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(3)
@@ -27,7 +30,7 @@ fn release(pause: &Arc<(Mutex<(bool, bool)>, Condvar)>) {
     pause.1.notify_all();
 }
 
-fn configured(mode: &str, capacity: usize) -> Runtime {
+fn configured(mode: &str, capacity: usize) -> RdmaTransport {
     let mut runtime = runtime(mode);
     runtime.config.max_endpoints = 8;
     runtime.config.max_staging_bytes = 64;
@@ -53,7 +56,7 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
             let first = endpoints.remove(0);
             let pause = pause(&runtime);
             thread::scope(|scope| {
-                let run = |mut endpoint: Endpoint| {
+                let run = |mut endpoint: RdmaEndpoint| {
                     let remote = endpoint.descriptor();
                     endpoint.transfer(&remote, operation, deadline()).unwrap();
                     endpoint.close().unwrap();
@@ -117,43 +120,59 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
 }
 
 // Pause at the real owner boundary: accepted by the lane, before QP creation.
-fn unopened(runtime: &Runtime) -> Endpoint {
+fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
     let device = runtime.device().unwrap();
     let progress = runtime.progress(Arc::clone(&device)).unwrap();
     {
         let mut usage = runtime.usage.lock().unwrap();
         usage.active_endpoints += 1;
+        usage.active_grants += 1;
         usage.staging_bytes += 8;
     }
     let resources = Box::new(Resources {
-        device,
-        handles: sys::Handles {
-            cq: progress.handle().unwrap(),
-            ..Default::default()
+        connection: ConnectionResources {
+            device: Arc::clone(&device),
+            handles: sys::ConnectionHandles {
+                cq: progress.handle().unwrap(),
+                ..Default::default()
+            },
+            incarnation: None,
+            local: Descriptor::default(),
+            closed: false,
+            lease: Some(ConnectionLease {
+                usage: Arc::clone(&runtime.usage),
+                drained: Arc::clone(&runtime.drained),
+            }),
         },
-        cached_mr: None,
-        buffer: Buffer::Staged(Staging::new(8).unwrap()),
-        _lease: Lease {
-            usage: Arc::clone(&runtime.usage),
-            drained: Arc::clone(&runtime.drained),
-            length: 8,
-            is_direct: false,
+        grant: GrantResources {
+            device,
+            handles: sys::MemoryHandles::default(),
+            cached_mr: None,
+            buffer: Buffer::Staged(Staging::new(8).unwrap()),
+            _lease: GrantLease {
+                usage: Arc::clone(&runtime.usage),
+                drained: Arc::clone(&runtime.drained),
+                length: 8,
+                is_direct: false,
+            },
+            max_read_slices: 64,
+            permission: 0,
+            generation: 0,
+            rkey: 0,
+            connection: None,
+            window_used: false,
+            window_bound: false,
         },
-        max_read_slices: 64,
-        permission: 0,
-        window_used: false,
-        window_bound: false,
     });
-    Endpoint {
+    RdmaEndpoint {
         record: progress.register(resources).unwrap(),
         progress,
         local: Descriptor::default(),
         incarnation: None,
-        grant_generation: 0,
         config: runtime.config.clone(),
         verbs: runtime.verbs,
         deadline: deadline(),
-        resources: None,
+        output: None,
     }
 }
 
@@ -271,12 +290,11 @@ fn close_deadline_returns_unquiesced_while_another_native_call_owns_the_worker()
     ));
     assert!(before.elapsed() < Duration::from_millis(500));
     assert!(
-        record
-            .lock()
-            .unwrap()
-            .resources
-            .as_ref()
-            .is_some_and(|r| !r.handles.qp.is_null())
+        record.lock().unwrap().resources.as_ref().is_some_and(|r| !r
+            .connection
+            .handles
+            .qp
+            .is_null())
     );
     drop(second); // The lane still holds the actual QP, buffer and charge.
     assert_eq!(runtime.stats().unwrap().active_endpoints, 2);
@@ -327,15 +345,21 @@ fn completed_outputs_and_quota_move_to_endpoint_despite_live_progress_snapshots(
         assert_eq!(endpoint.close().is_err(), mode == "post");
         assert!(snapshot.lock().unwrap().resources.is_none());
         assert_eq!(
-            runtime.stats().unwrap().active_endpoints,
-            1,
-            "caller still owns output"
+            (
+                runtime.stats().unwrap().active_endpoints,
+                runtime.stats().unwrap().active_grants
+            ),
+            (0, 1),
+            "physical QP capacity is released while the caller still owns output"
         );
         drop(endpoint);
         assert_eq!(
-            runtime.stats().unwrap().active_endpoints,
-            0,
-            "worker snapshots own no closed resources"
+            (
+                runtime.stats().unwrap().active_endpoints,
+                runtime.stats().unwrap().active_grants
+            ),
+            (0, 0),
+            "worker snapshots own no closed connection or grant resources"
         );
         let mut next = runtime.staging_endpoint(8, 0).unwrap();
         next.close().unwrap();
@@ -449,7 +473,11 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
         let stats = runtime.stats().unwrap();
         assert_eq!(stats.work_requests, usize::from(retained));
         assert_eq!(stats.retained_work_requests, usize::from(retained));
-        assert_eq!(stats.retained_endpoints, if retained { 2 } else { 0 });
+        assert_eq!(
+            stats.retained_endpoints,
+            if suffix == "_close0" { 2 } else { 0 }
+        );
+        assert_eq!(stats.retained_grants, if retained { 2 } else { 0 });
         if retained {
             assert!(memory.read(0, &mut [0; 1]).is_err());
             assert!(memory.write(8, &[9]).is_err());
@@ -570,8 +598,8 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
     let mut first = runtime.staging_endpoint(8, 2).unwrap();
     let mut second = runtime.staging_endpoint(8, 2).unwrap();
     let record = Arc::clone(&second.record);
-    let pause = crate::rdma::tests::pause(&runtime);
-    let events = crate::rdma::tests::events(&runtime);
+    let pause = crate::transport::rdma::tests::pause(&runtime);
+    let events = crate::transport::rdma::tests::events(&runtime);
     let close_first = thread::spawn(move || first.close());
     let (lock, changed) = &*pause;
     let (state, timed) = changed
@@ -585,7 +613,7 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
         assert!(Instant::now() < deadline);
         thread::yield_now();
     }
-    crate::rdma::device::tests::emit_async(&runtime, 255);
+    crate::transport::rdma::context::tests::emit_async(&runtime, 255);
     while runtime.stats().unwrap().async_event_workers != 0 {
         assert!(Instant::now() < deadline);
         thread::yield_now();
@@ -606,9 +634,10 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
             stats.active_endpoints,
             stats.retained_endpoints,
             stats.retained_windows,
-            stats.direct_bytes
+            stats.direct_bytes,
+            stats.retained_grants
         ),
-        (1, 1, 1, 8)
+        (1, 1, 2, 16, 2)
     );
     let events = events.lock().unwrap();
     assert_eq!(
@@ -617,6 +646,10 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
         "no second destroy after consumer loss"
     );
     assert!(!events.contains(&"destroy_cq"));
+    assert!(
+        !events.contains(&"dealloc_window"),
+        "consumer loss between QP and MW close retains both grants"
+    );
 }
 
 #[test]
@@ -626,17 +659,17 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
     runtime.config.max_direct_bytes = 16;
     let mut first = runtime.staging_endpoint(8, 2).unwrap();
     let mut second = runtime.staging_endpoint(8, 2).unwrap();
-    let events = crate::rdma::tests::events(&runtime);
-    let pause = crate::rdma::tests::pause(&runtime);
+    let events = crate::transport::rdma::tests::events(&runtime);
+    let pause = crate::transport::rdma::tests::pause(&runtime);
     let record = Arc::clone(&second.record);
     let constructor = record.lock().unwrap();
-    crate::rdma::device::tests::emit_async(&runtime, 3);
+    crate::transport::rdma::context::tests::emit_async(&runtime, 3);
     wait_blocked(&pause);
-    crate::rdma::device::tests::emit_async(&runtime, 255);
+    crate::transport::rdma::context::tests::emit_async(&runtime, 255);
     wait_until(|| runtime.stats().unwrap().async_event_workers == 0);
     release(&pause);
     drop(constructor);
-    wait_until(|| runtime.stats().unwrap().retained_endpoints == 2);
+    wait_until(|| runtime.stats().unwrap().retained_grants == 2);
     assert!(matches!(first.close(), Err(Error::Unquiesced { .. })));
     assert!(matches!(second.close(), Err(Error::Unquiesced { .. })));
     drop(first);
@@ -647,9 +680,10 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
             stats.active_endpoints,
             stats.retained_endpoints,
             stats.retained_windows,
-            stats.direct_bytes
+            stats.direct_bytes,
+            stats.retained_grants
         ),
-        (2, 2, 2, 16)
+        (1, 1, 2, 16, 2)
     );
     let events = events.lock().unwrap();
     assert_eq!(events.iter().filter(|s| **s == "destroy_qp").count(), 1);
@@ -662,7 +696,7 @@ pub(super) fn before_abort_lock(shared: &Shared, record: &Record) {
         return;
     }
     let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
-    let pause = crate::rdma::device::tests::pause_device(&device);
+    let pause = crate::transport::rdma::context::tests::pause_device(&device);
     let (lock, changed) = &*pause;
     let mut state = lock.lock().unwrap();
     state.0 = true;
@@ -670,4 +704,50 @@ pub(super) fn before_abort_lock(shared: &Shared, record: &Record) {
     while !state.1 {
         state = changed.wait(state).unwrap();
     }
+}
+
+#[test]
+fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_available() {
+    let mut transport = runtime("qp_pause");
+    transport.config.max_endpoints = 2;
+    transport.config.max_staging_bytes = 24;
+    let transport = Arc::new(transport);
+    let mut first = transport.staging_endpoint(8, 0).unwrap();
+    let progress = Arc::clone(&first.progress);
+    let record = Arc::clone(&first.record);
+    let pause = pause(&transport);
+    let closer = thread::spawn(move || {
+        let result = first.close();
+        (first, result)
+    });
+    wait_blocked(&pause);
+    {
+        let control = progress
+            .shared
+            .control
+            .try_lock()
+            .expect("native close must not hold the endpoint-store lock");
+        assert!(record.require_live().is_err());
+        assert!(Arc::ptr_eq(
+            &control.endpoints.work_owner(record.tag).unwrap(),
+            &record
+        ));
+        assert_eq!(control.endpoints.len(), 1);
+    }
+    assert_eq!(transport.stats().unwrap().active_endpoints, 1);
+    let mut second = transport.staging_endpoint(8, 0).unwrap();
+    assert_eq!(transport.stats().unwrap().active_endpoints, 2);
+    release(&pause);
+    let (first, result) = closer.join().unwrap();
+    result.unwrap();
+    assert_eq!(
+        (
+            transport.stats().unwrap().active_endpoints,
+            transport.stats().unwrap().active_grants
+        ),
+        (1, 2)
+    );
+    second.close().unwrap();
+    drop((first, second));
+    transport.close(deadline()).unwrap();
 }

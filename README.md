@@ -89,6 +89,16 @@ retirement. See the [runtime profiles](docs/rdma-cuda.md) and
 [OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307).
 The default OrbitKV provider remains TENT.
 
+The source now separates `runtime/control_plane::ControlService` from parallel
+`transport/tcp::TcpTransport` and `transport/rdma::RdmaTransport`; RDMA is no
+longer nested in or dispatched by TCP. Native owners use TENT's `RdmaContext`,
+`LocalBufferManager`, `Workers`, CQ, slice and `EndpointStore` boundaries.
+P4.7c separates physical connection quota from per-request memory/byte quota,
+retains terminal endpoints through detached native retirement, and keeps both
+physical QP barriers. Its new source/native qualification remains pending;
+connected QP reuse is still open. See the
+[architecture correspondence and drain contract](docs/rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
+
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault
 qualification remain open. Accepted evidence is scoped in the completion plan;

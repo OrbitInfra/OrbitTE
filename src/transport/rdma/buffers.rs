@@ -3,10 +3,10 @@ use std::time::Instant;
 
 use crate::engine::remaining;
 
-use super::{Device, RdmaConfig, RdmaStats, sys};
+use super::{RdmaConfig, RdmaContext, RdmaStats, sys};
 use crate::{Error, RegisteredMemory, Result};
 
-pub(crate) struct HostRegistrations {
+pub(crate) struct LocalBufferManager {
     state: Mutex<Cache>,
     changed: Condvar,
     usage: Arc<Mutex<RdmaStats>>,
@@ -43,8 +43,8 @@ enum State {
 }
 
 struct Resources {
-    handles: sys::Handles,
-    device: Arc<Device>,
+    handles: sys::MemoryHandles,
+    device: Arc<RdmaContext>,
     memory: RegisteredMemory,
     usage: Arc<Mutex<RdmaStats>>,
 }
@@ -64,12 +64,12 @@ impl Drop for Resources {
 }
 
 pub(super) struct MrLease {
-    cache: Arc<HostRegistrations>,
+    cache: Arc<LocalBufferManager>,
     owner: Arc<MemoryRegion>,
     released: bool,
 }
 
-impl HostRegistrations {
+impl LocalBufferManager {
     pub(super) fn new(
         config: &RdmaConfig,
         usage: Arc<Mutex<RdmaStats>>,
@@ -87,7 +87,7 @@ impl HostRegistrations {
 
     pub(super) fn acquire(
         self: &Arc<Self>,
-        device: Arc<Device>,
+        device: Arc<RdmaContext>,
         memory: &RegisteredMemory,
         deadline: Instant,
     ) -> Result<MrLease> {
@@ -173,7 +173,7 @@ impl HostRegistrations {
             let owner = Arc::new(MemoryRegion {
                 key: Arc::downgrade(&memory.0),
                 state: Mutex::new(State::Open(Box::new(Resources {
-                    handles: sys::Handles::default(),
+                    handles: sys::MemoryHandles::default(),
                     device: Arc::clone(&device),
                     memory: memory.clone(),
                     usage: Arc::clone(&self.usage),
@@ -311,7 +311,7 @@ impl HostRegistrations {
     }
 }
 
-impl Drop for HostRegistrations {
+impl Drop for LocalBufferManager {
     fn drop(&mut self) {
         let _ = self.close(Instant::now());
     }
@@ -414,5 +414,5 @@ impl Drop for MrLease {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/registration.rs"]
+#[path = "../../../tests/unit/transport/rdma/buffers.rs"]
 mod tests;

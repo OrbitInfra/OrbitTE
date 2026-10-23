@@ -13,6 +13,26 @@ import time
 import uuid
 
 
+def native_peer_test(profile):
+    runner = profile.get('runner')
+    if runner == 'orbitte-shared-cq':
+        return 'transport::rdma::workers::tests::hardware::shared_cq_peer'
+    if runner == 'orbitte-window':
+        return 'transport::rdma::workers::tests::hardware::source_window_peer'
+    if runner == 'orbitkv-peer-host':
+        return 'peer::orbitte::tests::rdma_host::registered_host_rdma_peer'
+    if runner is None:
+        return None
+    raise ValueError('unsupported hardware runner')
+
+
+def validate_peer_listing(test, listing):
+    matches = [line.strip() for line in listing.splitlines()
+               if line.strip().endswith((': test', ': benchmark'))]
+    if matches != [test + ': test']:
+        raise ValueError('native peer selector must resolve exactly one test: ' + repr(matches))
+
+
 class Controller:
     def __init__(self, profile, binary, output):
         self.profile, self.binary, self.output = profile, binary, output
@@ -123,8 +143,7 @@ class Controller:
                 capacity, window = case['rdma_max_cqes'], case['rdma_max_send_wr']
                 if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= 2:
                     raise ValueError('invalid shared CQ/SQ profile')
-                test = 'source_window_peer' if window_probe else 'shared_cq_peer'
-                arguments = ['rdma::cq::tests::hardware::' + test, '--exact', '--ignored', '--test-threads=1', '--nocapture']
+                arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
                     'ORBITTE_SHARED_ROLE': role,
                     'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
@@ -146,7 +165,7 @@ class Controller:
                     environment['ORBITTE_SHARED_PEER'] = readiness[0]
                 return arguments, environment
             if consumer:
-                arguments = ['peer::orbitte::tests::rdma_host::registered_host_rdma_peer', '--exact', '--ignored', '--test-threads=1', '--nocapture']
+                arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
                 environment = {
                     'ORBITKV_ORBITTE_ROLE': role,
                     'ORBITKV_ORBITTE_BIND': self.profile['nodes'][node]['bind'],
@@ -220,6 +239,11 @@ def main():
     controller = Controller(profile, args.binary.resolve(), args.output.resolve())
     manifest = {'profile': profile, 'binary_sha256': controller.sha256, 'remote_root': controller.remote, 'started_unix': time.time(), 'status': 'running', 'performance_measurement': False}
     try:
+        native_test = native_peer_test(profile)
+        if native_test is not None:
+            listing = controller.command([str(args.binary.resolve()), native_test, '--exact', '--list'])
+            validate_peer_listing(native_test, listing)
+            manifest['native_test_selection'] = {'test': native_test, 'listing': listing, 'matches': 1}
         for node in sorted({case[role] for case in profile['cases'] for role in ['source', 'requester']}):
             controller.deploy(node)
         for index, case in enumerate(profile['cases']):

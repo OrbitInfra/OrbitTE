@@ -239,5 +239,5 @@ impl SendQueue {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/progress.rs"]
+#[path = "../../../tests/unit/transport/rdma/slice.rs"]
 mod tests;

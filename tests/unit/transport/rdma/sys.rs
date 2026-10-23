@@ -78,10 +78,13 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         lkey: 0x01234567,
         ..ffi::ibv_mr::default()
     };
-    let mut handles = Handles {
+    let mut handles = ConnectionHandles {
         qp: (&mut qp as *mut ffi::ibv_qp).cast(),
+        ..ConnectionHandles::default()
+    };
+    let memory = MemoryHandles {
         mr: (&mut mr as *mut ffi::ibv_mr).cast(),
-        ..Handles::default()
+        ..MemoryHandles::default()
     };
     let requests = [
         WorkRequest {
@@ -105,6 +108,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         unsafe {
             post(
                 &mut handles,
+                &memory,
                 requests.as_ptr(),
                 requests.len(),
                 bytes.as_ptr() as u64 + 16,
@@ -146,6 +150,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                 unsafe {
                     post(
                         &mut handles,
+                        &memory,
                         requests.as_ptr(),
                         requests.len(),
                         bytes.as_ptr() as u64 + 16,
@@ -198,6 +203,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
             unsafe {
                 post(
                     &mut handles,
+                    &memory,
                     &invalid,
                     1,
                     bytes.as_ptr() as u64 + 16,
@@ -223,6 +229,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
             unsafe {
                 post(
                     &mut handles,
+                    &memory,
                     requests.as_ptr(),
                     requests.len(),
                     base,
@@ -274,9 +281,9 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         cq_context: (&mut state as *mut NativeCq).cast(),
         ..ffi::ibv_cq::default()
     };
-    let mut handles = Handles {
+    let mut handles = ConnectionHandles {
         cq: (&mut cq as *mut ffi::ibv_cq).cast(),
-        ..Handles::default()
+        ..ConnectionHandles::default()
     };
     let mut output = Completion::default();
     assert_eq!(
@@ -401,18 +408,21 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
                 qp_context: (&mut state as *mut WindowPost).cast(),
                 ..Default::default()
             };
-            let mut handles = Handles {
+            let mut handles = ConnectionHandles {
                 qp: (&mut qp as *mut ffi::ibv_qp).cast(),
+                ..Default::default()
+            };
+            let mut memory = MemoryHandles {
                 mr: (&mut mr as *mut ffi::ibv_mr).cast(),
                 mw: (&mut mw as *mut ffi::ibv_mw).cast(),
                 window_key: 0x123456ff,
-                ..Default::default()
             };
             let mut result = PostResult::default();
             assert_eq!(
                 unsafe {
                     window(
                         &mut handles,
+                        &mut memory,
                         65,
                         state.address,
                         state.length as usize,

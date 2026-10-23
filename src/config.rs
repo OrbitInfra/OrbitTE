@@ -7,7 +7,7 @@ use crate::{Error, Result};
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     #[cfg(feature = "rdma")]
-    pub rdma: Option<crate::rdma::RdmaConfig>,
+    pub rdma: Option<crate::transport::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
     pub max_registered_regions: usize,
     pub max_registered_bytes: usize,

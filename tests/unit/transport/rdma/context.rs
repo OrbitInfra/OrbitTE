@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::rdma::{Runtime, tests::FakeDevice, tests::runtime};
+use crate::transport::rdma::{RdmaTransport, tests::FakeDevice, tests::runtime};
 use std::sync::Barrier;
 use std::thread;
 
-pub(crate) fn events(runtime: &Runtime) -> Arc<Mutex<Vec<&'static str>>> {
+pub(crate) fn events(runtime: &RdmaTransport) -> Arc<Mutex<Vec<&'static str>>> {
     let cache = runtime.device.lock().unwrap();
     let owner = cache.owner.as_ref().unwrap();
     let state = owner.state.lock().unwrap();
@@ -15,12 +15,12 @@ pub(crate) fn events(runtime: &Runtime) -> Arc<Mutex<Vec<&'static str>>> {
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.events)
 }
 
-pub(crate) fn pause(runtime: &Runtime) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
+pub(crate) fn pause(runtime: &RdmaTransport) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
     pause_device(&runtime.device().unwrap())
 }
 
-pub(in crate::rdma) fn pause_device(
-    owner: &Device,
+pub(in crate::transport::rdma) fn pause_device(
+    owner: &RdmaContext,
 ) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
     let state = owner.state.lock().unwrap();
     let State::Open(resources) = &*state else {
@@ -264,7 +264,7 @@ fn close_cannot_destroy_a_device_while_any_endpoint_still_owns_it() {
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
 }
 
-pub(crate) fn emit_async(runtime: &Runtime, kind: u8) {
+pub(crate) fn emit_async(runtime: &RdmaTransport, kind: u8) {
     let owner = runtime.device().unwrap();
     let state = owner.state.lock().unwrap();
     let State::Open(resources) = &*state else {

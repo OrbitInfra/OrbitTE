@@ -1,10 +1,12 @@
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::cq::RdmaCq;
+use super::endpoint_store::EndpointStore;
 use super::{
-    Buffer, Descriptor, Device, Phase, RdmaConfig, RdmaStats, Resources, events, progress, sys,
+    Buffer, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaStats, Resources, events, slice, sys,
 };
 use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
@@ -51,7 +53,8 @@ const CLOSE: u8 = 2;
 
 pub(super) struct Record {
     actions: AtomicU8,
-    tag: u64,
+    pub(super) tag: u64,
+    pub(super) terminal: AtomicBool,
     state: Mutex<Request>,
     changed: Condvar,
 }
@@ -66,8 +69,8 @@ pub(super) struct Request {
 }
 
 struct Work {
-    queue: progress::SendQueue,
-    operation: progress::Operation,
+    queue: slice::SendQueue,
+    operation: slice::Operation,
     remote: Descriptor,
     deadline: Instant,
 }
@@ -76,15 +79,21 @@ impl Request {
     pub(super) fn check(&self) -> Result<()> {
         match self.failure {
             Some(fault) => Err(fault.error()),
-            None => self
-                .resources
-                .as_ref()
-                .map_or(Ok(()), |resources| resources.device.asynchronous.check()),
+            None => self.resources.as_ref().map_or(Ok(()), |resources| {
+                resources.connection.device.asynchronous.check()
+            }),
         }
     }
 }
 
 impl Record {
+    pub(super) fn require_live(&self) -> Result<()> {
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA endpoint is terminal"));
+        }
+        Ok(())
+    }
+
     pub(super) fn lock(&self) -> Result<MutexGuard<'_, Request>> {
         self.state.lock().map_err(|_| Error::Unquiesced {
             operation: "RDMA request lock poisoned",
@@ -93,7 +102,7 @@ impl Record {
     }
 }
 
-pub(super) struct Progress {
+pub(super) struct Workers {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -108,32 +117,14 @@ pub(super) struct Shared {
 }
 
 struct Control {
-    cq: Option<Box<CompletionQueue>>,
-    records: Vec<Arc<Record>>,
+    cq: Option<Box<RdmaCq>>,
+    endpoints: EndpointStore,
     next_tag: u64,
     dirty: bool,
     stopping: bool,
     finished: bool,
     fault: Option<Fault>,
     retained: Option<(&'static str, i32)>,
-}
-
-struct CompletionQueue {
-    handles: sys::Handles,
-    _device: Arc<Device>,
-    usage: Arc<Mutex<RdmaStats>>,
-}
-
-// The single progress thread polls/closes this CQ. Construction precedes spawn.
-unsafe impl Send for CompletionQueue {}
-
-impl Drop for CompletionQueue {
-    fn drop(&mut self) {
-        self.usage
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .active_cqs -= 1;
-    }
 }
 
 struct WorkerExit(Arc<Shared>);
@@ -156,23 +147,20 @@ impl Drop for WorkerExit {
     }
 }
 
-impl Progress {
+impl Workers {
     pub(super) fn new(
         config: &RdmaConfig,
-        device: Arc<Device>,
+        device: Arc<RdmaContext>,
         usage: Arc<Mutex<RdmaStats>>,
         verbs: &'static sys::Verbs,
     ) -> Result<Arc<Self>> {
-        let mut records = Vec::new();
-        records
-            .try_reserve_exact(config.max_endpoints)
-            .map_err(|_| Error::ResourceExhausted)?;
+        let endpoints = EndpointStore::new(config.max_endpoints)?;
         usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
             .active_cqs += 1;
-        let mut cq = Box::new(CompletionQueue {
-            handles: sys::Handles::default(),
+        let mut cq = Box::new(RdmaCq {
+            handles: sys::ConnectionHandles::default(),
             _device: Arc::clone(&device),
             usage: Arc::clone(&usage),
         });
@@ -196,7 +184,7 @@ impl Progress {
             asynchronous: Arc::clone(&device.asynchronous),
             control: Mutex::new(Control {
                 cq: Some(cq),
-                records,
+                endpoints,
                 next_tag: 0,
                 dirty: false,
                 stopping: false,
@@ -285,7 +273,7 @@ impl Progress {
         if control.stopping || control.finished {
             return Err(Error::Unavailable("RDMA progress is closed"));
         }
-        if control.records.len() >= self.shared.config.max_endpoints {
+        if control.endpoints.len() >= self.shared.config.max_endpoints {
             return Err(Error::ResourceExhausted);
         }
         let tag = control.next_tag;
@@ -297,6 +285,7 @@ impl Progress {
         let record = Arc::new(Record {
             actions: AtomicU8::new(0),
             tag,
+            terminal: AtomicBool::new(false),
             state: Mutex::new(Request {
                 resources: Some(resources),
                 phase: Phase::Init,
@@ -307,7 +296,7 @@ impl Progress {
             }),
             changed: Condvar::new(),
         });
-        control.records.push(Arc::clone(&record));
+        control.endpoints.publish(Arc::clone(&record))?;
         control.dirty = true;
         self.shared.wake.notify_one();
         Ok(record)
@@ -322,8 +311,10 @@ impl Progress {
     ) -> Result<()> {
         remaining(deadline)?;
         self.shared.asynchronous.check()?;
+        record.require_live()?;
         {
             let mut request = record.lock()?;
+            record.require_live()?;
             request.check()?;
             if request.phase != Phase::Connected {
                 return Err(Error::Internal("RDMA QP is not ready"));
@@ -334,7 +325,7 @@ impl Progress {
                 .ok_or(Error::Internal("missing RDMA endpoint"))?;
             if remote
                 .address
-                .checked_add(resources.buffer.len() as u64)
+                .checked_add(resources.grant.buffer.len() as u64)
                 .is_none()
             {
                 return Err(Error::InvalidRange);
@@ -342,10 +333,10 @@ impl Progress {
             let cap = if operation == TransferOp::Write {
                 32
             } else {
-                resources.max_read_slices
+                resources.grant.max_read_slices
             };
-            let queue = progress::SendQueue::new(
-                resources.buffer.len(),
+            let queue = slice::SendQueue::new(
+                resources.grant.buffer.len(),
                 self.shared.config.block_size,
                 cap,
                 Arc::clone(&self.shared.usage),
@@ -365,13 +356,15 @@ impl Progress {
     pub(super) fn window(
         &self,
         record: &Arc<Record>,
-        operation: progress::Operation,
+        operation: slice::Operation,
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
         self.shared.asynchronous.check()?;
+        record.require_live()?;
         {
             let mut request = record.lock()?;
+            record.require_live()?;
             request.check()?;
             if request.phase != Phase::Connected {
                 return Err(Error::Internal("MW QP is not ready"));
@@ -380,24 +373,24 @@ impl Progress {
                 .resources
                 .as_mut()
                 .ok_or(Error::Internal("missing MW owner"))?;
-            if resources.handles.mw.is_null() {
+            if resources.grant.handles.mw.is_null() {
                 return Err(Error::Unavailable("source MW is unavailable"));
             }
             let slot = match operation {
-                progress::Operation::Bind if !resources.window_used => {
-                    resources.window_used = true;
+                slice::Operation::Bind if !resources.grant.window_used => {
+                    resources.grant.window_used = true;
                     65
                 }
-                progress::Operation::Invalidate if resources.window_bound => 66,
+                slice::Operation::Invalidate if resources.grant.window_bound => 66,
                 _ => return Err(Error::Internal("MW authorization state")),
             };
             let remote = Descriptor {
-                address: resources.buffer.address().as_ptr() as u64,
-                rkey: resources.handles.window_key,
+                address: resources.grant.buffer.address().as_ptr() as u64,
+                rkey: resources.grant.handles.window_key,
                 ..Default::default()
             };
             request.work = Some(Work {
-                queue: progress::SendQueue::control(
+                queue: slice::SendQueue::control(
                     Arc::clone(&self.shared.usage),
                     record.tag * super::WR_ID_STRIDE + slot,
                 )?,
@@ -456,6 +449,15 @@ impl Progress {
         if !matches!(request.phase, Phase::Closed | Phase::Retained) {
             request.close_requested = true;
             drop(request);
+            self.shared
+                .control
+                .lock()
+                .map_err(|_| Error::Unquiesced {
+                    operation: "RDMA endpoint store poisoned",
+                    code: libc::EIO,
+                })?
+                .endpoints
+                .detach(record);
             record.actions.fetch_or(CLOSE, Ordering::Release);
             self.shared.signal();
             request = record.lock()?;
@@ -528,7 +530,7 @@ impl Progress {
     }
 }
 
-impl Drop for Progress {
+impl Drop for Workers {
     fn drop(&mut self) {
         // Last public/native request owner is gone. Native calls remain non-preemptible.
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -546,6 +548,7 @@ impl Shared {
     fn fail(&self, fault: Fault) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.fault.is_none() {
+            control.endpoints.detach_all();
             control.fault = Some(fault);
             self.usage
                 .lock()
@@ -588,23 +591,33 @@ impl Shared {
                     .progress_failures += 1;
             }
             control.fault = Some(Fault::Unquiesced(operation, code));
-            std::mem::take(&mut control.records)
+            control.endpoints.take_all()
         };
         let mut count = 0;
+        let mut grants = 0;
         let mut bytes = 0;
         let mut debt = 0;
         let mut windows = 0;
         for record in &records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if request.phase != Phase::Retained {
-                count += 1;
-                bytes += request.resources.as_ref().map_or(0, |r| r.buffer.len());
+                count += usize::from(
+                    request
+                        .resources
+                        .as_ref()
+                        .is_some_and(|r| r.connection.lease.is_some()),
+                );
+                grants += usize::from(request.resources.is_some());
+                bytes += request
+                    .resources
+                    .as_ref()
+                    .map_or(0, |r| r.grant.buffer.len());
                 debt += request.work.as_ref().map_or(0, |w| w.queue.outstanding());
                 windows += usize::from(
                     request
                         .resources
                         .as_ref()
-                        .is_some_and(|r| !r.handles.mw.is_null()),
+                        .is_some_and(|r| !r.grant.handles.mw.is_null()),
                 );
                 request.phase = Phase::Retained;
                 request.failure = Some(Fault::Unquiesced(operation, code));
@@ -617,6 +630,7 @@ impl Shared {
             let cq = control.cq.take();
             let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.retained_endpoints += count;
+            usage.retained_grants += grants;
             usage.retained_bytes += bytes;
             usage.retained_work_requests += debt;
             usage.retained_cqs += usize::from(cq.is_some());
@@ -630,40 +644,27 @@ impl Shared {
         self.wake.notify_all();
     }
 
-    fn close_mr(&self, resources: &mut Resources) -> std::result::Result<(), (&'static str, i32)> {
-        if !resources.handles.mw.is_null() {
-            let code = unsafe { (self.verbs.dealloc_window)(&mut resources.handles) };
-            if code != 0 {
-                return Err(("ibv_dealloc_mw", code));
-            }
-            self.usage
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .active_windows -= 1;
+    fn unlock(request: &mut Request) -> std::result::Result<(), (&'static str, i32)> {
+        if request
+            .work
+            .as_ref()
+            .is_some_and(|work| work.queue.pending())
+        {
+            return Err(("RDMA grant has unresolved completion debt", libc::EBUSY));
         }
-        if let Some(cached) = &mut resources.cached_mr {
-            cached.release().map_err(|error| match error {
-                Error::Unquiesced { operation, code } => (operation, code),
-                _ => ("RDMA MR borrow release", libc::EIO),
-            })?;
-            resources.handles.mr = std::ptr::null_mut();
-        } else {
-            let code = unsafe { (self.verbs.deregister)(&mut resources.handles) };
-            if code != 0 {
-                return Err(("ibv_dereg_mr", code));
-            }
-        }
-        resources.handles.cq = std::ptr::null_mut();
-        Ok(())
-    }
-
-    fn unlock(request: &mut Request) {
         if let Some(resources) = &mut request.resources {
-            if let Buffer::Direct { loan, .. } = &mut resources.buffer {
+            if !resources.connection.closed
+                || !resources.grant.handles.mw.is_null()
+                || !resources.grant.handles.mr.is_null()
+            {
+                return Err(("RDMA grant lacks native drain receipt", libc::EBUSY));
+            }
+            if let Buffer::Direct { loan, .. } = &mut resources.grant.buffer {
                 drop(loan.take());
             }
         }
         request.phase = Phase::Closed;
+        Ok(())
     }
 
     fn close_request(
@@ -693,17 +694,14 @@ impl Shared {
         if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
             return Err((operation, code));
         }
-        let code = unsafe { (self.verbs.destroy_qp)(&mut resources.handles) };
-        if code != 0 {
-            return Err(("ibv_destroy_qp", code));
-        }
-        self.close_mr(resources)?;
+        resources.connection.close(self.verbs)?;
+        resources.grant.close(&resources.connection, self.verbs)?;
+        Self::unlock(&mut request)?;
         self.control
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .records
-            .retain(|entry| !Arc::ptr_eq(entry, record));
-        Self::unlock(&mut request);
+            .endpoints
+            .remove_retired(record);
         drop(request);
         record.changed.notify_all();
         Ok(true)
@@ -725,10 +723,9 @@ impl Shared {
             let Some(resources) = &mut request.resources else {
                 continue;
             };
-            let code = unsafe { (self.verbs.destroy_qp)(&mut resources.handles) };
-            if code != 0 {
+            if let Err((operation, code)) = resources.connection.close(self.verbs) {
                 drop(request);
-                self.retain("ibv_destroy_qp", code);
+                self.retain(operation, code);
                 return;
             }
         }
@@ -743,7 +740,9 @@ impl Shared {
                 work.queue.quiesce();
             }
             if let Some(resources) = &mut request.resources {
-                if let Err((operation, code)) = self.close_mr(resources) {
+                if let Err((operation, code)) =
+                    resources.grant.close(&resources.connection, self.verbs)
+                {
                     drop(request);
                     self.retain(operation, code);
                     return;
@@ -753,11 +752,15 @@ impl Shared {
         for record in records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             request.failure.get_or_insert(fault);
-            Self::unlock(&mut request);
+            if let Err((operation, code)) = Self::unlock(&mut request) {
+                drop(request);
+                self.retain(operation, code);
+                return;
+            }
             record.changed.notify_all();
         }
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
-        control.records.clear();
+        control.endpoints.clear_after_drain();
         control.finished = true;
         self.wake.notify_all();
     }
@@ -767,7 +770,10 @@ impl Shared {
             return false;
         }
         let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-        if request.failure.is_some() || request.close_requested {
+        if record.terminal.load(Ordering::Acquire)
+            || request.failure.is_some()
+            || request.close_requested
+        {
             return false;
         }
         let Request {
@@ -816,24 +822,26 @@ impl Shared {
         *phase = Phase::Posted;
         let code = unsafe {
             match work.operation {
-                progress::Operation::Read | progress::Operation::Write => (self.verbs.post)(
-                    &mut resources.handles,
+                slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
+                    &mut resources.connection.handles,
+                    &resources.grant.handles,
                     requests.as_ptr(),
                     requests.len(),
-                    resources.buffer.address().as_ptr() as u64,
-                    resources.buffer.len(),
+                    resources.grant.buffer.address().as_ptr() as u64,
+                    resources.grant.buffer.len(),
                     work.remote.address,
                     work.remote.rkey,
-                    i32::from(work.operation == progress::Operation::Write),
+                    i32::from(work.operation == slice::Operation::Write),
                     &mut posted,
                 ),
-                progress::Operation::Bind | progress::Operation::Invalidate => (self.verbs.window)(
-                    &mut resources.handles,
+                slice::Operation::Bind | slice::Operation::Invalidate => (self.verbs.window)(
+                    &mut resources.connection.handles,
+                    &mut resources.grant.handles,
                     requests[0].id,
-                    resources.buffer.address().as_ptr() as u64,
-                    resources.buffer.len(),
-                    resources.permission,
-                    work.operation == progress::Operation::Bind,
+                    resources.grant.buffer.address().as_ptr() as u64,
+                    resources.grant.buffer.len(),
+                    resources.grant.permission,
+                    work.operation == slice::Operation::Bind,
                     &mut posted,
                 ),
             }
@@ -866,10 +874,8 @@ impl Shared {
             .control
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .records
-            .iter()
-            .find(|entry| entry.tag == tag)
-            .cloned();
+            .endpoints
+            .work_owner(tag);
         let Some(record) = record else {
             self.fail(Fault::Protocol("RDMA unknown completion owner"));
             return;
@@ -886,10 +892,10 @@ impl Shared {
             let operation = request.work.as_ref().map(|w| w.operation);
             if matches!(
                 operation,
-                Some(progress::Operation::Bind | progress::Operation::Invalidate)
+                Some(slice::Operation::Bind | slice::Operation::Invalidate)
             ) {
                 if let Some(resources) = &mut request.resources {
-                    resources.window_bound = operation == Some(progress::Operation::Bind);
+                    resources.grant.window_bound = operation == Some(slice::Operation::Bind);
                 }
                 request.phase = Phase::Connected;
             }
@@ -929,7 +935,7 @@ impl Shared {
             let (fault, stopping, cq) = {
                 let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
                 records.clear();
-                records.extend(control.records.iter().cloned());
+                control.endpoints.snapshot(&mut records);
                 control.dirty = false;
                 (
                     control.fault,
@@ -1008,7 +1014,7 @@ impl Shared {
                     .fault
                     .is_none()
             {
-                let mut handles = sys::Handles {
+                let mut handles = sys::ConnectionHandles {
                     cq: cq.unwrap_or(std::ptr::null_mut()),
                     ..Default::default()
                 };
@@ -1059,5 +1065,5 @@ impl Shared {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/cq.rs"]
+#[path = "../../../tests/unit/transport/rdma/workers.rs"]
 mod tests;

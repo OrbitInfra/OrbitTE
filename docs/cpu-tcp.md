@@ -16,14 +16,20 @@ Use its ownership boundaries while implementing the OrbitKV consumer path:
 | --- | --- | --- |
 | `runtime/transfer_engine_impl` | `src/engine.rs`, `src/batch.rs` | Immutable config, synchronous/async batch ownership, ordered execution and requester/source drain |
 | `runtime/segment`, `segment_tracker`, registration lifecycle | `src/memory.rs`, `src/segment.rs` | Shared allocation owners, reference-counted ranges, base/length descriptors, bounds/permissions and epoch fencing |
-| `runtime/control_plane`, RPC dispatch | `src/tcp.rs` | Direct P2P descriptor open/explicit refresh and source-owned handlers |
-| `transport/tcp` | `src/tcp.rs` | Host byte movement, deadlines, complete READ response and final WRITE acknowledgement |
-| Local/control notification queues and submit hooks | `src/notification.rs`, `src/engine.rs`, `src/tcp.rs` | Bounded named messages, atomic polling and synchronous batch-completion delivery |
+| `runtime/control_plane`, RPC dispatch | `src/runtime/control_plane.rs` (`ControlService`) | Direct P2P descriptor open/explicit refresh and source-owned handlers |
+| `transport/tcp` | `src/transport/tcp.rs` (`TcpTransport`) | Host byte movement, deadlines, complete READ response and final WRITE acknowledgement |
+| Local/control notification queues and submit hooks | `src/notification.rs`, `src/engine.rs`, `src/runtime/control_plane.rs` | Bounded named messages, atomic polling and synchronous batch-completion delivery |
 | Config/resource observations | `src/config.rs`, `TransferEngine::stats` | Per-engine budgets and retained/admitted resource counters |
 
-The TCP-only slice keeps RPC and TCP byte ownership together. Separate control
-and backend owners when the next real transport needs them; no empty provider
-traits or fallback to a Mooncake engine are present. Cache keys, replica/source
+The engine selects parallel TCP and RDMA transports directly. `ControlService`
+owns the shared socket service, descriptor/notification protocol, source
+admission and validated dispatch. `TcpTransport` owns TCP payload READ/WRITE;
+`RdmaTransport` owns RDMA bootstrap, native work and authorization receipts.
+RDMA uses a `ControlChannel` for setup without passing through `TcpTransport`.
+Frozen TENT also shares its control service with transports; its TCP payload
+RPC handlers live in `ControlService`, while this Rust layout places the byte
+behavior in `TcpTransport` and dispatches from the service. No generic forwarding
+transport facade or Mooncake fallback is present. Cache keys, replica/source
 grants, GPU allocation and recovery policy remain with OrbitKV.
 
 ## Rust contracts

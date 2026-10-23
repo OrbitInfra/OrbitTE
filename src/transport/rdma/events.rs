@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
 
-use super::{RdmaStats, cq, sys};
+use super::{RdmaStats, sys, workers};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -17,7 +17,7 @@ pub(super) struct State {
     // Positive: event type + 1; negative: the consumer can no longer ACK.
     fault: AtomicI32,
     stopping: AtomicBool,
-    progress: Mutex<Weak<cq::Shared>>,
+    progress: Mutex<Weak<workers::Shared>>,
 }
 
 impl State {
@@ -35,7 +35,7 @@ impl State {
         }
     }
 
-    pub(super) fn attach(&self, progress: Weak<cq::Shared>) {
+    pub(super) fn attach(&self, progress: Weak<workers::Shared>) {
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = progress;
         self.notify();
     }
@@ -73,7 +73,7 @@ struct Source {
     fd: i32,
     verbs: sys::AsyncVerbs,
 }
-// Device retains context/fd until this consumer has stopped and joined.
+// RdmaContext retains context/fd until this consumer has stopped and joined.
 unsafe impl Send for Source {}
 
 impl Source {
@@ -128,7 +128,7 @@ impl Source {
                 return;
             }
             let kind = event.kind;
-            // Fence without Record/Device/control locks before ACK. Native
+            // Fence without Record/RdmaContext/control locks before ACK. Native
             // destroy may be holding those locks while awaiting this receipt.
             state.event(kind);
             unsafe { (self.verbs.ack)(self.context.as_ptr(), &mut event) };
@@ -229,5 +229,5 @@ impl Events {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/events.rs"]
+#[path = "../../../tests/unit/transport/rdma/events.rs"]
 mod tests;
