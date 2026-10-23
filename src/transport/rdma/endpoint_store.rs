@@ -1,14 +1,45 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use super::ConnectionId;
 use super::workers::Record;
-use crate::{Error, Result};
+use crate::{Error, Result, SourceEpoch, TransferOp};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Peer {
+    pub(super) route: Option<SocketAddr>,
+    pub(super) epoch: SourceEpoch,
+    pub(super) local: ConnectionId,
+    pub(super) connection: ConnectionId,
+    pub(super) operation: TransferOp,
+    pub(super) source: bool,
+    pub(super) generation: u64,
+}
+
+impl Peer {
+    pub(super) fn same_pair(&self, other: &Self) -> bool {
+        self.route == other.route
+            && self.epoch == other.epoch
+            && self.local == other.local
+            && self.connection == other.connection
+            && self.operation == other.operation
+            && self.source == other.source
+    }
+}
+
+struct Idle {
+    endpoint: Arc<Record>,
+    peer: Peer,
+    claim: u64,
+}
 
 /// Strong native owners remain charged after lookup detachment and through retirement.
 pub(super) struct EndpointStore {
     live: Vec<Arc<Record>>,
     retiring: Vec<Arc<Record>>,
     capacity: usize,
+    idle: Vec<Idle>,
 }
 
 impl EndpointStore {
@@ -20,10 +51,14 @@ impl EndpointStore {
         retiring
             .try_reserve_exact(capacity)
             .map_err(|_| Error::ResourceExhausted)?;
+        let mut idle = Vec::new();
+        idle.try_reserve_exact(capacity)
+            .map_err(|_| Error::ResourceExhausted)?;
         Ok(Self {
             live,
             retiring,
             capacity,
+            idle,
         })
     }
 
@@ -46,7 +81,10 @@ impl EndpointStore {
         Ok(())
     }
 
-    pub(super) fn detach(&mut self, endpoint: &Arc<Record>) {
+    pub(super) fn detach(&mut self, endpoint: &Arc<Record>) -> bool {
+        let was_idle = self.idle.len();
+        self.idle
+            .retain(|entry| !Arc::ptr_eq(&entry.endpoint, endpoint));
         endpoint.terminal.store(true, Ordering::Release);
         if let Some(index) = self
             .live
@@ -55,9 +93,11 @@ impl EndpointStore {
         {
             self.retiring.push(self.live.swap_remove(index));
         }
+        self.idle.len() != was_idle
     }
 
     pub(super) fn detach_all(&mut self) {
+        self.idle.clear();
         for endpoint in &self.live {
             endpoint.terminal.store(true, Ordering::Release);
         }
@@ -66,6 +106,50 @@ impl EndpointStore {
 
     pub(super) fn remove_retired(&mut self, endpoint: &Arc<Record>) {
         self.retiring.retain(|entry| !Arc::ptr_eq(entry, endpoint));
+    }
+
+    pub(super) fn ready(&mut self, endpoint: &Arc<Record>, peer: Peer, claim: u64) -> Result<()> {
+        endpoint.require_live()?;
+        if !self.live.iter().any(|entry| Arc::ptr_eq(entry, endpoint))
+            || self
+                .idle
+                .iter()
+                .any(|entry| Arc::ptr_eq(&entry.endpoint, endpoint))
+        {
+            return Err(Error::Internal("RDMA endpoint store READY ownership"));
+        }
+        self.idle.push(Idle {
+            endpoint: Arc::clone(endpoint),
+            peer,
+            claim,
+        });
+        Ok(())
+    }
+
+    pub(super) fn claim(&mut self, matches: impl Fn(&Peer) -> bool) -> Option<(Arc<Record>, Peer)> {
+        let index = self.idle.iter().position(|entry| matches(&entry.peer))?;
+        let idle = self.idle.remove(index);
+        Some((idle.endpoint, idle.peer))
+    }
+
+    pub(super) fn evict(&mut self) -> Option<Arc<Record>> {
+        let idle = self.idle.first()?;
+        let record = Arc::clone(&idle.endpoint);
+        self.detach(&record);
+        Some(record)
+    }
+
+    pub(super) fn retire_idle(&mut self, endpoint: &Arc<Record>, claim: u64) -> bool {
+        if self
+            .idle
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.endpoint, endpoint) && entry.claim == claim)
+        {
+            self.detach(endpoint);
+            true
+        } else {
+            false
+        }
     }
 
     pub(super) fn work_owner(&self, tag: u64, receive: bool) -> Option<Arc<Record>> {
@@ -90,11 +174,13 @@ impl EndpointStore {
     }
 
     pub(super) fn take_all(&mut self) -> Vec<Arc<Record>> {
+        self.idle.clear();
         self.live.append(&mut self.retiring);
         std::mem::take(&mut self.live)
     }
 
     pub(super) fn clear_after_drain(&mut self) {
+        self.idle.clear();
         self.live.clear();
         self.retiring.clear();
     }

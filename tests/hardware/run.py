@@ -15,6 +15,8 @@ import uuid
 
 def native_peer_test(profile):
     runner = profile.get('runner')
+    if runner == 'orbitte-connected':
+        return 'transport::rdma::workers::tests::hardware::connected::connected_endpoint_peer'
     if runner == 'orbitte-shared-cq':
         return 'transport::rdma::workers::tests::hardware::shared_cq_peer'
     if runner == 'orbitte-window':
@@ -130,8 +132,8 @@ class Controller:
         requester_root = self.remote + f'/{index:02}-requester'
         consumer = self.profile.get('runner') == 'orbitkv-peer-host'
         window_probe = self.profile.get('runner') == 'orbitte-window'
-        shared = self.profile.get('runner') in ['orbitte-shared-cq', 'orbitte-window']
-        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq', 'orbitte-window']:
+        shared = self.profile.get('runner') in ['orbitte-shared-cq', 'orbitte-window', 'orbitte-connected']
+        if self.profile.get('runner') not in [None, 'orbitkv-peer-host', 'orbitte-shared-cq', 'orbitte-window', 'orbitte-connected']:
             raise ValueError('unsupported hardware runner')
         if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
             raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
@@ -194,6 +196,10 @@ class Controller:
             environment = {
                 'ORBITTE_HARDWARE_MAPS': root + '/maps.txt',
                 'ORBITTE_RDMA_HOST_MEMORY': host_memory,
+                'ORBITTE_EXPECT_QP_REUSE': str(int(case['transport'] == 'rdma' and all(
+                    case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
+                    and (case[r + '_kind'] == 'cpu' or case[r + '_kind'].startswith('pinned:'))
+                    for r in ['source', 'requester']))),
             }
             for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITTE_RDMA_MAX_ENDPOINTS', 4096)]:
                 value = case.get(key)

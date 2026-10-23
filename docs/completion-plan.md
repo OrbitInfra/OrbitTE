@@ -23,7 +23,7 @@ tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md), plus P4.3 direct host RDMA, P4.4 slice
 progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
 authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
-identities, P4.7e persistent source host MRs and P4.1/P5.1 RDMA/CUDA staging
+identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse and P4.1/P5.1 RDMA/CUDA staging
 paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -110,7 +110,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7e scoped acceptance; full P4 open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | P4.1-P4.7e scoped acceptance; P4.7f implemented, native/review pending; full P4 open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -580,36 +580,28 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   31-case native runs with actual process/resource close. Native eviction,
   unregister and arbitrary cleanup/device faults remain unqualified. See
   [the contract and evidence](rdma-cuda.md#persistent-source-registration).
-- [ ] **P4.7f — connected endpoint-store ownership (Planned; not implemented
-  or accepted).** Complete source authority/revocation and endpoint incarnation
-  contracts. The first profile is fixed role and operation capability, RC host
-  Direct, one grant per QP. Require an exact-connection/exact-grant sealed drain
-  receipt combining all payload CQEs, same-SQ fenced SEND/SEND CQE, exact source
-  RQ and bound DONE. Actual grant cleanup precedes source ACK; the requester
-  validates bound ACK before READY. READY retains no old grant, DMA loan,
-  message MR or SQ/RQ debt. Bootstrap must rendezvous both cached
-  connection identities before authority; grants and WR namespaces remain fresh.
-  Idle QPs stay physically charged; shutdown fences claims and retires idle
-  connections before waiting for physical endpoint usage to reach zero.
-  Eviction and failure keep actual-owner retention and physical barriers.
-  Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
-  context-owned CQs and worker-owned slice completion. Preserve physical SQ/CQ
-  charges and actual owners through retirement and failed cleanup; endpoint
-  lookup eviction alone must not repay debt or re-enable stale authority.
-  P4.5 caches requester local MRs; P4.6 shares the context CQ/worker. QPs and
-  source grants remain per request. P4.7a adds one-use MW authority; its
-  scoped acceptance is complete. P4.7b implements the persistent key domain and
-  bilateral incarnation/grant protocol above; its scoped acceptance is complete.
-  P4.7c implements separate connection/grant owners and terminal detached
-  retirement, with scoped source/CPU/native acceptance. P4.7d implements source
-  receive-buffer/CQ ownership and independent WR namespaces with scoped
-  independent acceptance, retaining physical barriers. P4.7e accepts source MR
-  persistence for its declared profile. Complete the
-  operation-level incoming-DMA drain contract before publishing idle connected
-  endpoints for reuse. The fenced SEND_WITH_INV/RQ receipt does not by itself
-  establish release without physical QP close. Domain exhaustion requires
-  successful physical retirement before replacing a PD; never reset a live
-  PD's key history to recover capacity.
+- [x] **P4.7f — connected endpoint-store ownership (Implemented; source/CPU
+  passed, native qualification and independent acceptance pending).** Fixed-role,
+  fixed READ/WRITE host Direct peers retain the actual RC QP, routing, PSN,
+  ConnectionId and physical quota. Each claim has a checked local token and new
+  deadline; each grant has fresh MW/key/generation/WR namespaces. Mandatory v9
+  pre-authority rendezvous binds both cached identities, previous grant and
+  selected release profile. Worker-owned sealed drain combines all payload
+  CQEs, same-SQ FENCE|SIGNALED SEND_WITH_INV/SEND CQE, exact source RQ and bound
+  DONE. Actual grant/MW/message/loan cleanup precedes source ACK, source READY
+  publication and bound READY; requester validates both receipts before caching.
+  READY has no old grant or SQ/RQ debt. Failed operations use physical retirement;
+  ambiguous WRITE is never replayed. Only explicit pre-authority cache miss can
+  retire the stale half and retry fresh once under the same epoch/PD/deadline.
+  Idle-only eviction and shutdown repay connection quota after actual close,
+  outside Store locks. Native retention and live-PD key history remain intact.
+  Source/CPU controls cover simultaneous claim, stale handle/receipt, cross-view
+  reuse, capacity-one eviction, pre-open generation/async faults and deterministic
+  Store/fault accounting races. The new native runner records four unchanged
+  QPs through public simultaneous duplex transfers and old-parent/backing
+  retirement; it and all existing regressions still require exact-artifact
+  qualification and independent acceptance. See
+  [the scope and architecture correspondence](rdma-cuda.md#connected-qp-reuse).
 - [ ] Complete automatic device/port/GID and topology discovery. Explicit
   provider FFI, shared context/PD and fenced bootstrap are implemented above.
 - [ ] Complete event-driven progress and backend cancellation qualification for
@@ -921,9 +913,9 @@ owners and terminal detached retirement, with independent source/CPU and
 healthy native profile acceptance.
 P4.7d adds accepted source receive/WR-identity ownership for its declared
 source/CPU/native profiles, retaining both physical barriers. P4.7e now accepts
-source registration owners for its declared profile. Next implement P4.7f's complete operation-level incoming-DMA drain protocol
-and connected endpoint reuse, followed by device/topology
-discovery, event progress and multirail. Follow the frozen
+source registration owners for its declared profile. P4.7f now implements the scoped operation-level drain protocol and connected
+reuse. Qualify its exact source/native profiles and obtain independent acceptance
+before dependent device/topology discovery, event progress and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.

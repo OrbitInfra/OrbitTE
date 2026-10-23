@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use super::RdmaTransport;
+use super::endpoint_store::Peer;
 use crate::engine::{PreparedTransfer, remaining};
 use crate::runtime::control_plane::{
     ControlChannel, Operation, REQUEST_SIZE, Reply, Request, u64_at,
@@ -9,13 +10,16 @@ use crate::transport::rdma::{ConnectionId, DESCRIPTOR_SIZE, Descriptor, RdmaEndp
 use crate::{Error, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp};
 
 const IDENTITY_SIZE: usize = 40;
-const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE;
-const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8;
+const HELLO_SIZE: usize = 1 + 2 * IDENTITY_SIZE + 16 + 8;
+const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE + 1;
+const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8 + 1;
 const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
 const ACCEPT: u8 = 1;
 const GRANT: u8 = 2;
 const DONE: u8 = 3;
 const ACK: u8 = 4;
+const READY: u8 = 5;
+const CACHE_MISS: u8 = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Identity {
@@ -44,6 +48,9 @@ impl Identity {
         }
         let mut epoch = [0; 16];
         epoch.copy_from_slice(&bytes[..16]);
+        if epoch == [0; 16] {
+            return Err(Error::Protocol("zero RDMA process identity"));
+        }
         Ok(Self {
             epoch: SourceEpoch(epoch),
             connection: ConnectionId::decode(&bytes[16..])?,
@@ -51,19 +58,101 @@ impl Identity {
     }
 }
 
-/// The exact request and both native connection owners fence every grant phase.
+/// Rendezvous both persistent connection owners before creating any authority.
+struct Hello {
+    requester: Identity,
+    source: Option<Identity>,
+    expected_domain: [u8; 16],
+    direct: bool,
+    previous_grant: u64,
+}
+
+impl Hello {
+    fn write(&self, channel: &mut ControlChannel<'_>) -> Result<()> {
+        let mut bytes = [0; HELLO_SIZE];
+        bytes[0] = u8::from(self.direct) | (u8::from(self.source.is_some()) << 1);
+        bytes[1..1 + IDENTITY_SIZE].copy_from_slice(&self.requester.encode());
+        if let Some(source) = self.source {
+            bytes[1 + IDENTITY_SIZE..1 + 2 * IDENTITY_SIZE].copy_from_slice(&source.encode());
+        }
+        bytes[HELLO_SIZE - 24..HELLO_SIZE - 8].copy_from_slice(&self.expected_domain);
+        bytes[HELLO_SIZE - 8..].copy_from_slice(&self.previous_grant.to_be_bytes());
+        channel.write_all(&bytes)
+    }
+
+    fn read(channel: &mut ControlChannel<'_>, epoch: SourceEpoch) -> Result<Self> {
+        let mut bytes = [0; HELLO_SIZE];
+        channel.read_exact(&mut bytes)?;
+        if bytes[0] & !3 != 0 {
+            return Err(Error::Protocol("RDMA rendezvous flags"));
+        }
+        let requester = Identity::decode(&bytes[1..1 + IDENTITY_SIZE])?;
+        let source_bytes = &bytes[1 + IDENTITY_SIZE..1 + 2 * IDENTITY_SIZE];
+        let source = if bytes[0] & 2 != 0 {
+            let source = Identity::decode(source_bytes)?;
+            if source.epoch != epoch {
+                return Err(Error::EpochMismatch);
+            }
+            if bytes[0] & 1 == 0 {
+                return Err(Error::Protocol("RDMA reuse without host Direct"));
+            }
+            Some(source)
+        } else {
+            if source_bytes.iter().any(|b| *b != 0) {
+                return Err(Error::Protocol(
+                    "RDMA fresh rendezvous has a cached identity",
+                ));
+            }
+            None
+        };
+        let mut expected_domain = [0; 16];
+        expected_domain.copy_from_slice(&bytes[HELLO_SIZE - 24..HELLO_SIZE - 8]);
+        let previous_grant = u64_at(&bytes, HELLO_SIZE - 8);
+        if source.is_some() != (previous_grant != 0) {
+            return Err(Error::Protocol("RDMA rendezvous grant generation"));
+        }
+        if source.is_some_and(|s| s.connection.domain != expected_domain) {
+            return Err(Error::Protocol("RDMA rendezvous changed its PD domain"));
+        }
+        Ok(Self {
+            requester,
+            source,
+            expected_domain,
+            direct: bytes[0] & 1 != 0,
+            previous_grant,
+        })
+    }
+}
+
+/// Exact request, native pair, generation and negotiated release profile.
 struct Binding([u8; BINDING_SIZE]);
 
+/// Constructed only after a successful bytewise bound DONE on the control channel.
+pub(super) struct BoundDone([u8; BINDING_SIZE]);
+impl BoundDone {
+    pub(super) fn binding(&self) -> &[u8; BINDING_SIZE] {
+        &self.0
+    }
+}
+
 impl Binding {
-    fn new(request: &Request, source: Identity, requester: Identity, grant: u64) -> Result<Self> {
+    fn new(
+        request: &Request,
+        source: Identity,
+        requester: Identity,
+        grant: u64,
+        cacheable: bool,
+    ) -> Result<Self> {
         if grant == 0 {
             return Err(Error::Protocol("zero RDMA grant generation"));
         }
         let mut bytes = [0; BINDING_SIZE];
         bytes[..REQUEST_SIZE].copy_from_slice(&request.encode());
         bytes[REQUEST_SIZE..REQUEST_SIZE + IDENTITY_SIZE].copy_from_slice(&source.encode());
-        bytes[REQUEST_SIZE + IDENTITY_SIZE..BINDING_SIZE - 8].copy_from_slice(&requester.encode());
-        bytes[BINDING_SIZE - 8..].copy_from_slice(&grant.to_be_bytes());
+        bytes[REQUEST_SIZE + IDENTITY_SIZE..REQUEST_SIZE + 2 * IDENTITY_SIZE]
+            .copy_from_slice(&requester.encode());
+        bytes[BINDING_SIZE - 9..BINDING_SIZE - 1].copy_from_slice(&grant.to_be_bytes());
+        bytes[BINDING_SIZE - 1] = u8::from(cacheable);
         Ok(Self(bytes))
     }
 
@@ -71,19 +160,12 @@ impl Binding {
         channel: &mut ControlChannel<'_>,
         request: &Request,
         source: Identity,
+        requester: Identity,
         grant: u64,
+        cacheable: bool,
     ) -> Result<Self> {
-        let mut bytes = [0; 1 + BINDING_SIZE];
-        channel.read_exact(&mut bytes)?;
-        if bytes[0] != ACCEPT {
-            return Err(Error::Protocol("RDMA accept phase"));
-        }
-        let requester =
-            Identity::decode(&bytes[1 + REQUEST_SIZE + IDENTITY_SIZE..1 + BINDING_SIZE - 8])?;
-        let binding = Self::new(request, source, requester, grant)?;
-        if bytes[1..] != binding.0 {
-            return Err(Error::Protocol("RDMA accept request or source incarnation"));
-        }
+        let binding = Self::new(request, source, requester, grant, cacheable)?;
+        binding.read(channel, ACCEPT)?;
         Ok(binding)
     }
 
@@ -102,6 +184,11 @@ impl Binding {
         }
         Ok(())
     }
+
+    fn done(&self, channel: &mut ControlChannel<'_>) -> Result<BoundDone> {
+        self.read(channel, DONE)?;
+        Ok(BoundDone(self.0))
+    }
 }
 
 impl RdmaTransport {
@@ -115,17 +202,35 @@ impl RdmaTransport {
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
-            let mut endpoint = self.endpoint(
-                &request.local,
-                request.local_offset,
-                request.length,
-                0,
-                deadline,
-            )?;
-            let transfer = (|| {
-                if operation == TransferOp::Write {
-                    endpoint.fill(&request.local, request.local_offset)?;
-                }
+            let direct = self.host_direct(&request.local);
+            let progress = self.progress(self.device()?)?;
+            let mut reuse = if direct {
+                progress.claim(
+                    |p| {
+                        !p.source
+                            && p.route == Some(peer.endpoint)
+                            && p.epoch == peer.epoch
+                            && p.operation == operation
+                    },
+                    deadline,
+                )?
+            } else {
+                None
+            };
+            let mut expected_domain = reuse
+                .as_ref()
+                .and_then(|e| e.cached_peer)
+                .map_or([0; 16], |p| p.connection.domain);
+            for attempt in 0..2 {
+                let mut endpoint = self.endpoint(
+                    &request.local,
+                    request.local_offset,
+                    request.length,
+                    0,
+                    deadline,
+                    reuse.take(),
+                )?;
+                let cached = endpoint.cached_peer;
                 let wire = Request {
                     operation: if operation == TransferOp::Read {
                         Operation::RdmaRead
@@ -137,66 +242,135 @@ impl RdmaTransport {
                     offset: request.remote_offset as u64,
                     length: request.length as u64,
                 };
-                let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
-                channel.write_all(&wire.encode())?;
-                let reply = Reply::read(&mut channel, peer.epoch)?;
-                if reply.status != 0 || reply.length != OFFER_SIZE as u64 {
-                    return Err(Error::Protocol("RDMA bootstrap length/status"));
-                }
-                let mut offer = [0; OFFER_SIZE];
-                channel.read_exact(&mut offer)?;
-                let remote_identity = Identity::decode(&offer[..IDENTITY_SIZE])?;
-                if remote_identity.epoch != peer.epoch {
-                    return Err(Error::EpochMismatch);
-                }
-                let grant = u64_at(&offer, IDENTITY_SIZE);
-                let mut descriptor = [0; DESCRIPTOR_SIZE];
-                descriptor.copy_from_slice(&offer[IDENTITY_SIZE + 8..]);
-                let connection = Descriptor::decode_connection(&descriptor)?;
-                let binding = Binding::new(
-                    &wire,
-                    remote_identity,
-                    Identity::local(&endpoint, epoch)?,
-                    grant,
-                )?;
-                binding.write(&mut channel, ACCEPT)?;
-                channel.write_all(&endpoint.connection())?;
-                endpoint.connect(&connection)?;
-                let ready = Reply::read(&mut channel, peer.epoch)?;
-                if ready.status != 9 {
-                    return Err(Error::Protocol("RDMA missing ready response"));
-                }
-                binding.read(&mut channel, GRANT)?;
-                channel.read_exact(&mut descriptor)?;
-                let remote = Descriptor::decode(&descriptor)?;
-                if remote.connection_bytes() != connection.connection_bytes() {
-                    return Err(Error::Protocol("RDMA grant changed its connection"));
-                }
-                // A peer may expose direct application backing. Once a WRITE is
-                // attempted it can change remote bytes even without DONE or ACK.
-                if operation == TransferOp::Write {
-                    effect = RemoteEffect::Unknown;
-                }
-                endpoint.transfer(&remote, operation, deadline)?;
-                endpoint.send_completion(&binding.0, remote.rkey)?;
+                let mut miss = false;
+                let transfer = (|| {
+                    if operation == TransferOp::Write {
+                        endpoint.fill(&request.local, request.local_offset)?;
+                    }
+                    let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
+                    channel.write_all(&wire.encode())?;
+                    Hello {
+                        requester: Identity::local(&endpoint, epoch)?,
+                        source: cached.map(|p| Identity {
+                            epoch: p.epoch,
+                            connection: p.connection,
+                        }),
+                        expected_domain,
+                        direct,
+                        previous_grant: cached.map_or(0, |p| p.generation),
+                    }
+                    .write(&mut channel)?;
+                    let reply = Reply::read(&mut channel, peer.epoch)?;
+                    if reply.status == CACHE_MISS
+                        && reply.length == 0
+                        && cached.is_some()
+                        && attempt == 0
+                    {
+                        miss = true;
+                        return Ok(());
+                    }
+                    if reply.status != 0 || reply.length != OFFER_SIZE as u64 {
+                        return Err(Error::Protocol("RDMA bootstrap length/status"));
+                    }
+                    let mut offer = [0; OFFER_SIZE];
+                    channel.read_exact(&mut offer)?;
+                    let remote_identity = Identity::decode(&offer[..IDENTITY_SIZE])?;
+                    if remote_identity.epoch != peer.epoch {
+                        return Err(Error::EpochMismatch);
+                    }
+                    if expected_domain != [0; 16]
+                        && remote_identity.connection.domain != expected_domain
+                    {
+                        return Err(Error::Protocol("RDMA source changed its protection domain"));
+                    }
+                    if cached.is_some_and(|p| remote_identity.connection != p.connection) {
+                        return Err(Error::Protocol("RDMA source changed cached connection"));
+                    }
+                    let cacheable = match offer[OFFER_SIZE - 1] {
+                        0 if cached.is_none() => false,
+                        1 if direct => true,
+                        _ => return Err(Error::Protocol("RDMA release profile mismatch")),
+                    };
+                    let grant = u64_at(&offer, IDENTITY_SIZE);
+                    if cached.is_some_and(|p| grant <= p.generation) {
+                        return Err(Error::Protocol(
+                            "RDMA source reused an old grant generation",
+                        ));
+                    }
+                    let mut descriptor = [0; DESCRIPTOR_SIZE];
+                    descriptor.copy_from_slice(&offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1]);
+                    let connection = Descriptor::decode_connection(&descriptor)?;
+                    let binding = Binding::new(
+                        &wire,
+                        remote_identity,
+                        Identity::local(&endpoint, epoch)?,
+                        grant,
+                        cacheable,
+                    )?;
+                    binding.write(&mut channel, ACCEPT)?;
+                    channel.write_all(&endpoint.connection())?;
+                    endpoint.connect(&connection)?;
+                    let ready = Reply::read(&mut channel, peer.epoch)?;
+                    if ready.status != 9 || ready.length != 0 {
+                        return Err(Error::Protocol("RDMA missing ready response"));
+                    }
+                    binding.read(&mut channel, GRANT)?;
+                    channel.read_exact(&mut descriptor)?;
+                    let remote = Descriptor::decode(&descriptor)?;
+                    if remote.connection_bytes() != connection.connection_bytes() {
+                        return Err(Error::Protocol("RDMA grant changed its connection"));
+                    }
+                    // A WRITE can change direct application bytes before DONE/ACK.
+                    if operation == TransferOp::Write {
+                        effect = RemoteEffect::Unknown;
+                    }
+                    endpoint.transfer(&remote, operation, deadline)?;
+                    endpoint.send_completion(&binding.0, remote.rkey)?;
+                    if cacheable {
+                        endpoint.finish_sent(&binding.0)?;
+                    } else {
+                        endpoint.close()?;
+                    }
+                    binding.write(&mut channel, DONE)?;
+                    let receipt = Reply::read(&mut channel, peer.epoch)?;
+                    if receipt.status != 0 || receipt.length != 0 {
+                        return Err(Error::Protocol("RDMA completion acknowledgement"));
+                    }
+                    binding.read(&mut channel, ACK)?;
+                    if cacheable {
+                        binding.read(&mut channel, READY)?;
+                        endpoint.cache(Peer {
+                            route: Some(peer.endpoint),
+                            epoch: peer.epoch,
+                            local: endpoint.incarnation()?,
+                            connection: remote_identity.connection,
+                            operation,
+                            source: false,
+                            generation: grant,
+                        })?;
+                    }
+                    Ok(())
+                })();
+                #[cfg(test)]
+                crate::transport::rdma::tests::before_requester_close(&mut endpoint, &transfer);
                 endpoint.close()?;
-                binding.write(&mut channel, DONE)?;
-                let receipt = Reply::read(&mut channel, peer.epoch)?;
-                if receipt.status != 0 || receipt.length != 0 {
-                    return Err(Error::Protocol("RDMA completion acknowledgement"));
+                transfer?;
+                if miss {
+                    // Only an explicit pre-authority cache miss can start a fresh pair.
+                    expected_domain = cached
+                        .ok_or(Error::Internal("missing stale RDMA pair"))?
+                        .connection
+                        .domain;
+                    drop(endpoint);
+                    continue;
                 }
-                binding.read(&mut channel, ACK)?;
-                Ok(())
-            })();
-            #[cfg(test)]
-            crate::transport::rdma::tests::before_requester_close(&mut endpoint, &transfer);
-            endpoint.close()?;
-            transfer?;
-            if operation == TransferOp::Read {
-                remaining(deadline)?;
-                endpoint.copy_back(&request.local, request.local_offset)?;
+                if operation == TransferOp::Read && !endpoint.released {
+                    remaining(deadline)?;
+                    endpoint.copy_back(&request.local, request.local_offset)?;
+                }
+                return Ok(());
             }
-            Ok(())
+            Err(Error::Protocol("RDMA repeated cache miss"))
         })();
         result.map_err(|error| (error, effect))
     }
@@ -211,12 +385,49 @@ impl RdmaTransport {
         length: usize,
     ) -> Result<()> {
         let writing = request.operation == Operation::RdmaWrite;
+        let operation = if writing {
+            TransferOp::Write
+        } else {
+            TransferOp::Read
+        };
+        let hello = Hello::read(channel, epoch)?;
+        let cacheable = hello.direct && self.host_direct(memory);
+        let device = self.device()?;
+        if hello.expected_domain != [0; 16] && hello.expected_domain != device.domain()? {
+            return Err(Error::Protocol(
+                "RDMA rendezvous protection domain mismatch",
+            ));
+        }
+        let progress = self.progress(device)?;
+        let reuse = if let Some(source) = hello.source {
+            if !cacheable {
+                return channel.reply(epoch, CACHE_MISS, 0);
+            }
+            let reuse = progress.claim(
+                |p| {
+                    p.source
+                        && p.local == source.connection
+                        && p.epoch == hello.requester.epoch
+                        && p.connection == hello.requester.connection
+                        && p.operation == operation
+                        && p.generation == hello.previous_grant
+                },
+                channel.deadline,
+            )?;
+            if reuse.is_none() {
+                return channel.reply(epoch, CACHE_MISS, 0);
+            }
+            reuse
+        } else {
+            None
+        };
         let mut endpoint = self.endpoint(
             memory,
             offset,
             length,
             if writing { 2 } else { 1 },
             channel.deadline,
+            reuse,
         )?;
         let transfer: Result<Binding> = (|| {
             if !writing {
@@ -227,10 +438,18 @@ impl RdmaTransport {
             let mut offer = [0; OFFER_SIZE];
             offer[..IDENTITY_SIZE].copy_from_slice(&identity.encode());
             offer[IDENTITY_SIZE..IDENTITY_SIZE + 8].copy_from_slice(&grant.to_be_bytes());
-            offer[IDENTITY_SIZE + 8..].copy_from_slice(&endpoint.connection());
+            offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1].copy_from_slice(&endpoint.connection());
+            offer[OFFER_SIZE - 1] = u8::from(cacheable);
             channel.reply(epoch, 0, OFFER_SIZE as u64)?;
             channel.write_all(&offer)?;
-            let binding = Binding::accept(channel, request, identity, grant)?;
+            let binding = Binding::accept(
+                channel,
+                request,
+                identity,
+                hello.requester,
+                grant,
+                cacheable,
+            )?;
             let mut bytes = [0; DESCRIPTOR_SIZE];
             channel.read_exact(&mut bytes)?;
             endpoint.connect(&Descriptor::decode_connection(&bytes)?)?;
@@ -239,25 +458,50 @@ impl RdmaTransport {
             channel.reply(epoch, 9, 0)?;
             binding.write(channel, GRANT)?;
             channel.write_all(&endpoint.grant()?.encode())?;
-            binding.read(channel, DONE)?;
+            let done = binding.done(channel)?;
             endpoint.receive_completion()?;
+            if cacheable {
+                endpoint.finish_received(&done)?;
+            }
             Ok(binding)
         })();
-        let closed = endpoint.close();
+        let closed = if cacheable && transfer.is_ok() {
+            Ok(())
+        } else {
+            endpoint.close()
+        };
         if matches!(&closed, Err(Error::Unquiesced { .. })) {
             return closed;
         }
         let binding = transfer?;
         closed?;
-        if writing {
-            remaining(channel.deadline)?;
-            endpoint.copy_back(memory, offset)?;
+        if !cacheable {
+            if writing {
+                remaining(channel.deadline)?;
+                endpoint.copy_back(memory, offset)?;
+            }
+            drop(endpoint.output.take());
         }
-        drop(endpoint);
         #[cfg(test)]
         crate::transport::rdma::tests::before_source_ack(self);
         channel.reply(epoch, 0, 0)?;
-        binding.write(channel, ACK)
+        binding.write(channel, ACK)?;
+        if cacheable {
+            endpoint.cache(Peer {
+                route: None,
+                epoch: hello.requester.epoch,
+                local: endpoint.incarnation()?,
+                connection: hello.requester.connection,
+                operation,
+                source: true,
+                generation: u64_at(&binding.0, BINDING_SIZE - 9),
+            })?;
+            if let Err(error) = binding.write(channel, READY) {
+                endpoint.retire_idle()?;
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 }
 

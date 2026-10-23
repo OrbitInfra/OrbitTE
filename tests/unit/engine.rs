@@ -453,7 +453,14 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
         assert!(!timed.timed_out());
         drop(state);
         let stats = runtime.stats().unwrap();
-        let mut next = runtime.endpoint(&remote, 0, 8, 1, Instant::now() + Duration::from_secs(2));
+        let mut next = runtime.endpoint(
+            &remote,
+            0,
+            8,
+            1,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        );
         if let Ok(endpoint) = &mut next {
             endpoint.close().unwrap();
         }
@@ -686,7 +693,7 @@ fn failed_direct_read_receipt_preserves_local_changes_and_retains_remote_access_
             stats.retained_endpoints,
             stats.retained_grants
         ),
-        (8, 0, 8, 0, 1)
+        (8, 0, 8, 1, 1)
     );
 }
 

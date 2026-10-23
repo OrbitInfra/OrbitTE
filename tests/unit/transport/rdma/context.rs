@@ -380,7 +380,7 @@ fn key_index_limit_and_unused_grants_keep_real_owner_cleanup_and_history() {
         ),
         (1, 2, 3)
     );
-    assert_eq!(second.grant_generation().unwrap(), 2);
+    assert_eq!(second.grant_generation().unwrap(), 3);
     assert_ne!(second.descriptor().rkey, key);
     drop(second);
     runtime
@@ -429,7 +429,10 @@ fn connection_and_grant_counters_refuse_overflow_before_native_construction() {
         );
         assert!(!events(&runtime).lock().unwrap().contains(&"open_endpoint"));
         if source_grant {
-            runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
+            assert!(matches!(
+                runtime.staging_endpoint(8, 0),
+                Err(Error::ResourceExhausted)
+            ));
         }
         runtime
             .close(Instant::now() + Duration::from_secs(2))
@@ -496,4 +499,133 @@ fn concurrent_key_reservations_and_retained_cleanup_preserve_the_pd_domain() {
         ),
         (1, 1, 1, 1, 1)
     );
+}
+
+#[test]
+fn reused_grant_exhaustion_and_pre_open_async_fault_preserve_its_creating_identity() {
+    use crate::engine::tests::{rdma_fixture, source_runtime};
+    use crate::{Permission, TransferOp, TransferRequest, Transport};
+    for asynchronous in [false, true] {
+        let source = rdma_fixture("direct:copy");
+        let requester = rdma_fixture(if asynchronous {
+            "direct:async_copy_reuse_open_pause"
+        } else {
+            "direct:copy"
+        });
+        let local = requester
+            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(vec![0x29; 8].into_boxed_slice(), Permission::RemoteRead)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(3),
+            )
+            .unwrap();
+        assert!(
+            requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address(),
+                        remote_address: remote.base_address(),
+                        length: 8,
+                    }],
+                    Duration::from_secs(3)
+                )
+                .unwrap()
+                .is_complete()
+        );
+        let runtime = source_runtime(&requester);
+        let owner = runtime.device().unwrap();
+        let progress = runtime.progress(Arc::clone(&owner)).unwrap();
+        let claimed = progress
+            .claim(|_| true, Instant::now() + Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        let old_identity = claimed.incarnation().unwrap();
+        if asynchronous {
+            let pause = pause(runtime);
+            thread::scope(|scope| {
+                let open = scope.spawn(|| {
+                    runtime.endpoint(
+                        &local,
+                        0,
+                        8,
+                        0,
+                        Instant::now() + Duration::from_secs(3),
+                        Some(claimed),
+                    )
+                });
+                let (lock, changed) = &*pause;
+                let (state, timed) = changed
+                    .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+                    .unwrap();
+                assert!(!timed.timed_out());
+                drop(state);
+                emit_async(runtime, 3);
+                let end = Instant::now() + Duration::from_secs(2);
+                while runtime.stats().unwrap().active_endpoints != 0 && Instant::now() < end {
+                    thread::yield_now();
+                }
+                let drained = runtime.stats().unwrap().active_endpoints == 0;
+                lock.lock().unwrap().1 = true;
+                changed.notify_all();
+                let result = open.join().unwrap();
+                assert!(
+                    drained,
+                    "pre-open fault did not physically drain accepted connection"
+                );
+                assert!(matches!(
+                    result,
+                    Err(Error::Backend { .. } | Error::Unavailable(_))
+                ));
+            });
+        } else {
+            let mut state = owner.state.lock().unwrap();
+            let State::Open(resources) = &mut *state else {
+                panic!("closed")
+            };
+            resources.next_grant = u64::MAX;
+            drop(state);
+            assert!(matches!(
+                runtime.endpoint(
+                    &local,
+                    0,
+                    8,
+                    0,
+                    Instant::now() + Duration::from_secs(3),
+                    Some(claimed)
+                ),
+                Err(Error::ResourceExhausted)
+            ));
+            let state = owner.state.lock().unwrap();
+            let State::Open(resources) = &*state else {
+                panic!("closed")
+            };
+            assert_eq!(resources.next_grant, u64::MAX);
+            assert_eq!(resources.domain, old_identity.domain);
+        }
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.idle_endpoints,
+                stats.active_grants,
+                stats.retained_endpoints,
+                stats.retained_grants,
+                stats.direct_bytes
+            ),
+            (0, 0, 0, 0, 0, 0)
+        );
+        assert_eq!((stats.opened_connections, stats.closed_connections), (1, 1));
+        local.write(0, &[0x55; 8]).unwrap();
+        requester.close(Duration::from_secs(3)).unwrap();
+        source.close(Duration::from_secs(3)).unwrap();
+    }
 }

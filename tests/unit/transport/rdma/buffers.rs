@@ -21,6 +21,7 @@ fn whole_registration_mr_is_reused_while_request_dma_lease_stays_exact() {
                 4,
                 0,
                 Instant::now() + Duration::from_secs(2),
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -106,6 +107,7 @@ fn idle_lru_eviction_obeys_physical_limits_and_never_evicts_a_live_mr_borrow() {
                 4,
                 permission,
                 Instant::now() + Duration::from_secs(2),
+                None,
             )
             .unwrap();
         assert!(matches!(
@@ -114,7 +116,8 @@ fn idle_lru_eviction_obeys_physical_limits_and_never_evicts_a_live_mr_borrow() {
                 4,
                 4,
                 permission,
-                Instant::now() + Duration::from_secs(2)
+                Instant::now() + Duration::from_secs(2),
+                None
             ),
             Err(Error::ResourceExhausted)
         ));
@@ -127,6 +130,7 @@ fn idle_lru_eviction_obeys_physical_limits_and_never_evicts_a_live_mr_borrow() {
                 4,
                 permission,
                 Instant::now() + Duration::from_secs(2),
+                None,
             )
             .unwrap();
         next.close().unwrap();
@@ -154,7 +158,8 @@ fn idle_lru_eviction_obeys_physical_limits_and_never_evicts_a_live_mr_borrow() {
                 4,
                 1,
                 permission,
-                Instant::now() + Duration::from_secs(2)
+                Instant::now() + Duration::from_secs(2),
+                None
             ),
             Err(Error::ResourceExhausted)
         ));
@@ -177,7 +182,14 @@ fn final_unregister_retirement_respects_duplicate_references_and_already_resolve
         .unwrap();
     let runtime = limited_runtime("direct:ok", 2, 48);
     runtime
-        .endpoint(&memory, 4, 4, 0, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            4,
+            4,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap()
         .close()
         .unwrap();
@@ -191,7 +203,14 @@ fn final_unregister_retirement_respects_duplicate_references_and_already_resolve
     assert_eq!(runtime.stats().unwrap().persistent_mrs, 0);
     // Resolution before final unregister is an admitted owner, not a new lookup.
     let mut admitted = runtime
-        .endpoint(&memory, 8, 4, 0, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            8,
+            4,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap();
     assert_eq!(runtime.stats().unwrap().persistent_mrs, 1);
     admitted.close().unwrap();
@@ -202,7 +221,14 @@ fn final_unregister_retirement_respects_duplicate_references_and_already_resolve
         .unwrap();
     assert_ne!(new_view.id(), memory.id());
     runtime
-        .endpoint(&new_view, 4, 4, 0, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &new_view,
+            4,
+            4,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap()
         .close()
         .unwrap();
@@ -233,6 +259,7 @@ fn creating_mr_can_be_retired_without_blocking_unregister_or_resurrecting_an_idl
                     4,
                     permission,
                     Instant::now() + Duration::from_secs(2),
+                    None,
                 )
                 .unwrap();
             endpoint.close().unwrap();
@@ -250,7 +277,8 @@ fn creating_mr_can_be_retired_without_blocking_unregister_or_resurrecting_an_idl
                 8,
                 4,
                 permission,
-                Instant::now() + Duration::from_millis(10)
+                Instant::now() + Duration::from_millis(10),
+                None
             ),
             Err(Error::Timeout)
         ));
@@ -326,6 +354,7 @@ fn concurrent_request_ranges_share_one_creating_mr_and_keep_independent_dma_leas
                         4,
                         permission,
                         Instant::now() + Duration::from_secs(2),
+                        None,
                     )
                     .unwrap();
                 barrier.wait();
@@ -414,6 +443,7 @@ fn deregistration_failure_keeps_actual_owner_device_and_budget_and_never_retries
                 4,
                 permission,
                 Instant::now() + Duration::from_secs(2),
+                None,
             );
             let events = events(&runtime);
             if boundary == "partial_open" {
@@ -448,7 +478,8 @@ fn deregistration_failure_keeps_actual_owner_device_and_budget_and_never_retries
                                 4,
                                 4,
                                 permission,
-                                Instant::now() + Duration::from_secs(2)
+                                Instant::now() + Duration::from_secs(2),
+                                None
                             ),
                             Err(Error::Unquiesced { .. })
                         ));
@@ -518,7 +549,14 @@ fn engine_close_waits_for_native_close_already_started_by_unregister() {
         .unwrap();
     let runtime = Arc::new(limited_runtime("direct:mr_close_pause", 1, 16));
     runtime
-        .endpoint(&memory, 4, 4, 0, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            4,
+            4,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap()
         .close()
         .unwrap();
@@ -540,7 +578,14 @@ fn engine_close_waits_for_native_close_already_started_by_unregister() {
         .register(vec![0; 16].into_boxed_slice(), Permission::LocalOnly)
         .unwrap();
     assert!(matches!(
-        runtime.endpoint(&next, 4, 4, 0, Instant::now() + Duration::from_secs(2)),
+        runtime.endpoint(
+            &next,
+            4,
+            4,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None
+        ),
         Err(Error::ResourceExhausted)
     ));
     assert!(matches!(runtime.close(Instant::now()), Err(Error::Timeout)));
@@ -592,7 +637,7 @@ fn local_and_source_capabilities_charge_separate_parents_and_sources_share_exact
         .unwrap();
     let runtime = limited_runtime("direct:ok", 2, 48);
     let end = Instant::now() + Duration::from_secs(2);
-    let mut local = runtime.endpoint(&memory, 0, 4, 0, end).unwrap();
+    let mut local = runtime.endpoint(&memory, 0, 4, 0, end, None).unwrap();
     let local_parent = local
         .record
         .lock()
@@ -601,6 +646,8 @@ fn local_and_source_capabilities_charge_separate_parents_and_sources_share_exact
         .as_ref()
         .unwrap()
         .grant
+        .as_ref()
+        .unwrap()
         .handles
         .mr;
     let mut parent: *mut std::ffi::c_void = std::ptr::null_mut();
@@ -609,7 +656,7 @@ fn local_and_source_capabilities_charge_separate_parents_and_sources_share_exact
     let mut grants = std::collections::HashSet::new();
     for (permission, offset) in [(1, 8), (2, 16), (1, 12)] {
         let mut source = runtime
-            .endpoint(&memory, offset, 4, permission, end)
+            .endpoint(&memory, offset, 4, permission, end, None)
             .unwrap();
         let actual_parent = source
             .record
@@ -619,6 +666,8 @@ fn local_and_source_capabilities_charge_separate_parents_and_sources_share_exact
             .as_ref()
             .unwrap()
             .grant
+            .as_ref()
+            .unwrap()
             .handles
             .mr;
         assert_ne!(
@@ -694,8 +743,8 @@ fn source_parent_cannot_bypass_shared_limits_or_release_a_failed_mw_borrow() {
             .unwrap();
         let runtime = limited_runtime(&format!("direct:{mode}"), regions, bytes);
         let end = Instant::now() + Duration::from_secs(2);
-        let mut local = runtime.endpoint(&memory, 0, 4, 0, end).unwrap();
-        let source = runtime.endpoint(&memory, 8, 4, 2, end);
+        let mut local = runtime.endpoint(&memory, 0, 4, 0, end, None).unwrap();
+        let source = runtime.endpoint(&memory, 8, 4, 2, end, None);
         if mode == "ok" {
             assert!(matches!(source, Err(Error::ResourceExhausted)));
             assert_eq!(
@@ -777,10 +826,10 @@ fn retirement_marks_every_capability_before_native_failure_can_interrupt_cleanup
         .unwrap();
     let runtime = limited_runtime("direct:mr_close", 2, 48);
     let end = Instant::now() + Duration::from_secs(2);
-    let mut local = runtime.endpoint(&memory, 0, 4, 0, end).unwrap();
+    let mut local = runtime.endpoint(&memory, 0, 4, 0, end, None).unwrap();
     local.close().unwrap();
     drop(local);
-    let mut source = runtime.endpoint(&memory, 8, 4, 2, end).unwrap();
+    let mut source = runtime.endpoint(&memory, 8, 4, 2, end, None).unwrap();
     registry.unregister(&memory).unwrap();
     let log = events(&runtime);
     assert!(matches!(

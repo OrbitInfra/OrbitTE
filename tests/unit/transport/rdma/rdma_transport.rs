@@ -57,8 +57,8 @@ fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receip
     let source = identity(1, 2, 3);
     let requester = identity(4, 5, 6);
     let request = request(source.epoch, 7);
-    let old = Binding::new(&request, source, requester, 1).unwrap();
-    let next = Binding::new(&request, source, requester, 2).unwrap();
+    let old = Binding::new(&request, source, requester, 1, false).unwrap();
+    let next = Binding::new(&request, source, requester, 2, false).unwrap();
     for phase in [GRANT, DONE, ACK] {
         let (mut sender, mut receiver) = channels();
         old.write(&mut sender, phase).unwrap();
@@ -67,7 +67,7 @@ fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receip
             Err(Error::Protocol(_))
         ));
     }
-    assert!(Binding::new(&request, source, requester, 0).is_err());
+    assert!(Binding::new(&request, source, requester, 0, false).is_err());
     let (mut sender, mut receiver) = channels();
     next.write(&mut sender, DONE).unwrap();
     assert!(matches!(
@@ -88,6 +88,15 @@ fn source_offer(
     let mut channel =
         ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel.write_all(&request.encode()).unwrap();
+    Hello {
+        requester: identity(9, 8, 7),
+        source: None,
+        expected_domain: [0; 16],
+        direct: false,
+        previous_grant: 0,
+    }
+    .write(&mut channel)
+    .unwrap();
     let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
     assert_eq!((reply.status, reply.length), (0, OFFER_SIZE as u64));
     let mut offer = [0; OFFER_SIZE];
@@ -95,7 +104,7 @@ fn source_offer(
     let identity = Identity::decode(&offer[..IDENTITY_SIZE]).unwrap();
     let grant = u64_at(&offer, IDENTITY_SIZE);
     let mut descriptor = [0; DESCRIPTOR_SIZE];
-    descriptor.copy_from_slice(&offer[IDENTITY_SIZE + 8..]);
+    descriptor.copy_from_slice(&offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1]);
     Descriptor::decode_connection(&descriptor).unwrap();
     (channel, identity, grant, descriptor)
 }
@@ -114,7 +123,7 @@ fn source_rejects_stale_accept_before_connect_or_bind_and_releases_actual_owners
             .unwrap();
         let request = request(source.source_epoch(), memory.id());
         let (mut channel, local, grant, descriptor) = source_offer(&source, &request);
-        let binding = Binding::new(&request, local, identity(9, 8, 7), grant).unwrap();
+        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, false).unwrap();
         let mut bytes = binding.0;
         let mut phase = ACCEPT;
         match case {
@@ -177,7 +186,7 @@ fn source_done_requires_both_incarnations_request_grant_and_phase_before_staged_
             .unwrap();
         let request = request(source.source_epoch(), memory.id());
         let (mut channel, local, grant, descriptor) = source_offer(&source, &request);
-        let binding = Binding::new(&request, local, identity(9, 8, 7), grant).unwrap();
+        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, false).unwrap();
         binding.write(&mut channel, ACCEPT).unwrap();
         channel.write_all(&descriptor).unwrap();
         assert_eq!(
@@ -260,6 +269,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 stopping: None,
             };
             let wire = crate::runtime::control_plane::tests::read_request(&mut channel);
+            let hello = Hello::read(&mut channel, epoch).unwrap();
             let payload = vec![0x42u8; 8].into_boxed_slice();
             let descriptor = grant_descriptor(payload.as_ptr() as u64);
             let local = identity(7, 8, 9);
@@ -267,7 +277,8 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             let mut offer = [0; OFFER_SIZE];
             offer[..IDENTITY_SIZE].copy_from_slice(&local.encode());
             offer[IDENTITY_SIZE..IDENTITY_SIZE + 8].copy_from_slice(&grant.to_be_bytes());
-            offer[IDENTITY_SIZE + 8..].copy_from_slice(&descriptor.connection_bytes());
+            offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1]
+                .copy_from_slice(&descriptor.connection_bytes());
             if stage == 0 {
                 match field {
                     0 => offer[0] ^= 1,
@@ -292,7 +303,8 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 expect_closed_without_next_phase(&mut channel);
                 return;
             }
-            let binding = Binding::accept(&mut channel, &wire, local, grant).unwrap();
+            let binding =
+                Binding::accept(&mut channel, &wire, local, hello.requester, grant, false).unwrap();
             channel.read_exact(&mut [0; DESCRIPTOR_SIZE]).unwrap();
             channel
                 .write_all(
@@ -412,6 +424,15 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     channel.deadline = deadline(Duration::from_secs(1)).unwrap();
     thread::scope(|scope| {
         let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory, 0, 8));
+        Hello {
+            requester: identity(9, 8, 7),
+            source: None,
+            expected_domain: [0; 16],
+            direct: false,
+            previous_grant: 0,
+        }
+        .write(&mut peer)
+        .unwrap();
         assert_eq!(
             Reply::read(&mut peer, epoch).unwrap().length,
             OFFER_SIZE as u64
@@ -424,10 +445,12 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
             local,
             identity(9, 8, 7),
             u64_at(&offer, IDENTITY_SIZE),
+            false,
         )
         .unwrap();
         binding.write(&mut peer, ACCEPT).unwrap();
-        peer.write_all(&offer[IDENTITY_SIZE + 8..]).unwrap();
+        peer.write_all(&offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1])
+            .unwrap();
         assert_eq!(Reply::read(&mut peer, epoch).unwrap().status, 9);
         binding.read(&mut peer, GRANT).unwrap();
         let mut bytes = [0; DESCRIPTOR_SIZE];
@@ -474,3 +497,6 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     );
     runtime.close(deadline(TIMEOUT).unwrap()).unwrap();
 }
+
+#[path = "reuse.rs"]
+mod reuse;

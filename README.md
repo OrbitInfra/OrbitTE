@@ -33,8 +33,9 @@ allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
 Each engine lazily reuses one RNIC context/PD. Requester local-only and source MW-bind host MRs now persist across requests
-in one bounded `LocalBufferManager` (P4.7e). Per-request MWs and QPs retain their
-existing physical teardown barriers. Independent source/CPU review and two
+in one bounded `LocalBufferManager` (P4.7e). P4.7f implements connected QP reuse
+for negotiated host Direct peers, with one grant per fixed-role/operation pair.
+Staged peers retain both physical QP-close barriers. Independent source/CPU review and two
 separately built 31-case native runs accept the declared source-cache profile. P4.7a implements one-use
 Type-2B MW source grants: parent MRs have LOCAL_WRITE/MW_BIND permissions only;
 bound MW keys become visible after a successful BIND CQE and are invalidated
@@ -46,9 +47,8 @@ reset key history, and exhausted tags or historical-index capacity refuse new
 authority. Its wire v7 bound both process/PD/connection identities, an
 independent grant generation and the exact request through bootstrap, grant,
 DONE and ACK. Independent source/CPU review and two independently built
-24-case native runs accept this scoped prerequisite stage. Connected QPs and
-grants remain per request while connection/grant ownership and physical drain
-are completed.
+24-case native runs accept this scoped prerequisite stage. Its per-request QP barriers are the historical prerequisite; P4.7f now supplies
+the bounded host Direct operation-drain protocol described below.
 One post/poll worker per context now polls separate bounded SQ and RQ CQs
 (P4.7d), with nonrepeating WR namespaces and separate queue credits. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed
@@ -74,8 +74,8 @@ Independent CPU review and two separately built fourteen-case native runs
 accept the declared MR reuse and normal-close profile. Shared CQ/progress now
 passes independent source/CPU review and six four-QP plus fourteen public
 regression cases from each separately built native binary. Single-endpoint
-RDMA regression quotas exercise immediate resource reuse. Connected endpoint
-reuse, source authorization revocation on persistent connections and the remaining
+RDMA regression quotas exercise immediate resource reuse. P4.7f connected reuse now has source/CPU implementation; its declared native
+profile and independent acceptance are recorded in the RDMA contract. The remaining
 P4 exit gates stay open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
@@ -96,7 +96,7 @@ longer nested in or dispatched by TCP. Native owners use TENT's `RdmaContext`,
 P4.7c separates physical connection quota from per-request memory/byte quota,
 retains terminal endpoints through detached native retirement, and keeps both
 physical QP barriers. Its source/CPU and declared native regression profiles
-are independently accepted; connected QP reuse is still open. See the
+are independently accepted; P4.7f extends them with connected reuse. See the
 [architecture correspondence and drain contract](docs/rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
 
 P4.7d adds a private receive buffer/MR and a wire v8 source RQ completion protocol.
@@ -104,13 +104,22 @@ After payload CQ drain, the requester sends a same-QP fenced SEND_WITH_INV;
 the source validates its actual receive CQE, invalidated key and full grant
 binding before confirming completion. SQ and RQ credits are independent, even
 at capacity one. Both physical QP-close barriers remain. Independent review
-accepts the scoped source/CPU and two independently built 29-case native runs. Connected reuse
-and release of incoming-DMA owners without QP close remain open.
+accepts the scoped source/CPU and two independently built 29-case native runs.
+P4.7f adds a separate negotiated operation-drain path on top of this prerequisite.
 
 P4.7e accepts scoped persistent source registration with exact one-use MW authority.
 Local and MW-bind capabilities for the same registered view are distinct physical
 MRs sharing the same cache limits; source READ and WRITE reuse the MW-bind parent.
 No parent key is published. See [the source registration contract](docs/rdma-cuda.md#persistent-source-registration).
+
+P4.7f keeps the actual `RdmaEndpoint` QP and immutable connection identity in
+`EndpointStore`, while `Workers` cleans each separate grant after its sealed
+completion proof. Mandatory v9 rendezvous checks both cached identities and the
+last grant before new authority. Fresh MW/key/generation/WR identities, exact
+RQ invalidation, bound DONE/ACK/READY and actual grant cleanup precede reuse.
+Idle QPs remain charged; eviction and shutdown destroy them outside the Store
+lock. Source/CPU gates pass; native qualification and independent acceptance
+are still pending. See [connected reuse](docs/rdma-cuda.md#connected-qp-reuse).
 
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault

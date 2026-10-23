@@ -149,7 +149,26 @@ fn finish(
             "source receive/message owners did not drain",
         ));
     }
-    if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != 0 {
+    let reused = env::var("ORBITTE_EXPECT_QP_REUSE").as_deref() == Ok("1");
+    let idle_qps = if reused {
+        env::var("ORBITTE_RDMA_MAX_ENDPOINTS").map_or(2, |s| s.parse::<usize>().unwrap_or(0).min(2))
+    } else {
+        0
+    };
+    let opened_qps = if transport == Transport::Rdma {
+        if reused { 2 } else { 6 }
+    } else {
+        0
+    };
+    if idle.opened_connections != opened_qps
+        || idle.closed_connections != opened_qps - idle_qps as u64
+        || idle.idle_endpoints != idle_qps
+        || idle.reused_connections != if reused { 4 } else { 0 }
+        || idle.completed_reusable_grants != if reused { 6 } else { 0 }
+    {
+        return Err(Error::Internal("actual QP reuse counters differ"));
+    }
+    if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != idle_qps {
         return Err(Error::Internal("connection/grant owners did not drain"));
     }
     if idle.active_windows != 0
@@ -209,6 +228,8 @@ fn finish(
         || rdma.persistent_source_mrs != 0
         || rdma.retained_source_mrs != 0
         || rdma.active_endpoints != 0
+        || rdma.idle_endpoints != 0
+        || rdma.opened_connections != rdma.closed_connections
         || rdma.active_grants != 0
         || rdma.retained_grants != 0
         || rdma.staging_bytes != 0
@@ -274,6 +295,14 @@ fn finish(
         rdma.active_grants,
         rdma.retained_endpoints,
         rdma.retained_grants
+    );
+    println!(
+        "ORBITTE_CONNECTION_STATS {{\"idle\":{},\"opened\":{},\"closed\":{},\"reused\":{},\"completed_grants\":{}}}",
+        idle.idle_endpoints,
+        rdma.opened_connections,
+        rdma.closed_connections,
+        rdma.reused_connections,
+        rdma.completed_reusable_grants
     );
     println!(
         "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",

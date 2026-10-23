@@ -56,6 +56,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
     register_memory: sys::REAL.register_memory,
+    prepare_grant: sys::REAL.prepare_grant,
     open: sys::REAL.open,
     connect: sys::REAL.connect,
     post: gated_post,
@@ -201,6 +202,7 @@ fn shared_cq_peer() {
                             0
                         },
                         end,
+                        None,
                     )
                     .unwrap()
             })
@@ -525,6 +527,7 @@ fn source_window_peer() {
                 0
             },
             Instant::now() + TIMEOUT,
+            None,
         )
         .unwrap();
     if source {
@@ -551,7 +554,14 @@ fn source_window_peer() {
             // A deliberately hostile test peer receives the unadvertised parent key.
             // Production bootstrap never exposes either parent key or parent address.
             let request = endpoint.record.lock().unwrap();
-            let h = &request.resources.as_ref().unwrap().grant.handles;
+            let h = &request
+                .resources
+                .as_ref()
+                .unwrap()
+                .grant
+                .as_ref()
+                .unwrap()
+                .handles;
             grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
         }
         let binding = [0x42; COMPLETION_MESSAGE_SIZE];
@@ -862,6 +872,7 @@ fn duplex_completion_peer() {
                         payload,
                         if operation == TransferOp::Read { 1 } else { 2 },
                         Instant::now() + TIMEOUT,
+                        None,
                     )
                     .unwrap()
             })
@@ -875,6 +886,7 @@ fn duplex_completion_peer() {
                         payload,
                         0,
                         Instant::now() + TIMEOUT,
+                        None,
                     )
                     .unwrap()
             })
@@ -1093,3 +1105,6 @@ fn duplex_completion_peer() {
         idle.completed_receives
     );
 }
+
+#[path = "connected.rs"]
+mod connected;

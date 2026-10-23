@@ -17,7 +17,14 @@ fn source(
         )
         .unwrap();
     let mut endpoint = runtime
-        .endpoint(&memory, 0, 8, 2, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            0,
+            8,
+            2,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap();
     endpoint.connect(&endpoint.descriptor()).unwrap();
     (runtime, registry, memory, endpoint)

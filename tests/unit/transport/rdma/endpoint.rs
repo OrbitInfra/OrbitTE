@@ -21,8 +21,12 @@ fn grant_release_requires_its_own_physical_connection_and_outputs_keep_only_gran
             Permission::RemoteReadWrite,
         )
         .unwrap();
-    let mut first = transport.endpoint(&memory, 0, 8, 2, deadline()).unwrap();
-    let mut other = transport.endpoint(&memory, 8, 8, 2, deadline()).unwrap();
+    let mut first = transport
+        .endpoint(&memory, 0, 8, 2, deadline(), None)
+        .unwrap();
+    let mut other = transport
+        .endpoint(&memory, 8, 8, 2, deadline(), None)
+        .unwrap();
     first.connect(&first.descriptor()).unwrap();
     first.bind_window().unwrap();
     first.invalidate_window().unwrap();
@@ -33,6 +37,8 @@ fn grant_release_requires_its_own_physical_connection_and_outputs_keep_only_gran
         assert!(
             resources
                 .grant
+                .as_mut()
+                .unwrap()
                 .close(&resources.connection, transport.verbs)
                 .is_err()
         );
@@ -46,6 +52,8 @@ fn grant_release_requires_its_own_physical_connection_and_outputs_keep_only_gran
         assert!(
             resources
                 .grant
+                .as_mut()
+                .unwrap()
                 .close(&second.connection, transport.verbs)
                 .is_err(),
             "another connection cannot authorize grant release"
@@ -89,7 +97,9 @@ fn partial_retirement_distinguishes_closed_qps_from_retained_grants_and_never_re
                 Permission::RemoteReadWrite,
             )
             .unwrap();
-        let mut endpoint = transport.endpoint(&memory, 0, 8, 2, deadline()).unwrap();
+        let mut endpoint = transport
+            .endpoint(&memory, 0, 8, 2, deadline(), None)
+            .unwrap();
         let log = events(&transport);
         endpoint.connect(&endpoint.descriptor()).unwrap();
         endpoint.bind_window().unwrap();
