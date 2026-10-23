@@ -21,7 +21,6 @@ fn detachment_retains_work_owners_and_capacity_until_exact_retirement() {
         &store.work_owner(first.record.tag).unwrap(),
         &first.record
     ));
-    assert!(store.publish(Arc::clone(&first.record)).is_err());
     let stats = transport.stats().unwrap();
     assert_eq!(
         (
@@ -41,6 +40,8 @@ fn detachment_retains_work_owners_and_capacity_until_exact_retirement() {
 
     first.close().unwrap();
     store.remove_retired(&first.record);
+    assert_eq!(store.len(), 1);
+    assert!(store.publish(Arc::clone(&first.record)).is_err());
     let mut replacement = transport.staging_endpoint(8, 0).unwrap();
     store.publish(Arc::clone(&replacement.record)).unwrap();
     store.detach(&replacement.record);

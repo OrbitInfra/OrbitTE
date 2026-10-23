@@ -28,18 +28,35 @@ impl Default for DeviceHandles {
 unsafe impl Send for DeviceHandles {}
 
 #[repr(C)]
-#[derive(Default)]
 pub(super) struct ConnectionHandles {
     pub cq: *mut c_void,
     pub qp: *mut c_void,
 }
 
+impl Default for ConnectionHandles {
+    fn default() -> Self {
+        Self {
+            cq: std::ptr::null_mut(),
+            qp: std::ptr::null_mut(),
+        }
+    }
+}
+
 #[repr(C)]
-#[derive(Default)]
 pub(super) struct MemoryHandles {
     pub mr: *mut c_void,
     pub mw: *mut c_void,
     pub window_key: u32,
+}
+
+impl Default for MemoryHandles {
+    fn default() -> Self {
+        Self {
+            mr: std::ptr::null_mut(),
+            mw: std::ptr::null_mut(),
+            window_key: 0,
+        }
+    }
 }
 
 #[derive(Default)]

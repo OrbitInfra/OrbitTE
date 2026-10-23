@@ -720,25 +720,31 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
         let result = first.close();
         (first, result)
     });
-    wait_blocked(&pause);
-    {
-        let control = progress
-            .shared
-            .control
-            .try_lock()
-            .expect("native close must not hold the endpoint-store lock");
-        assert!(record.require_live().is_err());
-        assert!(Arc::ptr_eq(
-            &control.endpoints.work_owner(record.tag).unwrap(),
-            &record
-        ));
-        assert_eq!(control.endpoints.len(), 1);
-    }
-    assert_eq!(transport.stats().unwrap().active_endpoints, 1);
-    let mut second = transport.staging_endpoint(8, 0).unwrap();
-    assert_eq!(transport.stats().unwrap().active_endpoints, 2);
+    let mut second = None;
+    let observation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_blocked(&pause);
+        {
+            let control = progress
+                .shared
+                .control
+                .try_lock()
+                .expect("native close must not hold the endpoint-store lock");
+            assert!(record.require_live().is_err());
+            assert!(Arc::ptr_eq(
+                &control.endpoints.work_owner(record.tag).unwrap(),
+                &record
+            ));
+            assert_eq!(control.endpoints.len(), 1);
+        }
+        assert_eq!(transport.stats().unwrap().active_endpoints, 1);
+        second = Some(transport.staging_endpoint(8, 0).unwrap());
+        assert_eq!(transport.stats().unwrap().active_endpoints, 2);
+    }));
     release(&pause);
-    let (first, result) = closer.join().unwrap();
+    let retired = closer.join();
+    observation.unwrap();
+    let (first, result) = retired.unwrap();
+    let mut second = second.unwrap();
     result.unwrap();
     assert_eq!(
         (
