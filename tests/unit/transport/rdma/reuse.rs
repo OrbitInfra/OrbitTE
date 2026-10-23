@@ -265,7 +265,20 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
             .collect::<Vec<_>>()
     });
     assert_eq!(winners.len(), 1);
-    let mut winner = winners.pop().unwrap();
+    let winner = winners.pop().unwrap();
+    let mut winner = runtime
+        .endpoint(&local, 0, 8, 0, deadline(TIMEOUT).unwrap(), Some(winner))
+        .unwrap();
+    let current_remote = winner
+        .record
+        .lock()
+        .unwrap()
+        .resources
+        .as_ref()
+        .unwrap()
+        .connection
+        .remote
+        .unwrap();
     let (record, peer, descriptor, old_claim) = captured.lock().unwrap().take().unwrap();
     assert_eq!(winner.claim, old_claim + 1);
     let mut stale = RdmaEndpoint {
@@ -283,14 +296,30 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
     };
     let log = events(runtime);
     let before = log.lock().unwrap().clone();
-    assert!(stale.grant().is_err());
-    assert!(stale.connect(&descriptor).is_err());
-    assert!(
-        stale
-            .transfer(&descriptor, TransferOp::Read, deadline(TIMEOUT).unwrap())
-            .is_err()
-    );
-    assert!(stale.fill(&local, 0).is_err());
+    assert!(matches!(
+        stale.fill(&local, 0),
+        Err(Error::Unavailable("stale RDMA grant handle"))
+    ));
+    winner.fill(&local, 0).unwrap();
+    assert!(matches!(
+        stale.connect(&current_remote),
+        Err(Error::Unavailable("stale RDMA grant handle"))
+    ));
+    assert!(winner.record.lock().unwrap().phase == super::super::super::Phase::Init);
+    winner.connect(&current_remote).unwrap();
+    assert!(matches!(
+        stale.grant(),
+        Err(Error::Unavailable("stale RDMA grant handle"))
+    ));
+    assert!(matches!(
+        stale.transfer(
+            &current_remote,
+            TransferOp::Read,
+            deadline(TIMEOUT).unwrap()
+        ),
+        Err(Error::Unavailable("stale RDMA grant handle"))
+    ));
+    assert!(winner.record.lock().unwrap().phase == super::super::super::Phase::Connected);
     stale.close().unwrap();
     drop(stale);
     assert_eq!(
@@ -308,7 +337,7 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
             .as_ref()
             .unwrap()
             .grant
-            .is_none()
+            .is_some()
     );
     winner.close().unwrap();
     drop(winner);
