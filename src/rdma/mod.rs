@@ -12,6 +12,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 mod cq;
 mod device;
 mod events;
+mod keys;
 mod progress;
 mod registration;
 mod sys;
@@ -51,6 +52,8 @@ pub struct RdmaConfig {
     pub max_cqes: usize,
     pub max_cached_mrs: usize,
     pub max_cached_mr_bytes: usize,
+    /// Historical MW indices retained without eviction until the PD is destroyed.
+    pub max_window_key_indices: usize,
 }
 
 impl RdmaConfig {
@@ -70,6 +73,7 @@ impl RdmaConfig {
             max_cqes: 1024,
             max_cached_mrs: 64,
             max_cached_mr_bytes: 64 << 20,
+            max_window_key_indices: 65_536,
         }
     }
 
@@ -81,6 +85,7 @@ impl RdmaConfig {
             || self.hop_limit == 0
             || self.max_cached_mrs == 0
             || self.max_cached_mr_bytes == 0
+            || !(1..=1 << 24).contains(&self.max_window_key_indices)
             || !(1..=4096).contains(&self.max_cqes)
             || !(1..=4096).contains(&self.max_endpoints)
             || self.max_staging_bytes == 0
@@ -107,6 +112,11 @@ pub struct RdmaStats {
     pub opened_devices: u64,
     pub active_windows: usize,
     pub opened_windows: u64,
+    /// Historical native MW indices charged for the lifetime of their PD.
+    pub window_key_indices: usize,
+    /// Full rkeys burned before an endpoint can submit BIND, including failures.
+    pub burned_window_keys: u64,
+    pub window_key_exhaustions: u64,
     pub retained_windows: usize,
     pub completed_window_binds: u64,
     pub completed_window_invalidations: u64,
@@ -394,6 +404,8 @@ impl Runtime {
             record,
             progress,
             local: Descriptor::default(),
+            incarnation: None,
+            grant_generation: 0,
             config: self.config.clone(),
             verbs: self.verbs,
             deadline,
@@ -622,10 +634,60 @@ enum Phase {
     Retained,
 }
 
+/// Connection identity is independent of reusable provider QP numbers and PSNs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConnectionId {
+    domain: [u8; 16],
+    generation: u64,
+}
+
+impl ConnectionId {
+    pub(crate) fn encode(self) -> [u8; 24] {
+        let mut bytes = [0; 24];
+        bytes[..16].copy_from_slice(&self.domain);
+        bytes[16..].copy_from_slice(&self.generation.to_be_bytes());
+        bytes
+    }
+
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+        let bytes: &[u8; 24] = bytes
+            .try_into()
+            .map_err(|_| Error::Protocol("RDMA connection identity size"))?;
+        let mut domain = [0; 16];
+        domain.copy_from_slice(&bytes[..16]);
+        let mut generation = [0; 8];
+        generation.copy_from_slice(&bytes[16..]);
+        let generation = u64::from_be_bytes(generation);
+        if domain == [0; 16] || generation == 0 {
+            return Err(Error::Protocol("invalid RDMA connection identity"));
+        }
+        Ok(Self { domain, generation })
+    }
+
+    fn new_domain() -> Result<[u8; 16]> {
+        let domain = SourceEpoch::generate()?.0;
+        if domain == [0; 16] {
+            return Err(Error::Unavailable("zero RDMA protection-domain identity"));
+        }
+        Ok(domain)
+    }
+
+    fn next(domain: [u8; 16], generation: &mut u64) -> Result<Self> {
+        let current = *generation;
+        *generation = current.checked_add(1).ok_or(Error::ResourceExhausted)?;
+        Ok(Self {
+            domain,
+            generation: current,
+        })
+    }
+}
+
 pub(crate) struct Endpoint {
     record: Arc<cq::Record>,
     progress: Arc<cq::Progress>,
     local: Descriptor,
+    incarnation: Option<ConnectionId>,
+    grant_generation: u64,
     config: RdmaConfig,
     verbs: &'static sys::Verbs,
     deadline: Instant,
@@ -644,10 +706,25 @@ impl Endpoint {
             .as_mut()
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
         let device = Arc::clone(&resources.device);
-        device.open_endpoint(resources, &self.config, permission, psn, &mut self.local)?;
+        let (incarnation, grant_generation) =
+            device.open_endpoint(resources, &self.config, permission, psn, &mut self.local)?;
+        self.incarnation = Some(incarnation);
+        self.grant_generation = grant_generation;
         self.local.validate()?;
         state.qpn = self.local.qpn;
         Ok(())
+    }
+
+    pub(crate) fn incarnation(&self) -> Result<ConnectionId> {
+        self.incarnation
+            .ok_or(Error::Internal("missing RDMA connection identity"))
+    }
+
+    pub(crate) fn grant_generation(&self) -> Result<u64> {
+        if self.grant_generation == 0 {
+            return Err(Error::Internal("endpoint owns no source grant generation"));
+        }
+        Ok(self.grant_generation)
     }
 
     pub(crate) fn connection(&self) -> [u8; DESCRIPTOR_SIZE] {

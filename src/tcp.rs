@@ -12,8 +12,13 @@ use crate::{
     RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp, Transport,
 };
 
+#[cfg(feature = "rdma")]
+mod rdma;
+#[cfg(feature = "rdma")]
+use rdma::{serve as rdma_serve, transfer as rdma_transfer};
+
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 6;
+const VERSION: u16 = 7;
 const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -342,152 +347,6 @@ pub(crate) fn transfer(
         Ok(())
     })();
     result.map_err(|error| (error, effect))
-}
-
-#[cfg(feature = "rdma")]
-fn rdma_transfer(
-    operation: TransferOp,
-    peer: &RemoteSegment,
-    request: &PreparedTransfer,
-    source: &Source,
-    deadline: Instant,
-) -> std::result::Result<(), (Error, RemoteEffect)> {
-    use crate::rdma::{DESCRIPTOR_SIZE, Descriptor};
-    let mut effect = RemoteEffect::None;
-    let result = (|| {
-        let runtime = source
-            .rdma
-            .as_ref()
-            .ok_or(Error::Unavailable("RDMA is not configured"))?;
-        let mut endpoint = runtime.endpoint(
-            &request.local,
-            request.local_offset,
-            request.length,
-            0,
-            deadline,
-        )?;
-        let transfer = (|| {
-            if operation == TransferOp::Write {
-                endpoint.fill(&request.local, request.local_offset)?;
-            }
-            let mut channel = Channel::connect(peer.endpoint, deadline)?;
-            channel.write_all(
-                &Request {
-                    operation: if operation == TransferOp::Read {
-                        Operation::RdmaRead
-                    } else {
-                        Operation::RdmaWrite
-                    },
-                    epoch: peer.epoch,
-                    region: request.remote.id,
-                    offset: request.remote_offset as u64,
-                    length: request.length as u64,
-                }
-                .encode(),
-            )?;
-            let reply = Reply::read(&mut channel, peer.epoch)?;
-            if reply.status != 0 || reply.length != DESCRIPTOR_SIZE as u64 {
-                return Err(Error::Protocol("RDMA bootstrap length/status"));
-            }
-            let mut descriptor = [0; DESCRIPTOR_SIZE];
-            channel.read_exact(&mut descriptor)?;
-            let connection = Descriptor::decode_connection(&descriptor)?;
-            channel.write_all(&endpoint.connection())?;
-            let remote = connection;
-            endpoint.connect(&remote)?;
-            let ready = Reply::read(&mut channel, peer.epoch)?;
-            if ready.status != 9 {
-                return Err(Error::Protocol("RDMA missing ready response"));
-            }
-            channel.read_exact(&mut descriptor)?;
-            let remote = Descriptor::decode(&descriptor)?;
-            if remote.connection_bytes() != connection.connection_bytes() {
-                return Err(Error::Protocol("RDMA grant changed its connection"));
-            }
-            // A peer may expose direct application backing. Once a WRITE is
-            // attempted it can change remote bytes even without DONE or ACK.
-            if operation == TransferOp::Write {
-                effect = RemoteEffect::Unknown;
-            }
-            endpoint.transfer(&remote, operation, deadline)?;
-            endpoint.close()?;
-            channel.write_all(&[1])?;
-            let receipt = Reply::read(&mut channel, peer.epoch)?;
-            if receipt.status != 0 || receipt.length != 0 {
-                return Err(Error::Protocol("RDMA completion acknowledgement"));
-            }
-            Ok(())
-        })();
-        #[cfg(test)]
-        crate::rdma::tests::before_requester_close(&mut endpoint, &transfer);
-        endpoint.close()?;
-        transfer?;
-        if operation == TransferOp::Read {
-            remaining(deadline)?;
-            endpoint.copy_back(&request.local, request.local_offset)?;
-        }
-        Ok(())
-    })();
-    result.map_err(|error| (error, effect))
-}
-
-#[cfg(feature = "rdma")]
-fn rdma_serve(
-    channel: &mut Channel<'_>,
-    source: &Source,
-    request: &Request,
-    memory: &crate::RegisteredMemory,
-    offset: usize,
-    length: usize,
-) -> Result<()> {
-    use crate::rdma::{DESCRIPTOR_SIZE, Descriptor};
-    let runtime = source
-        .rdma
-        .as_ref()
-        .ok_or(Error::Unavailable("RDMA is not configured"))?;
-    let writing = request.operation == Operation::RdmaWrite;
-    let mut endpoint = runtime.endpoint(
-        memory,
-        offset,
-        length,
-        if writing { 2 } else { 1 },
-        channel.deadline,
-    )?;
-    let transfer = (|| {
-        if !writing {
-            endpoint.fill(memory, offset)?;
-        }
-        channel.reply(source, 0, DESCRIPTOR_SIZE as u64)?;
-        channel.write_all(&endpoint.connection())?;
-        let mut bytes = [0; DESCRIPTOR_SIZE];
-        channel.read_exact(&mut bytes)?;
-        endpoint.connect(&Descriptor::decode_connection(&bytes)?)?;
-        endpoint.bind_window()?;
-        channel.reply(source, 9, 0)?;
-        channel.write_all(&endpoint.grant()?.encode())?;
-        let mut done = [0];
-        channel.read_exact(&mut done)?;
-        if done != [1] {
-            return Err(Error::Protocol("RDMA completion marker"));
-        }
-        Ok(())
-    })();
-    let invalidated = if transfer.is_ok() {
-        endpoint.invalidate_window()
-    } else {
-        Ok(())
-    };
-    endpoint.close()?;
-    transfer?;
-    invalidated?;
-    if writing {
-        remaining(channel.deadline)?;
-        endpoint.copy_back(memory, offset)?;
-    }
-    drop(endpoint);
-    #[cfg(test)]
-    crate::rdma::tests::before_source_ack(runtime);
-    channel.reply(source, 0, 0)
 }
 
 struct Channel<'a> {

@@ -158,9 +158,10 @@ Source parent MRs deliberately have no remote read/write permission. Their
 one-use Type-2B MWs grant only the exact requested range and direction. The
 provider must advertise Type-2B MW support; unsupported allocation is an error,
 never a fallback to a remote-enabled parent MR. A requester cached MR remains
-local-only. Persisting QPs/MWs still requires a bounded key-generation/reuse
-domain and both endpoint incarnations before connected reuse; a local reference
-count is not that proof.
+local-only. The actual PD now owns a bounded, non-evicting full-rkey burn domain,
+and both endpoint incarnations are explicit in the public protocol. These are
+prerequisites for connected reuse; QP/grant owner separation and a physical
+quiescence contract are still required before enabling it.
 
 Canonical `HostMemory` owns raw stable backing and a range-access authority.
 Direct leases use allocation-relative ranges and retain the exact
@@ -176,10 +177,13 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v6 exchanges QP-only descriptors with zero memory address/key. Both
-RC QPs connect; the source posts BIND_MW through the shared worker and consumes
+Protocol v7 exchanges QP-only descriptors with zero memory address/key, plus
+identities owned by each process, actual PD and connection. Every phase binds
+the exact request, both identities and an independent source grant generation.
+Both RC QPs connect; the source posts BIND_MW through the shared worker and consumes
 its exact successful CQE before publishing the MW grant. The requester checks
-that the grant preserves that QP/PSN/GID and then posts bounded signaled slices. After all required CQ identities,
+the complete binding and that the grant preserves that QP/PSN/GID, then posts
+bounded signaled slices. After all required CQ identities,
 opcodes/statuses and READ byte counts pass, it destroys
 its QP, returns the local cached-MR borrow (or destroys its private MR), and
 releases its direct range lease before sending DONE. The shared CQ continues
@@ -238,7 +242,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v6 explicitly rejects v1-v5; it is OrbitTE-only. A WRITE attempt is marked
+Wire v7 explicitly rejects v1-v6; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -696,6 +700,117 @@ Earlier 986c8b5/9372eb0 reports and native attempts are preserved as intermediat
 results, with their unresolved findings. Native provider calls already entered
 remain non-preemptible. Missing physical fault gates stay unqualified. OrbitKV
 linkage stays deferred until independent acceptance of the complete P4 exit.
+
+### Persistent key domain and bilateral incarnation qualification
+
+P4.7b is independently accepted for the source/CPU and declared native profiles
+at `4d94410e56aa192a268fe75cc6d7cbe46c639f3a`. Each request still physically
+closes its QP, MW and parent MR; this stage does not enable a connected endpoint
+cache or MW rebind.
+
+The context's actual PD owner retains a bitmap for every native MW index it
+has used. A source constructor takes the provider's actual initial rkey,
+selects an unused low-eight-bit tag, and burns the resulting full rkey under
+the PD mutex before any BIND can be submitted. Close, failed/unknown BIND,
+unused grant destruction and native MW deallocation never return that bit.
+Reallocation of the same index with another initial tag still consults the
+same bitmap. The selected key always differs from this allocation's native
+initial key. Each index has at most 256 burned full-key values; an unchanged
+initial tag permits at most 255 allocations before refusal. Exhaustion refuses
+authority before BIND and uses the existing physical owner cleanup.
+`max_window_key_indices` defaults to 65,536 and bounds the number of distinct
+historical 24-bit indices, not the numerical value of an index. A new index
+beyond this capacity fails; existing indices retain their remaining tags.
+There is no history eviction, automatic PD replacement or parent-key fallback.
+The bitmaps disappear only after actual PD/context destruction; failed native
+cleanup retains the real PD and its history.
+
+`window_key_indices` counts live historical index records, including retained
+PDs. `burned_window_keys` and `window_key_exhaustions` are cumulative runtime
+counters. The historical-index count reaches zero only after successful shared
+device close. It is independent of `active_windows`, which can be zero between
+requests while their key history remains charged.
+
+The actual PD gets a fresh 128-bit random nonce on construction. Separate
+checked, monotonic `u64` counters allocate connection generations and source
+grant generations; failure never rolls back either counter. Generations refuse
+to wrap before native endpoint creation. A connection identity contains the
+process `SourceEpoch`, PD nonce and connection generation. QP numbers/PSNs
+remain routing fields and do not substitute for that identity. These values
+fence protocol instances, not authenticate peers on this trusted-network,
+plaintext protocol.
+
+The native `Descriptor` ABI remains 40 bytes. Integers are big endian:
+
+| RDMA body | Bytes and validation |
+| --- | --- |
+| Source offer, after success reply with length 88 | Source identity (40), grant generation (8), QP-only descriptor (40); requester checks source epoch, nonzero PD nonce/generations and zero memory authority |
+| Binding | Exact original Request header (52), source identity (40), requester identity (40), grant generation (8): 140 bytes |
+| ACCEPT | Phase `1`, binding, requester QP-only descriptor: 181 bytes; source checks its identity, request and grant before connect/BIND |
+| GRANT, after ready reply | Phase `2`, binding, completed MW descriptor: 181 bytes; requester checks both identities, request, grant and unchanged QP routing before data |
+| DONE | Phase `3`, binding: 141 bytes; source checks all fields before INV/staged WRITE commit |
+| ACK, after final success reply | Phase `4`, binding: 141 bytes; requester checks all fields before staged READ copyback |
+
+Both identities and the independent grant generation are echoed exactly. Even
+identical requests on identical connections cannot consume an older grant's
+DONE/ACK. Partial frames, changed identities/ranges/grants and reflected phases
+fail through the original deadline/physical close contract. An error reply is
+never accepted as a completion receipt. Direct memory effects retain the
+existing nontransactional semantics.
+
+This follows frozen TENT's separation of context, endpoint store and buffer
+owners. Its [endpoint store](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint_store.cpp#L38)
+reuses nonterminal endpoints, detaches failed entries into a strong retirement
+list and performs native retirement outside the map lock. Its
+[RDMA bootstrap](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/runtime/control_plane.h#L46)
+uses NIC paths and QP lists; its
+[accept path](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp#L603)
+retires a changed peer QP set. Explicit bilateral process/PD/connection and
+grant generations, and the permanent rkey burn ledger, are OrbitTE's authority
+contract; they are not fields or a MW scheme present in frozen TENT RDMA.
+
+The selected rdma-core v55 `ibv_inc_rkey` changes only eight low bits. Its MW
+manual describes key unbinding/rebinding, without a guarantee that LOCAL_INV's
+CQE alone drains all previously accepted incoming DMA. This delivery keeps
+requester CQEs and actual QP close before DONE, then source INV CQE and actual
+QP/MW/MR close before releasing memory or ACK. Persistent connections still
+need a separately proven drain protocol, split connection/grant owners,
+nonrepeating per-grant WR identities and terminal store retirement. Full P4
+and OrbitKV linkage remain open.
+
+Independent source review passes stable/Rust 1.85 strict Clippy, the relevant
+feature/comparator/supervision gates and 110 CPU units plus notification/TCP/doc
+tests. Implementation gates also pass package verification. The implementation
+stable and independent MSRV release builds each pass 20 single-CPU runs with
+16 test threads. Thirty-eight old-logic executions across 19 fault families
+must fail assertions rather than timeout or fail compilation. Real control
+sockets keep malformed peers alive and check rejection before ACCEPT/connect,
+BIND/data, DONE or staged output commit. Source permission and both physical
+QP barriers remain unchanged.
+
+Each separately built native set passes four real invalidated/parent-key
+probes, six four-QP shared-CQ cases and fourteen public DRAM/pinned-host/mixed/
+staged/A-H20 GPU-staging/TCP regressions. The public RDMA source records six burned
+keys across one historical native index; the four-QP source records eight
+burns across four indices. History survives request resource close and reaches
+zero only at actual shared device close. Every set verifies 48 actual SSH waits
+and three controller waits, absence of all 96 owned native/supervisor PIDs,
+unchanged A19/B16 frozen libraries and mapped-file identities, reacquisition/
+release of the three original resource locks, and zero memory/no compute apps
+on A GPU7. B GPUs are never selected or queried.
+
+Evidence is external under `/root/orbitte-artifacts/rdma-key-domains-20261023/`:
+`independent-source-4d94410/independent-review.json` accepts source/CPU;
+`native-4d94410/implementation-hardware-review.json` records the implementation
+run; `independent-hardware-4d94410/independent-review.json` accepts the independent
+native profile. Initial MSRV/fixture failures, surviving old controls and the
+1884e74 interim native run remain preserved and do not qualify the final head.
+The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/20/checks) include the
+stable/MSRV feature matrix and the unmodified frozen TENT CPU comparison.
+Physical tag/index exhaustion, stale-key replay across native MW reallocation,
+delayed/replayed native completions, arbitrary cleanup/device/port faults and
+full P4 remain unqualified. No connected reuse,
+GDR, multirail, performance advantage or OrbitKV qualification is inferred.
 
 ### Run the native gate
 

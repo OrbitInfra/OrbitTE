@@ -272,3 +272,228 @@ pub(crate) fn emit_async(runtime: &Runtime, kind: u8) {
     };
     unsafe { &*resources.handles.context.cast::<FakeDevice>() }.emit_async(kind);
 }
+
+#[test]
+fn native_index_reallocation_cannot_repeat_any_burned_key_or_return_burns_on_close() {
+    let runtime = runtime("ok");
+    let mut published = std::collections::HashSet::new();
+    for index in 0..255 {
+        let mut endpoint = runtime.staging_endpoint(8, 1).unwrap();
+        assert_eq!(endpoint.incarnation().unwrap().generation, index + 1);
+        assert_eq!(endpoint.grant_generation().unwrap(), index + 1);
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        endpoint.bind_window().unwrap();
+        assert!(published.insert(endpoint.grant().unwrap().rkey));
+        endpoint.invalidate_window().unwrap();
+        endpoint.close().unwrap();
+        drop(endpoint);
+        assert_eq!(runtime.stats().unwrap().window_key_indices, 1);
+    }
+    assert!(matches!(
+        runtime.staging_endpoint(8, 1),
+        Err(Error::ResourceExhausted)
+    ));
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (stats.burned_window_keys, stats.window_key_exhaustions),
+        (255, 1)
+    );
+    assert_eq!(
+        (
+            stats.completed_window_binds,
+            stats.completed_window_invalidations
+        ),
+        (255, 255)
+    );
+    assert_eq!(
+        (
+            stats.active_windows,
+            stats.active_endpoints,
+            stats.staging_bytes,
+            stats.work_requests
+        ),
+        (0, 0, 0, 0)
+    );
+    // Exhausted remote authority must not silently turn into a local MR or
+    // erase PD history. Local-only requests need no remote key.
+    runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(runtime.stats().unwrap().window_key_indices, 0);
+    assert_eq!(runtime.stats().unwrap().burned_window_keys, 255);
+}
+
+#[test]
+fn key_index_limit_and_unused_grants_keep_real_owner_cleanup_and_history() {
+    let mut runtime = runtime("key_indices");
+    runtime.config.max_window_key_indices = 1;
+    let mut first = runtime.staging_endpoint(8, 1).unwrap();
+    let first_key = first.descriptor().rkey;
+    first.close().unwrap();
+    drop(first);
+    assert!(matches!(
+        runtime.staging_endpoint(8, 1),
+        Err(Error::ResourceExhausted)
+    ));
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.window_key_indices,
+            stats.burned_window_keys,
+            stats.window_key_exhaustions
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        (
+            stats.opened_windows,
+            stats.active_windows,
+            stats.active_endpoints,
+            stats.staging_bytes
+        ),
+        (2, 0, 0, 0)
+    );
+    assert_eq!(stats.completed_window_binds, 0);
+    assert_ne!(first_key & !255, 0);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(runtime.stats().unwrap().window_key_indices, 0);
+
+    let runtime = super::super::tests::runtime("ok");
+    let first = runtime.staging_endpoint(8, 1).unwrap();
+    let key = first.descriptor().rkey;
+    let first_id = first.incarnation().unwrap();
+    drop(first); // No BIND: the reserved key still cannot be returned.
+    let local = runtime.staging_endpoint(8, 0).unwrap();
+    let local_id = local.incarnation().unwrap();
+    assert!(local.grant_generation().is_err());
+    drop(local);
+    let second = runtime.staging_endpoint(8, 1).unwrap();
+    assert_eq!(second.incarnation().unwrap().domain, first_id.domain);
+    assert_eq!(
+        (
+            first_id.generation,
+            local_id.generation,
+            second.incarnation().unwrap().generation
+        ),
+        (1, 2, 3)
+    );
+    assert_eq!(second.grant_generation().unwrap(), 2);
+    assert_ne!(second.descriptor().rkey, key);
+    drop(second);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    let restarted = super::super::tests::runtime("ok");
+    let endpoint = restarted.staging_endpoint(8, 1).unwrap();
+    assert_ne!(endpoint.incarnation().unwrap().domain, first_id.domain);
+    assert_eq!(endpoint.incarnation().unwrap().generation, 1);
+    drop(endpoint);
+    restarted
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}
+
+#[test]
+fn connection_and_grant_counters_refuse_overflow_before_native_construction() {
+    for source_grant in [false, true] {
+        let runtime = runtime("ok");
+        let owner = runtime.device().unwrap();
+        {
+            let mut state = owner.state.lock().unwrap();
+            let State::Open(resources) = &mut *state else {
+                panic!("closed")
+            };
+            if source_grant {
+                resources.next_grant = u64::MAX;
+            } else {
+                resources.next_connection = u64::MAX;
+            }
+        }
+        for _ in 0..2 {
+            assert!(matches!(
+                runtime.staging_endpoint(8, 1),
+                Err(Error::ResourceExhausted)
+            ));
+        }
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.opened_windows,
+                stats.burned_window_keys
+            ),
+            (0, 0, 0)
+        );
+        assert!(!events(&runtime).lock().unwrap().contains(&"open_endpoint"));
+        if source_grant {
+            runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
+        }
+        runtime
+            .close(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+    }
+}
+
+#[test]
+fn concurrent_key_reservations_and_retained_cleanup_preserve_the_pd_domain() {
+    let mut runtime = runtime("ok");
+    runtime.config.max_endpoints = 16;
+    runtime.config.max_staging_bytes = 128;
+    let runtime = Arc::new(runtime);
+    let barrier = Arc::new(Barrier::new(17));
+    let mut workers = Vec::new();
+    for _ in 0..16 {
+        let runtime = Arc::clone(&runtime);
+        let barrier = Arc::clone(&barrier);
+        workers.push(thread::spawn(move || {
+            let endpoint = runtime.staging_endpoint(8, 1).unwrap();
+            let key = endpoint.descriptor().rkey;
+            let identity = endpoint.incarnation().unwrap();
+            barrier.wait();
+            drop(endpoint);
+            (key, identity)
+        }));
+    }
+    barrier.wait();
+    let mut keys = std::collections::HashSet::new();
+    let mut identities = std::collections::HashSet::new();
+    for worker in workers {
+        let (key, id) = worker.join().unwrap();
+        assert!(keys.insert(key));
+        assert!(identities.insert(id.encode()));
+    }
+    assert_eq!(
+        (
+            runtime.stats().unwrap().window_key_indices,
+            runtime.stats().unwrap().burned_window_keys
+        ),
+        (1, 16)
+    );
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+
+    let retained = super::super::tests::runtime("window_close");
+    let mut endpoint = retained.staging_endpoint(8, 1).unwrap();
+    assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
+    drop(endpoint);
+    assert!(
+        retained
+            .close(Instant::now() + Duration::from_secs(2))
+            .is_err()
+    );
+    let stats = retained.stats().unwrap();
+    assert_eq!(
+        (
+            stats.window_key_indices,
+            stats.burned_window_keys,
+            stats.active_windows,
+            stats.retained_windows,
+            stats.active_devices
+        ),
+        (1, 1, 1, 1, 1)
+    );
+}

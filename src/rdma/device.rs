@@ -2,7 +2,8 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, events, sys,
+    ConnectionId, Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check, events,
+    keys, sys,
 };
 use crate::{Error, RegisteredMemory, Result};
 
@@ -23,14 +24,20 @@ struct Resources {
     handles: sys::DeviceHandles,
     events: Option<events::Events>,
     usage: Arc<Mutex<RdmaStats>>,
+    domain: [u8; 16],
+    next_connection: u64,
+    next_grant: u64,
+    keys: keys::Keys,
 }
 
 impl Drop for Resources {
     fn drop(&mut self) {
-        self.usage
+        let mut usage = self
+            .usage
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .active_devices -= 1;
+            .unwrap_or_else(|poison| poison.into_inner());
+        usage.active_devices -= 1;
+        usage.window_key_indices -= self.keys.len();
     }
 }
 
@@ -42,6 +49,7 @@ impl Device {
     ) -> Result<Arc<Self>> {
         let name = CString::new(config.device.as_str())
             .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
+        let domain = ConnectionId::new_domain()?;
         usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
@@ -51,6 +59,10 @@ impl Device {
                 handles: sys::DeviceHandles::default(),
                 events: None,
                 usage,
+                domain,
+                next_connection: 1,
+                next_grant: 1,
+                keys: keys::Keys::new(config.max_window_key_indices),
             }))),
             verbs,
             asynchronous: Arc::default(),
@@ -136,15 +148,23 @@ impl Device {
         permission: u32,
         psn: u32,
         local: &mut Descriptor,
-    ) -> Result<()> {
-        let state = self
+    ) -> Result<(ConnectionId, u64)> {
+        let mut state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
-        let State::Open(device) = &*state else {
+        let State::Open(device) = &mut *state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
+        let incarnation = ConnectionId::next(device.domain, &mut device.next_connection)?;
+        let grant_generation = if permission != 0 {
+            let generation = device.next_grant;
+            device.next_grant = generation.checked_add(1).ok_or(Error::ResourceExhausted)?;
+            generation
+        } else {
+            0
+        };
         // SAFETY: the request and progress lane retain the Device and shared CQ;
         // its mutex excludes progress/cleanup while these handles initialize.
         let code = unsafe {
@@ -166,7 +186,27 @@ impl Device {
             usage.active_windows += 1;
             usage.opened_windows += 1;
         }
-        check("ibverbs endpoint construction", code)
+        check("ibverbs endpoint construction", code)?;
+        if permission != 0 {
+            if resources.handles.mw.is_null() {
+                return Err(Error::Internal("source endpoint has no MW"));
+            }
+            let previous = device.keys.len();
+            let key = device.keys.burn(resources.handles.window_key);
+            let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.window_key_indices += device.keys.len() - previous;
+            let key = match key {
+                Ok(key) => key,
+                Err(error) => {
+                    usage.window_key_exhaustions += 1;
+                    return Err(error);
+                }
+            };
+            usage.burned_window_keys += 1;
+            resources.handles.window_key = key;
+            local.rkey = key;
+        }
+        Ok((incarnation, grant_generation))
     }
 
     /// Runtime calls this only after endpoint admission is fenced and drained;

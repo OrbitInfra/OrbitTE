@@ -240,7 +240,7 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 6**, not TENT's YLT RPC framing or HP-TCP.
+This is **OrbitTE protocol version 7**, not TENT's YLT RPC framing or HP-TCP.
 It makes this first Rust CPU slice executable while TENT wire compatibility
 remains an explicit P0/P9 gate. Future wire changes require a version change
 and corresponding decoder rejection tests.
@@ -249,12 +249,14 @@ body submission and final receipts. Version 4 added staged RDMA bootstrap/commit
 explicit direct application host MRs: a WRITE attempt can change application
 bytes before DONE/ACK, and a failed direct READ can change its local target.
 Version 6 splits RDMA connection metadata from completed one-use MW grants;
-BIND/INV completion precedes grant publication/final ACK. Versions 1–5 are
+BIND/INV completion precedes grant publication/final ACK. Version 7 binds
+both process/PD/connection incarnations, the exact request and an independent
+source grant generation to every RDMA phase and receipt. Versions 1–6 are
 explicitly rejected.
 There is no legacy-protocol fallback.
 
 Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`6`), a
+Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`7`), a
 one-byte operation/status and one zero reserved byte.
 
 | Frame | Remaining fields |

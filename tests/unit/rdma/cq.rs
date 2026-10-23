@@ -148,6 +148,8 @@ fn unopened(runtime: &Runtime) -> Endpoint {
         record: progress.register(resources).unwrap(),
         progress,
         local: Descriptor::default(),
+        incarnation: None,
+        grant_generation: 0,
         config: runtime.config.clone(),
         verbs: runtime.verbs,
         deadline: deadline(),
