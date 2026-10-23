@@ -30,6 +30,7 @@ unsafe impl Send for DeviceHandles {}
 #[repr(C)]
 pub(super) struct ConnectionHandles {
     pub cq: *mut c_void,
+    pub receive_cq: *mut c_void,
     pub qp: *mut c_void,
 }
 
@@ -37,6 +38,7 @@ impl Default for ConnectionHandles {
     fn default() -> Self {
         Self {
             cq: std::ptr::null_mut(),
+            receive_cq: std::ptr::null_mut(),
             qp: std::ptr::null_mut(),
         }
     }
@@ -68,7 +70,11 @@ pub(super) struct Completion {
     pub length: u32,
     pub vendor_error: u32,
     pub qpn: u32,
+    pub flags: u32,
+    pub invalidated_rkey: u32,
 }
+
+pub(super) const WITH_INVALIDATE: u32 = ffi::ibv_wc_flags::IBV_WC_WITH_INV.0;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -155,6 +161,23 @@ pub(super) struct Verbs {
         usize,
         u32,
         bool,
+        *mut PostResult,
+    ) -> c_int,
+    pub post_receive: unsafe extern "C" fn(
+        *mut ConnectionHandles,
+        *const MemoryHandles,
+        u64,
+        u64,
+        usize,
+        *mut PostResult,
+    ) -> c_int,
+    pub send_completion: unsafe extern "C" fn(
+        *mut ConnectionHandles,
+        *const MemoryHandles,
+        u64,
+        u64,
+        usize,
+        u32,
         *mut PostResult,
     ) -> c_int,
     pub dealloc_window: CloseMemory,
@@ -302,7 +325,7 @@ unsafe extern "C" fn open(
         if attr.link_layer == 2 && gid.raw == [0; 16] {
             return libc::EADDRNOTAVAIL;
         }
-        if h.cq.is_null() {
+        if h.cq.is_null() || h.receive_cq.is_null() {
             return libc::EINVAL;
         }
         let mut remote_access = 0;
@@ -328,7 +351,7 @@ unsafe extern "C" fn open(
         }
         let mut init: ffi::ibv_qp_init_attr = std::mem::zeroed();
         init.send_cq = h.cq.cast();
-        init.recv_cq = h.cq.cast();
+        init.recv_cq = h.receive_cq.cast();
         init.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
         init.sq_sig_all = 1;
         init.cap.max_send_wr = max_send_wr;
@@ -339,7 +362,11 @@ unsafe extern "C" fn open(
         if h.qp.is_null() {
             return failure();
         }
-        if init.cap.max_send_wr < max_send_wr || init.cap.max_send_sge < 1 {
+        if init.cap.max_send_wr < max_send_wr
+            || init.cap.max_send_sge < 1
+            || init.cap.max_recv_wr < 1
+            || init.cap.max_recv_sge < 1
+        {
             return libc::EOPNOTSUPP;
         }
         let mut qp_attr: ffi::ibv_qp_attr = std::mem::zeroed();
@@ -631,6 +658,106 @@ unsafe extern "C" fn post(
     }
 }
 
+fn message_sge(
+    memory: &MemoryHandles,
+    address: u64,
+    length: usize,
+) -> std::result::Result<ffi::ibv_sge, c_int> {
+    if memory.mr.is_null() || length != super::COMPLETION_MESSAGE_SIZE {
+        return Err(libc::EINVAL);
+    }
+    let mr = unsafe { &*memory.mr.cast::<ffi::ibv_mr>() };
+    let offset = address.checked_sub(mr.addr as u64).ok_or(libc::EINVAL)?;
+    if offset
+        .checked_add(length as u64)
+        .is_none_or(|end| end > mr.length as u64)
+    {
+        return Err(libc::EINVAL);
+    }
+    Ok(ffi::ibv_sge {
+        addr: address,
+        length: length as u32,
+        lkey: mr.lkey,
+    })
+}
+
+unsafe extern "C" fn post_receive(
+    handles: *mut ConnectionHandles,
+    memory: *const MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    result: *mut PostResult,
+) -> c_int {
+    unsafe {
+        *result = PostResult::default();
+        if (*handles).qp.is_null() || id == 0 {
+            return libc::EINVAL;
+        }
+        let mut sge = match message_sge(&*memory, address, length) {
+            Ok(sge) => sge,
+            Err(code) => return code,
+        };
+        let qp = (*handles).qp.cast::<ffi::ibv_qp>();
+        let Some(post) = (*(*qp).context).ops.post_recv else {
+            return libc::EOPNOTSUPP;
+        };
+        let mut wr: ffi::ibv_recv_wr = std::mem::zeroed();
+        wr.wr_id = id;
+        wr.sg_list = &mut sge;
+        wr.num_sge = 1;
+        let mut bad = std::ptr::null_mut();
+        let code = post(qp, &mut wr, &mut bad);
+        if code == 0 {
+            (*result).accepted = 1;
+        } else if !std::ptr::eq(bad, &wr) {
+            (*result).uncertain = true;
+        }
+        code
+    }
+}
+
+unsafe extern "C" fn send_completion(
+    handles: *mut ConnectionHandles,
+    memory: *const MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    rkey: u32,
+    result: *mut PostResult,
+) -> c_int {
+    unsafe {
+        *result = PostResult::default();
+        if (*handles).qp.is_null() || id == 0 {
+            return libc::EINVAL;
+        }
+        let mut sge = match message_sge(&*memory, address, length) {
+            Ok(sge) => sge,
+            Err(code) => return code,
+        };
+        let qp = (*handles).qp.cast::<ffi::ibv_qp>();
+        let Some(post) = (*(*qp).context).ops.post_send else {
+            return libc::EOPNOTSUPP;
+        };
+        let mut wr: ffi::ibv_send_wr = std::mem::zeroed();
+        wr.wr_id = id;
+        wr.sg_list = &mut sge;
+        wr.num_sge = 1;
+        wr.opcode = ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV;
+        wr.send_flags =
+            ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
+        wr.__bindgen_anon_1.invalidate_rkey = rkey;
+        let mut bad = std::ptr::null_mut();
+        let code = post(qp, &mut wr, &mut bad);
+        if code == 0 {
+            (*result).accepted = 1;
+        } else if !std::ptr::eq(bad, &wr) {
+            (*result).uncertain = true;
+        }
+        code
+    }
+}
+
 unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Completion) -> c_int {
     // SAFETY: RdmaEndpoint retains the CQ; one initialized output receives one CQE.
     unsafe {
@@ -652,6 +779,11 @@ unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Completion) ->
             } else {
                 output.opcode = completion.opcode();
                 output.length = completion.len() as u32;
+                output.flags = completion.wc_flags.0;
+                if output.flags & WITH_INVALIDATE != 0 {
+                    // ibverbs-sys exposes the host-order union as imm_data.
+                    output.invalidated_rkey = completion.imm_data;
+                }
             }
             *result = output;
         }
@@ -714,6 +846,8 @@ pub(super) static REAL: Verbs = Verbs {
     connect,
     post,
     window,
+    post_receive,
+    send_completion,
     dealloc_window,
     poll,
     destroy_qp,

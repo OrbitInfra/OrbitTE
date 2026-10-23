@@ -60,6 +60,8 @@ static VERBS: sys::Verbs = sys::Verbs {
     connect: sys::REAL.connect,
     post: gated_post,
     window: sys::REAL.window,
+    post_receive: sys::REAL.post_receive,
+    send_completion: sys::REAL.send_completion,
     dealloc_window: sys::REAL.dealloc_window,
     poll: sys::REAL.poll,
     destroy_qp: sys::REAL.destroy_qp,
@@ -92,6 +94,10 @@ fn verify(memory: &crate::RegisteredMemory, expected: &[u8]) {
 #[test]
 #[ignore = "requires an explicitly selected two-host RNIC profile and original resource locks"]
 fn shared_cq_peer() {
+    if env::var("ORBITTE_SHARED_DUPLEX").as_deref() == Ok("1") {
+        duplex_completion_peer();
+        return;
+    }
     // Keep readiness and JSON on their own lines after libtest's name prefix.
     println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
@@ -327,7 +333,7 @@ fn shared_cq_peer() {
     let idle = runtime.stats().unwrap();
     assert_eq!(
         (idle.active_cqs, idle.opened_cqs, idle.progress_workers),
-        (1, 1, 1)
+        (2, 2, 1)
     );
     assert_eq!(
         (
@@ -383,6 +389,7 @@ fn shared_cq_peer() {
         ),
         (0, 0, 0, 0)
     );
+    receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
         "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
@@ -449,7 +456,7 @@ fn source_window_peer() {
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
     let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
-    assert!(matches!(probe.as_str(), "revoked" | "parent"));
+    assert!(matches!(probe.as_str(), "revoked" | "parent" | "remote"));
     let length = 4096 + 2 * GUARD;
     let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
     config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
@@ -493,7 +500,11 @@ fn source_window_peer() {
             &memory,
             GUARD,
             4096,
-            if source { 2 } else { 0 },
+            if source {
+                if probe == "remote" { 1 } else { 2 }
+            } else {
+                0
+            },
             Instant::now() + TIMEOUT,
         )
         .unwrap();
@@ -517,14 +528,23 @@ fn source_window_peer() {
         let mut grant = endpoint.grant().unwrap();
         if probe == "revoked" {
             endpoint.invalidate_window().unwrap();
-        } else {
+        } else if probe == "parent" {
             // A deliberately hostile test peer receives the unadvertised parent key.
             // Production bootstrap never exposes either parent key or parent address.
             let request = endpoint.record.lock().unwrap();
             let h = &request.resources.as_ref().unwrap().grant.handles;
             grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
         }
+        let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        if probe == "remote" {
+            endpoint.post_receive(&binding).unwrap();
+        }
         stream.write_all(&grant.encode()).unwrap();
+        if probe == "remote" {
+            endpoint.receive_completion().unwrap();
+            // Keep this actual source QP/MW alive until the hostile old-key access ends.
+            stream.write_all(&[9]).unwrap();
+        }
         token(&mut stream, 4);
         // The peer has observed REM_ACCESS_ERR and physically closed its QP.
         let close = endpoint.close();
@@ -536,8 +556,28 @@ fn source_window_peer() {
         stream.read_exact(&mut bytes).unwrap();
         let grant = Descriptor::decode(&bytes).unwrap();
         assert_eq!(grant.connection_bytes(), connection.connection_bytes());
+        if probe == "remote" {
+            endpoint
+                .transfer(&grant, TransferOp::Read, Instant::now() + TIMEOUT)
+                .unwrap();
+            endpoint
+                .send_completion(&[0x42; COMPLETION_MESSAGE_SIZE], grant.rkey)
+                .unwrap();
+            token(&mut stream, 9);
+            // The hostile test bypasses only the public one-grant submission guard.
+            // The old key is still submitted through the real provider/worker/CQ.
+            endpoint.record.lock().unwrap().message_sent = false;
+        }
         let error = endpoint
-            .transfer(&grant, TransferOp::Write, Instant::now() + TIMEOUT)
+            .transfer(
+                &grant,
+                if probe == "remote" {
+                    TransferOp::Read
+                } else {
+                    TransferOp::Write
+                },
+                Instant::now() + TIMEOUT,
+            )
             .unwrap_err();
         assert!(
             matches!(
@@ -577,12 +617,19 @@ fn source_window_peer() {
     assert_eq!(idle.window_key_indices, usize::from(source));
     assert_eq!(
         idle.completed_window_invalidations,
-        u64::from(source && probe == "revoked")
+        u64::from(source && probe != "parent")
     );
     assert_eq!(idle.completion_errors, u64::from(!source));
     assert_eq!(
         (idle.completed_write_bytes, idle.completed_read_bytes),
-        (0, 0)
+        (
+            0,
+            if !source && probe == "remote" {
+                4096
+            } else {
+                0
+            }
+        )
     );
     registry.unregister(&memory).unwrap();
     runtime.registrations.retire(&memory).unwrap();
@@ -599,6 +646,7 @@ fn source_window_peer() {
         ),
         (0, 0, 0, 0)
     );
+    receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
         "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
@@ -645,5 +693,353 @@ fn source_window_peer() {
     println!(
         "{{\"role\":\"{role}\",\"status\":\"passed\",\"probe\":\"{probe}\",\"real_remote_access_error\":{},\"completed_window_binds\":{},\"completed_window_invalidations\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
         !source, idle.completed_window_binds, idle.completed_window_invalidations
+    );
+}
+
+fn receive_stats(stats: &RdmaStats) {
+    assert_eq!(
+        (
+            stats.receive_work_requests,
+            stats.retained_receive_work_requests,
+            stats.active_message_mrs,
+            stats.retained_message_mrs,
+            stats.message_bytes,
+            stats.retained_message_bytes
+        ),
+        (0, 0, 0, 0, 0, 0)
+    );
+    println!(
+        "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
+        stats.completed_sends,
+        stats.completed_receives,
+        stats.receive_post_calls,
+        stats.peak_receive_work_requests,
+        stats.receive_work_requests,
+        stats.retained_receive_work_requests,
+        stats.active_message_mrs,
+        stats.retained_message_mrs,
+        stats.message_bytes,
+        stats.retained_message_bytes
+    );
+}
+
+fn duplex_binding(
+    seed: u64,
+    source: bool,
+    slot: usize,
+    operation: TransferOp,
+) -> [u8; COMPLETION_MESSAGE_SIZE] {
+    let mut bytes = [0xa7; COMPLETION_MESSAGE_SIZE];
+    bytes[..8].copy_from_slice(&seed.to_le_bytes());
+    bytes[8] = u8::from(source);
+    bytes[9] = slot as u8;
+    bytes[10] = u8::from(operation == TransferOp::Write);
+    bytes
+}
+
+fn duplex_completion_peer() {
+    println!();
+    let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
+    assert!(matches!(role.as_str(), "source" | "requester"));
+    let source = role == "source";
+    let payload: usize = env::var("ORBITTE_SHARED_PAYLOAD").unwrap().parse().unwrap();
+    assert!((4096..=8 << 20).contains(&payload));
+    let capacity: usize = env::var("ORBITTE_SHARED_CQES").unwrap().parse().unwrap();
+    assert!((1..=4).contains(&capacity));
+    let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
+    let stride = payload + 2 * GUARD;
+    let bank = COUNT * stride;
+    let length = 2 * bank;
+    let role_seed = seed ^ if source { 0x1234_5678 } else { 0xfedc_ba98 };
+    let peer_seed = seed ^ if source { 0xfedc_ba98 } else { 0x1234_5678 };
+    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
+    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
+    config.hop_limit = 64;
+    config.host_memory = RdmaHostMemory::Direct;
+    config.max_endpoints = 2 * COUNT;
+    config.max_direct_bytes = length;
+    config.max_cached_mr_bytes = length;
+    config.block_size = 4096;
+    config.max_cqes = capacity;
+    config.max_send_wr = 1;
+    let runtime = RdmaTransport::new(config).unwrap();
+    let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
+    let mut expected = vec![0xa5; length];
+    for slot in 0..COUNT {
+        for index in 0..payload {
+            expected[slot * stride + GUARD + index] = value(role_seed, slot * stride + index);
+            expected[bank + slot * stride + GUARD + index] =
+                value(role_seed ^ 0x4567, slot * stride + index);
+        }
+    }
+    let backing = Arc::new(HostMemory::new(expected.clone().into_boxed_slice()).unwrap());
+    let memory = registry
+        .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
+        .unwrap();
+    let mut stream = if source {
+        let listener = TcpListener::bind(env::var("ORBITTE_SHARED_BIND").unwrap()).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        println!("ORBITTE_READY {}", listener.local_addr().unwrap());
+        std::io::stdout().flush().unwrap();
+        let end = Instant::now() + TIMEOUT;
+        loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < end);
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    } else {
+        TcpStream::connect_timeout(
+            &env::var("ORBITTE_SHARED_PEER").unwrap().parse().unwrap(),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    };
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    stream.set_write_timeout(Some(TIMEOUT)).unwrap();
+    stream.set_nodelay(true).unwrap();
+    for operation in [TransferOp::Read, TransferOp::Write] {
+        if operation == TransferOp::Write {
+            for slot in 0..COUNT {
+                let bytes = (0..payload)
+                    .map(|index| value(role_seed ^ 0xaabb_ccdd, slot * stride + index))
+                    .collect::<Vec<_>>();
+                memory.write(bank + slot * stride + GUARD, &bytes).unwrap();
+                expected[bank + slot * stride + GUARD..bank + slot * stride + GUARD + payload]
+                    .copy_from_slice(&bytes);
+            }
+        }
+        let mut sources = (0..COUNT)
+            .map(|slot| {
+                runtime
+                    .endpoint(
+                        &memory,
+                        slot * stride + GUARD,
+                        payload,
+                        if operation == TransferOp::Read { 1 } else { 2 },
+                        Instant::now() + TIMEOUT,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut requesters = (0..COUNT)
+            .map(|slot| {
+                runtime
+                    .endpoint(
+                        &memory,
+                        bank + slot * stride + GUARD,
+                        payload,
+                        0,
+                        Instant::now() + TIMEOUT,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        for endpoint in sources.iter().chain(&requesters) {
+            stream.write_all(&endpoint.connection()).unwrap();
+        }
+        let mut peer_connections = Vec::new();
+        for _ in 0..2 * COUNT {
+            let mut bytes = [0; crate::transport::rdma::DESCRIPTOR_SIZE];
+            stream.read_exact(&mut bytes).unwrap();
+            peer_connections.push(Descriptor::decode_connection(&bytes).unwrap());
+        }
+        for (slot, endpoint) in sources.iter_mut().enumerate() {
+            endpoint.connect(&peer_connections[COUNT + slot]).unwrap();
+        }
+        for (slot, endpoint) in requesters.iter_mut().enumerate() {
+            endpoint.connect(&peer_connections[slot]).unwrap();
+        }
+        std::fs::write(
+            env::var("ORBITTE_SHARED_MAPS").unwrap(),
+            std::fs::read("/proc/self/maps").unwrap(),
+        )
+        .unwrap();
+        let mut grants = stream.try_clone().unwrap();
+        // Each process is simultaneously a source and a requester on one runtime.
+        // RQ capacity one forces incremental grants while SQ data keeps progressing.
+        thread::scope(|scope| {
+            let source_thread = scope.spawn(move || {
+                thread::scope(|sources_scope| {
+                    let mut handlers = Vec::new();
+                    for (slot, mut endpoint) in sources.into_iter().enumerate() {
+                        endpoint.bind_window().unwrap();
+                        endpoint
+                            .post_receive(&duplex_binding(seed, source, slot, operation))
+                            .unwrap();
+                        grants
+                            .write_all(&endpoint.grant().unwrap().encode())
+                            .unwrap();
+                        handlers.push(sources_scope.spawn(move || {
+                            endpoint.receive_completion().unwrap();
+                            endpoint.close().unwrap();
+                        }));
+                    }
+                    for handler in handlers {
+                        handler.join().unwrap();
+                    }
+                });
+            });
+            let mut transfers = Vec::new();
+            for (slot, mut endpoint) in requesters.into_iter().enumerate() {
+                let mut bytes = [0; crate::transport::rdma::DESCRIPTOR_SIZE];
+                stream.read_exact(&mut bytes).unwrap();
+                let remote = Descriptor::decode(&bytes).unwrap();
+                assert_eq!(
+                    remote.connection_bytes(),
+                    peer_connections[slot].connection_bytes()
+                );
+                transfers.push(scope.spawn(move || {
+                    endpoint
+                        .transfer(&remote, operation, Instant::now() + TIMEOUT)
+                        .unwrap();
+                    endpoint
+                        .send_completion(
+                            &duplex_binding(seed, !source, slot, operation),
+                            remote.rkey,
+                        )
+                        .unwrap();
+                    endpoint.close().unwrap();
+                }));
+            }
+            for transfer in transfers {
+                transfer.join().unwrap();
+            }
+            source_thread.join().unwrap();
+        });
+        // Both peers finish their source and requester owners before checking backing.
+        stream.write_all(&[7]).unwrap();
+        token(&mut stream, 7);
+        for slot in 0..COUNT {
+            let target_bank = if operation == TransferOp::Read {
+                bank
+            } else {
+                0
+            };
+            let content_seed = if operation == TransferOp::Read {
+                peer_seed
+            } else {
+                peer_seed ^ 0xaabb_ccdd
+            };
+            for index in 0..payload {
+                expected[target_bank + slot * stride + GUARD + index] =
+                    value(content_seed, slot * stride + index);
+            }
+        }
+        verify(&memory, &expected);
+    }
+    let idle = runtime.stats().unwrap();
+    let count = (2 * COUNT) as u64;
+    assert_eq!(
+        (
+            idle.opened_cqs,
+            idle.active_cqs,
+            idle.progress_workers,
+            idle.async_event_workers
+        ),
+        (2, 2, 1, 1)
+    );
+    assert_eq!(
+        (
+            idle.completed_window_binds,
+            idle.completed_window_invalidations,
+            idle.completed_sends,
+            idle.completed_receives,
+            idle.receive_post_calls
+        ),
+        (count, count, count, count, count)
+    );
+    assert!(idle.peak_work_requests > 0 && idle.peak_work_requests <= capacity);
+    assert!(idle.peak_receive_work_requests > 0 && idle.peak_receive_work_requests <= capacity);
+    assert_eq!(
+        (idle.completed_read_bytes, idle.completed_write_bytes),
+        ((COUNT * payload) as u64, (COUNT * payload) as u64)
+    );
+    assert_eq!(
+        (
+            idle.active_endpoints,
+            idle.active_grants,
+            idle.active_windows,
+            idle.work_requests,
+            idle.completion_errors,
+            idle.progress_failures
+        ),
+        (0, 0, 0, 0, 0, 0)
+    );
+    assert_eq!(
+        (
+            idle.persistent_mrs,
+            idle.opened_persistent_mrs,
+            idle.reused_persistent_mrs
+        ),
+        (1, 1, count - 1)
+    );
+    receive_stats(&idle);
+    registry.unregister(&memory).unwrap();
+    runtime.registrations.retire(&memory).unwrap();
+    drop(memory);
+    drop(backing);
+    runtime.close(Instant::now() + TIMEOUT).unwrap();
+    let closed = runtime.stats().unwrap();
+    receive_stats(&closed);
+    assert_eq!(
+        (
+            closed.active_devices,
+            closed.active_cqs,
+            closed.progress_workers,
+            closed.async_event_workers,
+            closed.active_endpoints,
+            closed.active_grants,
+            closed.persistent_mrs,
+            closed.window_key_indices
+        ),
+        (0, 0, 0, 0, 0, 0, 0, 0)
+    );
+    assert_eq!(
+        (
+            closed.retained_devices,
+            closed.retained_cqs,
+            closed.retained_endpoints,
+            closed.retained_grants,
+            closed.retained_windows,
+            closed.retained_work_requests
+        ),
+        (0, 0, 0, 0, 0, 0)
+    );
+    println!(
+        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        idle.active_endpoints,
+        idle.active_grants,
+        closed.active_endpoints,
+        closed.active_grants,
+        closed.retained_endpoints,
+        closed.retained_grants
+    );
+    println!(
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        idle.window_key_indices,
+        closed.window_key_indices,
+        closed.burned_window_keys,
+        closed.window_key_exhaustions
+    );
+    println!(
+        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+    );
+    println!(
+        "{{\"role\":\"{role}\",\"status\":\"passed\",\"duplex\":true,\"qps_per_phase\":{},\"cq_capacity\":{capacity},\"sq_window\":1,\"peak_work_requests\":{},\"peak_receive_work_requests\":{},\"peak_pending_qps\":{},\"opened_cqs\":{},\"completed_read_bytes\":{},\"completed_write_bytes\":{},\"completed_sends\":{},\"completed_receives\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
+        2 * COUNT,
+        idle.peak_work_requests,
+        idle.peak_receive_work_requests,
+        idle.peak_pending_qps,
+        idle.opened_cqs,
+        idle.completed_read_bytes,
+        idle.completed_write_bytes,
+        idle.completed_sends,
+        idle.completed_receives
     );
 }

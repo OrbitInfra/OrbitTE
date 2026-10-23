@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use super::{
@@ -122,6 +123,31 @@ impl RdmaContext {
                 &resources.handles,
                 address.as_ptr().cast(),
                 memory.len(),
+            )
+        })
+    }
+
+    pub(super) fn register_message(
+        &self,
+        handles: &mut sys::MemoryHandles,
+        address: NonNull<u8>,
+        length: usize,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        self.asynchronous.check()?;
+        // The grant record owns the stable control bytes through native teardown.
+        check("ibv_reg_mr completion message", unsafe {
+            (self.verbs.register_local)(
+                handles,
+                &resources.handles,
+                address.as_ptr().cast(),
+                length,
             )
         })
     }

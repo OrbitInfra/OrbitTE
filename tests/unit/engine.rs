@@ -336,7 +336,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
     ));
     let stats = requester.stats().unwrap();
     let rdma = stats.rdma.unwrap();
-    assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 1));
+    assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 2));
     assert_eq!(stats.inflight_batches, 1);
     assert!(requester.close(Duration::from_millis(10)).is_err());
     source.close(Duration::from_secs(2)).unwrap();
@@ -795,7 +795,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
             stats.completed_read_bytes,
             stats.work_requests
         ),
-        (2, 4, 8, 0)
+        (3, 4, 8, 0)
     );
     assert_eq!(fixture.drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

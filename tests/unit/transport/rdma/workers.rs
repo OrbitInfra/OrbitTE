@@ -81,7 +81,7 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
             let stats = runtime.stats().unwrap();
             assert_eq!(
                 (stats.opened_cqs, stats.active_cqs, stats.progress_workers),
-                (1, 1, 1)
+                (2, 2, 1)
             );
             assert_eq!(
                 (stats.peak_work_requests, stats.peak_pending_qps),
@@ -133,7 +133,8 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
         connection: ConnectionResources {
             device: Arc::clone(&device),
             handles: sys::ConnectionHandles {
-                cq: progress.handle().unwrap(),
+                cq: progress.handle(false).unwrap(),
+                receive_cq: progress.handle(true).unwrap(),
                 ..Default::default()
             },
             incarnation: None,
@@ -162,6 +163,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             connection: None,
             window_used: false,
             window_bound: false,
+            message: None,
         },
     });
     RdmaEndpoint {
@@ -249,7 +251,7 @@ fn lane_abort_and_retention_fence_registered_but_unopened_qps() {
         let stats = runtime.stats().unwrap();
         assert_eq!(
             (stats.retained_endpoints, stats.retained_cqs),
-            if retained { (2, 1) } else { (0, 0) }
+            if retained { (2, 2) } else { (0, 0) }
         );
         assert_eq!(stats.progress_failures, 1);
         assert!(runtime.staging_endpoint(8, 0).is_err());
@@ -324,7 +326,7 @@ fn a_retained_record_always_returns_unquiesced_after_a_logical_transfer_failure(
         })
     ));
     let stats = runtime.stats().unwrap();
-    assert_eq!((stats.retained_endpoints, stats.retained_cqs), (1, 1));
+    assert_eq!((stats.retained_endpoints, stats.retained_cqs), (1, 2));
     assert!(stats.retained_bytes > 0);
 }
 
@@ -398,7 +400,11 @@ fn cq_cleanup_failure_retains_only_still_owned_resources_and_never_retries() {
             ),
             (0, 0, 0)
         );
-        assert_eq!((stats.active_cqs, stats.retained_cqs), (1, 1));
+        let remaining = if mode == "close2" { 2 } else { 1 };
+        assert_eq!(
+            (stats.active_cqs, stats.retained_cqs),
+            (remaining, remaining)
+        );
         drop(runtime);
         let events = events.lock().unwrap();
         assert_eq!(events.iter().filter(|e| **e == "destroy_cq").count(), 1);
@@ -461,7 +467,7 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
         wait_blocked(&pause);
         let stats = runtime.stats().unwrap();
         assert_eq!(stats.work_requests, 1);
-        assert_eq!(stats.active_cqs, 1);
+        assert_eq!(stats.active_cqs, 2);
         assert!(memory.read(0, &mut [0; 1]).is_err());
         assert!(memory.write(8, &[9]).is_err());
         memory.write(4, &[7; 4]).unwrap();
@@ -715,6 +721,7 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
     let mut first = transport.staging_endpoint(8, 0).unwrap();
     let progress = Arc::clone(&first.progress);
     let record = Arc::clone(&first.record);
+    record.send_namespace.store(1, Ordering::Release);
     let pause = pause(&transport);
     let closer = thread::spawn(move || {
         let result = first.close();
@@ -731,7 +738,7 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
                 .expect("native close must not hold the endpoint-store lock");
             assert!(record.require_live().is_err());
             assert!(Arc::ptr_eq(
-                &control.endpoints.work_owner(record.tag).unwrap(),
+                &control.endpoints.work_owner(1, false).unwrap(),
                 &record
             ));
             assert_eq!(control.endpoints.len(), 1);
@@ -756,4 +763,349 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
     second.close().unwrap();
     drop((first, second));
     transport.close(deadline()).unwrap();
+}
+
+#[test]
+fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output_handoff() {
+    let runtime = configured("ok", 1);
+    let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+    let mut source = runtime.staging_endpoint(8, 2).unwrap();
+    source.connect(&source.descriptor()).unwrap();
+    source.bind_window().unwrap();
+    let bind_namespace = source.record.send_namespace.load(Ordering::Acquire);
+    source.post_receive(&binding).unwrap();
+    let receive_namespace = source.record.receive_namespace.load(Ordering::Acquire);
+    assert!(receive_namespace > bind_namespace);
+    let posted = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            posted.work_requests,
+            posted.receive_work_requests,
+            posted.message_bytes
+        ),
+        (0, 1, COMPLETION_MESSAGE_SIZE)
+    );
+    assert!(
+        !source
+            .record
+            .lock()
+            .unwrap()
+            .receive
+            .as_ref()
+            .unwrap()
+            .completed
+    );
+
+    let mut requester = runtime.staging_endpoint(8, 0).unwrap();
+    requester.connect(&requester.descriptor()).unwrap();
+    let mut namespaces = vec![bind_namespace, receive_namespace];
+    for operation in [TransferOp::Read, TransferOp::Write] {
+        requester
+            .transfer(&requester.descriptor(), operation, deadline())
+            .unwrap();
+        namespaces.push(requester.record.send_namespace.load(Ordering::Acquire));
+    }
+    requester
+        .send_completion(&binding, requester.descriptor().rkey)
+        .unwrap();
+    namespaces.push(requester.record.send_namespace.load(Ordering::Acquire));
+    assert!(namespaces.windows(2).all(|pair| pair[0] < pair[1]));
+    let calls = runtime.stats().unwrap().post_calls;
+    assert!(
+        requester
+            .transfer(&requester.descriptor(), TransferOp::Read, deadline())
+            .is_err()
+    );
+    assert!(
+        requester
+            .send_completion(&binding, requester.descriptor().rkey)
+            .is_err()
+    );
+    assert_eq!(runtime.stats().unwrap().post_calls, calls);
+    assert_eq!(
+        runtime.stats().unwrap().receive_work_requests,
+        1,
+        "SQ CQEs cannot pay RQ debt"
+    );
+    requester.close().unwrap();
+    assert_eq!(
+        runtime.stats().unwrap().message_bytes,
+        COMPLETION_MESSAGE_SIZE
+    );
+
+    crate::transport::rdma::tests::deliver_completion(&source, &binding, |_| {}, false);
+    source.receive_completion().unwrap();
+    let received = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            received.completed_sends,
+            received.completed_receives,
+            received.receive_work_requests
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!((received.active_cqs, received.progress_workers), (2, 1));
+    source.close().unwrap();
+    let handed_off = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            handed_off.message_bytes,
+            handed_off.active_message_mrs,
+            handed_off.active_endpoints,
+            handed_off.active_grants
+        ),
+        (0, 0, 0, 2)
+    );
+    drop(source);
+    drop(requester);
+    runtime.close(deadline()).unwrap();
+}
+
+#[test]
+fn wr_namespace_exhaustion_never_wraps_or_reaches_native_post() {
+    for exhausted in [0, u64::MAX / super::super::WR_ID_STRIDE] {
+        let runtime = configured("ok", 1);
+        let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        endpoint
+            .progress
+            .shared
+            .next_work_namespace
+            .store(exhausted, Ordering::Release);
+        assert!(matches!(
+            endpoint.transfer(&endpoint.descriptor(), TransferOp::Read, deadline()),
+            Err(Error::ResourceExhausted)
+        ));
+        assert_eq!(endpoint.record.send_namespace.load(Ordering::Acquire), 0);
+        assert_eq!(
+            endpoint
+                .progress
+                .shared
+                .next_work_namespace
+                .load(Ordering::Acquire),
+            exhausted
+        );
+        assert_eq!(runtime.stats().unwrap().post_calls, 0);
+        endpoint.close().unwrap();
+        drop(endpoint);
+        runtime.close(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn received_binding_wrong_cq_qp_and_old_wr_cannot_confirm_a_source_grant() {
+    for case in ["binding", "old_wr", "qpn", "wrong_cq", "opcode"] {
+        let runtime = configured("ok", 1);
+        let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        let mut endpoint = runtime.staging_endpoint(8, 2).unwrap();
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        endpoint.bind_window().unwrap();
+        endpoint.post_receive(&binding).unwrap();
+        let mut bytes = binding;
+        if case == "binding" {
+            bytes[COMPLETION_MESSAGE_SIZE - 1] ^= 1;
+        }
+        crate::transport::rdma::tests::deliver_completion(
+            &endpoint,
+            &bytes,
+            |wc| match case {
+                "old_wr" => wc.id -= super::super::WR_ID_STRIDE,
+                "qpn" => wc.qpn += 1,
+                "opcode" => wc.opcode = 0,
+                _ => {}
+            },
+            case == "wrong_cq",
+        );
+        assert!(
+            matches!(endpoint.receive_completion(), Err(Error::Protocol(_))),
+            "{case}"
+        );
+        let _ = endpoint.close();
+        drop(endpoint);
+        let _ = runtime.close(deadline());
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.completed_receives,
+                stats.receive_work_requests,
+                stats.retained_receive_work_requests,
+                stats.message_bytes,
+                stats.active_message_mrs
+            ),
+            (0, 0, 0, 0, 0),
+            "{case}"
+        );
+        assert_eq!(stats.progress_failures, 1, "{case}");
+    }
+}
+
+#[test]
+fn receive_and_message_failures_retain_exact_native_owners_without_drop_retries() {
+    for mode in [
+        "receive_post_fail",
+        "receive_unknown_close0",
+        "receive_unknown_receive_cq_close",
+        "message_register_fail_close1",
+        "message_close",
+        "send_completion_unknown_close0",
+    ] {
+        let runtime = configured(mode, 1);
+        let sending = mode.starts_with("send_completion");
+        let mut endpoint = runtime
+            .staging_endpoint(8, if sending { 0 } else { 2 })
+            .unwrap();
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        let posted = if sending {
+            endpoint
+                .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                .unwrap();
+            endpoint.send_completion(&binding, endpoint.descriptor().rkey)
+        } else {
+            endpoint.bind_window().unwrap();
+            endpoint.post_receive(&binding)
+        };
+        if mode == "message_close" {
+            posted.unwrap();
+            crate::transport::rdma::tests::deliver_completion(&endpoint, &binding, |_| {}, false);
+            endpoint.receive_completion().unwrap();
+        } else {
+            assert!(
+                matches!(
+                    posted,
+                    Err(Error::Backend { .. } | Error::Unquiesced { .. })
+                ),
+                "{mode}: {posted:?}"
+            );
+        }
+        let events = events(&runtime);
+        let close = endpoint.close();
+        let unquiesced = mode != "receive_post_fail";
+        assert_eq!(
+            matches!(close, Err(Error::Unquiesced { .. })),
+            unquiesced,
+            "{mode}: {close:?}"
+        );
+        drop(endpoint);
+        let _ = runtime.close(deadline());
+        let stats = runtime.stats().unwrap();
+        if unquiesced {
+            assert_eq!(
+                (
+                    stats.message_bytes,
+                    stats.retained_message_bytes,
+                    stats.active_message_mrs,
+                    stats.retained_message_mrs,
+                    stats.retained_grants
+                ),
+                (COMPLETION_MESSAGE_SIZE, COMPLETION_MESSAGE_SIZE, 1, 1, 1),
+                "{mode}"
+            );
+        } else {
+            assert_eq!(
+                (
+                    stats.message_bytes,
+                    stats.active_message_mrs,
+                    stats.retained_grants
+                ),
+                (0, 0, 0)
+            );
+        }
+        if mode.contains("receive_unknown") {
+            assert_eq!(
+                (
+                    stats.receive_work_requests,
+                    stats.retained_receive_work_requests
+                ),
+                (1, 1)
+            );
+            assert_eq!(
+                (stats.active_cqs, stats.retained_cqs),
+                if mode.contains("receive_cq_close") {
+                    (1, 1)
+                } else {
+                    (2, 2)
+                }
+            );
+            assert_eq!(
+                stats.retained_endpoints,
+                usize::from(mode.ends_with("close0"))
+            );
+        } else {
+            assert_eq!(
+                (
+                    stats.receive_work_requests,
+                    stats.retained_receive_work_requests
+                ),
+                (0, 0)
+            );
+        }
+        if sending {
+            assert_eq!(
+                (
+                    stats.work_requests,
+                    stats.retained_work_requests,
+                    stats.active_cqs,
+                    stats.retained_cqs
+                ),
+                (1, 1, 2, 2)
+            );
+        }
+        let before = events.lock().unwrap().clone();
+        drop(runtime);
+        assert_eq!(
+            *events.lock().unwrap(),
+            before,
+            "{mode}: retained owners must not retry native destruction from Drop"
+        );
+    }
+}
+
+#[test]
+fn second_cq_partial_construction_cleans_only_proven_native_owners() {
+    for mode in ["receive_cq_create", "receive_cq_create_close2"] {
+        let runtime = configured(mode, 1);
+        let result = runtime.staging_endpoint(8, 0);
+        let stats = runtime.stats().unwrap();
+        if mode.ends_with("close2") {
+            assert!(matches!(result, Err(Error::Unquiesced { .. })));
+            assert_eq!(
+                (
+                    stats.active_cqs,
+                    stats.retained_cqs,
+                    stats.active_devices,
+                    stats.retained_devices
+                ),
+                (2, 2, 1, 0)
+            );
+            let log = events(&runtime);
+            assert!(matches!(
+                runtime.close(deadline()),
+                Err(Error::Unquiesced { .. })
+            ));
+            drop(runtime);
+            assert!(!log.lock().unwrap().contains(&"dealloc_pd"));
+        } else {
+            assert!(matches!(result, Err(Error::Backend { .. })));
+            assert_eq!(
+                (
+                    stats.active_cqs,
+                    stats.retained_cqs,
+                    stats.active_devices,
+                    stats.retained_devices
+                ),
+                (0, 0, 1, 0)
+            );
+            runtime.close(deadline()).unwrap();
+            assert_eq!(runtime.stats().unwrap().active_devices, 0);
+        }
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.active_grants,
+                stats.message_bytes
+            ),
+            (0, 0, 0)
+        );
+    }
 }

@@ -8,7 +8,9 @@ pub(super) enum Operation {
     Read,
     Write,
     Bind,
+    #[cfg(test)]
     Invalidate,
+    Send,
 }
 impl From<TransferOp> for Operation {
     fn from(value: TransferOp) -> Self {
@@ -183,7 +185,9 @@ impl SendQueue {
             Operation::Write => 1,
             Operation::Read => 2,
             Operation::Bind => 5,
+            #[cfg(test)]
             Operation::Invalidate => 6,
+            Operation::Send => 0,
         };
         if completion.status == 0
             && (completion.opcode != expected_opcode
@@ -212,10 +216,16 @@ impl SendQueue {
             usage.completed_write_bytes += u64::from(request.length);
         } else if operation == Operation::Bind {
             usage.completed_window_binds += 1;
+        } else if operation == Operation::Send {
+            usage.completed_sends += 1;
         } else {
             usage.completed_window_invalidations += 1;
         }
         Ok(())
+    }
+
+    pub(super) fn namespace(&self) -> u64 {
+        self.first_id / super::WR_ID_STRIDE
     }
 
     pub(super) fn pending(&self) -> bool {

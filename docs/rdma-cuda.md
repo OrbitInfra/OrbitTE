@@ -100,8 +100,8 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
-engines do not share PDs. P4.6 gives that context one shared CQ and one
-post/poll worker. Every request retains its own QP, exact direct range lease or
+engines do not share PDs. P4.6 introduced shared progress. P4.7d gives that context separate shared SQ
+and RQ CQs, polled by one post/poll worker. Every request retains its own QP, exact direct range lease or
 stable staging. P4.7a source parent MRs and MWs remain per request; parent
 MRs have LOCAL_WRITE|MW_BIND only. One-use Type-2B MWs grant exact READ or WRITE
 access after a successful BIND CQE. QPs and PSNs remain per request. P4.5 requester local-only host MRs
@@ -177,22 +177,28 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v7 exchanges QP-only descriptors with zero memory address/key, plus
+Protocol v8 exchanges QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
-Both RC QPs connect; the source posts BIND_MW through the shared worker and consumes
-its exact successful CQE before publishing the MW grant. The requester checks
-the complete binding and that the grant preserves that QP/PSN/GID, then posts
-bounded signaled slices. After all required CQ identities,
-opcodes/statuses and READ byte counts pass, it destroys
-its QP, returns the local cached-MR borrow (or destroys its private MR), and
-releases its direct range lease before sending DONE. The shared CQ continues
-serving other request QPs. The source
-then posts LOCAL_INV and consumes its exact successful CQE. It destroys QP,
-MW and parent MR, releases its direct lease or commits WRITE staging, and drops
-the source endpoint/output charge before its final ACK.
-That ACK permits the next request to reuse the native endpoint/byte quota.
-Requester READ staging copies back after ACK.
+Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
+SQ CQE. It then registers a distinct local-only 140-byte receive buffer and
+waits for native RQ acceptance before publishing the MW grant. GRANT does not
+wait for a receive CQE, which requires the requester to have received the grant.
+The requester validates the full binding and QP/PSN/GID, then submits bounded
+signaled READ/WRITE slices. After all payload CQEs pass, it posts a signaled,
+fenced SEND_WITH_INV on that same QP using a distinct local-only message MR.
+The source's actual RQ CQE must match its own CQ, WR namespace, QPN, RECV opcode,
+140-byte length, exactly WITH_INV, host-order invalidated rkey and full binding.
+A requester SEND CQE or TCP DONE alone cannot prove source completion.
+
+The requester still physically destroys its QP and releases its MR borrow/loan
+before bound TCP DONE. The source requires both DONE and the validated RQ
+receipt, then physically destroys its QP, MW and parent MR. Only afterward may
+it release its loan or commit WRITE staging, drop its output charge and send
+bound ACK. READ staging copies back only after ACK. Both QP barriers remain;
+this stage does not qualify release of incoming-DMA owners without QP close.
+The public success path uses remote invalidation instead of LOCAL_INV. Historical
+LOCAL_INV and parent-key native probes remain separate regression controls.
 
 P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
 `endpoint.cpp::submitSlices` and `workers.cpp` completion ownership. The base
@@ -204,14 +210,20 @@ a window's CQEs have arrived. Each request keeps an exclusive QP window within
 the shared CQ.
 
 `max_send_wr` defaults to 16 and accepts 1..64 per QP. `max_cqes` defaults to
-1024 and accepts 1..4096 across all attached request QPs; `max_endpoints` accepts
+1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
+attached request QPs; `max_endpoints` accepts
 1..4096. The provider must return the requested CQ and QP capacities. The worker
 reserves the minimum of remaining slices, QP window and currently free CQ
 slots before dispatch. A full CQ backpressures other requests without losing
 owners; completing one window allows the next. Round-robin dispatch avoids a
-fixed first-QP preference. WR IDs occupy a monotonically burned block of 64 per
-request within the CQ lifetime; exhaustion refuses admission before wrapping.
-Completion routing validates both the global WR identity and native QP number.
+fixed first-QP preference. Every data submission, BIND, SEND and receive burns a fresh 128-ID namespace
+within the worker/actual-CQ lifetime, including successive submissions on the
+same physical QP. Zero is unassigned; checked allocation rejects exhaustion
+before native posting or namespace publication. Slot identities are bounded
+within that namespace. Completion routing validates the actual SQ/RQ CQ,
+namespace, expected WR and native QPN. A prefix from an earlier operation cannot
+pay current queue debt. These namespaces cannot be reset while live QPs remain;
+worker/CQ replacement with live connections is not implemented.
 RDMA READ credit stays at one; SQ/CQ capacity is not a throughput claim. Window
 metadata remains bounded to at most 64 slices. Port/rail discovery, connected
 endpoint reuse, event progress and multirail remain open.
@@ -225,8 +237,8 @@ length, CQ errors and deadline expiry also stop progress. A logical failure
 clears no unproven native debt. An ambiguous/partially accepted post, invalid
 completion, CQ error or deadline with pending WRs poisons the entire shared
 lane. New posts and registrations stop. Every attached record is fenced under
-the same mutex used to create/connect a QP, all QPs are destroyed, then the CQ
-is destroyed before unresolved WR charges are cleared. Only then are remaining
+the same mutex used to create/connect a QP, all QPs are destroyed, then both CQs
+are destroyed before either SQ or RQ debt is cleared. Only then are remaining
 MRs/borrows and direct loans released. Failed teardown retains actual queue
 metadata, allocation, registration and charges. TENT's pre-destroy cancellation of quota is not a release proof here.
 
@@ -242,7 +254,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v7 explicitly rejects v1-v6; it is OrbitTE-only. A WRITE attempt is marked
+Wire v8 explicitly rejects v1-v7; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -283,7 +295,7 @@ both before waiting, and gives their accepted operations one shared drain
 deadline. Already accepted work can still create its endpoints during this drain;
 closing admission does not cancel it. Once both owners are drained, the runtime
 permanently closes device admission, waits for actual request owners to leave,
-drains cached local MRs, closes the shared CQ and joins its progress worker,
+drains cached local MRs, closes both shared CQs and joins its progress worker,
 then explicitly destroys PD -> context. Waiting for another MR creator or
 closer uses the same absolute deadline. A request's close wait also uses its
 original absolute deadline; expiry before a physical receipt returns
@@ -890,21 +902,10 @@ peer's physical QP close barrier. The local MR cache remains requester-only;
 `Workers` still uses one polling worker/shared CQ. Physical cleanup/replay
 faults, source persistent MRs, connected reuse and full P4 remain open.
 
-A candidate persistent-connection drain protocol is a same-requester-SQ fenced
-SEND_WITH_INV followed by the source's actual successful RQ CQE, with exact
-invalidated rkey, byte length and full grant binding checks. The selected
-[rdma-core v55 send manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_post_send.3)
-and [CQ manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_poll_cq.3)
-describe these operations and fields. The
-[RDMA maintainer's ordering discussion](https://lists.infradead.org/pipermail/linux-nvme/2017-November/013829.html)
-explains why execution ordering of READ and SEND/invalidate needs a fence.
-This is a candidate contract, not an implemented or proven incoming-DMA drain:
-RQ buffer/MR ownership, receive/CQ admission (including CQ capacity one),
-nonrepeating per-grant WR identities, stale/partial/failed receipt handling and
-the complete operation-level ordering proof still need implementation and
-qualification. A requester SEND CQE or TCP DONE alone cannot replace the proposed
-source receive receipt. This stage continues to release source bytes only after
-actual physical QP close.
+P4.7c proposed a source receive receipt as a prerequisite for connected reuse.
+[P4.7d below](#source-receive-completion-and-independent-wr-identities) implements
+that prerequisite while retaining both physical QP-close barriers. Its own
+qualification must not be inferred from the historical P4.7c evidence.
 
 ### Connection/grant retirement qualification
 
@@ -948,6 +949,61 @@ This accepts the declared healthy and key-rejection profile with both actual
 QP-close barriers. It does not qualify failed physical teardown, arbitrary
 device/CQ faults, key exhaustion/replay, incoming DMA drain without QP close,
 connected QP reuse, GDR, multirail, performance, OrbitKV or full P4.
+
+### Source receive completion and independent WR identities
+
+P4.7d is a candidate implementation; exact-source gates and independent native
+qualification are pending. This substage keeps per-request physical QPs. It
+does not publish idle connected endpoints or claim P4 completion.
+
+The frozen TENT context/buffer/endpoint/store/worker/slice ownership remains the
+reference. TENT `RdmaCQ`/`Workers` own CQ progress; `RdmaEndPoint::submitSlices`
+and native `Slice*` WR identities associate completions with their slices.
+OrbitTE `Workers` now polls two actual `RdmaCq` owners (SQ and RQ) fairly in one
+thread, including when only RQ debt remains. `ReceiveQueue` owns a single
+posted receive's exact identity, expected binding, key and deadline. Checked
+per-submission WR namespaces replace resettable/pointer identities. These are
+Rust lifetime/authorization adaptations; frozen TENT does not implement this
+OrbitTE grant receipt or wire format.
+
+`GrantResources` owns `MessageBuffer`: separate stable bytes and a local-only
+MR. No Rust slice accesses posted receive memory before its validated CQE.
+Requester SEND bytes cannot alias a mutable READ destination. Checked control
+storage has its own `max_endpoints * 140` byte limit, separate from payload
+staging/direct quotas; allocation charges precede native registration. Partial
+registration and uncertain WR posts retain that actual owner. After physical
+grant cleanup the message MR and bytes are freed immediately, before payload
+output handoff, so retained completed output cannot expand this control budget.
+
+`max_cqes` bounds SQ and RQ reservations independently. A capacity-one receive
+cannot block the SQ needed to produce the peer's receipt. Every receive uses
+its own WR namespace; CQ source, exact fields and binding checks precede
+logical success. Wrong identities never clear another operation's debt. An
+error CQE uses only WR ID, QPN, status and vendor error; unused success fields
+are ignored. Only native accepted/post-uncertain ownership or exact matching
+CQEs affect queue charges. A pending/unknown receive or SEND uses whole-lane
+abort: all QPs, then both CQs, then debt quiescence, then grant memory. Failed
+second-CQ destruction keeps its remaining CQ plus both original unresolved
+debts and memory owners; successful first-CQ destruction does not invent drain.
+
+`receive_work_requests`, `retained_receive_work_requests` and their peak track
+RQ debt separately. `receive_post_calls`, `completed_receives` and
+`completed_sends` count native dispatch/completion receipts. `active_message_mrs`,
+`message_bytes` and their retained counters expose control ownership. SQ
+`posted_work_requests`/`post_calls` include SEND; payload read/write byte
+counters exclude completion messages. Remote source invalidation is counted
+only after the exact successful receive receipt and binding validation.
+
+The [rdma-core v55 SEND manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_post_send.3)
+defines SEND_WITH_INV, signaled and fence flags. The
+[CQ manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_poll_cq.3)
+defines receive fields and error-valid metadata. The
+[RDMA maintainer's ordering discussion](https://lists.infradead.org/pipermail/linux-nvme/2017-November/013829.html)
+explains why READ/SEND execution requires care. This stage waits for all payload
+CQEs before fenced SEND. ABI flag controls and healthy native bytes cannot
+independently prove adversarial provider reorderings or incoming DMA drain
+without QP close. That complete operation-level proof, persistent source MRs,
+connected endpoint reuse, arbitrary native faults, GDR and full P4 remain open.
 
 ### Run the native gate
 

@@ -42,15 +42,14 @@ A context-owned async event consumer stays alive through native QP/CQ teardown;
 lost consumption retains actual owners and loans.
 P4.7b implements a PD-lifetime full-rkey burn ledger: MW destruction cannot
 reset key history, and exhausted tags or historical-index capacity refuse new
-authority. OrbitTE wire v7 binds both process/PD/connection identities, an
+authority. OrbitTE wire v8 retains bindings for both process/PD/connection identities, an
 independent grant generation and the exact request through bootstrap, grant,
 DONE and ACK. Independent source/CPU review and two independently built
 24-case native runs accept this scoped prerequisite stage. Connected QPs and
 grants remain per request while connection/grant ownership and physical drain
 are completed.
-P4.6 shares one bounded CQ and
-one post/poll worker per context, with globally unique WR identities and
-separate QP/CQ quotas. Whole-engine `close(timeout)`
+One post/poll worker per context now polls separate bounded SQ and RQ CQs
+(P4.7d), with nonrepeating WR namespaces and separate queue credits. Whole-engine `close(timeout)`
 fences both directions, drains accepted work and explicitly destroys shared device resources; failed
 teardown stays retained. Independent review accepts its CPU ownership gates and
 a scoped two-host DRAM/A-H20 GPU-staging native profile. Consumer dependency and
@@ -98,6 +97,13 @@ retains terminal endpoints through detached native retirement, and keeps both
 physical QP barriers. Its source/CPU and declared native regression profiles
 are independently accepted; connected QP reuse is still open. See the
 [architecture correspondence and drain contract](docs/rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
+
+P4.7d adds a private receive buffer/MR and a source RQ completion protocol.
+After payload CQ drain, the requester sends a same-QP fenced SEND_WITH_INV;
+the source validates its actual receive CQE, invalidated key and full grant
+binding before confirming completion. SQ and RQ credits are independent, even
+at capacity one. Both physical QP-close barriers remain. Qualification is
+pending for this candidate; connected reuse follows its accepted drain design.
 
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault

@@ -32,7 +32,14 @@ impl EndpointStore {
     }
 
     pub(super) fn publish(&mut self, endpoint: Arc<Record>) -> Result<()> {
-        if self.len() >= self.capacity || endpoint.terminal.load(Ordering::Acquire) {
+        if self.len() >= self.capacity
+            || endpoint.terminal.load(Ordering::Acquire)
+            || self
+                .live
+                .iter()
+                .chain(&self.retiring)
+                .any(|entry| entry.tag == endpoint.tag)
+        {
             return Err(Error::ResourceExhausted);
         }
         self.live.push(endpoint);
@@ -61,11 +68,20 @@ impl EndpointStore {
         self.retiring.retain(|entry| !Arc::ptr_eq(entry, endpoint));
     }
 
-    pub(super) fn work_owner(&self, tag: u64) -> Option<Arc<Record>> {
+    pub(super) fn work_owner(&self, tag: u64, receive: bool) -> Option<Arc<Record>> {
         self.live
             .iter()
             .chain(&self.retiring)
-            .find(|entry| entry.tag == tag)
+            .find(|entry| {
+                tag != 0
+                    && (if receive {
+                        &entry.receive_namespace
+                    } else {
+                        &entry.send_namespace
+                    })
+                    .load(Ordering::Acquire)
+                        == tag
+            })
             .cloned()
     }
 

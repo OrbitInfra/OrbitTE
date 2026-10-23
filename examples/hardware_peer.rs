@@ -129,6 +129,25 @@ fn finish(
     } else {
         0
     };
+    let expected_sends = if role == "requester" && transport == Transport::Rdma {
+        6
+    } else {
+        0
+    };
+    if idle.completed_sends != expected_sends
+        || idle.completed_receives != windows
+        || idle.receive_post_calls != windows
+        || idle.receive_work_requests != 0
+        || idle.retained_receive_work_requests != 0
+        || idle.active_message_mrs != 0
+        || idle.retained_message_mrs != 0
+        || idle.message_bytes != 0
+        || idle.retained_message_bytes != 0
+    {
+        return Err(Error::Internal(
+            "source receive/message owners did not drain",
+        ));
+    }
     if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != 0 {
         return Err(Error::Internal("connection/grant owners did not drain"));
     }
@@ -144,8 +163,8 @@ fn finish(
     {
         return Err(Error::Internal("source MW lifecycle counters differ"));
     }
-    if idle.active_cqs != usize::from(transport == Transport::Rdma)
-        || idle.opened_cqs != u64::from(transport == Transport::Rdma)
+    if idle.active_cqs != 2 * usize::from(transport == Transport::Rdma)
+        || idle.opened_cqs != 2 * u64::from(transport == Transport::Rdma)
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
         || idle.async_event_workers != usize::from(transport == Transport::Rdma)
         || idle.progress_failures != 0
@@ -199,6 +218,28 @@ fn finish(
     {
         return Err(Error::Internal("resource counters did not drain"));
     }
+    if rdma.receive_work_requests != 0
+        || rdma.retained_receive_work_requests != 0
+        || rdma.active_message_mrs != 0
+        || rdma.retained_message_mrs != 0
+        || rdma.message_bytes != 0
+        || rdma.retained_message_bytes != 0
+    {
+        return Err(Error::Internal("receive/message resources were retained"));
+    }
+    println!(
+        "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
+        rdma.completed_sends,
+        rdma.completed_receives,
+        rdma.receive_post_calls,
+        rdma.peak_receive_work_requests,
+        rdma.receive_work_requests,
+        rdma.retained_receive_work_requests,
+        rdma.active_message_mrs,
+        rdma.retained_message_mrs,
+        rdma.message_bytes,
+        rdma.retained_message_bytes
+    );
     let retained = cuda::retained_resources();
     if retained.device_allocations != 0
         || retained.pinned_allocations != 0
@@ -429,7 +470,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 || rdma.completed_writes < 3
                 || rdma.completed_read_bytes != transferred as u64
                 || rdma.completed_write_bytes != transferred as u64
-                || rdma.posted_work_requests != rdma.completed_reads + rdma.completed_writes
+                || rdma.posted_work_requests
+                    != rdma.completed_reads + rdma.completed_writes + rdma.completed_sends
                 || rdma.peak_work_requests == 0)
         {
             return Err("no actual RDMA completion counters".into());
