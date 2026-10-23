@@ -159,13 +159,20 @@ pub struct RdmaStats {
     pub opened_direct_endpoints: u64,
     pub retained_endpoints: usize,
     pub retained_bytes: usize,
-    /// Local-only MR owners, including creation, closing and retained failures.
+    /// All cached physical MRs, including creation, closing and retained failures.
     pub persistent_mrs: usize,
     pub persistent_mr_bytes: usize,
     pub retained_persistent_mrs: usize,
     pub opened_persistent_mrs: u64,
     pub reused_persistent_mrs: u64,
     pub evicted_persistent_mrs: u64,
+    /// MW-bind parent subset of persistent_mrs; never remote-enabled MRs.
+    pub persistent_source_mrs: usize,
+    pub opened_source_mrs: u64,
+    pub reused_source_mrs: u64,
+    /// Source parents retained by failed deregistration. Failed MW cleanup keeps
+    /// its parent borrow charged in persistent_source_mrs without a dereg attempt.
+    pub retained_source_mrs: usize,
     pub completed_reads: u64,
     pub completed_writes: u64,
     pub completed_read_bytes: u64,
@@ -404,11 +411,13 @@ impl RdmaTransport {
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         let device = self.device()?;
         let progress = self.progress(Arc::clone(&device))?;
-        let cached_mr = if is_direct && permission == 0 {
-            Some(
-                self.registrations
-                    .acquire(Arc::clone(&device), memory, deadline)?,
-            )
+        let cached_mr = if is_direct {
+            Some(self.registrations.acquire(
+                Arc::clone(&device),
+                memory,
+                permission != 0,
+                deadline,
+            )?)
         } else {
             None
         };

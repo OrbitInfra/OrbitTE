@@ -162,7 +162,7 @@ class Controller:
                         raise ValueError('invalid duplex CQ capacity')
                     environment['ORBITTE_SHARED_CQES'] = str(role_capacity)
                 if window_probe:
-                    if case.get('window_probe') not in ['revoked', 'parent', 'remote']:
+                    if case.get('window_probe') not in ['revoked', 'parent', 'remote', 'range']:
                         raise ValueError('invalid MW probe')
                     environment['ORBITTE_WINDOW_PROBE'] = case['window_probe']
                 if readiness is not None:

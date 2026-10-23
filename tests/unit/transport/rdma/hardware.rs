@@ -55,7 +55,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     asynchronous: sys::REAL.asynchronous,
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
-    register_local: sys::REAL.register_local,
+    register_memory: sys::REAL.register_memory,
     open: sys::REAL.open,
     connect: sys::REAL.connect,
     post: gated_post,
@@ -358,17 +358,31 @@ fn shared_cq_peer() {
         idle.completed_window_invalidations,
         idle.completed_window_binds
     );
+    assert_eq!(
+        (
+            idle.opened_persistent_mrs,
+            idle.reused_persistent_mrs,
+            idle.persistent_mrs,
+            idle.persistent_mr_bytes
+        ),
+        (1, 7, 1, length)
+    );
+    assert_eq!(
+        (
+            idle.persistent_source_mrs,
+            idle.opened_source_mrs,
+            idle.reused_source_mrs
+        ),
+        (
+            usize::from(source),
+            u64::from(source),
+            if source { 7 } else { 0 }
+        )
+    );
     if !source {
         assert_eq!(idle.peak_work_requests, capacity);
         assert!(idle.peak_pending_qps >= capacity.div_ceil(window));
-        assert_eq!(
-            (
-                idle.opened_persistent_mrs,
-                idle.reused_persistent_mrs,
-                idle.persistent_mrs
-            ),
-            (1, 7, 1)
-        );
+
         assert_eq!(
             (idle.completed_read_bytes, idle.completed_write_bytes),
             ((COUNT * payload) as u64, (COUNT * payload) as u64)
@@ -389,6 +403,7 @@ fn shared_cq_peer() {
         ),
         (0, 0, 0, 0)
     );
+    source_mr_stats(&idle, &closed);
     receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
@@ -456,7 +471,10 @@ fn source_window_peer() {
     assert!(matches!(role.as_str(), "source" | "requester"));
     let source = role == "source";
     let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
-    assert!(matches!(probe.as_str(), "revoked" | "parent" | "remote"));
+    assert!(matches!(
+        probe.as_str(),
+        "revoked" | "parent" | "remote" | "range"
+    ));
     let length = 4096 + 2 * GUARD;
     let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
     config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
@@ -555,8 +573,12 @@ fn source_window_peer() {
         stream.write_all(&[5]).unwrap();
     } else {
         stream.read_exact(&mut bytes).unwrap();
-        let grant = Descriptor::decode(&bytes).unwrap();
+        let mut grant = Descriptor::decode(&bytes).unwrap();
         assert_eq!(grant.connection_bytes(), connection.connection_bytes());
+        if probe == "range" {
+            // The address is inside the persistent parent but outside the exact MW.
+            grant.address -= 1;
+        }
         if probe == "remote" {
             endpoint
                 .transfer(&grant, TransferOp::Read, Instant::now() + TIMEOUT)
@@ -619,7 +641,7 @@ fn source_window_peer() {
     assert_eq!(idle.window_key_indices, usize::from(source));
     assert_eq!(
         idle.completed_window_invalidations,
-        u64::from(source && probe != "parent")
+        u64::from(source && matches!(probe.as_str(), "revoked" | "remote"))
     );
     assert_eq!(idle.completion_errors, u64::from(!source));
     assert_eq!(
@@ -648,6 +670,7 @@ fn source_window_peer() {
         ),
         (0, 0, 0, 0)
     );
+    source_mr_stats(&idle, &closed);
     receive_stats(&closed);
     assert_eq!(closed.window_key_indices, 0);
     println!(
@@ -695,6 +718,21 @@ fn source_window_peer() {
     println!(
         "{{\"role\":\"{role}\",\"status\":\"passed\",\"probe\":\"{probe}\",\"real_remote_access_error\":{},\"completed_window_binds\":{},\"completed_window_invalidations\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
         !source, idle.completed_window_binds, idle.completed_window_invalidations
+    );
+}
+
+fn source_mr_stats(idle: &RdmaStats, closed: &RdmaStats) {
+    assert_eq!(
+        (closed.persistent_source_mrs, closed.retained_source_mrs),
+        (0, 0)
+    );
+    println!(
+        "ORBITTE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
+        idle.persistent_source_mrs,
+        closed.persistent_source_mrs,
+        closed.opened_source_mrs,
+        closed.reused_source_mrs,
+        closed.retained_source_mrs
     );
 }
 
@@ -760,7 +798,7 @@ fn duplex_completion_peer() {
     config.host_memory = RdmaHostMemory::Direct;
     config.max_endpoints = 2 * COUNT;
     config.max_direct_bytes = length;
-    config.max_cached_mr_bytes = length;
+    config.max_cached_mr_bytes = 2 * length;
     config.block_size = 4096;
     config.max_cqes = capacity;
     config.max_send_wr = 1;
@@ -978,8 +1016,17 @@ fn duplex_completion_peer() {
             idle.opened_persistent_mrs,
             idle.reused_persistent_mrs
         ),
+        (2, 2, 2 * count - 2)
+    );
+    assert_eq!(
+        (
+            idle.persistent_source_mrs,
+            idle.opened_source_mrs,
+            idle.reused_source_mrs
+        ),
         (1, 1, count - 1)
     );
+    assert_eq!(idle.persistent_mr_bytes, 2 * length);
     receive_stats(&idle);
     registry.unregister(&memory).unwrap();
     runtime.registrations.retire(&memory).unwrap();
@@ -987,6 +1034,7 @@ fn duplex_completion_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    source_mr_stats(&idle, &closed);
     receive_stats(&closed);
     assert_eq!(
         (

@@ -71,7 +71,14 @@ struct FakeMr {
     address: usize,
     length: usize,
     local_only: bool,
+    window_bind: bool,
     qps: AtomicUsize,
+    windows: AtomicUsize,
+}
+
+struct FakeWindow {
+    bound: bool,
+    qp_alive: AtomicBool,
 }
 
 fn block(device: &FakeDevice) {
@@ -152,14 +159,19 @@ unsafe extern "C" fn create_cq(
     }
 }
 
-unsafe extern "C" fn register_local(
+unsafe extern "C" fn register_memory(
     h: *mut sys::MemoryHandles,
     handles: *const sys::DeviceHandles,
     address: *mut c_void,
     length: usize,
+    window_bind: bool,
 ) -> c_int {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
-    device.events.lock().unwrap().push("register_local");
+    device.events.lock().unwrap().push(if window_bind {
+        "register_parent"
+    } else {
+        "register_local"
+    });
     device.mrs.fetch_add(1, Ordering::SeqCst);
     unsafe {
         (*h).mr = Box::into_raw(Box::new(FakeMr {
@@ -167,7 +179,9 @@ unsafe extern "C" fn register_local(
             address: address as usize,
             length,
             local_only: true,
+            window_bind,
             qps: AtomicUsize::new(0),
+            windows: AtomicUsize::new(0),
         }))
         .cast();
     }
@@ -216,11 +230,14 @@ unsafe extern "C" fn open(
                 address: bytes as usize,
                 length,
                 local_only: false,
+                window_bind: permission != 0,
                 qps: AtomicUsize::new(0),
+                windows: AtomicUsize::new(0),
             }))
             .cast();
         } else {
             let mr = &*(*memory).mr.cast::<FakeMr>();
+            assert_eq!(mr.window_bind, permission != 0);
             assert!(
                 bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
             );
@@ -250,7 +267,17 @@ unsafe extern "C" fn open(
                 return libc::EOPNOTSUPP;
             }
             device.windows.fetch_add(1, Ordering::SeqCst);
-            (*memory).mw = Box::into_raw(Box::new(false)).cast();
+            (*memory).mw = Box::into_raw(Box::new(FakeWindow {
+                bound: false,
+                qp_alive: AtomicBool::new(true),
+            }))
+            .cast();
+            (*(*h).qp.cast::<Fake>())
+                .window
+                .store((*memory).mw as usize, Ordering::Release);
+            (*(*memory).mr.cast::<FakeMr>())
+                .windows
+                .fetch_add(1, Ordering::SeqCst);
             (*memory).window_key = if device.mode == "key_indices" {
                 (qpn << 8) | 1
             } else {
@@ -293,7 +320,7 @@ unsafe extern "C" fn window(
     let qp = unsafe { &*h.qp.cast::<Fake>() };
     let device = unsafe { &*qp.device };
     let cq = unsafe { &*qp.cq };
-    let state = unsafe { &mut *(*memory).mw.cast::<bool>() };
+    let state = unsafe { &mut (*(*memory).mw.cast::<FakeWindow>()).bound };
     qp.window_key
         .store(unsafe { (*memory).window_key }, Ordering::Release);
     qp.window
@@ -347,10 +374,10 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
         return 0;
     }
     let mr = unsafe { &*h.mr.cast::<FakeMr>() };
-    assert_eq!(
-        mr.qps.load(Ordering::SeqCst),
-        0,
-        "QP barrier precedes MW cleanup"
+    let window = unsafe { &*h.mw.cast::<FakeWindow>() };
+    assert!(
+        !window.qp_alive.load(Ordering::Acquire),
+        "creating QP barrier precedes MW cleanup"
     );
     let device = unsafe { &*mr.device };
     device.events.lock().unwrap().push("dealloc_window");
@@ -358,10 +385,11 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
         return libc::EIO;
     }
     unsafe {
-        drop(Box::from_raw(h.mw.cast::<bool>()));
+        drop(Box::from_raw(h.mw.cast::<FakeWindow>()));
     }
     h.mw = std::ptr::null_mut();
     device.windows.fetch_sub(1, Ordering::SeqCst);
+    mr.windows.fetch_sub(1, Ordering::SeqCst);
     0
 }
 
@@ -548,7 +576,7 @@ unsafe extern "C" fn send_completion(
         // Explicit CPU provider control, not evidence of RNIC DMA or ordering.
         unsafe {
             std::ptr::copy_nonoverlapping(address as *const u8, receive.address as *mut u8, length);
-            *(receive.window as *mut bool) = false;
+            (*(receive.window as *mut FakeWindow)).bound = false;
             let cq = &*(receive.cq as *const FakeCq);
             cq.completions.lock().unwrap().push_back(sys::Completion {
                 id: receive.id,
@@ -636,6 +664,12 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
         .unwrap()
         .retain(|_, receive| receive.qp != state as *const Fake as usize);
     let cq = unsafe { &*state.cq };
+    let window = state.window.load(Ordering::Acquire);
+    if window != 0 {
+        unsafe { &*(window as *const FakeWindow) }
+            .qp_alive
+            .store(false, Ordering::Release);
+    }
     unsafe { &*state.mr }.qps.fetch_sub(1, Ordering::SeqCst);
     cq.qps.fetch_sub(1, Ordering::SeqCst);
     unsafe { &*state.receive_cq }
@@ -659,15 +693,26 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
     }
     let state = unsafe { &*handles.mr.cast::<FakeMr>() };
     let device = unsafe { &*state.device };
-    device.events.lock().unwrap().push(if state.local_only {
-        "deregister_local"
-    } else {
-        "deregister"
-    });
+    device
+        .events
+        .lock()
+        .unwrap()
+        .push(if state.local_only && state.window_bind {
+            "deregister_parent"
+        } else if state.local_only {
+            "deregister_local"
+        } else {
+            "deregister"
+        });
     assert_eq!(
         state.qps.load(Ordering::SeqCst),
         0,
         "QP barrier precedes MR cleanup"
+    );
+    assert_eq!(
+        state.windows.load(Ordering::SeqCst),
+        0,
+        "MWs close before parent MR"
     );
     if device.mode.ends_with("close1")
         || device.mode == "mr_close"
@@ -762,7 +807,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     asynchronous: None,
     open_device,
     create_cq,
-    register_local,
+    register_memory,
     open,
     connect,
     post,
@@ -1200,8 +1245,22 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
             .register_host(allocation.clone(), 4, 8, crate::Permission::RemoteReadWrite)
             .unwrap();
         let runtime = runtime(&format!("direct:{mode}"));
+        if mode == "open_close1" {
+            // Already-resolved work may outlive final unregister; construction must
+            // not resurrect an idle parent when partial cleanup fails.
+            registry.unregister(&memory).unwrap();
+        }
         let result = runtime.endpoint(&memory, 2, 4, 2, Instant::now() + Duration::from_secs(2));
         let retained = mode.contains("close");
+        if memory.is_active() {
+            registry.unregister(&memory).unwrap();
+        }
+        let retired = runtime.registrations.retire(&memory);
+        if mode == "open_close1" {
+            assert!(matches!(retired, Err(Error::Unquiesced { .. })));
+        } else {
+            retired.unwrap();
+        }
         match result {
             Ok(mut endpoint) => {
                 assert_eq!(endpoint.close().is_err(), retained, "{mode}");
@@ -1213,7 +1272,6 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
                 "{mode}: {error:?}"
             ),
         }
-        registry.unregister(&memory).unwrap();
         drop(memory);
         drop(fixture.memory);
         let stats = runtime.stats().unwrap();

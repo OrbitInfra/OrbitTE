@@ -567,6 +567,14 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   20 single-CPU release runs per compiler and two independently built 29-case
   native runs with actual process/resource close. Arbitrary physical faults and
   release without QP close remain unqualified. See [the contract](rdma-cuda.md#source-receive-completion-and-independent-wr-identities).
+- [ ] **P4.7e — persistent source host MR owners (Implemented; qualification
+  and independent acceptance pending).** `LocalBufferManager` caches separate
+  local-only and MW-bind capabilities under shared physical count/full-view byte
+  limits. Source READ/WRITE reuse a non-remote-enabled parent while every grant
+  keeps its exact MW, key burn and DMA lease. Both physical QP barriers remain;
+  actual MW deallocation precedes parent-borrow release. Final unregister retires
+  every capability, with actual-owner retention on failed cleanup. See
+  [the contract](rdma-cuda.md#persistent-source-registration).
 - [ ] Complete connected endpoint-store ownership,
   including source authority/revocation and endpoint incarnation contracts.
   Follow frozen TENT's terminal endpoint lifecycle, detached retirement list,
@@ -897,8 +905,8 @@ owners and terminal detached retirement, with independent source/CPU and
 healthy native profile acceptance.
 P4.7d adds accepted source receive/WR-identity ownership for its declared
 source/CPU/native profiles, retaining both physical barriers. Next establish
-the complete incoming-DMA drain protocol and source registration owners before
-connected reuse, followed by device/topology
+scoped source-MR qualification (P4.7e), then the complete operation-level
+incoming-DMA drain protocol and connected endpoint reuse, followed by device/topology
 discovery, event progress and multirail. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those

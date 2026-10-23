@@ -32,6 +32,7 @@ struct Entry {
 
 struct MemoryRegion {
     key: Weak<crate::memory::Registration>,
+    window_bind: bool,
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
 }
@@ -46,6 +47,7 @@ struct Resources {
     handles: sys::MemoryHandles,
     device: Arc<RdmaContext>,
     memory: RegisteredMemory,
+    window_bind: bool,
     usage: Arc<Mutex<RdmaStats>>,
 }
 
@@ -58,6 +60,7 @@ impl Drop for Resources {
             .usage
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        usage.persistent_source_mrs -= usize::from(self.window_bind);
         usage.persistent_mrs -= 1;
         usage.persistent_mr_bytes -= self.memory.len();
     }
@@ -89,6 +92,7 @@ impl LocalBufferManager {
         self: &Arc<Self>,
         device: Arc<RdmaContext>,
         memory: &RegisteredMemory,
+        window_bind: bool,
         deadline: Instant,
     ) -> Result<MrLease> {
         loop {
@@ -103,11 +107,9 @@ impl LocalBufferManager {
                 return Err(Error::Unavailable("MR cache is closed"));
             }
             remaining(deadline)?;
-            if let Some(index) = cache
-                .entries
-                .iter()
-                .position(|entry| entry.owner.matches(memory))
-            {
+            if let Some(index) = cache.entries.iter().position(|entry| {
+                entry.owner.matches(memory) && entry.owner.window_bind == window_bind
+            }) {
                 if cache.entries[index].creating {
                     drop(
                         self.changed
@@ -125,10 +127,13 @@ impl LocalBufferManager {
                 entry.retiring |= !memory.is_active();
                 let owner = Arc::clone(&entry.owner);
                 cache.entries.push(entry);
-                self.usage
+                let mut usage = self
+                    .usage
                     .lock()
-                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                    .reused_persistent_mrs += 1;
+                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+                usage.reused_persistent_mrs += 1;
+                usage.reused_source_mrs += u64::from(window_bind);
+                drop(usage);
                 return Ok(MrLease {
                     cache: Arc::clone(self),
                     owner,
@@ -168,14 +173,17 @@ impl LocalBufferManager {
                 .try_reserve(1)
                 .map_err(|_| Error::ResourceExhausted)?;
             usage.persistent_mrs += 1;
+            usage.persistent_source_mrs += usize::from(window_bind);
             usage.persistent_mr_bytes = bytes;
             drop(usage);
             let owner = Arc::new(MemoryRegion {
                 key: Arc::downgrade(&memory.0),
+                window_bind,
                 state: Mutex::new(State::Open(Box::new(Resources {
                     handles: sys::MemoryHandles::default(),
                     device: Arc::clone(&device),
                     memory: memory.clone(),
+                    window_bind,
                     usage: Arc::clone(&self.usage),
                 }))),
                 verbs: self.verbs,
@@ -217,31 +225,33 @@ impl LocalBufferManager {
     }
 
     pub(crate) fn retire(&self, memory: &RegisteredMemory) -> Result<()> {
-        let mut cache = self
-            .state
-            .lock()
-            .map_err(|_| Error::Internal("MR cache lock poisoned"))?;
-        if let Some((operation, code)) = cache.failure {
-            return Err(Error::Unquiesced { operation, code });
+        loop {
+            let mut cache = self
+                .state
+                .lock()
+                .map_err(|_| Error::Internal("MR cache lock poisoned"))?;
+            if let Some((operation, code)) = cache.failure {
+                return Err(Error::Unquiesced { operation, code });
+            }
+            if memory.is_active() {
+                return Ok(());
+            }
+            // One registration can have local and MW-bind entries; revoke both.
+            for entry in &mut cache.entries {
+                if entry.owner.matches(memory) {
+                    entry.retiring = true;
+                }
+            }
+            let Some(index) = cache.entries.iter().position(|entry| {
+                entry.owner.matches(memory) && !entry.creating && entry.borrowers == 0
+            }) else {
+                return Ok(());
+            };
+            let entry = cache.entries.remove(index);
+            cache.closing += 1;
+            drop(cache);
+            self.finish_close(entry.owner)?;
         }
-        let Some(index) = cache
-            .entries
-            .iter()
-            .position(|entry| entry.owner.matches(memory))
-        else {
-            return Ok(());
-        };
-        if memory.is_active() {
-            return Ok(());
-        }
-        cache.entries[index].retiring = true;
-        if cache.entries[index].creating || cache.entries[index].borrowers != 0 {
-            return Ok(());
-        }
-        let entry = cache.entries.remove(index);
-        cache.closing += 1;
-        drop(cache);
-        self.finish_close(entry.owner)
     }
 
     fn release(&self, owner: &Arc<MemoryRegion>) -> Result<()> {
@@ -334,14 +344,17 @@ impl MemoryRegion {
         let State::Open(resources) = &mut *state else {
             return Err(Error::Unavailable("MR is closed or retained"));
         };
-        resources
-            .device
-            .register_local(&mut resources.handles, &resources.memory)?;
-        resources
+        resources.device.register_memory(
+            &mut resources.handles,
+            &resources.memory,
+            self.window_bind,
+        )?;
+        let mut usage = resources
             .usage
             .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-            .opened_persistent_mrs += 1;
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+        usage.opened_persistent_mrs += 1;
+        usage.opened_source_mrs += u64::from(self.window_bind);
         Ok(())
     }
     fn handle(&self) -> Result<*mut std::ffi::c_void> {
@@ -372,11 +385,13 @@ impl MemoryRegion {
                 // destruction or no descriptor exposure precedes the last release.
                 let code = unsafe { (self.verbs.deregister)(&mut resources.handles) };
                 if code != 0 {
-                    resources
+                    let mut usage = resources
                         .usage
                         .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
-                        .retained_persistent_mrs += 1;
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    usage.retained_persistent_mrs += 1;
+                    usage.retained_source_mrs += usize::from(self.window_bind);
+                    drop(usage);
                     let previous = std::mem::replace(&mut *state, State::Retained { code });
                     std::mem::forget(previous);
                     return Err(Error::Unquiesced {
