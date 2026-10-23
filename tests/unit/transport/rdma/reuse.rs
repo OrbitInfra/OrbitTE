@@ -771,6 +771,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
         let failure = report.failure.unwrap();
         assert!(matches!(failure.error, Error::Protocol(_)), "{failure:?}");
         assert_eq!(failure.remote_effect, RemoteEffect::None);
+        source.close(TIMEOUT).unwrap();
         assert_eq!(bytes(&remote), [0x63; 8]);
         assert_eq!(
             source.stats().unwrap().rdma.unwrap().completed_window_binds,
@@ -789,6 +790,5 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
         assert_eq!(stats.opened_connections, stats.closed_connections);
         assert_eq!((stats.active_grants, stats.idle_endpoints), (0, 0));
         requester.close(TIMEOUT).unwrap();
-        source.close(TIMEOUT).unwrap();
     }
 }
