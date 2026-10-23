@@ -155,7 +155,7 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
             stats.direct_bytes,
             stats.acknowledged_async_events
         ),
-        (1, 1, 1, 1, 8, 0)
+        (1, 1, 2, 1, 8, 0)
     );
     let before = events.lock().unwrap().clone();
     assert!(!before.iter().any(|e| matches!(

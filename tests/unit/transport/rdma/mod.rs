@@ -3,7 +3,7 @@
 use crate::TransferOp;
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 pub(crate) use super::context::tests::{events, pause};
@@ -30,16 +30,40 @@ struct FakeCq {
     completions: Mutex<std::collections::VecDeque<sys::Completion>>,
     qps: AtomicUsize,
     retiring: AtomicBool,
+    ordinal: usize,
 }
 
 struct Fake {
     device: *const FakeDevice,
     cq: *const FakeCq,
+    receive_cq: *const FakeCq,
+    messages: Mutex<Vec<*mut FakeMr>>,
+    receive: Mutex<Option<(u64, u64, usize)>>,
     length: usize,
     bytes: *mut u8,
     qpn: u32,
     first_id: u64,
+    remote_address: AtomicU64,
+    window_key: AtomicU32,
+    window: AtomicUsize,
     mr: *mut FakeMr,
+}
+
+struct FakeReceive {
+    qp: usize,
+    cq: usize,
+    address: u64,
+    length: usize,
+    id: u64,
+    qpn: u32,
+    window: usize,
+}
+
+fn receives() -> &'static Mutex<std::collections::HashMap<(u64, u32), FakeReceive>> {
+    static RECEIVES: std::sync::OnceLock<
+        Mutex<std::collections::HashMap<(u64, u32), FakeReceive>>,
+    > = std::sync::OnceLock::new();
+    RECEIVES.get_or_init(Default::default)
 }
 
 struct FakeMr {
@@ -108,17 +132,20 @@ unsafe extern "C" fn create_cq(
 ) -> c_int {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push("create_cq");
-    device.cqs.fetch_add(1, Ordering::SeqCst);
+    let ordinal = device.cqs.fetch_add(1, Ordering::SeqCst) + 1;
     unsafe {
         (*h).cq = Box::into_raw(Box::new(FakeCq {
             device,
             completions: Mutex::default(),
             qps: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
+            ordinal,
         }))
         .cast();
     }
-    if device.mode.starts_with("cq_create") {
+    if device.mode.starts_with("cq_create")
+        || (device.mode.starts_with("receive_cq_create") && ordinal == 2)
+    {
         libc::EIO
     } else {
         0
@@ -147,7 +174,9 @@ unsafe extern "C" fn register_local(
     if device.mode == "register_pause" {
         block(device);
     }
-    if device.mode.starts_with("register_fail") {
+    if device.mode.starts_with("register_fail")
+        || (device.mode.starts_with("message_register_fail") && length == COMPLETION_MESSAGE_SIZE)
+    {
         libc::EIO
     } else {
         0
@@ -176,6 +205,8 @@ unsafe extern "C" fn open(
     }
     device.endpoints.fetch_add(1, Ordering::SeqCst);
     cq.qps.fetch_add(1, Ordering::SeqCst);
+    let receive_cq = unsafe { &*(*h).receive_cq.cast::<FakeCq>() };
+    receive_cq.qps.fetch_add(1, Ordering::SeqCst);
     let qpn = device.next_qpn.fetch_add(1, Ordering::SeqCst);
     unsafe {
         if (*memory).mr.is_null() {
@@ -200,10 +231,16 @@ unsafe extern "C" fn open(
         (*h).qp = Box::into_raw(Box::new(Fake {
             device,
             cq,
+            receive_cq,
+            messages: Mutex::default(),
+            receive: Mutex::default(),
             length,
             bytes: bytes.cast(),
             qpn,
             first_id: 0,
+            remote_address: AtomicU64::new(0),
+            window_key: AtomicU32::new(0),
+            window: AtomicUsize::new(0),
             mr: (*memory).mr.cast(),
         }))
         .cast();
@@ -257,6 +294,10 @@ unsafe extern "C" fn window(
     let device = unsafe { &*qp.device };
     let cq = unsafe { &*qp.cq };
     let state = unsafe { &mut *(*memory).mw.cast::<bool>() };
+    qp.window_key
+        .store(unsafe { (*memory).window_key }, Ordering::Release);
+    qp.window
+        .store(unsafe { (*memory).mw } as usize, Ordering::Release);
     assert_eq!(address, qp.bytes as u64);
     assert_eq!(length, qp.length);
     assert!(matches!(permission, 1 | 2));
@@ -357,12 +398,14 @@ unsafe extern "C" fn post(
     let mode = device.mode.as_str();
     assert_eq!(local, state.bytes as u64);
     assert_eq!(local_length, state.length);
+    state.remote_address.store(remote, Ordering::Release);
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
     if state.first_id == 0 {
         state.first_id = requests[0].id;
     }
     let partial = mode.starts_with("partial");
-    let uncertain = mode.contains("unknown") || mode == "copy_post";
+    let uncertain =
+        (mode.contains("unknown") && !mode.starts_with("send_completion")) || mode == "copy_post";
     let accepted = if partial {
         count.min(1)
     } else if mode.starts_with("post") {
@@ -397,6 +440,7 @@ unsafe extern "C" fn post(
             length: request.length - u32::from(mode == "length"),
             status: u32::from(mode == "wc" || mode == "wc_close0"),
             vendor_error: 0,
+            ..Default::default()
         });
     }
     if mode == "pause_copy" || mode.starts_with("pause_post") {
@@ -413,6 +457,121 @@ unsafe extern "C" fn post(
     } else {
         0
     }
+}
+
+unsafe extern "C" fn post_receive(
+    handles: *mut sys::ConnectionHandles,
+    memory: *const sys::MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    result: *mut sys::PostResult,
+) -> c_int {
+    let qp = unsafe { &*(*handles).qp.cast::<Fake>() };
+    let device = unsafe { &*qp.device };
+    device.events.lock().unwrap().push("post_receive");
+    assert_eq!(length, COMPLETION_MESSAGE_SIZE);
+    assert_ne!(unsafe { (*memory).mr }, qp.mr.cast());
+    unsafe {
+        *result = sys::PostResult::default();
+    }
+    if device.mode.starts_with("receive_post_fail") {
+        return libc::ENOMEM;
+    }
+    let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
+    qp.messages.lock().unwrap().push(mr);
+    *qp.receive.lock().unwrap() = Some((id, address, length));
+    receives().lock().unwrap().insert(
+        (qp.bytes as u64, qp.window_key.load(Ordering::Acquire)),
+        FakeReceive {
+            qp: qp as *const Fake as usize,
+            cq: qp.receive_cq as usize,
+            address,
+            length,
+            id,
+            qpn: qp.qpn,
+            window: qp.window.load(Ordering::Acquire),
+        },
+    );
+    if device.mode.contains("receive_unknown") {
+        unsafe {
+            (*result).uncertain = true;
+        }
+        return libc::EIO;
+    }
+    unsafe {
+        (*result).accepted = 1;
+    }
+    0
+}
+
+unsafe extern "C" fn send_completion(
+    handles: *mut sys::ConnectionHandles,
+    memory: *const sys::MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    rkey: u32,
+    result: *mut sys::PostResult,
+) -> c_int {
+    let qp = unsafe { &*(*handles).qp.cast::<Fake>() };
+    let device = unsafe { &*qp.device };
+    device.events.lock().unwrap().push("send_completion");
+    assert_eq!(length, COMPLETION_MESSAGE_SIZE);
+    assert_ne!(unsafe { (*memory).mr }, qp.mr.cast());
+    let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    assert_eq!(unsafe { &*mr }.address, address as usize);
+    unsafe {
+        *result = sys::PostResult::default();
+    }
+    if device.mode == "send_completion_post" {
+        return libc::ENOMEM;
+    }
+    unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
+    qp.messages.lock().unwrap().push(mr);
+    if device.mode.contains("send_completion_unknown") {
+        unsafe {
+            (*result).uncertain = true;
+        }
+        return libc::EIO;
+    }
+    unsafe {
+        (*result).accepted = 1;
+    }
+    if let Some(receive) = receives()
+        .lock()
+        .unwrap()
+        .remove(&(qp.remote_address.load(Ordering::Acquire), rkey))
+    {
+        assert_eq!(receive.length, length);
+        // Explicit CPU provider control, not evidence of RNIC DMA or ordering.
+        unsafe {
+            std::ptr::copy_nonoverlapping(address as *const u8, receive.address as *mut u8, length);
+            *(receive.window as *mut bool) = false;
+            let cq = &*(receive.cq as *const FakeCq);
+            cq.completions.lock().unwrap().push_back(sys::Completion {
+                id: receive.id,
+                qpn: receive.qpn,
+                opcode: 128,
+                length: length as u32,
+                flags: sys::WITH_INVALIDATE,
+                invalidated_rkey: rkey,
+                ..Default::default()
+            });
+        }
+    }
+    unsafe { &*qp.cq }
+        .completions
+        .lock()
+        .unwrap()
+        .push_back(sys::Completion {
+            id,
+            qpn: qp.qpn,
+            opcode: 0,
+            ..Default::default()
+        });
+    0
 }
 
 unsafe extern "C" fn poll(
@@ -472,9 +631,19 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
     if device.mode.ends_with("close0") {
         return 16;
     }
+    receives()
+        .lock()
+        .unwrap()
+        .retain(|_, receive| receive.qp != state as *const Fake as usize);
     let cq = unsafe { &*state.cq };
     unsafe { &*state.mr }.qps.fetch_sub(1, Ordering::SeqCst);
     cq.qps.fetch_sub(1, Ordering::SeqCst);
+    unsafe { &*state.receive_cq }
+        .qps
+        .fetch_sub(1, Ordering::SeqCst);
+    for mr in state.messages.lock().unwrap().iter() {
+        unsafe { &**mr }.qps.fetch_sub(1, Ordering::SeqCst);
+    }
     device.endpoints.fetch_sub(1, Ordering::SeqCst);
     unsafe {
         drop(Box::from_raw(handles.qp.cast::<Fake>()));
@@ -500,7 +669,12 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
         0,
         "QP barrier precedes MR cleanup"
     );
-    if device.mode.ends_with("close1") || device.mode == "mr_close" {
+    if device.mode.ends_with("close1")
+        || device.mode == "mr_close"
+        || (device.mode == "message_close"
+            && state.local_only
+            && state.length == COMPLETION_MESSAGE_SIZE)
+    {
         return 16;
     }
     if device.mode == "mr_close_pause" {
@@ -531,7 +705,9 @@ unsafe extern "C" fn cq(h: *mut sys::ConnectionHandles) -> c_int {
     if device.mode == "cq_pause" {
         block(device);
     }
-    if device.mode.ends_with("close2") {
+    if device.mode.ends_with("close2")
+        || (device.mode.contains("receive_cq_close") && state.ordinal == 2)
+    {
         return 16;
     }
     device.cqs.fetch_sub(1, Ordering::SeqCst);
@@ -591,6 +767,8 @@ static VERBS: sys::Verbs = sys::Verbs {
     connect,
     post,
     window,
+    post_receive,
+    send_completion,
     dealloc_window,
     poll,
     destroy_qp: qp,
@@ -1181,4 +1359,41 @@ impl RdmaEndpoint {
             ..resources.connection.local
         }
     }
+}
+
+pub(super) fn deliver_completion(
+    endpoint: &RdmaEndpoint,
+    bytes: &[u8; COMPLETION_MESSAGE_SIZE],
+    mutate: impl FnOnce(&mut sys::Completion),
+    send_cq: bool,
+) {
+    let request = endpoint.record.lock().unwrap();
+    let resources = request.resources.as_ref().unwrap();
+    let qp = unsafe { &*resources.connection.handles.qp.cast::<Fake>() };
+    assert_ne!(
+        qp.cq, qp.receive_cq,
+        "SQ and RQ controls must use different actual CQ handles"
+    );
+    let (id, address, length) = qp.receive.lock().unwrap().unwrap();
+    assert_eq!(length, bytes.len());
+    // CPU owner/routing control only; this cannot qualify provider DMA ordering.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), address as *mut u8, length);
+    }
+    let mut completion = sys::Completion {
+        id,
+        qpn: qp.qpn,
+        opcode: 128,
+        length: length as u32,
+        flags: sys::WITH_INVALIDATE,
+        invalidated_rkey: qp.window_key.load(Ordering::Acquire),
+        ..Default::default()
+    };
+    mutate(&mut completion);
+    let cq = if send_cq { qp.cq } else { qp.receive_cq };
+    unsafe { &*cq }
+        .completions
+        .lock()
+        .unwrap()
+        .push_back(completion);
 }

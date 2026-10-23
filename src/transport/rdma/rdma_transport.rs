@@ -11,6 +11,7 @@ use crate::{Error, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp}
 const IDENTITY_SIZE: usize = 40;
 const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE;
 const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8;
+const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
 const ACCEPT: u8 = 1;
 const GRANT: u8 = 2;
 const DONE: u8 = 3;
@@ -177,6 +178,7 @@ impl RdmaTransport {
                     effect = RemoteEffect::Unknown;
                 }
                 endpoint.transfer(&remote, operation, deadline)?;
+                endpoint.send_completion(&binding.0, remote.rkey)?;
                 endpoint.close()?;
                 binding.write(&mut channel, DONE)?;
                 let receipt = Reply::read(&mut channel, peer.epoch)?;
@@ -233,20 +235,20 @@ impl RdmaTransport {
             channel.read_exact(&mut bytes)?;
             endpoint.connect(&Descriptor::decode_connection(&bytes)?)?;
             endpoint.bind_window()?;
+            endpoint.post_receive(&binding.0)?;
             channel.reply(epoch, 9, 0)?;
             binding.write(channel, GRANT)?;
             channel.write_all(&endpoint.grant()?.encode())?;
             binding.read(channel, DONE)?;
+            endpoint.receive_completion()?;
             Ok(binding)
         })();
-        let invalidated = if transfer.is_ok() {
-            endpoint.invalidate_window()
-        } else {
-            Ok(())
-        };
-        endpoint.close()?;
+        let closed = endpoint.close();
+        if matches!(&closed, Err(Error::Unquiesced { .. })) {
+            return closed;
+        }
         let binding = transfer?;
-        invalidated?;
+        closed?;
         if writing {
             remaining(channel.deadline)?;
             endpoint.copy_back(memory, offset)?;

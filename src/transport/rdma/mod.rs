@@ -16,6 +16,7 @@ mod endpoint_store;
 mod events;
 mod keys;
 mod rdma_transport;
+mod receive;
 mod slice;
 mod sys;
 mod workers;
@@ -28,6 +29,7 @@ use endpoint::{
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
 pub(super) const WR_ID_STRIDE: u64 = 128;
+pub(super) const COMPLETION_MESSAGE_SIZE: usize = 140;
 
 /// Host-memory policy. CUDA allocations continue to use owned host staging.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -55,7 +57,7 @@ pub struct RdmaConfig {
     pub block_size: usize,
     /// Maximum signaled work requests in one request QP window (1..=64).
     pub max_send_wr: usize,
-    /// Physical shared CQ capacity across all request QPs (1..=4096).
+    /// Capacity of each shared send/receive CQ (1..=4096), charged separately.
     pub max_cqes: usize,
     pub max_cached_mrs: usize,
     pub max_cached_mr_bytes: usize,
@@ -127,6 +129,16 @@ pub struct RdmaStats {
     pub retained_windows: usize,
     pub completed_window_binds: u64,
     pub completed_window_invalidations: u64,
+    pub receive_work_requests: usize,
+    pub retained_receive_work_requests: usize,
+    pub peak_receive_work_requests: usize,
+    pub receive_post_calls: u64,
+    pub completed_receives: u64,
+    pub completed_sends: u64,
+    pub active_message_mrs: usize,
+    pub retained_message_mrs: usize,
+    pub message_bytes: usize,
+    pub retained_message_bytes: usize,
     pub active_cqs: usize,
     pub retained_cqs: usize,
     pub opened_cqs: u64,
@@ -401,7 +413,8 @@ impl RdmaTransport {
             None
         };
         let connection_handles = sys::ConnectionHandles {
-            cq: progress.handle()?,
+            cq: progress.handle(false)?,
+            receive_cq: progress.handle(true)?,
             ..Default::default()
         };
         let mut memory_handles = sys::MemoryHandles::default();
@@ -430,6 +443,7 @@ impl RdmaTransport {
                 connection: None,
                 window_used: false,
                 window_bound: false,
+                message: None,
             },
         }))?;
         let mut endpoint = RdmaEndpoint {

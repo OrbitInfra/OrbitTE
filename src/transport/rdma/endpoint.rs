@@ -86,12 +86,13 @@ impl Staging {
         self.length
     }
     pub(super) fn bytes_mut(&mut self) -> &mut [u8] {
-        // SAFETY: only Init endpoints before descriptor exposure call this;
-        // native DMA has not started and the allocation is exclusively owned.
+        // SAFETY: payloads are initialized before exposure; message bytes are
+        // initialized before their SEND is posted. No DMA owns either range.
         unsafe { std::slice::from_raw_parts_mut(self.address.as_ptr(), self.length) }
     }
     pub(super) fn bytes(&self) -> &[u8] {
-        // SAFETY: only Closed endpoints expose a slice, after QP/MR destruction.
+        // SAFETY: payloads require native close. A private receive message is
+        // inspected only after its successful actual RQ CQE, without reposting.
         unsafe { std::slice::from_raw_parts(self.address.as_ptr(), self.length) }
     }
 }
@@ -134,6 +135,7 @@ impl ConnectionResources {
         }
         self.closed = true;
         self.handles.cq = std::ptr::null_mut();
+        self.handles.receive_cq = std::ptr::null_mut();
         drop(self.lease.take());
         Ok(())
     }
@@ -152,6 +154,7 @@ pub(super) struct GrantResources {
     pub(super) connection: Option<ConnectionId>,
     pub(super) window_used: bool,
     pub(super) window_bound: bool,
+    pub(super) message: Option<super::receive::MessageBuffer>,
 }
 
 impl GrantResources {
@@ -192,6 +195,10 @@ impl GrantResources {
                 return Err(("ibv_dereg_mr", code));
             }
         }
+        if let Some(message) = &mut self.message {
+            message.close(verbs)?;
+        }
+        self.message = None;
         Ok(())
     }
 }
@@ -445,11 +452,34 @@ impl RdmaEndpoint {
         })
     }
 
+    pub(crate) fn post_receive(
+        &mut self,
+        binding: &[u8; super::COMPLETION_MESSAGE_SIZE],
+    ) -> Result<()> {
+        self.progress
+            .post_receive(&self.record, *binding, self.deadline)
+    }
+
+    pub(crate) fn receive_completion(&self) -> Result<()> {
+        self.progress
+            .receive_completion(&self.record, self.deadline)
+    }
+
+    pub(crate) fn send_completion(
+        &mut self,
+        binding: &[u8; super::COMPLETION_MESSAGE_SIZE],
+        rkey: u32,
+    ) -> Result<()> {
+        self.progress
+            .send_completion(&self.record, *binding, rkey, self.deadline)
+    }
+
     pub(crate) fn bind_window(&mut self) -> Result<()> {
         self.progress
             .window(&self.record, slice::Operation::Bind, self.deadline)
     }
 
+    #[cfg(test)]
     pub(crate) fn invalidate_window(&mut self) -> Result<()> {
         self.progress
             .window(&self.record, slice::Operation::Invalidate, self.deadline)

@@ -375,7 +375,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
         let stats = requester.stats().unwrap().rdma.unwrap();
         assert_eq!(
             (stats.completed_reads, stats.posted_work_requests),
-            if stage == 2 { (1, 1) } else { (0, 0) }
+            if stage == 2 { (1, 2) } else { (0, 0) }
         );
         assert_eq!(
             (
@@ -393,4 +393,84 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
         );
         requester.close(TIMEOUT).unwrap();
     }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging() {
+    let runtime = crate::transport::rdma::tests::runtime("ok");
+    let epoch = SourceEpoch([1; 16]);
+    let registry = crate::memory::MemoryRegistry::new(epoch, 1, 8);
+    let memory = registry
+        .register(
+            vec![0x42; 8].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let request = request(epoch, memory.id());
+    let (mut peer, mut channel) = channels();
+    channel.deadline = deadline(Duration::from_secs(1)).unwrap();
+    thread::scope(|scope| {
+        let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory, 0, 8));
+        assert_eq!(
+            Reply::read(&mut peer, epoch).unwrap().length,
+            OFFER_SIZE as u64
+        );
+        let mut offer = [0; OFFER_SIZE];
+        peer.read_exact(&mut offer).unwrap();
+        let local = Identity::decode(&offer[..IDENTITY_SIZE]).unwrap();
+        let binding = Binding::new(
+            &request,
+            local,
+            identity(9, 8, 7),
+            u64_at(&offer, IDENTITY_SIZE),
+        )
+        .unwrap();
+        binding.write(&mut peer, ACCEPT).unwrap();
+        peer.write_all(&offer[IDENTITY_SIZE + 8..]).unwrap();
+        assert_eq!(Reply::read(&mut peer, epoch).unwrap().status, 9);
+        binding.read(&mut peer, GRANT).unwrap();
+        let mut bytes = [0; DESCRIPTOR_SIZE];
+        peer.read_exact(&mut bytes).unwrap();
+        let grant = Descriptor::decode(&bytes).unwrap();
+        // CPU provider control: stage bytes as though a peer had written payload.
+        // No native transport ordering or DMA receipt is inferred from this write.
+        unsafe {
+            std::ptr::write_bytes(grant.address as *mut u8, 0xc3, 8);
+        }
+        binding.write(&mut peer, DONE).unwrap();
+        assert_eq!(runtime.stats().unwrap().receive_work_requests, 1);
+        let result = handler.join().unwrap();
+        assert!(
+            matches!(
+                result,
+                Err(Error::Timeout
+                    | Error::Unquiesced {
+                        operation: "RDMA close deadline before quiescence",
+                        code: libc::ETIMEDOUT
+                    })
+            ),
+            "{result:?}"
+        );
+    });
+    // Successful ACK cannot be present, even for an exact, correctly bound DONE.
+    drop(channel);
+    expect_closed_without_next_phase(&mut peer);
+    runtime.close(deadline(TIMEOUT).unwrap()).unwrap();
+    let mut actual = [0; 8];
+    memory.read(0, &mut actual).unwrap();
+    assert_eq!(actual, [0x42; 8]);
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.completed_receives,
+            stats.completed_window_invalidations,
+            stats.receive_work_requests,
+            stats.message_bytes,
+            stats.active_message_mrs,
+            stats.active_endpoints
+        ),
+        (0, 0, 0, 0, 0, 0)
+    );
+    runtime.close(deadline(TIMEOUT).unwrap()).unwrap();
 }

@@ -176,7 +176,8 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
                         opcode,
                         length,
                         vendor_error: 0,
-                        qpn: 0
+                        qpn: 0,
+                        ..Default::default()
                     },
                     TransferOp::Read
                 )

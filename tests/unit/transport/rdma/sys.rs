@@ -311,6 +311,12 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
             0,
         ),
         (
+            ffi::ibv_wc_status::IBV_WC_SUCCESS,
+            ffi::ibv_wc_opcode::IBV_WC_RECV,
+            super::super::COMPLETION_MESSAGE_SIZE as u32,
+            0,
+        ),
+        (
             ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
             u32::MAX,
             u32::MAX,
@@ -323,6 +329,10 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         for (index, field) in [status, opcode, vendor, length].into_iter().enumerate() {
             state.bytes[8 + index * 4..12 + index * 4].copy_from_slice(&field.to_ne_bytes());
         }
+        let flags = std::mem::offset_of!(ffi::ibv_wc, wc_flags);
+        state.bytes[flags..flags + 4].copy_from_slice(&WITH_INVALIDATE.to_ne_bytes());
+        let key = std::mem::offset_of!(ffi::ibv_wc, imm_data);
+        state.bytes[key..key + 4].copy_from_slice(&0x01020304u32.to_ne_bytes());
         let qpn = std::mem::offset_of!(ffi::ibv_wc, qp_num);
         state.bytes[qpn..qpn + 4].copy_from_slice(&0x12345u32.to_ne_bytes());
         assert_eq!(unsafe { poll(&mut handles, &mut output) }, 1);
@@ -336,6 +346,14 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
             (0, 0)
         };
         assert_eq!((output.opcode, output.length), expected);
+        assert_eq!(
+            (output.flags, output.invalidated_rkey),
+            if status == 0 {
+                (WITH_INVALIDATE, 0x01020304)
+            } else {
+                (0, 0)
+            }
+        );
     }
 }
 
@@ -438,5 +456,182 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
                 (usize::from(code == 0), foreign)
             );
         }
+    }
+}
+
+struct MessagePost {
+    code: i32,
+    foreign_bad: bool,
+    calls: usize,
+    address: u64,
+    lkey: u32,
+}
+
+unsafe extern "C" fn capture_receive(
+    qp: *mut ffi::ibv_qp,
+    wr: *mut ffi::ibv_recv_wr,
+    bad: *mut *mut ffi::ibv_recv_wr,
+) -> c_int {
+    unsafe {
+        let state = &mut *(*qp).qp_context.cast::<MessagePost>();
+        let request = &*wr;
+        state.calls += 1;
+        assert_eq!(request.wr_id, 0x1234567812345601);
+        assert!(request.next.is_null());
+        assert_eq!(request.num_sge, 1);
+        let sge = &*request.sg_list;
+        assert_eq!(
+            (sge.addr, sge.length, sge.lkey),
+            (
+                state.address,
+                super::super::COMPLETION_MESSAGE_SIZE as u32,
+                state.lkey
+            )
+        );
+        if state.code != 0 {
+            *bad = if state.foreign_bad {
+                wr.cast::<u8>().add(1).cast()
+            } else {
+                wr
+            };
+        }
+        state.code
+    }
+}
+
+unsafe extern "C" fn capture_message(
+    qp: *mut ffi::ibv_qp,
+    wr: *mut ffi::ibv_send_wr,
+    bad: *mut *mut ffi::ibv_send_wr,
+) -> c_int {
+    unsafe {
+        let state = &mut *(*qp).qp_context.cast::<MessagePost>();
+        let request = &*wr;
+        state.calls += 1;
+        assert_eq!(request.wr_id, 0x1234567812345601);
+        assert!(request.next.is_null());
+        assert_eq!(request.num_sge, 1);
+        assert_eq!(request.opcode, ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV);
+        assert_eq!(
+            request.send_flags,
+            ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
+        );
+        assert_eq!(request.__bindgen_anon_1.invalidate_rkey, 0x01020304);
+        let sge = &*request.sg_list;
+        assert_eq!(
+            (sge.addr, sge.length, sge.lkey),
+            (
+                state.address,
+                super::super::COMPLETION_MESSAGE_SIZE as u32,
+                state.lkey
+            )
+        );
+        if state.code != 0 {
+            *bad = if state.foreign_bad {
+                wr.cast::<u8>().add(1).cast()
+            } else {
+                wr
+            };
+        }
+        state.code
+    }
+}
+
+#[test]
+fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_ownership() {
+    let length = super::super::COMPLETION_MESSAGE_SIZE;
+    for receive in [true, false] {
+        let mut context = Box::new(ffi::ibv_context::default());
+        context.ops.post_recv = Some(capture_receive);
+        context.ops.post_send = Some(capture_message);
+        let mut bytes = vec![0u8; length];
+        let mut state = MessagePost {
+            code: 0,
+            foreign_bad: false,
+            calls: 0,
+            address: bytes.as_ptr() as u64,
+            lkey: 0xa0b0c0d0,
+        };
+        let mut qp = ffi::ibv_qp {
+            context: &mut *context,
+            qp_context: (&mut state as *mut MessagePost).cast(),
+            ..Default::default()
+        };
+        let mut mr = ffi::ibv_mr {
+            addr: bytes.as_mut_ptr().cast(),
+            length,
+            lkey: state.lkey,
+            ..Default::default()
+        };
+        let mut handles = ConnectionHandles {
+            qp: (&mut qp as *mut ffi::ibv_qp).cast(),
+            ..Default::default()
+        };
+        let memory = MemoryHandles {
+            mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+            ..Default::default()
+        };
+        for (code, foreign_bad) in [(0, false), (libc::ENOMEM, false), (libc::EIO, true)] {
+            state.code = code;
+            state.foreign_bad = foreign_bad;
+            let mut result = PostResult::default();
+            let actual = unsafe {
+                if receive {
+                    post_receive(
+                        &mut handles,
+                        &memory,
+                        0x1234567812345601,
+                        state.address,
+                        length,
+                        &mut result,
+                    )
+                } else {
+                    send_completion(
+                        &mut handles,
+                        &memory,
+                        0x1234567812345601,
+                        state.address,
+                        length,
+                        0x01020304,
+                        &mut result,
+                    )
+                }
+            };
+            assert_eq!(actual, code);
+            assert_eq!(
+                (result.accepted, result.uncertain),
+                (usize::from(code == 0), foreign_bad)
+            );
+        }
+        assert_eq!(state.calls, 3);
+        for (id, address, size) in [
+            (0, state.address, length),
+            (1, state.address - 1, length),
+            (1, state.address + 1, length),
+            (1, state.address, length - 1),
+        ] {
+            let mut result = PostResult::default();
+            let actual = unsafe {
+                if receive {
+                    post_receive(&mut handles, &memory, id, address, size, &mut result)
+                } else {
+                    send_completion(
+                        &mut handles,
+                        &memory,
+                        id,
+                        address,
+                        size,
+                        0x01020304,
+                        &mut result,
+                    )
+                }
+            };
+            assert_eq!(actual, libc::EINVAL);
+            assert_eq!((result.accepted, result.uncertain), (0, false));
+        }
+        assert_eq!(
+            state.calls, 3,
+            "invalid descriptors never reach the provider"
+        );
     }
 }

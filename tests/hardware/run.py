@@ -155,8 +155,14 @@ class Controller:
                     'ORBITTE_SHARED_WINDOW': str(window),
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
+                if case.get('duplex'):
+                    environment['ORBITTE_SHARED_DUPLEX'] = '1'
+                    role_capacity = case.get(role + '_rdma_max_cqes', capacity)
+                    if type(role_capacity) is not int or not 1 <= role_capacity <= 4:
+                        raise ValueError('invalid duplex CQ capacity')
+                    environment['ORBITTE_SHARED_CQES'] = str(role_capacity)
                 if window_probe:
-                    if case.get('window_probe') not in ['revoked', 'parent']:
+                    if case.get('window_probe') not in ['revoked', 'parent', 'remote']:
                         raise ValueError('invalid MW probe')
                     environment['ORBITTE_WINDOW_PROBE'] = case['window_probe']
                 if readiness is not None:
