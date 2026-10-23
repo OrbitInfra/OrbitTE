@@ -29,7 +29,7 @@ use endpoint::{
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
 pub(super) const WR_ID_STRIDE: u64 = 128;
-pub(super) const COMPLETION_MESSAGE_SIZE: usize = 140;
+pub(super) const COMPLETION_MESSAGE_SIZE: usize = 141;
 
 /// Host-memory policy. CUDA allocations continue to use owned host staging.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -41,7 +41,7 @@ pub enum RdmaHostMemory {
     Staged,
 }
 
-/// Explicit RNIC selection. This profile creates an RC endpoint per request.
+/// Explicit RNIC selection. Host Direct peers can retain role-specific RC QPs.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
     pub device: String,
@@ -149,6 +149,12 @@ pub struct RdmaStats {
     pub progress_failures: u64,
     pub peak_pending_qps: usize,
     pub active_endpoints: usize,
+    pub idle_endpoints: usize,
+    pub opened_connections: u64,
+    pub closed_connections: u64,
+    pub reused_connections: u64,
+    pub evicted_connections: u64,
+    pub completed_reusable_grants: u64,
     /// Per-request memory owners, including outputs after physical QP close.
     pub active_grants: usize,
     pub retained_grants: usize,
@@ -296,6 +302,9 @@ impl RdmaTransport {
             }
             (cache.owner.clone(), cache.progress.clone())
         };
+        if let Some(progress) = &progress {
+            progress.fence(deadline)?;
+        }
         let mut usage = self
             .usage
             .lock()
@@ -340,7 +349,9 @@ impl RdmaTransport {
         length: usize,
         permission: u32,
         deadline: Instant,
+        reuse: Option<RdmaEndpoint>,
     ) -> Result<RdmaEndpoint> {
+        remaining(deadline)?;
         if length == 0 || length > u32::MAX as usize {
             return Err(Error::InvalidRange);
         }
@@ -351,20 +362,24 @@ impl RdmaTransport {
             None
         };
         let is_direct = direct.is_some();
-        let (connection_lease, grant_lease) = {
+        if reuse.is_some() && !is_direct {
+            return Err(Error::Protocol(
+                "RDMA reuse requires host Direct on both peers",
+            ));
+        }
+        let grant_lease = {
             let mut usage = self
                 .usage
                 .lock()
                 .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
             let (charged, limit) = if is_direct {
-                (&mut usage.direct_bytes, self.config.max_direct_bytes)
+                (usage.direct_bytes, self.config.max_direct_bytes)
             } else {
-                (&mut usage.staging_bytes, self.config.max_staging_bytes)
+                (usage.staging_bytes, self.config.max_staging_bytes)
             };
             let bytes = charged
                 .checked_add(length)
                 .ok_or(Error::ResourceExhausted)?;
-            let over_limit = bytes > limit;
             if usage.retained_endpoints != 0
                 || usage.retained_grants != 0
                 || usage.retained_devices != 0
@@ -376,28 +391,21 @@ impl RdmaTransport {
                     "RDMA admission is poisoned by retained native resources",
                 ));
             }
-            if usage.active_endpoints >= self.config.max_endpoints || over_limit {
+            if bytes > limit {
                 return Err(Error::ResourceExhausted);
             }
-            usage.active_endpoints += 1;
             usage.active_grants += 1;
             if is_direct {
                 usage.direct_bytes = bytes;
             } else {
                 usage.staging_bytes = bytes;
             }
-            (
-                ConnectionLease {
-                    usage: Arc::clone(&self.usage),
-                    drained: Arc::clone(&self.drained),
-                },
-                GrantLease {
-                    usage: Arc::clone(&self.usage),
-                    length,
-                    is_direct,
-                    drained: Arc::clone(&self.drained),
-                },
-            )
+            GrantLease {
+                usage: Arc::clone(&self.usage),
+                length,
+                is_direct,
+                drained: Arc::clone(&self.drained),
+            }
         };
         let buffer = match direct {
             Some(loan) => Buffer::Direct {
@@ -407,10 +415,29 @@ impl RdmaTransport {
             },
             None => Buffer::Staged(Staging::new(length)?),
         };
-        let epoch = SourceEpoch::generate()?;
-        let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         let device = self.device()?;
         let progress = self.progress(Arc::clone(&device))?;
+        let new_connection_lease = if reuse.is_none() {
+            Some(loop {
+                let mut usage = self
+                    .usage
+                    .lock()
+                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+                if usage.active_endpoints < self.config.max_endpoints {
+                    usage.active_endpoints += 1;
+                    break ConnectionLease {
+                        usage: Arc::clone(&self.usage),
+                        drained: Arc::clone(&self.drained),
+                    };
+                }
+                drop(usage);
+                if !progress.evict_idle(deadline)? {
+                    return Err(Error::ResourceExhausted);
+                }
+            })
+        } else {
+            None
+        };
         let cached_mr = if is_direct {
             Some(self.registrations.acquire(
                 Arc::clone(&device),
@@ -421,52 +448,84 @@ impl RdmaTransport {
         } else {
             None
         };
-        let connection_handles = sys::ConnectionHandles {
-            cq: progress.handle(false)?,
-            receive_cq: progress.handle(true)?,
-            ..Default::default()
-        };
         let mut memory_handles = sys::MemoryHandles::default();
         if let Some(registration) = &cached_mr {
             memory_handles.mr = registration.handle()?;
         }
-        let record = progress.register(Box::new(Resources {
-            connection: ConnectionResources {
-                device: Arc::clone(&device),
-                handles: connection_handles,
-                incarnation: None,
-                local: Descriptor::default(),
-                closed: false,
-                lease: Some(connection_lease),
-            },
-            grant: GrantResources {
-                device,
-                handles: memory_handles,
-                cached_mr,
-                buffer,
-                _lease: grant_lease,
-                max_read_slices: if memory.is_cuda() { 32 } else { 64 },
-                permission,
-                generation: 0,
-                rkey: 0,
-                connection: None,
-                window_used: false,
-                window_bound: false,
-                message: None,
-            },
-        }))?;
-        let mut endpoint = RdmaEndpoint {
-            record,
-            progress,
-            local: Descriptor::default(),
-            incarnation: None,
-            config: self.config.clone(),
-            verbs: self.verbs,
-            deadline,
-            output: None,
+        let mut grant = GrantResources {
+            device: Arc::clone(&device),
+            handles: memory_handles,
+            cached_mr,
+            buffer,
+            _lease: grant_lease,
+            max_read_slices: if memory.is_cuda() { 32 } else { 64 },
+            permission,
+            generation: 0,
+            rkey: 0,
+            connection: None,
+            window_used: false,
+            window_bound: false,
+            message: None,
         };
-        let initialized = endpoint.open(permission, psn);
-        if let Err(error) = initialized {
+        let mut endpoint = if let Some(endpoint) = reuse {
+            {
+                let mut request = endpoint.record.lock()?;
+                request.check_claim(endpoint.claim)?;
+                let resources = request
+                    .resources
+                    .as_mut()
+                    .ok_or(Error::Internal("missing cached connection"))?;
+                if resources.grant.is_some() || !Arc::ptr_eq(&resources.connection.device, &device)
+                {
+                    return Err(Error::Internal("RDMA reuse grant ownership"));
+                }
+                if resources.connection.permission != permission {
+                    return Err(Error::Protocol("RDMA reuse changed QP capability"));
+                }
+                grant.connection = resources.connection.incarnation;
+                resources.grant = Some(grant);
+            }
+            endpoint
+        } else {
+            let connection_lease = new_connection_lease
+                .ok_or(Error::Internal("missing physical connection reservation"))?;
+            let connection_handles = sys::ConnectionHandles {
+                cq: progress.handle(false)?,
+                receive_cq: progress.handle(true)?,
+                ..Default::default()
+            };
+            let record = progress.register(Box::new(Resources {
+                connection: ConnectionResources {
+                    device,
+                    handles: connection_handles,
+                    incarnation: None,
+                    local: Descriptor::default(),
+                    remote: None,
+                    permission,
+                    closed: false,
+                    lease: Some(connection_lease),
+                },
+                grant: Some(grant),
+            }))?;
+            RdmaEndpoint {
+                record,
+                progress,
+                local: Descriptor::default(),
+                incarnation: None,
+                config: self.config.clone(),
+                verbs: self.verbs,
+                deadline,
+                output: None,
+                claim: 1,
+                released: false,
+                cached_peer: None,
+            }
+        };
+        #[cfg(test)]
+        tests::before_reused_open(self, &endpoint);
+        let epoch = SourceEpoch::generate()?;
+        let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
+        if let Err(error) = endpoint.open(permission, psn) {
             endpoint.close()?;
             return Err(error);
         }
@@ -477,6 +536,10 @@ impl RdmaTransport {
                 .opened_direct_endpoints += 1;
         }
         Ok(endpoint)
+    }
+
+    fn host_direct(&self, memory: &RegisteredMemory) -> bool {
+        self.config.host_memory == RdmaHostMemory::Direct && !memory.is_cuda()
     }
 }
 

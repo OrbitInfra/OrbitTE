@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.7e/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.7f/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -101,12 +101,17 @@ CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
 engines do not share PDs. P4.6 introduced shared progress. P4.7d gives that context separate shared SQ
-and RQ CQs, polled by one post/poll worker. Every request retains its own QP, exact direct range lease or
-stable staging. P4.7e source parent MRs outlive requests; per-request MWs retain their physical
-teardown barrier. Parent MRs have LOCAL_WRITE|MW_BIND only. One-use Type-2B MWs grant exact READ or WRITE
-access after a successful BIND CQE. QPs and PSNs remain per request. P4.5 requester local-only host MRs
-outlive the request QP and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
-are re-queried for every new endpoint instead of reusing cached addressing.
+and RQ CQs, polled by one post/poll worker. Each grant owns an exact direct range
+lease or stable staging and its one-use source MW. P4.7e parent MRs outlive
+grants. P4.7f retains the real connected QP/PSN/incarnation when both peers
+negotiate host Direct and finish the complete operation-drain protocol below.
+The first profile fixes role and READ/WRITE capability, with one active grant
+per QP. Staged or device-backed peers still use per-request QPs and both
+physical close barriers. Parent MRs have LOCAL_WRITE|MW_BIND only; requester
+MRs have LOCAL_WRITE only. Neither parent key is exported. The shared PD is
+not a source-grant authorization boundary. Port state, MTU, LID and selected GID
+are re-queried for each new physical endpoint; retaining a QP does not rediscover
+a changed route or add port recovery.
 
 This follows the frozen TENT `e2d6e8e0` hierarchy in
 `tent/src/transport/rdma/context.cpp`, `buffers.cpp` and `endpoint.cpp`: context/PD
@@ -118,8 +123,8 @@ erase an owner after failed deregistration. P4.5 follows TENT's independent
 registered-buffer owner and separates local MR lifetime from endpoint lifetime.
 P4.6 follows context-owned `cq.cpp` and worker-owned `workers.cpp` progress,
 including quota reservation and retaining a completion owner through the end
-of its handler. Connected endpoint reuse remains future P4 work. Resource reuse
-alone is no performance result.
+of its handler. P4.7f adds the [scoped connected reuse](#connected-qp-reuse)
+described below. Resource reuse alone is no performance result.
 
 The persistent cache uses actual `RegisteredMemory` identity within one PD,
 registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
@@ -138,9 +143,9 @@ Native register/deregister executes outside the cache lock.
 
 An idle MR holds no DMA exclusion lease, so normal CPU access stays available.
 Each request independently retains its exact allocation-relative range through
-all slices and successful native teardown. QP destruction precedes return of
-its cached-MR borrow; CPU exclusion is released only after the complete endpoint
-close succeeds. Posting validates the request-local base and length inside the
+all slices and successful native teardown. Physical QP destruction or the negotiated complete operation-drain receipt
+precedes return of its cached-MR borrow. CPU exclusion ends only after the
+corresponding native grant cleanup succeeds. Posting validates the request-local base and length inside the
 larger MR, and constructs local SGEs relative to that request base. Remote
 addresses remain relative to the source grant.
 
@@ -179,30 +184,32 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v8 exchanges QP-only descriptors with zero memory address/key, plus
+Protocol v9 rendezvous precedes the QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
 Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
-SQ CQE. It then registers a distinct local-only 140-byte receive buffer and
+SQ CQE. It then registers a distinct local-only 141-byte receive buffer and
 waits for native RQ acceptance before publishing the MW grant. GRANT does not
 wait for a receive CQE, which requires the requester to have received the grant.
 The requester validates the full binding and QP/PSN/GID, then submits bounded
 signaled READ/WRITE slices. After all payload CQEs pass, it posts a signaled,
 fenced SEND_WITH_INV on that same QP using a distinct local-only message MR.
 The source's actual RQ CQE must match its own CQ, WR namespace, QPN, RECV opcode,
-140-byte length, exactly WITH_INV, host-order invalidated rkey and full binding.
+141-byte length, exactly WITH_INV, host-order invalidated rkey and full binding.
 A requester SEND CQE or TCP DONE alone cannot prove source completion.
 
-The requester still physically destroys its QP and releases its MR borrow/loan
-before bound TCP DONE. The source requires both DONE and the validated RQ
-receipt, then physically destroys its QP and MW before returning its parent MR
-borrow to `LocalBufferManager`. It may then release its exact loan or commit
-WRITE staging, drop its output charge and send bound ACK. An idle active parent
-remains registered; final unregister, LRU eviction or engine close can physically
-deregister it later. READ staging copies back only after ACK. Both QP barriers remain;
-this stage does not qualify release of incoming-DMA owners without QP close.
-The public success path uses remote invalidation instead of LOCAL_INV. Historical
-LOCAL_INV and parent-key native probes remain separate regression controls.
+For negotiated host Direct, the requester consumes its SEND CQE, closes its
+local grant/message MR and loan, and sends bound DONE. The source requires
+both DONE and the actual validated RQ receipt, then deallocates its invalidated
+MW, returns the parent borrow, closes the message MR and releases the exact
+loan/grant before ACK. ACK is written before source READY publication; a final
+bound READY frame lets the requester confirm publication before caching its
+half. No old grant, preposted RQ or completion debt remains on an idle QP.
+For either staged peer, both physical QP-close barriers remain. WRITE staging
+commits and drops its output before ACK; READ staging copies back after ACK.
+Idle active parent MRs remain registered independently of the connection, until
+unregister, eviction or close. Historical LOCAL_INV and parent-key probes remain
+separate regression controls. See [the complete reuse scope](#connected-qp-reuse).
 
 P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
 `endpoint.cpp::submitSlices` and `workers.cpp` completion ownership. The base
@@ -229,8 +236,8 @@ namespace, expected WR and native QPN. A prefix from an earlier operation cannot
 pay current queue debt. These namespaces cannot be reset while live QPs remain;
 worker/CQ replacement with live connections is not implemented.
 RDMA READ credit stays at one; SQ/CQ capacity is not a throughput claim. Window
-metadata remains bounded to at most 64 slices. Port/rail discovery, connected
-endpoint reuse, event progress and multirail remain open.
+metadata remains bounded to at most 64 slices. Port/rail discovery, event progress and multirail remain open. Connected host
+Direct reuse is scoped below.
 
 Before a post dispatch, all window slots become charged. A known `bad_wr`
 identity proves only an accepted prefix and an unposted suffix. A null/foreign
@@ -258,7 +265,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v8 explicitly rejects v1-v7; it is OrbitTE-only. A WRITE attempt is marked
+Wire v9 explicitly rejects v1-v8; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -280,9 +287,9 @@ staging and context. Failed native frees retain resources and their driver.
 ## Failure, drain and resource ownership
 
 Endpoint count, registered direct host bytes and staging bytes stay bounded
-per engine. A successful request, or a provably unposted failure with no WR
-debt, tears down its QP and MR borrow/private MR while the shared CQ remains
-open. Under the request mutex, registry membership is removed before Closed
+per engine. A negotiated host Direct success cleans only its grant and retains a READY
+QP. A staged success or any failed operation retires its QP and active grant
+while the shared CQ remains open; unresolved debt uses the whole-lane barrier. Under the request mutex, registry membership is removed before Closed
 is published. The close receipt then moves drained resources/output into the
 caller endpoint, including on a logical transfer error. A worker snapshot keeps
 only metadata; dropping the endpoint immediately returns its byte/count charge
@@ -298,8 +305,9 @@ by an endpoint.
 both before waiting, and gives their accepted operations one shared drain
 deadline. Already accepted work can still create its endpoints during this drain;
 closing admission does not cancel it. Once both owners are drained, the runtime
-permanently closes device admission, waits for actual request owners to leave,
-drains cached local MRs, closes both shared CQs and joins its progress worker,
+permanently closes device and claim admission, detaches and retires idle QPs,
+allows accepted constructors/grants to finish or retire, waits for actual
+connection/grant charges to reach zero, then drains cached host MRs, closes both shared CQs and joins its progress worker,
 then explicitly destroys PD -> context. Waiting for another MR creator or
 closer uses the same absolute deadline. A request's close wait also uses its
 original absolute deadline; expiry before a physical receipt returns
@@ -1310,13 +1318,166 @@ This accepts the stated P4.7e profile while both QP barriers remain. Connected
 reuse, release of incoming-DMA owners on live QPs, full P4, GDR, multirail,
 performance and OrbitKV integration remain open.
 
-For the planned P4.7f profile in the completion plan, the operation-level
-contract follows [RFC 8166 section 2.3.2](https://www.rfc-editor.org/rfc/rfc8166.html#section-2.3.2)
-on data completion and subsequent SEND notification, and
-[RFC 8797 section 3.2](https://www.rfc-editor.org/rfc/rfc8797.html#section-3.2)
-on actual receive-reported invalidation. It additionally requires OrbitTE's
-full per-grant sealing, same-SQ fence, bilateral binding and resource cleanup.
-It must retain frozen TENT's nonterminal endpoint lookup and detached retirement,
-with a physical connection's identity unchanged across fresh grants. These are
-implementation/acceptance requirements for the next substage, not behavior
-implemented by this source-MR change.
+## Connected QP reuse
+
+P4.7f is implemented for negotiated, coherent host Direct RC peers, fixed source
+or requester role and fixed READ/WRITE capability. Each physical QP admits one
+grant at a time. The declared source/CPU and native profiles have independent
+acceptance. This is F02/F03/F07/F08/F15/F18 groundwork and a scoped
+B04 profile, not the complete P4 exit or native TENT wire interoperability.
+
+### Correspondence with frozen TENT
+
+The reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+
+| Frozen native TENT | OrbitTE owner and behavior |
+| --- | --- |
+| `context.cpp`: PD/CQs outlive endpoints and MRs | `RdmaContext` retains the actual PD and key/generation history; shared SQ/RQ CQs outlive every QP |
+| `buffers.cpp`: `LocalBufferManager` registers buffers independently of endpoints | Local-only and MW-bind full-view MRs persist independently; exact grant loans remain separate |
+| `endpoint_store.cpp`: FIFO/SIEVE `getOrInsert` reuses a nonterminal endpoint | `EndpointStore` atomically claims only an idle exact pair; active/idle physical QPs share the bounded capacity |
+| `endpoint.cpp`: connected `RdmaEndPoint` retains its QPs | `ConnectionResources` retains the same native QP, QPN, PSN, peer routing and ConnectionId; reuse calls `prepare_grant`, never QP create/RTR/RTS |
+| `workers.cpp`/`slice.h`: workers own post/poll and slice completion | `Workers` owns the sealed completion proof, native grant cleanup and nonrepeating SQ/RQ WR namespaces |
+| `beginDestroy`/`finishDestroy` and `waiting_list_` | Terminal detachment is irreversible; retired owners retain routing/quota until actual close, outside the Store lock |
+
+This uses the native [nonterminal lookup and retirement design](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint_store.cpp).
+OrbitTE deliberately keeps per-grant one-use MW authority instead of exporting a
+persistent remote-enabled parent key. It currently uses oldest-idle eviction,
+not the full configurable native FIFO/SIEVE policy. Busy entries are never
+victims. Native cleanup failure retains real objects, backing, debt and budgets;
+no Drop retry or live PD/key-history reset supplies recovery.
+
+### Successful operation proof
+
+The selected coherent-host operation contract follows the data/SEND completion
+pattern in [RFC 8166 section 2.3.2](https://www.rfc-editor.org/rfc/rfc8166.html#section-2.3.2)
+and the receive-reported invalidation in
+[RFC 8797 section 3.2](https://www.rfc-editor.org/rfc/rfc8797.html#section-3.2).
+These transport patterns are combined with OrbitTE's mandatory binding, exact
+native CQ validation and owner cleanup; a TCP receipt or invalidation flag alone
+is insufficient. No arbitrary unrelated-QP, relaxed-ordering or device-memory
+drain proof is inferred.
+
+1. Requester payload CQEs resolve every accepted slice. Worker-owned sealing
+   excludes any later payload post. The completion message is sent on that same
+   actual SQ with FENCE|SIGNALED SEND_WITH_INV, invalidating only this grant's key.
+2. The requester consumes the exact successful SEND CQE and cleans its local
+   grant/MR borrow, message MR, exact loan and grant charge before bound DONE.
+3. The source consumes the accepted actual RQ CQE with exact CQ direction,
+   namespace, QPN, RECV opcode, 141-byte length, WITH_INV/rkey and full binding.
+   It also requires the bytewise bound DONE from the control channel.
+4. A private `GrantDrain` receipt binds the actual creating ConnectionId, local
+   grant generation, capability and successful sealed work. The sole post/poll
+   worker deallocates the invalidated MW before parent-borrow release, closes
+   the message MR, releases the exact loan and drops the grant. Failure retains
+   the remaining actual lane rather than retrying cleanup.
+5. The source writes bound ACK, publishes READY, then writes bound READY. The
+   requester validates both before publishing its own READY. A failed last
+   write may retire only the exact still-idle Arc/claim token. An old handle,
+   Drop or reply has no authority over a newer claim.
+
+`ConnectionResources` remains the unique physical owner inside `Resources`;
+its optional grant is `None` in READY. Each claim burns a checked local token
+and uses a fresh deadline; each source grant burns a new generation/MW/key and
+every operation burns new WR namespaces. READY carries no old work/receive,
+message-sent seal, DMA exclusion or RQ/SQ debt. Physical identities never change
+to label a rebuilt QP as reuse. Idle connections do not keep old registrations
+alive; unregister and MR eviction can deregister their former parents.
+
+### Wire v9 and cache behavior
+
+The existing 52-byte Request is followed by a mandatory 105-byte HELLO: one
+flags byte (host Direct candidate/reused pair, other bits zero), requester
+Identity40, optional source Identity40, expected remote PD domain16 and previous
+grant8. A fresh pair uses zero source identity and previous grant. A retry after
+an explicit cache miss preserves the old expected domain. HELLO's requester
+identity is immutable in ACCEPT.
+
+The 89-byte OFFER has source Identity40, new grant8, QP-only Descriptor40 and a
+release-profile byte (`0` physical close, `1` negotiated host Direct). Reused
+OFFERs must keep the old source identity/routing and increase the grant number.
+Every ACCEPT/GRANT/DONE/ACK/READY and native completion message binds Request52,
+source Identity40, requester Identity40, grant8 and profile1: 141 bytes, plus
+one phase byte on control frames. ACCEPT/GRANT additionally carry Descriptor40.
+The source must match both cached identities, role, operation and previous
+grant before creating authority. QP addresses/keys in bootstrap remain zero.
+
+An unavailable/busy/stale source pair returns explicit status `12` before any
+BIND, GRANT or data. Only this response permits one fresh-pair retry after
+physical retirement of the stale requester half, under the original deadline,
+process epoch and PD domain. EOF, malformed or missing ACK/READY, native faults,
+timeout, ambiguous posts and changed identities never authorize WRITE replay.
+If source ACK/READY is lost, an empty idle source half may outlive the requester;
+it has no live MW/loan and must pass a later exact-pair rendezvous or be evicted.
+
+Idle QPs retain physical `max_endpoints` quota. When full, detach only idle
+entries, destroy outside the Store lock, then repay the actual connection lease;
+failed native close retains the owner and poisons admission. Store membership
+and idle-count changes share one control critical section, including against
+lane failure. No Record lock, native call or condition wait occurs inside the
+Store critical section. Whole close fences new claims and retires idle QPs
+before waiting for physical usage zero; accepted builders/grants finish or
+retire under their existing deadlines. Directional close stays independent.
+
+`opened_connections` and `closed_connections` count actual native QPs,
+`idle_endpoints` remains part of `active_endpoints`, `reused_connections` counts
+successful idle claims and `completed_reusable_grants` counts sealed native
+grant cleanup. Claim/creation failures do not return physical quota early.
+
+### Verification and remaining scope
+
+CPU gates cover unchanged QP identities across four grants and a different
+registration, two-way claim exclusion, stale handles, exact drain bindings,
+invalid HELLO/OFFER/ACCEPT/GRANT/DONE/ACK/READY, missing either source proof,
+explicit miss/eviction under capacity one, generation/WR exhaustion, pre-open
+async faults and deterministic idle-debit/lane-failure interleaving. The existing
+native message ABI gate requires FENCE|SIGNALED and SEND_WITH_INV.
+
+The opt-in `orbitte-connected` hardware runner selects exactly
+`transport::rdma::workers::tests::hardware::connected::connected_endpoint_peer`.
+It runs public v9 simultaneous host READ/WRITE in both directions on one runtime
+per host, CQ capacity one or an asymmetric pair, four persistent physical QPs,
+four rounds, actual old-parent deregistration/backing release with QPs live,
+new registrations/ranges and full source/destination/guard checks. Each round
+records native QPN/QP handle, PSN, both routing directions and ConnectionId;
+new grants retain them exactly. Existing key/range rejection, shared progress,
+duplex and DRAM/pinned/NVIDIA staging/TCP profiles remain required. Public
+runner profiles set `ORBITTE_EXPECT_QP_REUSE` from both peers' actual selected
+memory/policy, rather than deriving expected behavior from observed counters.
+
+Source `371d804763251337ca4e1ca93dac3df7c87dc5ca` passes independent stable
+1.99.1/MSRV 1.85 four-feature gates, 140 unit tests and 40 single-CPU release
+runs. Twenty reverse controls for ten new contracts all reject the removed
+guard; the unchanged baseline passes. Earlier controls that survived before
+test strengthening, interrupted runs and actual failures remain preserved.
+
+The implementation stable build at `71861df` and independently built MSRV
+source `371d804` each pass 35 native cases: four connected public duplex cases,
+eight actual key/range rejection probes, six shared-progress, three earlier
+duplex and fourteen public DRAM/pinned/GPU-staging/TCP regressions. The later
+source changes only CPU tests; the independent carry receipt verifies every
+production and selected native-fixture blob, and the public peer binary is
+byte-identical. This is a verified carry, not a claim that the implementation
+reran native work at the later source commit.
+
+Each connected peer retains four actual QPs through four rounds, claims them
+twelve more times and cleans sixteen grants. Final unregister deregisters its
+old parents and frees the old backing while those QPs remain live; new views
+reuse the same QPN/PSN/routing/incarnations. Each peer opens four full-view MRs and
+reuses them twelve times, including two source parents/six source reuses, with
+eight completed SENDs, receives, MW binds and invalidations. Every full buffer
+and guard matches. Each native set verifies all 70 SSH starter waits and the
+absence of all 140 native/supervisor PIDs, reacquires the original resource
+locks, verifies frozen/mapped DSOs and returns A GPU7 memory to zero. B GPUs
+are not selected.
+
+Raw evidence remains outside Git at
+`/root/orbitte-artifacts/rdma-connection-reuse-20261023/`.
+`native-71861df/implementation-hardware-review.json` records the implementation
+run. `review/independent-scoped-acceptance-371d804.json` records independent scoped acceptance
+(SHA-256 `b099fe7677c594976c34dbbd4694127e0c35d5d3a4e1125d10657ec7ceea579d`), including the final source/native build, carry and
+resource-close evidence. The maintained commands and original lock/host
+constraints above remain required to reproduce the profile.
+
+GDR, arbitrary physical device/cleanup faults, multirail/topology discovery,
+SIEVE policy, concurrent grants or role reversal on one QP, relaxed ordering,
+performance, complete P4 and OrbitKV linkage remain unqualified.

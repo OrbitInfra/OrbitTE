@@ -5,10 +5,12 @@ use std::time::{Duration, Instant};
 
 use super::COMPLETION_MESSAGE_SIZE;
 use super::cq::RdmaCq;
-use super::endpoint_store::EndpointStore;
+use super::endpoint_store::{EndpointStore, Peer};
+use super::rdma_transport::BoundDone;
 use super::receive::{MessageBuffer, ReceiveQueue};
 use super::{
-    Buffer, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaStats, Resources, events, slice, sys,
+    Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaEndpoint, RdmaStats,
+    Resources, events, slice, sys,
 };
 use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
@@ -53,6 +55,7 @@ impl Fault {
 const WORK: u8 = 1;
 const CLOSE: u8 = 2;
 const RECEIVE: u8 = 4;
+const FINISH: u8 = 8;
 
 pub(super) struct Record {
     actions: AtomicU8,
@@ -68,11 +71,36 @@ pub(super) struct Request {
     pub(super) resources: Option<Box<Resources>>,
     pub(super) phase: Phase,
     pub(super) qpn: u32,
+    pub(super) claim: u64,
+    finish: Option<GrantDrain>,
     work: Option<Work>,
     receive: Option<ReceiveQueue>,
     message_sent: bool,
+    payload_operation: Option<TransferOp>,
+    mixed_operations: bool,
     close_requested: bool,
     failure: Option<Fault>,
+}
+
+pub(super) struct GrantDrain {
+    connection: ConnectionId,
+    generation: u64,
+    permission: u32,
+}
+
+impl GrantDrain {
+    pub(super) fn matches(
+        &self,
+        resources: &super::ConnectionResources,
+        grant: &super::GrantResources,
+    ) -> bool {
+        resources.incarnation == Some(self.connection)
+            && grant.connection == Some(self.connection)
+            && self.generation != 0
+            && grant.generation == self.generation
+            && grant.permission == self.permission
+            && !grant.window_bound
+    }
 }
 
 struct Work {
@@ -83,6 +111,12 @@ struct Work {
 }
 
 impl Request {
+    pub(super) fn check_claim(&self, claim: u64) -> Result<()> {
+        if self.claim != claim {
+            return Err(Error::Unavailable("stale RDMA grant handle"));
+        }
+        self.check()
+    }
     pub(super) fn check(&self) -> Result<()> {
         match self.failure {
             Some(fault) => Err(fault.error()),
@@ -131,6 +165,7 @@ struct Control {
     next_tag: u64,
     dirty: bool,
     stopping: bool,
+    accepting: bool,
     finished: bool,
     fault: Option<Fault>,
     retained: Option<(&'static str, i32)>,
@@ -196,6 +231,7 @@ impl Workers {
                 next_tag: 0,
                 dirty: false,
                 stopping: false,
+                accepting: true,
                 finished: false,
                 fault: None,
                 retained: None,
@@ -303,9 +339,13 @@ impl Workers {
                 resources: Some(resources),
                 phase: Phase::Init,
                 qpn: 0,
+                claim: 1,
+                finish: None,
                 work: None,
                 receive: None,
                 message_sent: false,
+                payload_operation: None,
+                mixed_operations: false,
                 close_requested: false,
                 failure: None,
             }),
@@ -320,6 +360,7 @@ impl Workers {
     pub(super) fn transfer(
         &self,
         record: &Arc<Record>,
+        claim: u64,
         remote: Descriptor,
         operation: TransferOp,
         deadline: Instant,
@@ -330,7 +371,7 @@ impl Workers {
         {
             let mut request = record.lock()?;
             record.require_live()?;
-            request.check()?;
+            request.check_claim(claim)?;
             if request.phase != Phase::Connected || request.message_sent {
                 return Err(Error::Internal("RDMA QP is not ready"));
             }
@@ -340,7 +381,7 @@ impl Workers {
                 .ok_or(Error::Internal("missing RDMA endpoint"))?;
             if remote
                 .address
-                .checked_add(resources.grant.buffer.len() as u64)
+                .checked_add(resources.grant()?.buffer.len() as u64)
                 .is_none()
             {
                 return Err(Error::InvalidRange);
@@ -348,10 +389,10 @@ impl Workers {
             let cap = if operation == TransferOp::Write {
                 32
             } else {
-                resources.grant.max_read_slices
+                resources.grant()?.max_read_slices
             };
             let queue = slice::SendQueue::new(
-                resources.grant.buffer.len(),
+                resources.grant()?.buffer.len(),
                 self.shared.config.block_size,
                 cap,
                 Arc::clone(&self.shared.usage),
@@ -360,6 +401,10 @@ impl Workers {
             record
                 .send_namespace
                 .store(queue.namespace(), Ordering::Release);
+            request.mixed_operations |= request
+                .payload_operation
+                .is_some_and(|previous| previous != operation);
+            request.payload_operation = Some(operation);
             request.work = Some(Work {
                 queue,
                 operation: operation.into(),
@@ -368,12 +413,13 @@ impl Workers {
             });
             request.phase = Phase::Queued;
         }
-        self.wait(record, deadline)
+        self.wait(record, claim, deadline)
     }
 
     pub(super) fn window(
         &self,
         record: &Arc<Record>,
+        claim: u64,
         operation: slice::Operation,
         deadline: Instant,
     ) -> Result<()> {
@@ -383,7 +429,7 @@ impl Workers {
         {
             let mut request = record.lock()?;
             record.require_live()?;
-            request.check()?;
+            request.check_claim(claim)?;
             if request.phase != Phase::Connected {
                 return Err(Error::Internal("MW QP is not ready"));
             }
@@ -391,23 +437,23 @@ impl Workers {
                 .resources
                 .as_mut()
                 .ok_or(Error::Internal("missing MW owner"))?;
-            if resources.grant.handles.mw.is_null() {
+            if resources.grant_mut()?.handles.mw.is_null() {
                 return Err(Error::Unavailable("source MW is unavailable"));
             }
             let slot = match operation {
-                slice::Operation::Bind if !resources.grant.window_used => {
-                    resources.grant.window_used = true;
+                slice::Operation::Bind if !resources.grant_mut()?.window_used => {
+                    resources.grant_mut()?.window_used = true;
                     65
                 }
                 #[cfg(test)]
-                slice::Operation::Invalidate if resources.grant.window_bound => 66,
+                slice::Operation::Invalidate if resources.grant_mut()?.window_bound => 66,
                 _ => return Err(Error::Internal("MW authorization state")),
             };
             let namespace = self.shared.next_work_namespace()?;
             record.send_namespace.store(namespace, Ordering::Release);
             let remote = Descriptor {
-                address: resources.grant.buffer.address().as_ptr() as u64,
-                rkey: resources.grant.handles.window_key,
+                address: resources.grant_mut()?.buffer.address().as_ptr() as u64,
+                rkey: resources.grant_mut()?.handles.window_key,
                 ..Default::default()
             };
             request.work = Some(Work {
@@ -421,7 +467,7 @@ impl Workers {
             });
             request.phase = Phase::Queued;
         }
-        self.wait(record, deadline)
+        self.wait(record, claim, deadline)
     }
 
     fn prepare_message(&self, request: &mut Request) -> Result<()> {
@@ -429,19 +475,19 @@ impl Workers {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA grant"))?;
-        if resources.grant.message.is_some() {
+        let grant = resources.grant_mut()?;
+        if grant.message.is_some() {
             return Err(Error::Internal("RDMA message already prepared"));
         }
-        resources.grant.message = Some(MessageBuffer::new(
+        grant.message = Some(MessageBuffer::new(
             Arc::clone(&self.shared.usage),
             self.shared.config.max_endpoints,
         )?);
-        let message = resources
-            .grant
+        let message = grant
             .message
             .as_mut()
             .ok_or(Error::Internal("missing RDMA message"))?;
-        let registered = resources.grant.device.register_message(
+        let registered = grant.device.register_message(
             &mut message.handles,
             message.memory.address,
             message.memory.length,
@@ -453,6 +499,7 @@ impl Workers {
     pub(super) fn post_receive(
         &self,
         record: &Arc<Record>,
+        claim: u64,
         expected: [u8; COMPLETION_MESSAGE_SIZE],
         deadline: Instant,
     ) -> Result<()> {
@@ -462,13 +509,13 @@ impl Workers {
         {
             let mut request = record.lock()?;
             record.require_live()?;
-            request.check()?;
+            request.check_claim(claim)?;
             if request.phase != Phase::Connected
                 || request.receive.is_some()
                 || !request
                     .resources
                     .as_ref()
-                    .is_some_and(|r| r.grant.window_bound)
+                    .is_some_and(|r| r.grant.as_ref().is_some_and(|g| g.window_bound))
             {
                 return Err(Error::Internal("RDMA receive before source grant"));
             }
@@ -478,7 +525,7 @@ impl Workers {
                 .resources
                 .as_ref()
                 .ok_or(Error::Internal("missing RDMA grant"))?
-                .grant
+                .grant()?
                 .rkey;
             request.receive = Some(ReceiveQueue::new(
                 namespace * super::WR_ID_STRIDE + 1,
@@ -491,17 +538,28 @@ impl Workers {
         }
         record.actions.fetch_or(RECEIVE, Ordering::Release);
         self.shared.signal();
-        self.wait_receive(record, deadline, false)
+        self.wait_receive(record, claim, deadline, false)
     }
 
-    pub(super) fn receive_completion(&self, record: &Arc<Record>, deadline: Instant) -> Result<()> {
-        self.wait_receive(record, deadline, true)
+    pub(super) fn receive_completion(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.wait_receive(record, claim, deadline, true)
     }
 
-    fn wait_receive(&self, record: &Arc<Record>, deadline: Instant, completed: bool) -> Result<()> {
+    fn wait_receive(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        deadline: Instant,
+        completed: bool,
+    ) -> Result<()> {
         let mut request = record.lock()?;
         loop {
-            request.check()?;
+            request.check_claim(claim)?;
             let receive = request
                 .receive
                 .as_ref()
@@ -541,6 +599,7 @@ impl Workers {
     pub(super) fn send_completion(
         &self,
         record: &Arc<Record>,
+        claim: u64,
         binding: [u8; COMPLETION_MESSAGE_SIZE],
         rkey: u32,
         deadline: Instant,
@@ -551,7 +610,7 @@ impl Workers {
         {
             let mut request = record.lock()?;
             record.require_live()?;
-            request.check()?;
+            request.check_claim(claim)?;
             if request.phase != Phase::Connected
                 || request.message_sent
                 || !request.work.as_ref().is_some_and(|w| {
@@ -563,12 +622,18 @@ impl Workers {
             {
                 return Err(Error::Internal("RDMA completion before payload CQ drain"));
             }
+            if request.work.as_ref().is_none_or(|w| w.remote.rkey != rkey) {
+                return Err(Error::Protocol(
+                    "completion invalidation changed its payload key",
+                ));
+            }
             let namespace = self.shared.next_work_namespace()?;
             self.prepare_message(&mut request)?;
             let message = request
                 .resources
                 .as_mut()
-                .and_then(|r| r.grant.message.as_mut())
+                .and_then(|r| r.grant.as_mut())
+                .and_then(|g| g.message.as_mut())
                 .ok_or(Error::Internal("missing RDMA message"))?;
             message.memory.bytes_mut().copy_from_slice(&binding);
             request.message_sent = true;
@@ -587,15 +652,15 @@ impl Workers {
             record.send_namespace.store(namespace, Ordering::Release);
             request.phase = Phase::Queued;
         }
-        self.wait(record, deadline)
+        self.wait(record, claim, deadline)
     }
 
-    fn wait(&self, record: &Arc<Record>, deadline: Instant) -> Result<()> {
+    fn wait(&self, record: &Arc<Record>, claim: u64, deadline: Instant) -> Result<()> {
         record.actions.fetch_or(WORK, Ordering::Release);
         self.shared.signal();
         let mut request = record.lock()?;
         loop {
-            request.check()?;
+            request.check_claim(claim)?;
             if request
                 .work
                 .as_ref()
@@ -631,20 +696,360 @@ impl Workers {
         }
     }
 
-    pub(super) fn close_record(&self, record: &Arc<Record>, deadline: Instant) -> Result<()> {
+    pub(super) fn finish_sent(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        binding: &[u8; COMPLETION_MESSAGE_SIZE],
+        deadline: Instant,
+    ) -> Result<()> {
+        self.finish(record, claim, binding, None, deadline)
+    }
+
+    pub(super) fn finish_received(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        done: &BoundDone,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.finish(record, claim, done.binding(), Some(done), deadline)
+    }
+
+    fn finish(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        binding: &[u8; COMPLETION_MESSAGE_SIZE],
+        done: Option<&BoundDone>,
+        deadline: Instant,
+    ) -> Result<()> {
+        remaining(deadline)?;
+        record.require_live()?;
         let mut request = record.lock()?;
+        request.check_claim(claim)?;
+        if request.phase != Phase::Connected || request.finish.is_some() {
+            return Err(Error::Internal("RDMA grant cannot finish"));
+        }
+        let resources = request
+            .resources
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA connection"))?;
+        let grant = resources.grant()?;
+        if !matches!(grant.buffer, Buffer::Direct { .. })
+            || binding[COMPLETION_MESSAGE_SIZE - 1] != 1
+        {
+            return Err(Error::Protocol(
+                "only negotiated host Direct grants can retain a QP",
+            ));
+        }
+        let work = request
+            .work
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA completion work"))?;
+        if !work.queue.finished() || work.queue.pending() || grant.window_bound {
+            return Err(Error::Internal("RDMA operation lacks completion drain"));
+        }
+        let connection = resources
+            .connection
+            .incarnation
+            .ok_or(Error::Internal("missing connection incarnation"))?;
+        let identity_offset = crate::runtime::control_plane::REQUEST_SIZE
+            + if grant.permission == 0 { 40 } else { 0 };
+        let native_identity_matches =
+            binding[identity_offset + 16..identity_offset + 40] == connection.encode();
+        let length_matches =
+            crate::runtime::control_plane::u64_at(binding, 44) == grant.buffer.len() as u64;
+        let generation_matches = grant.permission == 0
+            || crate::runtime::control_plane::u64_at(binding, COMPLETION_MESSAGE_SIZE - 9)
+                == grant.generation;
+        let operation_matches = match grant.permission {
+            0 => matches!(binding[10], 4 | 5),
+            1 => binding[10] == 4,
+            2 => binding[10] == 5,
+            _ => false,
+        };
+        if !native_identity_matches || !length_matches || !generation_matches || !operation_matches
+        {
+            return Err(Error::Protocol(
+                "RDMA operation receipt changed native grant identity",
+            ));
+        }
+        let valid = if grant.permission == 0 {
+            done.is_none()
+                && request.message_sent
+                && !request.mixed_operations
+                && request
+                    .payload_operation
+                    .is_some_and(|op| binding[10] == if op == TransferOp::Read { 4 } else { 5 })
+                && work.operation == slice::Operation::Send
+                && request.receive.is_none()
+                && grant
+                    .message
+                    .as_ref()
+                    .is_some_and(|m| m.memory.bytes() == binding)
+        } else {
+            done.is_some()
+                && !request.message_sent
+                && work.operation == slice::Operation::Bind
+                && request.receive.as_ref().is_some_and(|r| {
+                    r.completed && !r.pending() && r.expected == *binding && r.rkey == grant.rkey
+                })
+        };
+        if !valid {
+            return Err(Error::Protocol("RDMA grant lacks sealed operation receipt"));
+        }
+        request.finish = Some(GrantDrain {
+            connection: resources
+                .connection
+                .incarnation
+                .ok_or(Error::Internal("missing connection incarnation"))?,
+            generation: grant.generation,
+            permission: grant.permission,
+        });
+        request.phase = Phase::Drained;
+        record.actions.fetch_or(FINISH, Ordering::Release);
+        drop(request);
+        self.shared.signal();
+        let mut request = record.lock()?;
+        loop {
+            request.check_claim(claim)?;
+            if request.finish.is_none()
+                && request
+                    .resources
+                    .as_ref()
+                    .is_some_and(|r| r.grant.is_none())
+            {
+                return Ok(());
+            }
+            let duration = remaining(deadline).map_err(|_| Error::Unquiesced {
+                operation: "RDMA grant cleanup deadline",
+                code: libc::ETIMEDOUT,
+            })?;
+            request = record
+                .changed
+                .wait_timeout(request, duration)
+                .map_err(|_| Error::Unquiesced {
+                    operation: "RDMA grant wait poisoned",
+                    code: libc::EIO,
+                })?
+                .0;
+        }
+    }
+
+    pub(super) fn claim(
+        self: &Arc<Self>,
+        matches: impl Fn(&Peer) -> bool,
+        deadline: Instant,
+    ) -> Result<Option<RdmaEndpoint>> {
+        remaining(deadline)?;
+        let claimed = {
+            let mut control = self
+                .shared
+                .control
+                .lock()
+                .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?;
+            self.shared.asynchronous.check()?;
+            if let Some(fault) = control.fault {
+                return Err(fault.error());
+            }
+            if !control.accepting {
+                return Err(Error::Unavailable("RDMA claims are fenced"));
+            }
+            let claimed = control.endpoints.claim(matches);
+            if claimed.is_some() {
+                self.shared
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .idle_endpoints -= 1;
+            }
+            claimed
+        };
+        let Some((record, peer)) = claimed else {
+            return Ok(None);
+        };
+        let (local, incarnation, claim) = {
+            let mut request = record.lock()?;
+            record.require_live()?;
+            request.check()?;
+            if request.phase != Phase::Ready || request.close_requested {
+                let old = request.claim;
+                drop(request);
+                self.close_record(&record, old, deadline)?;
+                return Err(Error::Unavailable("claimed RDMA QP is retiring"));
+            }
+            let claim = match request.claim.checked_add(1) {
+                Some(claim) => claim,
+                None => {
+                    let old = request.claim;
+                    drop(request);
+                    self.close_record(&record, old, deadline)?;
+                    return Err(Error::ResourceExhausted);
+                }
+            };
+            let resources = request
+                .resources
+                .as_ref()
+                .ok_or(Error::Internal("missing idle connection"))?;
+            if resources.grant.is_some() {
+                return Err(Error::Internal("idle connection retains a grant"));
+            }
+            let local = resources.connection.local;
+            let incarnation = resources.connection.incarnation;
+            request.claim = claim;
+            request.phase = Phase::Init;
+            (local, incarnation, claim)
+        };
+        self.shared
+            .usage
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .reused_connections += 1;
+        Ok(Some(RdmaEndpoint {
+            record,
+            progress: Arc::clone(self),
+            local,
+            incarnation,
+            config: self.shared.config.clone(),
+            verbs: self.shared.verbs,
+            deadline,
+            output: None,
+            claim,
+            released: false,
+            cached_peer: Some(peer),
+        }))
+    }
+
+    pub(super) fn cache(&self, record: &Arc<Record>, claim: u64, peer: Peer) -> Result<bool> {
+        let mut request = record.lock()?;
+        request.check_claim(claim)?;
+        record.require_live()?;
+        if request.phase != Phase::Drained
+            || request.close_requested
+            || request.finish.is_some()
+            || request.resources.as_ref().is_none_or(|r| r.grant.is_some())
+            || request.work.is_some()
+            || request.receive.is_some()
+            || record.actions.load(Ordering::Acquire) != 0
+        {
+            return Err(Error::Internal("RDMA READY retains grant state"));
+        }
+        let mut control = self
+            .shared
+            .control
+            .lock()
+            .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?;
+        if let Some(fault) = control.fault {
+            return Err(fault.error());
+        }
+        if !control.accepting {
+            return Ok(false);
+        }
+        control.endpoints.ready(record, peer, claim)?;
+        request.phase = Phase::Ready;
+        self.shared
+            .usage
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .idle_endpoints += 1;
+        Ok(true)
+    }
+
+    pub(super) fn evict_idle(&self, deadline: Instant) -> Result<bool> {
+        let record = {
+            let mut control = self
+                .shared
+                .control
+                .lock()
+                .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?;
+            if control.fault.is_some() {
+                return Ok(false);
+            }
+            let record = control.endpoints.evict();
+            if record.is_some() {
+                let mut usage = self.shared.usage.lock().unwrap_or_else(|p| p.into_inner());
+                usage.idle_endpoints -= 1;
+                usage.evicted_connections += 1;
+            }
+            record
+        };
+        let Some(record) = record else {
+            return Ok(false);
+        };
+        let claim = record.lock()?.claim;
+        self.close_record(&record, claim, deadline)?;
+        Ok(true)
+    }
+
+    pub(super) fn retire_idle(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        let retired = {
+            let mut control = self
+                .shared
+                .control
+                .lock()
+                .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?;
+            let retired = control.endpoints.retire_idle(record, claim);
+            if retired {
+                #[cfg(test)]
+                tests::before_idle_debit(&self.shared);
+                self.shared
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .idle_endpoints -= 1;
+            }
+            retired
+        };
+        if retired {
+            self.close_record(record, claim, deadline)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn fence(&self, deadline: Instant) -> Result<()> {
+        self.shared
+            .control
+            .lock()
+            .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?
+            .accepting = false;
+        while self.evict_idle(deadline)? {}
+        Ok(())
+    }
+
+    pub(super) fn close_record(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        let mut request = record.lock()?;
+        if request.claim != claim {
+            return Ok(());
+        }
         if !matches!(request.phase, Phase::Closed | Phase::Retained) {
             request.close_requested = true;
             drop(request);
-            self.shared
-                .control
-                .lock()
-                .map_err(|_| Error::Unquiesced {
+            {
+                let mut control = self.shared.control.lock().map_err(|_| Error::Unquiesced {
                     operation: "RDMA endpoint store poisoned",
                     code: libc::EIO,
-                })?
-                .endpoints
-                .detach(record);
+                })?;
+                if control.endpoints.detach(record) {
+                    #[cfg(test)]
+                    tests::before_idle_debit(&self.shared);
+                    self.shared
+                        .usage
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .idle_endpoints -= 1;
+                }
+            }
             record.actions.fetch_or(CLOSE, Ordering::Release);
             self.shared.signal();
             request = record.lock()?;
@@ -735,7 +1140,12 @@ impl Shared {
     fn fail(&self, fault: Fault) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.fault.is_none() {
+            control.accepting = false;
             control.endpoints.detach_all();
+            self.usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .idle_endpoints = 0;
             control.fault = Some(fault);
             self.usage
                 .lock()
@@ -797,6 +1207,12 @@ impl Shared {
                     .progress_failures += 1;
             }
             control.fault = Some(Fault::Unquiesced(operation, code));
+            control.accepting = false;
+            self.usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .idle_endpoints = 0;
+            control.endpoints.detach_all();
             control.endpoints.take_all()
         };
         let mut count = 0;
@@ -816,27 +1232,32 @@ impl Shared {
                         .as_ref()
                         .is_some_and(|r| r.connection.lease.is_some()),
                 );
-                grants += usize::from(request.resources.is_some());
+                grants += usize::from(
+                    request
+                        .resources
+                        .as_ref()
+                        .is_some_and(|r| r.grant.is_some()),
+                );
                 bytes += request
                     .resources
                     .as_ref()
-                    .map_or(0, |r| r.grant.buffer.len());
+                    .and_then(|r| r.grant.as_ref())
+                    .map_or(0, |g| g.buffer.len());
                 debt += request.work.as_ref().map_or(0, |w| w.queue.outstanding());
                 receive_debt += usize::from(request.receive.as_ref().is_some_and(|r| r.pending()));
                 if let Some(message) = request
                     .resources
                     .as_ref()
-                    .and_then(|r| r.grant.message.as_ref())
+                    .and_then(|r| r.grant.as_ref())
+                    .and_then(|g| g.message.as_ref())
                 {
                     message_mrs += usize::from(!message.handles.mr.is_null());
                     message_bytes += message.memory.length;
                 }
-                windows += usize::from(
-                    request
-                        .resources
-                        .as_ref()
-                        .is_some_and(|r| !r.grant.handles.mw.is_null()),
-                );
+                windows +=
+                    usize::from(request.resources.as_ref().is_some_and(|r| {
+                        r.grant.as_ref().is_some_and(|g| !g.handles.mw.is_null())
+                    }));
                 request.phase = Phase::Retained;
                 request.failure = Some(Fault::Unquiesced(operation, code));
             }
@@ -866,26 +1287,69 @@ impl Shared {
     }
 
     fn unlock(request: &mut Request) -> std::result::Result<(), (&'static str, i32)> {
-        if request
-            .work
-            .as_ref()
-            .is_some_and(|work| work.queue.pending())
+        if request.work.as_ref().is_some_and(|w| w.queue.pending())
             || request.receive.as_ref().is_some_and(|r| r.pending())
         {
             return Err(("RDMA grant has unresolved completion debt", libc::EBUSY));
         }
         if let Some(resources) = &mut request.resources {
-            if !resources.connection.closed
-                || !resources.grant.handles.mw.is_null()
-                || !resources.grant.handles.mr.is_null()
-            {
-                return Err(("RDMA grant lacks native drain receipt", libc::EBUSY));
+            if !resources.connection.closed {
+                return Err(("RDMA connection lacks native drain receipt", libc::EBUSY));
             }
-            if let Buffer::Direct { loan, .. } = &mut resources.grant.buffer {
-                drop(loan.take());
+            if let Some(grant) = &mut resources.grant {
+                if !grant.handles.mw.is_null() || !grant.handles.mr.is_null() {
+                    return Err(("RDMA grant lacks native drain receipt", libc::EBUSY));
+                }
+                if let Buffer::Direct { loan, .. } = &mut grant.buffer {
+                    drop(loan.take());
+                }
             }
         }
         request.phase = Phase::Closed;
+        Ok(())
+    }
+
+    fn finish_request(&self, record: &Arc<Record>) -> std::result::Result<(), (&'static str, i32)> {
+        if record.actions.load(Ordering::Acquire) & FINISH == 0 {
+            return Ok(());
+        }
+        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
+        if record.terminal.load(Ordering::Acquire) || request.close_requested {
+            return Ok(());
+        }
+        if request.phase != Phase::Drained {
+            return Err(("RDMA finish phase changed", libc::EIO));
+        }
+        let Request {
+            resources, finish, ..
+        } = &mut *request;
+        let resources = resources
+            .as_mut()
+            .ok_or(("missing RDMA finish resources", libc::EIO))?;
+        let receipt = finish
+            .as_ref()
+            .ok_or(("missing sealed RDMA receipt", libc::EIO))?;
+        let grant = resources
+            .grant
+            .as_mut()
+            .ok_or(("missing RDMA finish grant", libc::EIO))?;
+        grant.close_drained(&resources.connection, receipt, self.verbs)?;
+        if let Buffer::Direct { loan, .. } = &mut grant.buffer {
+            drop(loan.take());
+        }
+        drop(resources.grant.take());
+        request.work = None;
+        request.receive = None;
+        request.message_sent = false;
+        request.payload_operation = None;
+        request.mixed_operations = false;
+        request.finish = None;
+        record.actions.store(0, Ordering::Release);
+        self.usage
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .completed_reusable_grants += 1;
+        record.changed.notify_all();
         Ok(())
     }
 
@@ -918,7 +1382,9 @@ impl Shared {
             return Err((operation, code));
         }
         resources.connection.close(self.verbs)?;
-        resources.grant.close(&resources.connection, self.verbs)?;
+        if let Some(grant) = &mut resources.grant {
+            grant.close(&resources.connection, self.verbs)?;
+        }
         Self::unlock(&mut request)?;
         self.control
             .lock()
@@ -966,12 +1432,12 @@ impl Shared {
                 receive.quiesce();
             }
             if let Some(resources) = &mut request.resources {
-                if let Err((operation, code)) =
-                    resources.grant.close(&resources.connection, self.verbs)
-                {
-                    drop(request);
-                    self.retain(operation, code);
-                    return;
+                if let Some(grant) = &mut resources.grant {
+                    if let Err((operation, code)) = grant.close(&resources.connection, self.verbs) {
+                        drop(request);
+                        self.retain(operation, code);
+                        return;
+                    }
                 }
             }
         }
@@ -1027,7 +1493,10 @@ impl Shared {
         let Some(resources) = resources else {
             return false;
         };
-        if work.operation == slice::Operation::Send && resources.grant.message.is_none() {
+        let Some(grant) = &mut resources.grant else {
+            return false;
+        };
+        if work.operation == slice::Operation::Send && grant.message.is_none() {
             request.failure = Some(Fault::Internal("missing RDMA SEND message"));
             record.changed.notify_all();
             return false;
@@ -1055,18 +1524,18 @@ impl Shared {
             match work.operation {
                 slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
                     &mut resources.connection.handles,
-                    &resources.grant.handles,
+                    &grant.handles,
                     requests.as_ptr(),
                     requests.len(),
-                    resources.grant.buffer.address().as_ptr() as u64,
-                    resources.grant.buffer.len(),
+                    grant.buffer.address().as_ptr() as u64,
+                    grant.buffer.len(),
                     work.remote.address,
                     work.remote.rkey,
                     i32::from(work.operation == slice::Operation::Write),
                     &mut posted,
                 ),
                 slice::Operation::Send => {
-                    let Some(message) = &resources.grant.message else {
+                    let Some(message) = &grant.message else {
                         return false;
                     };
                     (self.verbs.send_completion)(
@@ -1081,11 +1550,11 @@ impl Shared {
                 }
                 _ => (self.verbs.window)(
                     &mut resources.connection.handles,
-                    &mut resources.grant.handles,
+                    &mut grant.handles,
                     requests[0].id,
-                    resources.grant.buffer.address().as_ptr() as u64,
-                    resources.grant.buffer.len(),
-                    resources.grant.permission,
+                    grant.buffer.address().as_ptr() as u64,
+                    grant.buffer.len(),
+                    grant.permission,
                     work.operation == slice::Operation::Bind,
                     &mut posted,
                 ),
@@ -1141,14 +1610,14 @@ impl Shared {
                 request.phase = Phase::Connected;
             }
             if operation == Some(slice::Operation::Bind) {
-                if let Some(resources) = &mut request.resources {
-                    resources.grant.window_bound = true;
+                if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
+                    grant.window_bound = true;
                 }
             }
             #[cfg(test)]
             if operation == Some(slice::Operation::Invalidate) {
-                if let Some(resources) = &mut request.resources {
-                    resources.grant.window_bound = false;
+                if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
+                    grant.window_bound = false;
                 }
             }
         }
@@ -1204,7 +1673,7 @@ impl Shared {
         if receive.posted {
             return false;
         }
-        let Some(message) = &resources.grant.message else {
+        let Some(message) = resources.grant.as_ref().and_then(|g| g.message.as_ref()) else {
             request.failure = Some(Fault::Internal("missing RDMA receive message"));
             record.changed.notify_all();
             return false;
@@ -1259,8 +1728,8 @@ impl Shared {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA receive owner"))?;
-        let message = resources
-            .grant
+        let grant = resources.grant_mut()?;
+        let message = grant
             .message
             .as_ref()
             .ok_or(Error::Internal("missing RDMA receive bytes"))?;
@@ -1268,17 +1737,12 @@ impl Shared {
         if message.memory.bytes() != receive.expected {
             return Err(Error::Protocol("RDMA received grant binding mismatch"));
         }
-        if !resources.grant.window_bound || resources.grant.rkey != receive.rkey {
+        if !grant.window_bound || grant.rkey != receive.rkey {
             return Err(Error::Protocol("RDMA receive changed grant authority"));
         }
-        resources.grant.window_bound = false;
+        grant.window_bound = false;
         receive.completed = true;
-        let mut usage = resources
-            .grant
-            ._lease
-            .usage
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut usage = grant._lease.usage.lock().unwrap_or_else(|p| p.into_inner());
         usage.completed_receives += 1;
         usage.completed_window_invalidations += 1;
         Ok(())
@@ -1330,6 +1794,12 @@ impl Shared {
                     .finished = true;
                 self.wake.notify_all();
                 return;
+            }
+            for record in &records {
+                if let Err((operation, code)) = self.finish_request(record) {
+                    self.retain(operation, code);
+                    return;
+                }
             }
             let mut index = 0;
             while index < records.len() {

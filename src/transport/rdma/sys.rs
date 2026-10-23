@@ -124,6 +124,14 @@ pub(super) struct Verbs {
         usize,
         bool,
     ) -> c_int,
+    pub prepare_grant: unsafe extern "C" fn(
+        *mut ConnectionHandles,
+        *mut MemoryHandles,
+        *const DeviceHandles,
+        *mut c_void,
+        usize,
+        u32,
+    ) -> c_int,
     pub open: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *mut MemoryHandles,
@@ -295,6 +303,70 @@ unsafe extern "C" fn register_memory(
     }
 }
 
+unsafe extern "C" fn prepare_grant(
+    handles: *mut ConnectionHandles,
+    memory: *mut MemoryHandles,
+    device: *const DeviceHandles,
+    buffer: *mut c_void,
+    length: usize,
+    permission: u32,
+) -> c_int {
+    // SAFETY: one exclusive grant claim owns these bytes and the actual PD/QP.
+    // This never resets/reconnects an existing QP or publishes its parent key.
+    unsafe {
+        let memory = &mut *memory;
+        let device = &*device;
+        if !(*handles).qp.is_null() && (*(*handles).qp.cast::<ffi::ibv_qp>()).pd != device.pd.cast()
+        {
+            return libc::EINVAL;
+        }
+        let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
+            | if permission != 0 {
+                ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
+            } else {
+                0
+            };
+        if memory.mr.is_null() {
+            memory.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
+            if memory.mr.is_null() {
+                return failure();
+            }
+        } else {
+            let mr = &*memory.mr.cast::<ffi::ibv_mr>();
+            if mr.pd != device.pd.cast()
+                || (buffer as usize)
+                    .checked_sub(mr.addr as usize)
+                    .and_then(|offset| offset.checked_add(length))
+                    .is_none_or(|end| end > mr.length)
+            {
+                return libc::EINVAL;
+            }
+        }
+        if permission != 0 {
+            let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
+            let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
+            if code != 0 {
+                return code;
+            }
+            if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
+                return libc::EOPNOTSUPP;
+            }
+            let context = &*device.context.cast::<ffi::ibv_context>();
+            let Some(allocate) = context.ops.alloc_mw else {
+                return libc::EOPNOTSUPP;
+            };
+            memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
+            if memory.mw.is_null() {
+                return failure();
+            }
+            let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
+            // RdmaContext selects and permanently burns a fresh full key in its PD.
+            memory.window_key = key;
+        }
+        0
+    }
+}
+
 unsafe extern "C" fn open(
     handles: *mut ConnectionHandles,
     memory: *mut MemoryHandles,
@@ -346,27 +418,9 @@ unsafe extern "C" fn open(
         if permission & 2 != 0 {
             remote_access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
         }
-        let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
-            | if permission != 0 {
-                ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
-            } else {
-                0
-            };
-        if memory.mr.is_null() {
-            memory.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
-            if memory.mr.is_null() {
-                return failure();
-            }
-        } else {
-            let mr = &*memory.mr.cast::<ffi::ibv_mr>();
-            if mr.pd != device.pd.cast()
-                || (buffer as usize)
-                    .checked_sub(mr.addr as usize)
-                    .and_then(|offset| offset.checked_add(length))
-                    .is_none_or(|end| end > mr.length)
-            {
-                return libc::EINVAL;
-            }
+        let code = prepare_grant(handles, memory, device, buffer, length, permission);
+        if code != 0 {
+            return code;
         }
         let mut init: ffi::ibv_qp_init_attr = std::mem::zeroed();
         init.send_cq = h.cq.cast();
@@ -399,27 +453,6 @@ unsafe extern "C" fn open(
         let error = ffi::ibv_modify_qp(h.qp.cast(), &mut qp_attr, mask.0 as c_int);
         if error != 0 {
             return error;
-        }
-        if permission != 0 {
-            let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
-            let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
-            if code != 0 {
-                return code;
-            }
-            if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
-                return libc::EOPNOTSUPP;
-            }
-            let context = &*device.context.cast::<ffi::ibv_context>();
-            let Some(allocate) = context.ops.alloc_mw else {
-                return libc::EOPNOTSUPP;
-            };
-            memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
-            if memory.mw.is_null() {
-                return failure();
-            }
-            let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
-            // RdmaContext selects and permanently burns a fresh full key in its PD.
-            memory.window_key = key;
         }
         *local = Descriptor {
             address: buffer as u64,
@@ -861,6 +894,7 @@ pub(super) static REAL: Verbs = Verbs {
     open_device,
     create_cq,
     register_memory,
+    prepare_grant,
     open,
     connect,
     post,

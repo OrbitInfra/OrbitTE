@@ -132,7 +132,14 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
         .unwrap();
     let weak = Arc::downgrade(&memory.0);
     let mut endpoint = runtime
-        .endpoint(&memory, 0, 8, 2, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            0,
+            8,
+            2,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap();
     let events = native_events(&runtime);
     crate::transport::rdma::context::tests::emit_async(&runtime, 255);

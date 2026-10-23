@@ -114,6 +114,8 @@ pub(super) struct ConnectionResources {
     pub(super) handles: sys::ConnectionHandles,
     pub(super) incarnation: Option<ConnectionId>,
     pub(super) local: Descriptor,
+    pub(super) remote: Option<Descriptor>,
+    pub(super) permission: u32,
     pub(super) closed: bool,
     pub(super) lease: Option<ConnectionLease>,
 }
@@ -129,9 +131,19 @@ impl ConnectionResources {
         if let Err(Error::Unquiesced { operation, code }) = self.device.asynchronous.check() {
             return Err((operation, code));
         }
+        let had_qp = !self.handles.qp.is_null();
         let code = unsafe { (verbs.destroy_qp)(&mut self.handles) };
         if code != 0 {
             return Err(("ibv_destroy_qp", code));
+        }
+        if had_qp {
+            if let Some(lease) = &self.lease {
+                lease
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .closed_connections += 1;
+            }
         }
         self.closed = true;
         self.handles.cq = std::ptr::null_mut();
@@ -169,6 +181,22 @@ impl GrantResources {
         {
             return Err(("RDMA grant before connection drain", libc::EBUSY));
         }
+        self.close_native(verbs)
+    }
+
+    pub(super) fn close_drained(
+        &mut self,
+        connection: &ConnectionResources,
+        receipt: &workers::GrantDrain,
+        verbs: &sys::Verbs,
+    ) -> std::result::Result<(), (&'static str, i32)> {
+        if !Arc::ptr_eq(&self.device, &connection.device) || !receipt.matches(connection, self) {
+            return Err(("RDMA grant lacks sealed operation receipt", libc::EBUSY));
+        }
+        self.close_native(verbs)
+    }
+
+    fn close_native(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
         if let Err(Error::Unquiesced { operation, code }) = self.device.asynchronous.check() {
             return Err((operation, code));
         }
@@ -205,7 +233,21 @@ impl GrantResources {
 
 pub(super) struct Resources {
     pub(super) connection: ConnectionResources,
-    pub(super) grant: GrantResources,
+    pub(super) grant: Option<GrantResources>,
+}
+
+impl Resources {
+    pub(super) fn grant(&self) -> Result<&GrantResources> {
+        self.grant
+            .as_ref()
+            .ok_or(Error::Internal("RDMA connection has no active grant"))
+    }
+
+    pub(super) fn grant_mut(&mut self) -> Result<&mut GrantResources> {
+        self.grant
+            .as_mut()
+            .ok_or(Error::Internal("RDMA connection has no active grant"))
+    }
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -309,6 +351,8 @@ unsafe impl Send for GrantResources {}
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Phase {
     Init,
+    Ready,
+    Drained,
     Connected,
     Queued,
     Posted,
@@ -373,12 +417,24 @@ pub(crate) struct RdmaEndpoint {
     pub(super) verbs: &'static sys::Verbs,
     pub(super) deadline: Instant,
     pub(super) output: Option<Box<GrantResources>>,
+    pub(super) claim: u64,
+    pub(super) released: bool,
+    pub(super) cached_peer: Option<super::endpoint_store::Peer>,
 }
 
 impl RdmaEndpoint {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, workers::Request>> {
+        if self.released {
+            return Err(Error::Unavailable("RDMA grant handle has been consumed"));
+        }
+        let state = self.record.lock()?;
+        state.check_claim(self.claim)?;
+        Ok(state)
+    }
+
     pub(super) fn open(&mut self, permission: u32, psn: u32) -> Result<()> {
         self.record.require_live()?;
-        let mut state = self.record.lock()?;
+        let mut state = self.lock()?;
         self.record.require_live()?;
         state.check()?;
         if state.phase != Phase::Init {
@@ -393,15 +449,17 @@ impl RdmaEndpoint {
         let (incarnation, _) =
             device.open_endpoint(resources, &self.config, permission, psn, &mut local)?;
         local.validate()?;
-        self.incarnation = Some(incarnation);
-        self.local = Descriptor {
+        let connection = Descriptor {
             address: 0,
             rkey: 0,
             ..local
         };
-        resources.connection.local = self.local;
-        resources.grant.rkey = local.rkey;
-        state.qpn = self.local.qpn;
+        resources.connection.local = connection;
+        resources.grant_mut()?.rkey = local.rkey;
+        state.qpn = connection.qpn;
+        drop(state);
+        self.incarnation = Some(incarnation);
+        self.local = connection;
         Ok(())
     }
 
@@ -411,9 +469,14 @@ impl RdmaEndpoint {
     }
 
     pub(crate) fn grant_generation(&self) -> Result<u64> {
-        let state = self.record.lock()?;
+        let state = self.lock()?;
         state.check()?;
-        let generation = state.resources.as_ref().map_or(0, |r| r.grant.generation);
+        let generation = state
+            .resources
+            .as_ref()
+            .and_then(|r| r.grant.as_ref())
+            .filter(|g| g.permission != 0)
+            .map_or(0, |g| g.generation);
         if generation == 0 {
             return Err(Error::Internal("endpoint owns no source grant generation"));
         }
@@ -431,12 +494,12 @@ impl RdmaEndpoint {
 
     pub(crate) fn grant(&self) -> Result<Descriptor> {
         self.record.require_live()?;
-        let request = self.record.lock()?;
+        let request = self.lock()?;
         request.check()?;
         if !request
             .resources
             .as_ref()
-            .is_some_and(|r| r.grant.window_bound)
+            .is_some_and(|r| r.grant.as_ref().is_some_and(|g| g.window_bound))
             || request.phase != Phase::Connected
         {
             return Err(Error::Unavailable("source MW has no completed bind"));
@@ -446,8 +509,8 @@ impl RdmaEndpoint {
             .as_ref()
             .ok_or(Error::Internal("missing RDMA grant owner"))?;
         Ok(Descriptor {
-            address: resources.grant.buffer.address().as_ptr() as u64,
-            rkey: resources.grant.rkey,
+            address: resources.grant()?.buffer.address().as_ptr() as u64,
+            rkey: resources.grant()?.rkey,
             ..resources.connection.local
         })
     }
@@ -457,12 +520,12 @@ impl RdmaEndpoint {
         binding: &[u8; super::COMPLETION_MESSAGE_SIZE],
     ) -> Result<()> {
         self.progress
-            .post_receive(&self.record, *binding, self.deadline)
+            .post_receive(&self.record, self.claim, *binding, self.deadline)
     }
 
     pub(crate) fn receive_completion(&self) -> Result<()> {
         self.progress
-            .receive_completion(&self.record, self.deadline)
+            .receive_completion(&self.record, self.claim, self.deadline)
     }
 
     pub(crate) fn send_completion(
@@ -471,23 +534,31 @@ impl RdmaEndpoint {
         rkey: u32,
     ) -> Result<()> {
         self.progress
-            .send_completion(&self.record, *binding, rkey, self.deadline)
+            .send_completion(&self.record, self.claim, *binding, rkey, self.deadline)
     }
 
     pub(crate) fn bind_window(&mut self) -> Result<()> {
-        self.progress
-            .window(&self.record, slice::Operation::Bind, self.deadline)
+        self.progress.window(
+            &self.record,
+            self.claim,
+            slice::Operation::Bind,
+            self.deadline,
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn invalidate_window(&mut self) -> Result<()> {
-        self.progress
-            .window(&self.record, slice::Operation::Invalidate, self.deadline)
+        self.progress.window(
+            &self.record,
+            self.claim,
+            slice::Operation::Invalidate,
+            self.deadline,
+        )
     }
 
     pub(crate) fn fill(&mut self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
         self.record.require_live()?;
-        let mut state = self.record.lock()?;
+        let mut state = self.lock()?;
         self.record.require_live()?;
         state.check()?;
         if state.phase != Phase::Init {
@@ -497,7 +568,7 @@ impl RdmaEndpoint {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA staging"))?
-            .grant
+            .grant_mut()?
             .buffer
         {
             Buffer::Staged(bytes) => memory.read(offset, bytes.bytes_mut()),
@@ -506,7 +577,7 @@ impl RdmaEndpoint {
     }
 
     pub(crate) fn copy_back(&self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
-        let state = self.record.lock()?;
+        let state = self.lock()?;
         state.check()?;
         if state.phase != Phase::Closed {
             return Err(Error::Internal("RDMA buffer is not physically quiescent"));
@@ -525,7 +596,7 @@ impl RdmaEndpoint {
     pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
         remote.validate_connection()?;
         self.record.require_live()?;
-        let mut state = self.record.lock()?;
+        let mut state = self.lock()?;
         self.record.require_live()?;
         state.check()?;
         if state.phase != Phase::Init || remote.link_layer != self.local.link_layer {
@@ -535,6 +606,13 @@ impl RdmaEndpoint {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
+        if let Some(existing) = resources.connection.remote {
+            if existing.connection_bytes() != remote.connection_bytes() {
+                return Err(Error::Protocol("cached RDMA peer descriptor changed"));
+            }
+            state.phase = Phase::Connected;
+            return Ok(());
+        }
         check("ibv_modify_qp RTR/RTS", unsafe {
             (self.verbs.connect)(
                 &mut resources.connection.handles,
@@ -546,6 +624,7 @@ impl RdmaEndpoint {
                 self.config.hop_limit,
             )
         })?;
+        resources.connection.remote = Some(*remote);
         state.phase = Phase::Connected;
         Ok(())
     }
@@ -557,15 +636,65 @@ impl RdmaEndpoint {
         deadline: Instant,
     ) -> Result<()> {
         self.progress
-            .transfer(&self.record, *remote, operation, deadline)
+            .transfer(&self.record, self.claim, *remote, operation, deadline)
+    }
+
+    pub(super) fn finish_sent(
+        &mut self,
+        binding: &[u8; super::COMPLETION_MESSAGE_SIZE],
+    ) -> Result<()> {
+        self.progress
+            .finish_sent(&self.record, self.claim, binding, self.deadline)
+    }
+
+    pub(super) fn finish_received(
+        &mut self,
+        done: &super::rdma_transport::BoundDone,
+    ) -> Result<()> {
+        self.progress
+            .finish_received(&self.record, self.claim, done, self.deadline)
+    }
+
+    pub(super) fn cache(&mut self, peer: super::endpoint_store::Peer) -> Result<()> {
+        if self.released
+            || self.output.is_some()
+            || peer.local != self.incarnation()?
+            || peer.generation == 0
+        {
+            return Err(Error::Internal("RDMA idle claim ownership"));
+        }
+        if let Some(expected) = self.cached_peer {
+            if !expected.same_pair(&peer) || peer.generation <= expected.generation {
+                return Err(Error::Protocol(
+                    "RDMA cached pair or grant generation changed",
+                ));
+            }
+        }
+        if !self.progress.cache(&self.record, self.claim, peer)? {
+            self.close()?;
+        }
+        self.cached_peer = Some(peer);
+        self.released = true;
+        Ok(())
+    }
+
+    pub(super) fn retire_idle(&self) -> Result<()> {
+        self.progress
+            .retire_idle(&self.record, self.claim, self.deadline)
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {
-        let result = self.progress.close_record(&self.record, self.deadline);
+        if self.released {
+            return Ok(());
+        }
+        let result = self
+            .progress
+            .close_record(&self.record, self.claim, self.deadline);
         let mut request = self.record.lock()?;
-        if request.phase == Phase::Closed {
-            if let Some(resources) = request.resources.take() {
-                self.output = Some(Box::new(resources.grant));
+        // A consumed/stale handle has no authority over the next grant.
+        if request.claim == self.claim && request.phase == Phase::Closed {
+            if let Some(mut resources) = request.resources.take() {
+                self.output = resources.grant.take().map(Box::new);
             }
         }
         result

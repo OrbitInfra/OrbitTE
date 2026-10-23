@@ -190,46 +190,75 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
-        let incarnation = ConnectionId::next(device.domain, &mut device.next_connection)?;
-        let grant_generation = if permission != 0 {
-            let generation = device.next_grant;
-            device.next_grant = generation.checked_add(1).ok_or(Error::ResourceExhausted)?;
-            generation
-        } else {
-            0
+        let reused = resources.connection.incarnation.is_some();
+        let incarnation = match resources.connection.incarnation {
+            Some(id) => id,
+            None => ConnectionId::next(device.domain, &mut device.next_connection)?,
         };
+        let generation = device.next_grant;
+        device.next_grant = generation.checked_add(1).ok_or(Error::ResourceExhausted)?;
         resources.connection.incarnation = Some(incarnation);
-        resources.grant.connection = Some(incarnation);
-        resources.grant.generation = grant_generation;
-        // SAFETY: the request and progress lane retain the RdmaContext and shared CQ;
-        // its mutex excludes progress/cleanup while these handles initialize.
-        let code = unsafe {
-            (self.verbs.open)(
-                &mut resources.connection.handles,
-                &mut resources.grant.handles,
-                &device.handles,
-                config.port,
-                config.gid_index,
-                resources.grant.buffer.address().as_ptr().cast(),
-                resources.grant.buffer.len(),
-                permission,
-                psn,
-                config.max_send_wr as u32,
-                local,
-            )
+        let grant = resources.grant_mut()?;
+        grant.connection = Some(incarnation);
+        grant.generation = generation;
+        let buffer = grant.buffer.address().as_ptr().cast();
+        let length = grant.buffer.len();
+        // The record lock excludes posting and retirement throughout construction.
+        let code = if reused {
+            *local = resources.connection.local;
+            let EndpointResources { connection, grant } = resources;
+            let grant = grant
+                .as_mut()
+                .ok_or(Error::Internal("missing reused grant"))?;
+            unsafe {
+                (self.verbs.prepare_grant)(
+                    &mut connection.handles,
+                    &mut grant.handles,
+                    &device.handles,
+                    buffer,
+                    length,
+                    permission,
+                )
+            }
+        } else {
+            let EndpointResources { connection, grant } = resources;
+            let grant = grant.as_mut().ok_or(Error::Internal("missing new grant"))?;
+            unsafe {
+                (self.verbs.open)(
+                    &mut connection.handles,
+                    &mut grant.handles,
+                    &device.handles,
+                    config.port,
+                    config.gid_index,
+                    buffer,
+                    length,
+                    permission,
+                    psn,
+                    config.max_send_wr as u32,
+                    local,
+                )
+            }
         };
-        if !resources.grant.handles.mw.is_null() {
+        if !reused && !resources.connection.handles.qp.is_null() {
+            device
+                .usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .opened_connections += 1;
+        }
+        let grant = resources.grant_mut()?;
+        if !grant.handles.mw.is_null() {
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.active_windows += 1;
             usage.opened_windows += 1;
         }
-        check("ibverbs endpoint construction", code)?;
+        check("ibverbs grant/endpoint construction", code)?;
         if permission != 0 {
-            if resources.grant.handles.mw.is_null() {
+            if grant.handles.mw.is_null() {
                 return Err(Error::Internal("source endpoint has no MW"));
             }
             let previous = device.keys.len();
-            let key = device.keys.burn(resources.grant.handles.window_key);
+            let key = device.keys.burn(grant.handles.window_key);
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.window_key_indices += device.keys.len() - previous;
             let key = match key {
@@ -240,10 +269,23 @@ impl RdmaContext {
                 }
             };
             usage.burned_window_keys += 1;
-            resources.grant.handles.window_key = key;
+            grant.handles.window_key = key;
             local.rkey = key;
         }
-        Ok((incarnation, grant_generation))
+        local.address = buffer as u64;
+        Ok((incarnation, generation))
+    }
+
+    pub(super) fn domain(&self) -> Result<[u8; 16]> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        self.asynchronous.check()?;
+        match &*state {
+            State::Open(resources) => Ok(resources.domain),
+            _ => Err(Error::Unavailable("RDMA device is closed or retained")),
+        }
     }
 
     /// RdmaTransport calls this only after endpoint admission is fenced and drained;

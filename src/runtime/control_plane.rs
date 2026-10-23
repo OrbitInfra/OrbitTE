@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 8;
+const VERSION: u16 = 9;
 pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -137,7 +137,7 @@ impl Reply {
             return Err(Error::Protocol("error/ready reply contains payload"));
         }
         match reply.status {
-            0 | 9 => Ok(reply),
+            0 | 9 | 12 => Ok(reply),
             1 => Err(Error::EpochMismatch),
             2 => Err(Error::RegionNotFound),
             3 => Err(Error::PermissionDenied),

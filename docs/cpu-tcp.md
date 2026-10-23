@@ -246,7 +246,7 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 8**, not TENT's YLT RPC framing or HP-TCP.
+This is **OrbitTE protocol version 9**, not TENT's YLT RPC framing or HP-TCP.
 It makes this first Rust CPU slice executable while TENT wire compatibility
 remains an explicit P0/P9 gate. Future wire changes require a version change
 and corresponding decoder rejection tests.
@@ -259,11 +259,13 @@ BIND/INV completion precedes grant publication/final ACK. Version 7 binds
 both process/PD/connection incarnations, the exact request and an independent
 source grant generation to every RDMA phase and receipt. Version 8 requires
 an actual source RQ receipt after same-QP fenced SEND_WITH_INV, while retaining
-both physical QP-close barriers. Versions 1–7 are explicitly rejected.
+both physical QP-close barriers. Version 9 adds an explicit bilateral connection
+rendezvous, a bound host-Direct release profile and ACK/READY completion for
+connected RDMA reuse. Versions 1–8 are explicitly rejected.
 There is no legacy-protocol fallback.
 
 Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`8`), a
+Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`9`), a
 one-byte operation/status and one zero reserved byte.
 
 | Frame | Remaining fields |

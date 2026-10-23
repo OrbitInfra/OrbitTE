@@ -139,13 +139,15 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             },
             incarnation: None,
             local: Descriptor::default(),
+            remote: None,
+            permission: 0,
             closed: false,
             lease: Some(ConnectionLease {
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),
             }),
         },
-        grant: GrantResources {
+        grant: Some(GrantResources {
             device,
             handles: sys::MemoryHandles::default(),
             cached_mr: None,
@@ -164,7 +166,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             window_used: false,
             window_bound: false,
             message: None,
-        },
+        }),
     });
     RdmaEndpoint {
         record: progress.register(resources).unwrap(),
@@ -175,6 +177,9 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
         verbs: runtime.verbs,
         deadline: deadline(),
         output: None,
+        claim: 1,
+        released: false,
+        cached_peer: None,
     }
 }
 
@@ -450,8 +455,12 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
                 crate::Permission::RemoteReadWrite,
             )
             .unwrap();
-        let mut active = runtime.endpoint(&memory, 0, 4, 1, deadline()).unwrap();
-        let mut passive = runtime.endpoint(&memory, 8, 4, 1, deadline()).unwrap();
+        let mut active = runtime
+            .endpoint(&memory, 0, 4, 1, deadline(), None)
+            .unwrap();
+        let mut passive = runtime
+            .endpoint(&memory, 8, 4, 1, deadline(), None)
+            .unwrap();
         active.connect(&active.descriptor()).unwrap();
         let progress = Arc::clone(&active.progress);
         let pause = pause(&runtime);
@@ -526,12 +535,26 @@ fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() 
         )
         .unwrap();
     let mut source = runtime
-        .endpoint(&memory, 0, 8, 2, Instant::now() + Duration::from_secs(3))
+        .endpoint(
+            &memory,
+            0,
+            8,
+            2,
+            Instant::now() + Duration::from_secs(3),
+            None,
+        )
         .unwrap();
     source.connect(&source.descriptor()).unwrap();
     source.bind_window().unwrap();
     let mut requester = runtime
-        .endpoint(&output, 0, 8, 0, Instant::now() + Duration::from_secs(3))
+        .endpoint(
+            &output,
+            0,
+            8,
+            0,
+            Instant::now() + Duration::from_secs(3),
+            None,
+        )
         .unwrap();
     requester.connect(&requester.descriptor()).unwrap();
     let record = Arc::clone(&requester.record);
@@ -1108,4 +1131,205 @@ fn second_cq_partial_construction_cleans_only_proven_native_owners() {
             (0, 0, 0)
         );
     }
+}
+
+static IDLE_DEBIT: std::sync::OnceLock<(Mutex<(bool, bool)>, Condvar)> = std::sync::OnceLock::new();
+
+pub(super) fn before_idle_debit(shared: &Shared) {
+    if shared.config.device != "copy_idle_debit_pause" {
+        return;
+    }
+    let (lock, changed) = IDLE_DEBIT.get_or_init(Default::default);
+    let mut state = lock.lock().unwrap();
+    state.0 = true;
+    changed.notify_all();
+    while !state.1 {
+        state = changed.wait(state).unwrap();
+    }
+}
+
+#[test]
+fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
+    use crate::engine::tests::{rdma_fixture, source_runtime};
+    use crate::{Permission, TransferRequest, Transport};
+    for terminal_close in [false, true] {
+        *IDLE_DEBIT.get_or_init(Default::default).0.lock().unwrap() = (false, false);
+        let source = rdma_fixture("direct:copy");
+        let requester = rdma_fixture("direct:copy_idle_debit_pause");
+        let local = requester
+            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(vec![0x29; 8].into_boxed_slice(), Permission::RemoteRead)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(3),
+            )
+            .unwrap();
+        assert!(
+            requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address(),
+                        remote_address: remote.base_address(),
+                        length: 8,
+                    }],
+                    Duration::from_secs(3)
+                )
+                .unwrap()
+                .is_complete()
+        );
+        let runtime = source_runtime(&requester);
+        let progress = runtime.progress(runtime.device().unwrap()).unwrap();
+        let mut records = Vec::new();
+        progress
+            .shared
+            .control
+            .lock()
+            .unwrap()
+            .endpoints
+            .snapshot(&mut records);
+        assert_eq!(records.len(), 1);
+        let record = records.remove(0);
+        let claim = record.lock().unwrap().claim;
+        let started = AtomicBool::new(false);
+        thread::scope(|scope| {
+            let progress = &progress;
+            let close = scope.spawn(|| {
+                if terminal_close {
+                    progress.close_record(&record, claim, deadline())
+                } else {
+                    progress.retire_idle(&record, claim, deadline())
+                }
+            });
+            let (lock, changed) = IDLE_DEBIT.get().unwrap();
+            let (state, timed) = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+                .unwrap();
+            assert!(!timed.timed_out());
+            let atomic = progress.shared.control.try_lock().is_err();
+            let failed = scope.spawn(|| {
+                started.store(true, Ordering::Release);
+                progress
+                    .shared
+                    .fail(Fault::Protocol("concurrent idle retirement fault"));
+            });
+            while !started.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            drop(state);
+            lock.lock().unwrap().1 = true;
+            changed.notify_all();
+            let _ = close.join().unwrap();
+            failed.join().unwrap();
+            assert!(
+                atomic,
+                "store detachment and counter debit need one critical section"
+            );
+        });
+        requester.close(Duration::from_secs(3)).unwrap();
+        let stats = requester.stats().unwrap().rdma.unwrap();
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.idle_endpoints,
+                stats.retained_endpoints,
+                stats.active_grants
+            ),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            (
+                stats.opened_connections,
+                stats.closed_connections,
+                stats.progress_failures
+            ),
+            (1, 1, 1)
+        );
+        source.close(Duration::from_secs(3)).unwrap();
+    }
+}
+
+#[test]
+fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
+    use crate::engine::tests::{rdma_fixture, source_runtime};
+    use crate::{Permission, TransferRequest, Transport};
+    let source = rdma_fixture("direct:copy");
+    let requester = rdma_fixture("direct:copy");
+    let local = requester
+        .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(vec![0x29; 8].into_boxed_slice(), Permission::RemoteRead)
+        .unwrap();
+    let peer = requester
+        .open_segment(
+            source.endpoint(),
+            source.source_epoch(),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+    assert!(
+        requester
+            .submit_and_wait(
+                TransferOp::Read,
+                &peer,
+                &[TransferRequest {
+                    transport: Transport::Rdma,
+                    local_address: local.base_address(),
+                    remote_address: remote.base_address(),
+                    length: 8,
+                }],
+                Duration::from_secs(3)
+            )
+            .unwrap()
+            .is_complete()
+    );
+    let runtime = source_runtime(&requester);
+    let progress = runtime.progress(runtime.device().unwrap()).unwrap();
+    let mut records = Vec::new();
+    progress
+        .shared
+        .control
+        .lock()
+        .unwrap()
+        .endpoints
+        .snapshot(&mut records);
+    let record = records.remove(0);
+    record.lock().unwrap().claim = u64::MAX;
+    assert!(matches!(
+        progress.claim(|_| true, deadline()),
+        Err(Error::ResourceExhausted)
+    ));
+    let state = record.lock().unwrap();
+    assert_eq!(state.claim, u64::MAX);
+    assert!(state.phase == Phase::Closed);
+    assert!(record.terminal.load(Ordering::Acquire));
+    drop(state);
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.opened_connections,
+            stats.closed_connections,
+            stats.reused_connections
+        ),
+        (1, 1, 0)
+    );
+    assert_eq!(
+        (
+            stats.active_endpoints,
+            stats.idle_endpoints,
+            stats.retained_endpoints,
+            stats.active_grants
+        ),
+        (0, 0, 0, 0)
+    );
+    requester.close(Duration::from_secs(3)).unwrap();
+    source.close(Duration::from_secs(3)).unwrap();
 }

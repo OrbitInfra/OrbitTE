@@ -31,6 +31,7 @@ struct FakeCq {
     qps: AtomicUsize,
     retiring: AtomicBool,
     ordinal: usize,
+    owners: Mutex<std::collections::HashMap<u32, usize>>,
 }
 
 struct Fake {
@@ -39,14 +40,15 @@ struct Fake {
     receive_cq: *const FakeCq,
     messages: Mutex<Vec<*mut FakeMr>>,
     receive: Mutex<Option<(u64, u64, usize)>>,
-    length: usize,
-    bytes: *mut u8,
+    length: AtomicUsize,
+    bytes: AtomicU64,
     qpn: u32,
-    first_id: u64,
+    first_id: AtomicU64,
+    send_id: AtomicU64,
     remote_address: AtomicU64,
     window_key: AtomicU32,
     window: AtomicUsize,
-    mr: *mut FakeMr,
+    mr: AtomicUsize,
 }
 
 struct FakeReceive {
@@ -77,8 +79,10 @@ struct FakeMr {
 }
 
 struct FakeWindow {
-    bound: bool,
+    bound: AtomicBool,
     qp_alive: AtomicBool,
+    qp: AtomicUsize,
+    received: AtomicBool,
 }
 
 fn block(device: &FakeDevice) {
@@ -147,6 +151,7 @@ unsafe extern "C" fn create_cq(
             qps: AtomicUsize::new(0),
             retiring: AtomicBool::new(false),
             ordinal,
+            owners: Mutex::default(),
         }))
         .cast();
     }
@@ -197,6 +202,82 @@ unsafe extern "C" fn register_memory(
     }
 }
 
+unsafe extern "C" fn prepare_grant(
+    h: *mut sys::ConnectionHandles,
+    memory: *mut sys::MemoryHandles,
+    handles: *const sys::DeviceHandles,
+    bytes: *mut c_void,
+    length: usize,
+    permission: u32,
+) -> c_int {
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    let qp = unsafe { &*(*h).qp.cast::<Fake>() };
+    assert_eq!(
+        qp.mr.load(Ordering::Acquire),
+        0,
+        "previous grant must detach all MR dependencies"
+    );
+    assert!(qp.messages.lock().unwrap().is_empty());
+    assert_eq!(
+        qp.window.load(Ordering::Acquire),
+        0,
+        "no old MW in reused QP"
+    );
+    unsafe {
+        if (*memory).mr.is_null() {
+            device.mrs.fetch_add(1, Ordering::SeqCst);
+            (*memory).mr = Box::into_raw(Box::new(FakeMr {
+                device,
+                address: bytes as usize,
+                length,
+                local_only: false,
+                window_bind: permission != 0,
+                qps: AtomicUsize::new(0),
+                windows: AtomicUsize::new(0),
+            }))
+            .cast();
+        } else {
+            let mr = &*(*memory).mr.cast::<FakeMr>();
+            assert_eq!(mr.window_bind, permission != 0);
+            assert!(
+                bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
+            );
+        }
+        (*(*memory).mr.cast::<FakeMr>())
+            .qps
+            .fetch_add(1, Ordering::SeqCst);
+        qp.mr.store((*memory).mr as usize, Ordering::Release);
+        qp.bytes.store(bytes as u64, Ordering::Release);
+        qp.length.store(length, Ordering::Release);
+        qp.first_id.store(0, Ordering::Release);
+        qp.send_id.store(0, Ordering::Release);
+        if permission != 0 && !device.mode.starts_with("open") {
+            device.events.lock().unwrap().push("alloc_window");
+            if device.mode == "window_unsupported" {
+                return libc::EOPNOTSUPP;
+            }
+            device.windows.fetch_add(1, Ordering::SeqCst);
+            (*memory).mw = Box::into_raw(Box::new(FakeWindow {
+                bound: AtomicBool::new(false),
+                qp_alive: AtomicBool::new(true),
+                qp: AtomicUsize::new(qp as *const Fake as usize),
+                received: AtomicBool::new(false),
+            }))
+            .cast();
+            qp.window.store((*memory).mw as usize, Ordering::Release);
+            (*(*memory).mr.cast::<FakeMr>())
+                .windows
+                .fetch_add(1, Ordering::SeqCst);
+            (*memory).window_key = if device.mode == "key_indices" {
+                (qp.qpn << 8) | 1
+            } else {
+                0x101
+            };
+        }
+    }
+    0
+}
+
 unsafe extern "C" fn open(
     h: *mut sys::ConnectionHandles,
     memory: *mut sys::MemoryHandles,
@@ -222,68 +303,32 @@ unsafe extern "C" fn open(
     let receive_cq = unsafe { &*(*h).receive_cq.cast::<FakeCq>() };
     receive_cq.qps.fetch_add(1, Ordering::SeqCst);
     let qpn = device.next_qpn.fetch_add(1, Ordering::SeqCst);
+    let qp = Box::into_raw(Box::new(Fake {
+        device,
+        cq,
+        receive_cq,
+        messages: Mutex::default(),
+        receive: Mutex::default(),
+        length: AtomicUsize::new(0),
+        bytes: AtomicU64::new(0),
+        qpn,
+        first_id: AtomicU64::new(0),
+        send_id: AtomicU64::new(0),
+        remote_address: AtomicU64::new(0),
+        window_key: AtomicU32::new(0),
+        window: AtomicUsize::new(0),
+        mr: AtomicUsize::new(0),
+    }));
     unsafe {
-        if (*memory).mr.is_null() {
-            device.mrs.fetch_add(1, Ordering::SeqCst);
-            (*memory).mr = Box::into_raw(Box::new(FakeMr {
-                device,
-                address: bytes as usize,
-                length,
-                local_only: false,
-                window_bind: permission != 0,
-                qps: AtomicUsize::new(0),
-                windows: AtomicUsize::new(0),
-            }))
-            .cast();
-        } else {
-            let mr = &*(*memory).mr.cast::<FakeMr>();
-            assert_eq!(mr.window_bind, permission != 0);
-            assert!(
-                bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
-            );
-        }
-        (*(*memory).mr.cast::<FakeMr>())
-            .qps
-            .fetch_add(1, Ordering::SeqCst);
-        (*h).qp = Box::into_raw(Box::new(Fake {
-            device,
-            cq,
-            receive_cq,
-            messages: Mutex::default(),
-            receive: Mutex::default(),
-            length,
-            bytes: bytes.cast(),
-            qpn,
-            first_id: 0,
-            remote_address: AtomicU64::new(0),
-            window_key: AtomicU32::new(0),
-            window: AtomicUsize::new(0),
-            mr: (*memory).mr.cast(),
-        }))
-        .cast();
-        if permission != 0 && !device.mode.starts_with("open") {
-            device.events.lock().unwrap().push("alloc_window");
-            if device.mode == "window_unsupported" {
-                return libc::EOPNOTSUPP;
-            }
-            device.windows.fetch_add(1, Ordering::SeqCst);
-            (*memory).mw = Box::into_raw(Box::new(FakeWindow {
-                bound: false,
-                qp_alive: AtomicBool::new(true),
-            }))
-            .cast();
-            (*(*h).qp.cast::<Fake>())
-                .window
-                .store((*memory).mw as usize, Ordering::Release);
-            (*(*memory).mr.cast::<FakeMr>())
-                .windows
-                .fetch_add(1, Ordering::SeqCst);
-            (*memory).window_key = if device.mode == "key_indices" {
-                (qpn << 8) | 1
-            } else {
-                0x101
-            };
-        }
+        (*h).qp = qp.cast();
+    }
+    cq.owners.lock().unwrap().insert(qpn, qp as usize);
+    receive_cq.owners.lock().unwrap().insert(qpn, qp as usize);
+    let code = unsafe { prepare_grant(h, memory, handles, bytes, length, permission) };
+    if code != 0 {
+        return code;
+    }
+    unsafe {
         *descriptor = Descriptor {
             address: bytes as u64,
             rkey: if permission == 0 {
@@ -306,6 +351,18 @@ unsafe extern "C" fn open(
     }
 }
 
+fn detach_grant(qp: &Fake) {
+    let mr = qp.mr.swap(0, Ordering::AcqRel);
+    if mr != 0 {
+        unsafe { &*(mr as *const FakeMr) }
+            .qps
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+    for mr in qp.messages.lock().unwrap().drain(..) {
+        unsafe { &*mr }.qps.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 unsafe extern "C" fn window(
     handles: *mut sys::ConnectionHandles,
     memory: *mut sys::MemoryHandles,
@@ -320,15 +377,15 @@ unsafe extern "C" fn window(
     let qp = unsafe { &*h.qp.cast::<Fake>() };
     let device = unsafe { &*qp.device };
     let cq = unsafe { &*qp.cq };
-    let state = unsafe { &mut (*(*memory).mw.cast::<FakeWindow>()).bound };
+    let state = unsafe { &(*(*memory).mw.cast::<FakeWindow>()).bound };
     qp.window_key
         .store(unsafe { (*memory).window_key }, Ordering::Release);
     qp.window
         .store(unsafe { (*memory).mw } as usize, Ordering::Release);
-    assert_eq!(address, qp.bytes as u64);
-    assert_eq!(length, qp.length);
+    assert_eq!(address, qp.bytes.load(Ordering::Acquire));
+    assert_eq!(length, qp.length.load(Ordering::Acquire));
     assert!(matches!(permission, 1 | 2));
-    assert_ne!(*state, bind);
+    assert_ne!(state.load(Ordering::Acquire), bind);
     device.events.lock().unwrap().push(if bind {
         "bind_window"
     } else {
@@ -344,11 +401,11 @@ unsafe extern "C" fn window(
         return libc::ENOMEM;
     }
     if fault == "window_unknown_post" || (!bind && fault == "window_inv_unknown") {
-        *state = bind;
+        state.store(bind, Ordering::Release);
         result.uncertain = true;
         return libc::EIO;
     }
-    *state = bind;
+    state.store(bind, Ordering::Release);
     result.accepted = 1;
     if (bind && fault == "window_bind_timeout") || (!bind && fault == "window_inv_timeout") {
         return 0;
@@ -376,13 +433,23 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
     let mr = unsafe { &*h.mr.cast::<FakeMr>() };
     let window = unsafe { &*h.mw.cast::<FakeWindow>() };
     assert!(
-        !window.qp_alive.load(Ordering::Acquire),
-        "creating QP barrier precedes MW cleanup"
+        !window.qp_alive.load(Ordering::Acquire)
+            || (!window.bound.load(Ordering::Acquire) && window.received.load(Ordering::Acquire)),
+        "MW cleanup requires creating QP close or actual receive/invalidation"
     );
     let device = unsafe { &*mr.device };
     device.events.lock().unwrap().push("dealloc_window");
     if device.mode == "window_close" {
         return libc::EIO;
+    }
+    if window.qp_alive.load(Ordering::Acquire) {
+        let qp = unsafe { &*(window.qp.load(Ordering::Acquire) as *const Fake) };
+        assert_eq!(qp.mr.load(Ordering::Acquire), 0);
+        assert!(
+            qp.window
+                .compare_exchange(h.mw as usize, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        );
     }
     unsafe {
         drop(Box::from_raw(h.mw.cast::<FakeWindow>()));
@@ -420,16 +487,16 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
-    let state = unsafe { &mut *(*h).qp.cast::<Fake>() };
+    let state = unsafe { &*(*h).qp.cast::<Fake>() };
     let device = unsafe { &*state.device };
     let cq = unsafe { &*state.cq };
     let mode = device.mode.as_str();
-    assert_eq!(local, state.bytes as u64);
-    assert_eq!(local_length, state.length);
+    assert_eq!(local, state.bytes.load(Ordering::Acquire));
+    assert_eq!(local_length, state.length.load(Ordering::Acquire));
     state.remote_address.store(remote, Ordering::Release);
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
-    if state.first_id == 0 {
-        state.first_id = requests[0].id;
+    if state.first_id.load(Ordering::Acquire) == 0 {
+        state.first_id.store(requests[0].id, Ordering::Release);
     }
     let partial = mode.starts_with("partial");
     let uncertain =
@@ -442,11 +509,15 @@ unsafe extern "C" fn post(
         count
     };
     for request in &requests[..accepted] {
-        assert!(request.offset as usize + request.length as usize <= state.length);
+        assert!(
+            request.offset as usize + request.length as usize
+                <= state.length.load(Ordering::Acquire)
+        );
         if mode.contains("copy") {
             // CPU mutation under production leases, not a DMA receipt.
             unsafe {
-                let local = state.bytes.add(request.offset as usize);
+                let local =
+                    (state.bytes.load(Ordering::Acquire) as *mut u8).add(request.offset as usize);
                 let remote = (remote as usize as *mut u8).add(request.offset as usize);
                 if write != 0 {
                     std::ptr::copy(local, remote, request.length as usize);
@@ -459,7 +530,7 @@ unsafe extern "C" fn post(
             id: if mode == "identity" {
                 u64::MAX
             } else if mode == "duplicate" {
-                state.first_id
+                state.first_id.load(Ordering::Acquire)
             } else {
                 request.id
             },
@@ -499,7 +570,10 @@ unsafe extern "C" fn post_receive(
     let device = unsafe { &*qp.device };
     device.events.lock().unwrap().push("post_receive");
     assert_eq!(length, COMPLETION_MESSAGE_SIZE);
-    assert_ne!(unsafe { (*memory).mr }, qp.mr.cast());
+    assert_ne!(
+        unsafe { (*memory).mr },
+        qp.mr.load(Ordering::Acquire) as *mut c_void
+    );
     unsafe {
         *result = sys::PostResult::default();
     }
@@ -511,7 +585,10 @@ unsafe extern "C" fn post_receive(
     qp.messages.lock().unwrap().push(mr);
     *qp.receive.lock().unwrap() = Some((id, address, length));
     receives().lock().unwrap().insert(
-        (qp.bytes as u64, qp.window_key.load(Ordering::Acquire)),
+        (
+            qp.bytes.load(Ordering::Acquire),
+            qp.window_key.load(Ordering::Acquire),
+        ),
         FakeReceive {
             qp: qp as *const Fake as usize,
             cq: qp.receive_cq as usize,
@@ -547,7 +624,10 @@ unsafe extern "C" fn send_completion(
     let device = unsafe { &*qp.device };
     device.events.lock().unwrap().push("send_completion");
     assert_eq!(length, COMPLETION_MESSAGE_SIZE);
-    assert_ne!(unsafe { (*memory).mr }, qp.mr.cast());
+    assert_ne!(
+        unsafe { (*memory).mr },
+        qp.mr.load(Ordering::Acquire) as *mut c_void
+    );
     let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
     assert_eq!(unsafe { &*mr }.address, address as usize);
     unsafe {
@@ -556,6 +636,7 @@ unsafe extern "C" fn send_completion(
     if device.mode == "send_completion_post" {
         return libc::ENOMEM;
     }
+    qp.send_id.store(id, Ordering::Release);
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
     qp.messages.lock().unwrap().push(mr);
     if device.mode.contains("send_completion_unknown") {
@@ -576,7 +657,9 @@ unsafe extern "C" fn send_completion(
         // Explicit CPU provider control, not evidence of RNIC DMA or ordering.
         unsafe {
             std::ptr::copy_nonoverlapping(address as *const u8, receive.address as *mut u8, length);
-            (*(receive.window as *mut FakeWindow)).bound = false;
+            (*(receive.window as *mut FakeWindow))
+                .bound
+                .store(false, Ordering::Release);
             let cq = &*(receive.cq as *const FakeCq);
             cq.completions.lock().unwrap().push_back(sys::Completion {
                 id: receive.id,
@@ -621,6 +704,27 @@ unsafe extern "C" fn poll(
         queue.pop_front()
     };
     if let Some(value) = value {
+        if value.status == 0 && matches!(value.opcode, 0 | 128) {
+            if let Some(owner) = state.owners.lock().unwrap().get(&value.qpn).copied() {
+                let qp = unsafe { &*(owner as *const Fake) };
+                let exact = if value.opcode == 0 {
+                    qp.send_id.load(Ordering::Acquire) == value.id
+                } else {
+                    qp.receive.lock().unwrap().is_some_and(|r| r.0 == value.id)
+                };
+                if exact {
+                    if value.opcode == 128 {
+                        let window = qp.window.load(Ordering::Acquire);
+                        if window != 0 {
+                            unsafe { &*(window as *const FakeWindow) }
+                                .received
+                                .store(true, Ordering::Release);
+                        }
+                    }
+                    detach_grant(qp);
+                }
+            }
+        }
         unsafe {
             *completion = value;
         }
@@ -670,14 +774,17 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
             .qp_alive
             .store(false, Ordering::Release);
     }
-    unsafe { &*state.mr }.qps.fetch_sub(1, Ordering::SeqCst);
+    detach_grant(state);
+    cq.owners.lock().unwrap().remove(&state.qpn);
+    unsafe { &*state.receive_cq }
+        .owners
+        .lock()
+        .unwrap()
+        .remove(&state.qpn);
     cq.qps.fetch_sub(1, Ordering::SeqCst);
     unsafe { &*state.receive_cq }
         .qps
         .fetch_sub(1, Ordering::SeqCst);
-    for mr in state.messages.lock().unwrap().iter() {
-        unsafe { &**mr }.qps.fetch_sub(1, Ordering::SeqCst);
-    }
     device.endpoints.fetch_sub(1, Ordering::SeqCst);
     unsafe {
         drop(Box::from_raw(handles.qp.cast::<Fake>()));
@@ -808,6 +915,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     open_device,
     create_cq,
     register_memory,
+    prepare_grant,
     open,
     connect,
     post,
@@ -958,6 +1066,7 @@ impl RdmaTransport {
             length,
             permission,
             Instant::now() + Duration::from_secs(2),
+            None,
         )
     }
 }
@@ -1175,10 +1284,24 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
     let mut runtime = runtime("direct:ok");
     runtime.config.max_endpoints = 3;
     let mut first = runtime
-        .endpoint(&memory, 3, 5, 1, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            3,
+            5,
+            1,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap();
     let mut second = runtime
-        .endpoint(&memory, 13, 3, 2, Instant::now() + Duration::from_secs(2))
+        .endpoint(
+            &memory,
+            13,
+            3,
+            2,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
         .unwrap();
     assert_eq!(first.descriptor().address, memory.base_address() + 3);
     assert_eq!(second.descriptor().address, memory.base_address() + 13);
@@ -1187,12 +1310,22 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
         let resources = state.resources.as_ref().unwrap();
         let fake = unsafe { &*resources.connection.handles.qp.cast::<Fake>() };
         assert_eq!(
-            (fake.bytes as u64, fake.length),
+            (
+                fake.bytes.load(Ordering::Acquire),
+                fake.length.load(Ordering::Acquire)
+            ),
             (memory.base_address() + 3, 5)
         );
     }
     assert!(matches!(
-        runtime.endpoint(&memory, 9, 1, 0, Instant::now() + Duration::from_secs(2)),
+        runtime.endpoint(
+            &memory,
+            9,
+            1,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None
+        ),
         Err(Error::ResourceExhausted)
     ));
     memory.write(9, &[7]).unwrap();
@@ -1250,7 +1383,14 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
             // not resurrect an idle parent when partial cleanup fails.
             registry.unregister(&memory).unwrap();
         }
-        let result = runtime.endpoint(&memory, 2, 4, 2, Instant::now() + Duration::from_secs(2));
+        let result = runtime.endpoint(
+            &memory,
+            2,
+            4,
+            2,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        );
         let retained = mode.contains("close");
         if memory.is_active() {
             registry.unregister(&memory).unwrap();
@@ -1303,7 +1443,14 @@ fn direct_native_failures_release_or_retain_actual_backing_registration_and_acce
                 .register(vec![0; 8].into_boxed_slice(), crate::Permission::LocalOnly)
                 .unwrap();
             assert!(matches!(
-                runtime.endpoint(&probe, 0, 1, 0, Instant::now() + Duration::from_secs(2)),
+                runtime.endpoint(
+                    &probe,
+                    0,
+                    1,
+                    0,
+                    Instant::now() + Duration::from_secs(2),
+                    None
+                ),
                 Err(Error::Unavailable(_))
             ));
             assert!(
@@ -1356,7 +1503,14 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         runtime.config.block_size = 16;
         runtime.config.max_send_wr = 4;
         let mut endpoint = runtime
-            .endpoint(&memory, 0, 128, 1, Instant::now() + Duration::from_secs(2))
+            .endpoint(
+                &memory,
+                0,
+                128,
+                1,
+                Instant::now() + Duration::from_secs(2),
+                None,
+            )
             .unwrap();
         let remote = endpoint.descriptor();
         endpoint.connect(&remote).unwrap();
@@ -1415,8 +1569,8 @@ impl RdmaEndpoint {
         let state = self.record.lock().unwrap();
         let resources = state.resources.as_ref().unwrap();
         Descriptor {
-            address: resources.grant.buffer.address().as_ptr() as u64,
-            rkey: resources.grant.rkey,
+            address: resources.grant.as_ref().unwrap().buffer.address().as_ptr() as u64,
+            rkey: resources.grant.as_ref().unwrap().rkey,
             ..resources.connection.local
         }
     }
@@ -1457,4 +1611,17 @@ pub(super) fn deliver_completion(
         .lock()
         .unwrap()
         .push_back(completion);
+}
+
+pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaEndpoint) {
+    if endpoint.cached_peer.is_some() && runtime.config.device == "async_copy_reuse_open_pause" {
+        let pause = pause(runtime);
+        let (lock, changed) = &*pause;
+        let mut state = lock.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    }
 }
