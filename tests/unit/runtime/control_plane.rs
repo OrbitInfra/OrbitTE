@@ -1000,6 +1000,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
 }
 
+#[cfg(feature = "rdma")]
 pub(crate) fn read_request(channel: &mut ControlChannel<'_>) -> Request {
     let mut bytes = [0; REQUEST_SIZE];
     channel.read_exact(&mut bytes).unwrap();
