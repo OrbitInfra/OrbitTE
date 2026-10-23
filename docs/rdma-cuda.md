@@ -63,7 +63,7 @@ the port/GID index, traffic class, hop limit and endpoint/direct/staging budgets
 `RdmaConfig.host_memory` defaults to `RdmaHostMemory::Direct`: actual DRAM and
 CUDA-pinned host ranges use actual application backing. Requesters reuse a local-only MR for the full registered view; P4.7e source
 grants reuse a separate MW-bind parent for the full view and bind only the exact
-requested range. The source cache implementation is awaiting native acceptance. Set it to `Staged`
+requested range. The source cache has scoped independent source/CPU/native acceptance. Set it to `Staged`
 for private host copies. `max_direct_bytes` and `max_staging_bytes` separately
 bound each engine's charged native bytes (64 MiB each by default); both share
 `max_endpoints`. A failed host MR registration is an error, never a staging
@@ -1235,7 +1235,9 @@ SSD and GDS require separate evidence. No performance comparison is claimed.
 
 ## Persistent source registration
 
-P4.7e is implemented and awaiting source/CPU/native independent acceptance.
+P4.7e is independently accepted for the declared source/CPU/native profiles.
+It advances B04's host path, F04 registration and F15/F18 physical ownership
+foundations; complete parity rows remain open.
 It keeps the frozen TENT
 [`LocalBufferManager`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/buffers.cpp)
 boundary: a buffer registration and its access capability belong to the buffer
@@ -1271,3 +1273,50 @@ actual source-cache counters and denies a write one byte before the MW while
 still inside its registered parent. Existing parent-key and invalidated-key
 probes remain required. These gates do not establish connected QP reuse, arbitrary
 physical faults, direct GPU registration, multirail or a performance gain.
+
+Source `dda4db90ad06c04ccfe060cd5e79fa1b9ab2daea` passes independent
+stable 1.97.1/MSRV 1.85 four-feature gates, 128 unit tests, 148 rejected CPU
+negative controls and 40 single-CPU release runs. Twenty-six negative-control
+children intentionally abort inside CPU fake/provider-ABI assertions; those are
+not hardware fault injections. The first-native-deregistration-failure test
+specifically rejects marking only the first capability retiring. Both the
+implementation stable build and independent MSRV build pass 31 native cases:
+eight key/range rejection probes, six four-QP shared-progress, three same-runtime
+duplex and fourteen public DRAM/pinned/GPU-staging/TCP regressions. A direct source
+opens one parent and reuses it five times; a shared source reuses it seven times.
+Duplex charges two full-view MRs and reuses one source parent seven times.
+
+The physical key probes reject an unadvertised parent-key WRITE, a revoked-key
+WRITE, a WRITE outside the exact MW and an old-key READ after actual remote
+invalidation while the source QP is still live, in both directions. They require
+actual REM_ACCESS_ERR, complete guards/bytes and physical close. There is no
+separate parent-key READ hardware probe; absence of both parent remote flags is
+also verified in source. Each native run confirms 62 actual SSH waits, all 124
+owned PIDs absent, both queue debts and all memory/native owners at zero after
+close, the original three resource-lock inodes reusable, unchanged frozen DSOs
+and A-H20 GPU7 back at zero memory. B GPUs are not selected. Native eviction,
+unregister, arbitrary partial posts, device and cleanup faults remain unqualified.
+
+External evidence is under
+`/root/orbitte-artifacts/rdma-source-registration-20261023/`:
+`implementation-source-dda4db9/manifest.json`,
+`native-dda4db9/implementation-hardware-review.json`,
+`independent-hardware-dda4db9/independent-review.json` and
+`independent-hardware-dda4db9/independent-raw-audit.json`. The independent scoped
+acceptance is `review/independent-scoped-acceptance-dda4db9.json`, SHA-256
+`adcd3c59f1da0f7e511679029922931107010cc526d1c8554d28e4af94245652`.
+The two source archives and distinct native binary hashes are recorded there.
+This accepts the stated P4.7e profile while both QP barriers remain. Connected
+reuse, release of incoming-DMA owners on live QPs, full P4, GDR, multirail,
+performance and OrbitKV integration remain open.
+
+For the planned P4.7f profile in the completion plan, the operation-level
+contract follows [RFC 8166 section 2.3.2](https://www.rfc-editor.org/rfc/rfc8166.html#section-2.3.2)
+on data completion and subsequent SEND notification, and
+[RFC 8797 section 3.2](https://www.rfc-editor.org/rfc/rfc8797.html#section-3.2)
+on actual receive-reported invalidation. It additionally requires OrbitTE's
+full per-grant sealing, same-SQ fence, bilateral binding and resource cleanup.
+It must retain frozen TENT's nonterminal endpoint lookup and detached retirement,
+with a physical connection's identity unchanged across fresh grants. These are
+implementation/acceptance requirements for the next substage, not behavior
+implemented by this source-MR change.
