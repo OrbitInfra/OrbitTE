@@ -785,6 +785,7 @@ fn candidate_fallback_requires_actual_cleanup_and_retained_failure_stops_discove
     };
     for (mode, retained) in [
         ("device_open", false),
+        ("route_rejected", false),
         ("device_open_close", true),
         ("device_pd_close", true),
     ] {

@@ -147,6 +147,18 @@ fn pins_and_whitelist_are_strict_and_gid_zero_is_not_auto() {
     assert!(matches!(f.discover(&config), Err(Error::Unavailable(_))));
     config.gid_index = Some(3);
     assert_eq!(f.discover(&config).unwrap().1.len(), 1);
+    // Matching routes prevent port/GID filters from concealing a missing device pin.
+    f.gid("b", 1, 0, "::ffff:192.0.2.2", "IB/RoCE v1", "eth1");
+    let (_, pinned) = f.discover(&RdmaConfig::new("a")).unwrap();
+    assert_eq!(pinned.len(), 1);
+    assert!(pinned.iter().all(|route| route.device == "a"));
+    let blacklist = RdmaConfig {
+        rdma_blacklist: vec!["a".into()],
+        ..Default::default()
+    };
+    let (inventory, allowed) = f.discover(&blacklist).unwrap();
+    assert_eq!(inventory.nic_list.len(), 1);
+    assert!(allowed.iter().all(|route| route.device == "b"));
     for name in ["", "../a", "a/b", ".", "a\0b"] {
         assert!(RdmaConfig::new(name).validate().is_err());
     }

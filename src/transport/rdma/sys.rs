@@ -325,10 +325,15 @@ fn validate_gid_entry(entry: &ffi::ibv_gid_entry, address: &RdmaAddress) -> Resu
     Ok(())
 }
 
-unsafe fn query_address(
+unsafe fn read_address(
     device: *const DeviceHandles,
     expected: &RdmaAddress,
-) -> Result<RdmaAddress> {
+) -> Result<(RdmaAddress, ffi::ibv_gid_entry)> {
+    #[cfg(test)]
+    if let Some(result) = tests::take_address_read(device) {
+        return result;
+    }
+
     let descriptor = unsafe { query_descriptor(device, expected.port, expected.gid_index) }
         .map_err(|code| Error::Backend {
             operation: "ibverbs route query",
@@ -360,6 +365,14 @@ unsafe fn query_address(
         net_device_index,
         ..expected.clone()
     };
+    Ok((observed, entry))
+}
+
+unsafe fn query_address(
+    device: *const DeviceHandles,
+    expected: &RdmaAddress,
+) -> Result<RdmaAddress> {
+    let (observed, entry) = unsafe { read_address(device, expected) }?;
     validate_gid_entry(&entry, &observed)?;
     if entry.ndev_ifindex != 0 {
         let mut name = [0; libc::IF_NAMESIZE];

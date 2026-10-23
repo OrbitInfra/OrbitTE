@@ -956,6 +956,11 @@ unsafe fn query_address(
     if let Some(route) = &*device.route.lock().unwrap() {
         return Ok(route.clone());
     }
+    if device.mode == "route_rejected" {
+        let mut observed = address.clone();
+        observed.descriptor.gid[15] ^= 1;
+        return Ok(observed);
+    }
     Ok(discovery::RdmaAddress {
         descriptor: Descriptor {
             lid: 1,
