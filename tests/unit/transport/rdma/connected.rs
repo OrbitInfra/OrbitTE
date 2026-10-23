@@ -48,7 +48,11 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
         "two roles and two fixed operation capabilities"
     );
     let json = rows.iter().map(|row| {
-        let id = row.1.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let id = row.1.iter().fold(String::with_capacity(48), |mut id, byte| {
+            use std::fmt::Write as _;
+            write!(id, "{byte:02x}").unwrap();
+            id
+        });
         format!("{{\"tag\":{},\"connection\":\"{id}\",\"qpn\":{},\"psn\":{},\"remote_qpn\":{},\"remote_psn\":{},\"qp_handle\":{},\"permission\":{}}}", row.0,row.2,row.3,row.4,row.5,row.6,row.7)
     }).collect::<Vec<_>>().join(",");
     println!("ORBITTE_CONNECTION_SNAPSHOT {{\"round\":{round},\"connections\":[{json}]}}");
