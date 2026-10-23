@@ -32,9 +32,10 @@ usable. Failed native cleanup retains those owners and charges. Device
 allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
-Each engine lazily reuses one RNIC context/PD. Requester local-only host MRs
-now persist across requests in a bounded registration cache, while source-grant
-parent MRs and QPs remain exclusive to each request. P4.7a implements one-use
+Each engine lazily reuses one RNIC context/PD. Requester local-only and source MW-bind host MRs now persist across requests
+in one bounded `LocalBufferManager` (P4.7e). Per-request MWs and QPs retain their
+existing physical teardown barriers. Independent source/CPU review and two
+separately built 31-case native runs accept the declared source-cache profile. P4.7a implements one-use
 Type-2B MW source grants: parent MRs have LOCAL_WRITE/MW_BIND permissions only;
 bound MW keys become visible after a successful BIND CQE and are invalidated
 before final ACK. Independent review accepts its scoped CPU and native gates.
@@ -105,6 +106,11 @@ binding before confirming completion. SQ and RQ credits are independent, even
 at capacity one. Both physical QP-close barriers remain. Independent review
 accepts the scoped source/CPU and two independently built 29-case native runs. Connected reuse
 and release of incoming-DMA owners without QP close remain open.
+
+P4.7e accepts scoped persistent source registration with exact one-use MW authority.
+Local and MW-bind capabilities for the same registered view are distinct physical
+MRs sharing the same cache limits; source READ and WRITE reuse the MW-bind parent.
+No parent key is published. See [the source registration contract](docs/rdma-cuda.md#persistent-source-registration).
 
 The protocol remains OrbitTE-only. Full TENT API/wire compatibility, RDMA/GPU
 coverage, GPUDirect, NVLink, SSD, installed inference serving and physical fault

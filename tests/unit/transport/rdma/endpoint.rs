@@ -94,6 +94,8 @@ fn partial_retirement_distinguishes_closed_qps_from_retained_grants_and_never_re
         endpoint.connect(&endpoint.descriptor()).unwrap();
         endpoint.bind_window().unwrap();
         endpoint.invalidate_window().unwrap();
+        registry.unregister(&memory).unwrap();
+        transport.registrations.retire(&memory).unwrap();
         assert!(
             matches!(endpoint.close(), Err(Error::Unquiesced { .. })),
             "{mode}"
@@ -117,7 +119,10 @@ fn partial_retirement_distinguishes_closed_qps_from_retained_grants_and_never_re
         assert!(memory.read(0, &mut [0; 8]).is_err());
         let receipt = log.lock().unwrap().clone();
         assert_eq!(
-            receipt.iter().filter(|e| **e == "deregister").count(),
+            receipt
+                .iter()
+                .filter(|e| **e == "deregister_parent")
+                .count(),
             usize::from(deregistered)
         );
         assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
@@ -131,6 +136,5 @@ fn partial_retirement_distinguishes_closed_qps_from_retained_grants_and_never_re
             transport.close(deadline()),
             Err(Error::Unquiesced { .. })
         ));
-        registry.unregister(&memory).unwrap();
     }
 }

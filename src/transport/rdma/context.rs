@@ -102,10 +102,11 @@ impl RdmaContext {
         Ok(owner)
     }
 
-    pub(super) fn register_local(
+    pub(super) fn register_memory(
         &self,
         handles: &mut sys::MemoryHandles,
         memory: &RegisteredMemory,
+        window_bind: bool,
     ) -> Result<()> {
         let address = memory.host_address()?;
         let state = self
@@ -118,11 +119,12 @@ impl RdmaContext {
         self.asynchronous.check()?;
         // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
         check("ibv_reg_mr", unsafe {
-            (self.verbs.register_local)(
+            (self.verbs.register_memory)(
                 handles,
                 &resources.handles,
                 address.as_ptr().cast(),
                 memory.len(),
+                window_bind,
             )
         })
     }
@@ -143,11 +145,12 @@ impl RdmaContext {
         self.asynchronous.check()?;
         // The grant record owns the stable control bytes through native teardown.
         check("ibv_reg_mr completion message", unsafe {
-            (self.verbs.register_local)(
+            (self.verbs.register_memory)(
                 handles,
                 &resources.handles,
                 address.as_ptr().cast(),
                 length,
+                false,
             )
         })
     }

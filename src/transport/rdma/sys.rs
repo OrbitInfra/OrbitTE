@@ -117,8 +117,13 @@ pub(super) struct Verbs {
     pub asynchronous: Option<AsyncVerbs>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub create_cq: unsafe extern "C" fn(*mut ConnectionHandles, *const DeviceHandles, u32) -> c_int,
-    pub register_local:
-        unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles, *mut c_void, usize) -> c_int,
+    pub register_memory: unsafe extern "C" fn(
+        *mut MemoryHandles,
+        *const DeviceHandles,
+        *mut c_void,
+        usize,
+        bool,
+    ) -> c_int,
     pub open: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *mut MemoryHandles,
@@ -260,20 +265,26 @@ unsafe extern "C" fn create_cq(
     }
 }
 
-unsafe extern "C" fn register_local(
+unsafe extern "C" fn register_memory(
     handles: *mut MemoryHandles,
     device: *const DeviceHandles,
     buffer: *mut c_void,
     length: usize,
+    window_bind: bool,
 ) -> c_int {
     // SAFETY: the MR owner retains the device and entire host registration.
-    // LOCAL_WRITE permits local READ destinations without any remote access.
+    // Window-bind capability never grants access through the parent MR rkey.
     unsafe {
         (*handles).mr = ffi::ibv_reg_mr(
             (*device).pd.cast(),
             buffer,
             length,
-            ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0 as c_int,
+            (ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
+                | if window_bind {
+                    ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
+                } else {
+                    0
+                }) as c_int,
         )
         .cast();
         if (*handles).mr.is_null() {
@@ -346,8 +357,16 @@ unsafe extern "C" fn open(
             if memory.mr.is_null() {
                 return failure();
             }
-        } else if permission != 0 {
-            return libc::EINVAL;
+        } else {
+            let mr = &*memory.mr.cast::<ffi::ibv_mr>();
+            if mr.pd != device.pd.cast()
+                || (buffer as usize)
+                    .checked_sub(mr.addr as usize)
+                    .and_then(|offset| offset.checked_add(length))
+                    .is_none_or(|end| end > mr.length)
+            {
+                return libc::EINVAL;
+            }
         }
         let mut init: ffi::ibv_qp_init_attr = std::mem::zeroed();
         init.send_cq = h.cq.cast();
@@ -841,7 +860,7 @@ pub(super) static REAL: Verbs = Verbs {
     }),
     open_device,
     create_cq,
-    register_local,
+    register_memory,
     open,
     connect,
     post,

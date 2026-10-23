@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.7d/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.7e/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share a bounded, single-rail
@@ -61,9 +61,9 @@ NVLink, device MR support or a new completed parity row.
 Set `EngineConfig.rdma = Some(RdmaConfig::new("mlx5_0"))` and explicitly choose
 the port/GID index, traffic class, hop limit and endpoint/direct/staging budgets.
 `RdmaConfig.host_memory` defaults to `RdmaHostMemory::Direct`: actual DRAM and
-CUDA-pinned host ranges use actual application backing. Requesters reuse a
-local-only MR for the full registered view; source grants register only the
-requested range for each request. Set it to `Staged`
+CUDA-pinned host ranges use actual application backing. Requesters reuse a local-only MR for the full registered view; P4.7e source
+grants reuse a separate MW-bind parent for the full view and bind only the exact
+requested range. The source cache has scoped independent source/CPU/native acceptance. Set it to `Staged`
 for private host copies. `max_direct_bytes` and `max_staging_bytes` separately
 bound each engine's charged native bytes (64 MiB each by default); both share
 `max_endpoints`. A failed host MR registration is an error, never a staging
@@ -102,8 +102,8 @@ P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
 Overlapping and successive requests retain that actual shared owner; separate
 engines do not share PDs. P4.6 introduced shared progress. P4.7d gives that context separate shared SQ
 and RQ CQs, polled by one post/poll worker. Every request retains its own QP, exact direct range lease or
-stable staging. P4.7a source parent MRs and MWs remain per request; parent
-MRs have LOCAL_WRITE|MW_BIND only. One-use Type-2B MWs grant exact READ or WRITE
+stable staging. P4.7e source parent MRs outlive requests; per-request MWs retain their physical
+teardown barrier. Parent MRs have LOCAL_WRITE|MW_BIND only. One-use Type-2B MWs grant exact READ or WRITE
 access after a successful BIND CQE. QPs and PSNs remain per request. P4.5 requester local-only host MRs
 outlive the request QP and can be reused within that engine. The shared PD is not a source-grant authorization boundary. Port state, MTU, LID and the selected GID
 are re-queried for every new endpoint instead of reusing cached addressing.
@@ -122,8 +122,10 @@ of its handler. Connected endpoint reuse remains future P4 work. Resource reuse
 alone is no performance result.
 
 The persistent cache uses actual `RegisteredMemory` identity within one PD,
-registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` only, and
-retains its real allocation and device. `max_cached_mrs` and
+registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
+or `LOCAL_WRITE|MW_BIND` for a source, and retains its real allocation and device.
+Capability is part of the cache key: one view used in both roles needs two actual
+MRs, with two full-view byte charges. A local-only MR is never silently upgraded. `max_cached_mrs` and
 `max_cached_mr_bytes` bound physical count and full-view bytes (defaults 64 and
 64 MiB), independently of exact active DMA bytes. Creating, closing and retained
 MRs remain charged. Idle entries are evicted in least-recently-used order;
@@ -193,9 +195,11 @@ A requester SEND CQE or TCP DONE alone cannot prove source completion.
 
 The requester still physically destroys its QP and releases its MR borrow/loan
 before bound TCP DONE. The source requires both DONE and the validated RQ
-receipt, then physically destroys its QP, MW and parent MR. Only afterward may
-it release its loan or commit WRITE staging, drop its output charge and send
-bound ACK. READ staging copies back only after ACK. Both QP barriers remain;
+receipt, then physically destroys its QP and MW before returning its parent MR
+borrow to `LocalBufferManager`. It may then release its exact loan or commit
+WRITE staging, drop its output charge and send bound ACK. An idle active parent
+remains registered; final unregister, LRU eviction or engine close can physically
+deregister it later. READ staging copies back only after ACK. Both QP barriers remain;
 this stage does not qualify release of incoming-DMA owners without QP close.
 The public success path uses remote invalidation instead of LOCAL_INV. Historical
 LOCAL_INV and parent-key native probes remain separate regression controls.
@@ -331,10 +335,14 @@ of application commit/notification results. `direct_bytes` remains charged
 through endpoint-owner release (or forever on unquiesced retention);
 `opened_direct_endpoints` counts successfully constructed direct host endpoints.
 Staging-only or device-staged peers report zero direct opens.
-`persistent_mrs`/`persistent_mr_bytes` count cached local-only physical owners,
-including creation/closing/retention; `retained_persistent_mrs` records failed
-cleanup. Successful creation, cache reuse and idle eviction have separate
-cumulative counters. These do not count source-grant or staging MRs. Successful
+`persistent_mrs`/`persistent_mr_bytes` count both cached local-only and MW-bind
+physical owners, including creation/closing/retention; `retained_persistent_mrs`
+records failed deregistration. Successful creation, cache reuse and idle eviction
+have separate cumulative counters. `persistent_source_mrs`, `opened_source_mrs`
+and `reused_source_mrs` report the MW-bind subset. `retained_source_mrs` counts
+parents retained by failed deregistration; a failed MW deallocation still keeps
+its parent borrow charged in `persistent_source_mrs` without attempting deregistration.
+Private staging and completion-message MRs are outside these cache counters. Successful
 whole-engine close requires zero remaining persistent MRs before PD release.
 
 `Error::Unquiesced` means a backend could not prove termination/teardown. A
@@ -836,7 +844,7 @@ historical P4.7b evidence remains scoped to its own source tree.
 | `transport/tcp/tcp_transport.h::TcpTransport` | `src/transport/tcp.rs::TcpTransport` | TCP payload READ/WRITE and their acknowledgements |
 | `transport/rdma/rdma_transport.h::RdmaTransport` | `src/transport/rdma/rdma_transport.rs`, `mod.rs` | RDMA bootstrap/grant protocol, native transport resources and data transfer |
 | `transport/rdma/context.h::RdmaContext` | `src/transport/rdma/context.rs::RdmaContext` | Actual RNIC context/PD, async events, key history and connection/grant generations |
-| `transport/rdma/buffers.h::LocalBufferManager` | `src/transport/rdma/buffers.rs::LocalBufferManager` | Existing requester local-only MR cache and physical retirement |
+| `transport/rdma/buffers.h::LocalBufferManager` | `src/transport/rdma/buffers.rs::LocalBufferManager` | Requester local-only and source MW-bind registration cache and physical retirement |
 | `transport/rdma/endpoint.h::RdmaEndPoint` | `src/transport/rdma/endpoint.rs::RdmaEndpoint` | Current connection/grant lifecycle and physical close handoff |
 | `transport/rdma/endpoint_store.h::EndpointStore` | `src/transport/rdma/endpoint_store.rs::EndpointStore` | Bounded live/detached ownership and exact-object retirement |
 | `transport/rdma/workers.h::Workers`, `cq.h::RdmaCQ`, `slice.h` | `src/transport/rdma/workers.rs::Workers`, `cq.rs::RdmaCq`, `slice.rs::SendQueue` | One shared-CQ worker, physical CQ ownership and bounded signaled slice debt |
@@ -1224,3 +1232,91 @@ completion/cancel/timeout, endpoint/native teardown faults, restart/reuse and
 installed-artifact controls, alongside an independently built frozen TENT oracle
 under the same declared budgets. IB and RoCE, GPU directions, GDR, NVLink, MNNVL,
 SSD and GDS require separate evidence. No performance comparison is claimed.
+
+## Persistent source registration
+
+P4.7e is independently accepted for the declared source/CPU/native profiles.
+It advances B04's host path, F04 registration and F15/F18 physical ownership
+foundations; complete parity rows remain open.
+It keeps the frozen TENT
+[`LocalBufferManager`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/buffers.cpp)
+boundary: a buffer registration and its access capability belong to the buffer
+manager, independently of an endpoint. OrbitTE keys entries by actual registration
+identity and local/MW-bind capability within the owning PD. Direct ordinary DRAM
+and CUDA-pinned host views use this cache; private host/device staging remains
+per request. The common count/full-view byte limits charge both capabilities,
+including construction, native close and failed cleanup. Concurrent requests
+share one constructor per capability and retain separate exact DMA leases.
+
+Frozen TENT can publish remote-enabled registered-buffer keys. OrbitTE's cached
+source parent has only `LOCAL_WRITE|MW_BIND`, with neither `REMOTE_READ`,
+`REMOTE_WRITE` nor relaxed ordering. Its key never appears in a public descriptor.
+Each request allocates a separate Type-2B MW, burns a fresh full rkey in the
+persistent PD ledger and binds the exact requested range with only that request's
+READ or WRITE permission. READ and WRITE may share the same parent MR. Completion
+messages still register separate `LOCAL_WRITE` MRs without MW-bind capability.
+
+The source requires the existing exact receive/binding protocol and actual QP
+close before deallocating its MW. Only successful native MW deallocation returns
+the parent's borrower; remote invalidation alone cannot do that. Final unregister
+marks **all** capabilities retiring before native work outside the cache lock,
+including entries still borrowed or being created. Last release deregisters a
+retiring parent. An admitted resolved owner may finish after unregister but
+cannot leave a new idle entry. Failed MW cleanup retains the actual MW, parent
+borrow, exact DMA lease, backing, PD and charges. Failed parent deregistration
+retains its actual native MR and backing without a Drop retry.
+
+Source controls cover capability separation under shared physical limits,
+READ/WRITE parent reuse with distinct grants, concurrent construction, final
+unregister, idle eviction and cleanup failures. The two-host gate also checks
+actual source-cache counters and denies a write one byte before the MW while
+still inside its registered parent. Existing parent-key and invalidated-key
+probes remain required. These gates do not establish connected QP reuse, arbitrary
+physical faults, direct GPU registration, multirail or a performance gain.
+
+Source `dda4db90ad06c04ccfe060cd5e79fa1b9ab2daea` passes independent
+stable 1.97.1/MSRV 1.85 four-feature gates, 128 unit tests, 148 rejected CPU
+negative controls and 40 single-CPU release runs. Twenty-six negative-control
+children intentionally abort inside CPU fake/provider-ABI assertions; those are
+not hardware fault injections. The first-native-deregistration-failure test
+specifically rejects marking only the first capability retiring. Both the
+implementation stable build and independent MSRV build pass 31 native cases:
+eight key/range rejection probes, six four-QP shared-progress, three same-runtime
+duplex and fourteen public DRAM/pinned/GPU-staging/TCP regressions. A direct source
+opens one parent and reuses it five times; a shared source reuses it seven times.
+Duplex charges two full-view MRs and reuses one source parent seven times.
+
+The physical key probes reject an unadvertised parent-key WRITE, a revoked-key
+WRITE, a WRITE outside the exact MW and an old-key READ after actual remote
+invalidation while the source QP is still live, in both directions. They require
+actual REM_ACCESS_ERR, complete guards/bytes and physical close. There is no
+separate parent-key READ hardware probe; absence of both parent remote flags is
+also verified in source. Each native run confirms 62 actual SSH waits, all 124
+owned PIDs absent, both queue debts and all memory/native owners at zero after
+close, the original three resource-lock inodes reusable, unchanged frozen DSOs
+and A-H20 GPU7 back at zero memory. B GPUs are not selected. Native eviction,
+unregister, arbitrary partial posts, device and cleanup faults remain unqualified.
+
+External evidence is under
+`/root/orbitte-artifacts/rdma-source-registration-20261023/`:
+`implementation-source-dda4db9/manifest.json`,
+`native-dda4db9/implementation-hardware-review.json`,
+`independent-hardware-dda4db9/independent-review.json` and
+`independent-hardware-dda4db9/independent-raw-audit.json`. The independent scoped
+acceptance is `review/independent-scoped-acceptance-dda4db9.json`, SHA-256
+`adcd3c59f1da0f7e511679029922931107010cc526d1c8554d28e4af94245652`.
+The two source archives and distinct native binary hashes are recorded there.
+This accepts the stated P4.7e profile while both QP barriers remain. Connected
+reuse, release of incoming-DMA owners on live QPs, full P4, GDR, multirail,
+performance and OrbitKV integration remain open.
+
+For the planned P4.7f profile in the completion plan, the operation-level
+contract follows [RFC 8166 section 2.3.2](https://www.rfc-editor.org/rfc/rfc8166.html#section-2.3.2)
+on data completion and subsequent SEND notification, and
+[RFC 8797 section 3.2](https://www.rfc-editor.org/rfc/rfc8797.html#section-3.2)
+on actual receive-reported invalidation. It additionally requires OrbitTE's
+full per-grant sealing, same-SQ fence, bilateral binding and resource cleanup.
+It must retain frozen TENT's nonterminal endpoint lookup and detached retirement,
+with a physical connection's identity unchanged across fresh grants. These are
+implementation/acceptance requirements for the next substage, not behavior
+implemented by this source-MR change.

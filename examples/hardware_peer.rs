@@ -119,7 +119,8 @@ fn finish(
     let expect_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
-    let cached = role == "requester" && expect_direct;
+    let cached = expect_direct;
+    let source_cached = role == "source" && cached;
     let idle = engine
         .stats()?
         .rdma
@@ -174,6 +175,10 @@ fn finish(
         || idle.reused_persistent_mrs != if cached { 5 } else { 0 }
         || idle.evicted_persistent_mrs != 0
         || idle.retained_persistent_mrs != 0
+        || idle.persistent_source_mrs != usize::from(source_cached)
+        || idle.opened_source_mrs != u64::from(source_cached)
+        || idle.reused_source_mrs != if source_cached { 5 } else { 0 }
+        || idle.retained_source_mrs != 0
     {
         return Err(Error::Internal("persistent MR reuse counters differ"));
     }
@@ -201,6 +206,8 @@ fn finish(
         || rdma.persistent_mrs != 0
         || rdma.persistent_mr_bytes != 0
         || rdma.retained_persistent_mrs != 0
+        || rdma.persistent_source_mrs != 0
+        || rdma.retained_source_mrs != 0
         || rdma.active_endpoints != 0
         || rdma.active_grants != 0
         || rdma.retained_grants != 0
@@ -247,6 +254,14 @@ fn finish(
     {
         return Err(Error::Internal("CUDA resources were retained"));
     }
+    println!(
+        "ORBITTE_SOURCE_MR_STATS {{\"idle_parents\":{},\"parents\":{},\"opened\":{},\"reused\":{},\"retained\":{}}}",
+        idle.persistent_source_mrs,
+        rdma.persistent_source_mrs,
+        rdma.opened_source_mrs,
+        rdma.reused_source_mrs,
+        rdma.retained_source_mrs
+    );
     println!(
         "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
         idle.async_event_workers, rdma.async_event_workers, rdma.acknowledged_async_events
