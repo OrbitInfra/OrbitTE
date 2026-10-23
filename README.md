@@ -78,7 +78,10 @@ RDMA regression quotas exercise immediate resource reuse. P4.7f connected reuse 
 profile and independent acceptance are recorded in the RDMA contract. The remaining
 P4 exit gates stay open. P4.8 adds automatic device/port/GID selection and a
 TENT-style host/RNIC topology snapshot, with strict pins, pre-open RNIC filters
-and a frozen context route. Its qualification is tracked in the completion plan.
+and a frozen context route. Independent source/CPU gates and the implementation's
+39-case IPv6 RoCEv2 native profile pass. Its independently built native repeat
+awaits new authorized nodes after the original stage terminated; P4.8 acceptance
+and the complete P4 exit remain open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

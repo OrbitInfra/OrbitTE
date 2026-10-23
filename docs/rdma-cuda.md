@@ -31,7 +31,12 @@ for binding generation: the moving Ubuntu 26.04 image generated invalid opaque
 layouts in `ibverbs-sys` with its default parser toolchain. Build with matching
 `CLANG_PATH=/usr/bin/clang-18` and `LIBCLANG_PATH=/usr/lib/llvm-18/lib` when using
 that CI profile; layout assertions remain enabled. Only Linux native builds
-are tested; cross compilation remains unqualified.
+are tested; cross compilation remains unqualified. Both CI workflows use signed
+Ubuntu 24.04 official HTTPS sources through
+`.github/scripts/install-native-deps.sh`. The previous Azure HTTP mirror can
+stream packages too slowly to finish within the ten-minute dependency step;
+that failure occurs before Rust compilation. The source set, Clang 18 pins and
+full correctness gates remain explicit.
 
 The standard post/poll inline operations dispatch through the provider function
 table exposed by the generated bindings. Missing callbacks return an unsupported
@@ -1485,8 +1490,9 @@ performance, complete P4 and OrbitKV linkage remain unqualified.
 
 ## Device, port, GID and host topology discovery
 
-P4.8 implements automatic **single-rail Linux host discovery**. Source/CPU and
-physical qualification are tracked in the completion plan. This does not close
+P4.8 implements automatic **single-rail Linux host discovery**. Source/CPU is
+independently accepted and the implementation's healthy IPv6 RoCEv2 run is
+qualified; the independently built native repeat remains unqualified. This does not close
 full P4, add multirail failover or infer an allocation's NUMA placement.
 
 The frozen reference remains Mooncake/TENT
@@ -1497,8 +1503,8 @@ owners rather than adding topology policy to TCP:
 | --- | --- | --- |
 | `runtime/topology.h`, `topology.cpp` | `runtime/topology.rs` | `Topology`, `NicEntry`, `MemEntry`, three NIC priority ranks; transport attributes remain namespaced metadata |
 | `platform/cpu_probe.cpp` | `platform/cpu_probe.rs` | CPU node inventory, RNIC PCI BDF and known/unknown NUMA node; local rank 0 and fallback rank 2 |
-| `CpuProbe::listInfiniBandDevices` | `rdma::sys::devices`, `rdma::discovery` | Intersect provider-visible RNICs with readable/writable uverbs character nodes; apply device filters before native open |
-| RDMA `Context::getBestGidIndex`, `openDevice` | `rdma::discovery`, `RdmaContext` | Enumerate/rank active ports and nonzero GIDs; validate the chosen route against the actual native context |
+| `CpuPlatform::probe`, `listInfiniBandDevices` | `rdma::sys::devices`, `rdma::discovery` | Intersect provider-visible RNICs with readable/writable uverbs character nodes; apply device filters before native open |
+| RDMA `getBestGidIndex`, `Context::openDevice` | `rdma::discovery`, `RdmaContext` | Enumerate/rank active ports and nonzero GIDs; validate the chosen route against the actual native context |
 | RDMA context address ownership | `RdmaContext::Resources` | Freeze selected device/port/GID/type/netdev/ifindex/LID/MTU/link layer with its actual PD and key domain |
 | Existing RDMA event and endpoint owners | `events`, `Workers`, `EndpointStore` | A changed/unqueryable route fences admission; actual QP/MW/MR owners supply retirement and retention |
 
@@ -1580,3 +1586,57 @@ starting the binary; discovery cannot open another RNIC. Connected/public
 peers emit `ORBITTE_TOPOLOGY` alongside byte/guard, QP-continuity and close
 proofs. Retain explicit-pin regressions separately. Physical IB, route/device
 fault injection, multirail selection and hot route rebuild remain unqualified.
+
+
+### Discovery qualification and current gate
+
+Source `97cc94f830dd71ea51e6d5529fe9575eedd4a4a5` passes the implementation's
+47-command stable/MSRV, feature, package, CPU-trace and runner suite, including
+eight single-CPU release runs. Independent review passes 76 gate commands,
+including 40 single-CPU release pressure runs; it covers 153 all-feature unit
+tests, three notification and five process/TCP tests and the doc example.
+Another 42 effective negative controls cover 21 contracts. The initial candidate's four test-coverage gaps are fixed and
+both old and final control results remain archived. Three selected-RNIC tests
+are ignored in ordinary CPU runs and executed by the physical profile. The
+ignored subprocess fixture is invoked explicitly by the process restart test;
+its ignored listing is not a skipped restart gate.
+
+The implementation's separately frozen stable native binaries pass 39 cases:
+four automatic-selection cases (both public DRAM directions and connected
+duplex QP continuity) plus the existing 35 explicit-profile regressions. Both
+automatic peers select `mlx5_0 / port 1 / GID 3`, true IPv6 RoCEv2 with native
+ifindex 2. Byte/guard, fixed-QP reuse, source grant/MR ownership and complete
+normal close checks pass. All seven controllers and 78 SSH waits return zero;
+156 peer/supervisor PIDs are absent afterward, original three locks are free,
+19/16 frozen DSOs and 12/7 mapped-DSO controls match, and A GPU 7 has zero memory
+and no compute applications. B GPUs are not selected.
+
+The independent MSRV binaries are built and frozen but execute **zero** native
+cases. Fresh Forge/History discovery finds both original attempts terminated:
+job `20551990`, stage `95601664`, A `RELEASED` and B `KILLED`, with no RUNNING
+replacement. The implementation's postflight completed at
+`2026-10-23T10:46:23Z`; both release times are after `10:50:35Z`. Independent
+raw-evidence review verifies the successful implementation run predates those
+releases. It does not substitute for the missing independently built native
+repeat. Source/CPU is Accepted, implementation native is Qualified, independent
+native is Unqualified, and P4.8's acceptance checkbox remains open. Resume with
+a newly authorized two-host resource profile; do not operate on the terminated
+attempts or silently reuse their node/lock identities.
+
+Evidence root: `/root/orbitte-artifacts/rdma-topology-discovery-20261023`.
+
+- `gates-97cc94f/manifest.json`, SHA256
+  `50d51ce4e58132f61a1d987be997e4c86c4021e6e18aaeace378f3953d522be0`.
+- `native-97cc94f/implementation-hardware-review.json`, SHA256
+  `9879192c9fd6ba6948031e333f693895ddb37faf4be6e2fe5ea1491443d79a32`.
+- `review/independent-source-97cc94f/gates.json` and `mutations/manifest.json`,
+  SHA256 `ec535f217d7680a101329ce4fe5a3d045bdf7fea6faacb479217e788e4d38ecc`
+  and `3aa0ed2af145b04b0a756b37e707a3ee5c02ed299cdce6cbd75258856f307434`.
+- `review/independent-implementation-native-raw-audit-97cc94f.json`, SHA256
+  `15ea80535078acefe3717c82f3ae14695979b290d0e512cc5e4680299930a2cd`;
+  `independent-hardware-97cc94f/` retains the unavailable repeat's selected-stage
+  metadata, all-state History and frozen MSRV build provenance.
+
+Physical IB, comparisons across multiple RNIC/NUMA ranks, real route/device
+faults, GDR, multirail and performance remain unqualified. OrbitKV integration
+continues to wait for the full P4 native-stage boundary.
