@@ -8,7 +8,7 @@ use super::{
 use crate::{Error, RegisteredMemory, Result};
 
 /// The context/PD belongs to one runtime and outlives every CQ, QP and MR.
-pub(super) struct Device {
+pub(super) struct RdmaContext {
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
     pub(super) asynchronous: Arc<events::State>,
@@ -41,7 +41,7 @@ impl Drop for Resources {
     }
 }
 
-impl Device {
+impl RdmaContext {
     pub(super) fn open(
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
@@ -75,7 +75,7 @@ impl Device {
             let State::Open(resources) = &mut *state else {
                 return Err(Error::Internal("RDMA device construction state"));
             };
-            // SAFETY: Device retains initialized handles even on partial open.
+            // SAFETY: RdmaContext retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
                 if let Some(asynchronous) = verbs.asynchronous {
@@ -103,7 +103,7 @@ impl Device {
 
     pub(super) fn register_local(
         &self,
-        handles: &mut sys::Handles,
+        handles: &mut sys::MemoryHandles,
         memory: &RegisteredMemory,
     ) -> Result<()> {
         let address = memory.host_address()?;
@@ -115,7 +115,7 @@ impl Device {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
-        // SAFETY: the MR owner retains the exact registration and actual Device.
+        // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
         check("ibv_reg_mr", unsafe {
             (self.verbs.register_local)(
                 handles,
@@ -126,7 +126,11 @@ impl Device {
         })
     }
 
-    pub(super) fn create_cq(&self, handles: &mut sys::Handles, capacity: u32) -> Result<()> {
+    pub(super) fn create_cq(
+        &self,
+        handles: &mut sys::ConnectionHandles,
+        capacity: u32,
+    ) -> Result<()> {
         let state = self
             .state
             .lock()
@@ -135,7 +139,7 @@ impl Device {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
-        // SAFETY: the progress owner retains the real Device through CQ close.
+        // SAFETY: the progress owner retains the real RdmaContext through CQ close.
         check("ibv_create_cq", unsafe {
             (self.verbs.create_cq)(handles, &resources.handles, capacity)
         })
@@ -165,34 +169,38 @@ impl Device {
         } else {
             0
         };
-        // SAFETY: the request and progress lane retain the Device and shared CQ;
+        resources.connection.incarnation = Some(incarnation);
+        resources.grant.connection = Some(incarnation);
+        resources.grant.generation = grant_generation;
+        // SAFETY: the request and progress lane retain the RdmaContext and shared CQ;
         // its mutex excludes progress/cleanup while these handles initialize.
         let code = unsafe {
             (self.verbs.open)(
-                &mut resources.handles,
+                &mut resources.connection.handles,
+                &mut resources.grant.handles,
                 &device.handles,
                 config.port,
                 config.gid_index,
-                resources.buffer.address().as_ptr().cast(),
-                resources.buffer.len(),
+                resources.grant.buffer.address().as_ptr().cast(),
+                resources.grant.buffer.len(),
                 permission,
                 psn,
                 config.max_send_wr as u32,
                 local,
             )
         };
-        if !resources.handles.mw.is_null() {
+        if !resources.grant.handles.mw.is_null() {
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.active_windows += 1;
             usage.opened_windows += 1;
         }
         check("ibverbs endpoint construction", code)?;
         if permission != 0 {
-            if resources.handles.mw.is_null() {
+            if resources.grant.handles.mw.is_null() {
                 return Err(Error::Internal("source endpoint has no MW"));
             }
             let previous = device.keys.len();
-            let key = device.keys.burn(resources.handles.window_key);
+            let key = device.keys.burn(resources.grant.handles.window_key);
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.window_key_indices += device.keys.len() - previous;
             let key = match key {
@@ -203,13 +211,13 @@ impl Device {
                 }
             };
             usage.burned_window_keys += 1;
-            resources.handles.window_key = key;
+            resources.grant.handles.window_key = key;
             local.rkey = key;
         }
         Ok((incarnation, grant_generation))
     }
 
-    /// Runtime calls this only after endpoint admission is fenced and drained;
+    /// RdmaTransport calls this only after endpoint admission is fenced and drained;
     /// Drop calls it only when the last actual endpoint owner has gone away.
     pub(super) fn close(&self) -> Result<()> {
         let mut state = self
@@ -268,12 +276,12 @@ impl Device {
     }
 }
 
-impl Drop for Device {
+impl Drop for RdmaContext {
     fn drop(&mut self) {
         let _ = self.close();
     }
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/device.rs"]
+#[path = "../../../tests/unit/transport/rdma/context.rs"]
 pub(crate) mod tests;

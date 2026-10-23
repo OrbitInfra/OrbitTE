@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 use ibverbs_sys as ffi;
 
 use super::*;
-use crate::rdma::{
-    Runtime,
+use crate::transport::rdma::{
+    RdmaTransport,
     tests::{events as native_events, runtime},
 };
 
-fn wait(runtime: &Runtime, predicate: impl Fn(RdmaStats) -> bool) {
+fn wait(runtime: &RdmaTransport, predicate: impl Fn(RdmaStats) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while !predicate(runtime.stats().unwrap()) {
         assert!(
@@ -68,13 +68,13 @@ fn context_consumer_acks_information_then_fences_unknown_events() {
         .into_iter()
         .enumerate()
     {
-        crate::rdma::device::tests::emit_async(&runtime, kind as u8);
+        crate::transport::rdma::context::tests::emit_async(&runtime, kind as u8);
         wait(&runtime, |s| {
             s.acknowledged_async_events == index as u64 + 1
         });
         assert!(runtime.device().unwrap().asynchronous.check().is_ok());
     }
-    crate::rdma::device::tests::emit_async(&runtime, 254);
+    crate::transport::rdma::context::tests::emit_async(&runtime, 254);
     wait(&runtime, |s| s.acknowledged_async_events == 3);
     assert!(matches!(
         runtime.device().unwrap().asynchronous.check(),
@@ -135,7 +135,7 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
         .endpoint(&memory, 0, 8, 2, Instant::now() + Duration::from_secs(2))
         .unwrap();
     let events = native_events(&runtime);
-    crate::rdma::device::tests::emit_async(&runtime, 255);
+    crate::transport::rdma::context::tests::emit_async(&runtime, 255);
     wait(&runtime, |s| {
         s.retained_endpoints == 1 && s.async_event_workers == 0
     });

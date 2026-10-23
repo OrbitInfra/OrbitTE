@@ -5,21 +5,16 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::engine::{PreparedTransfer, Source, deadline, remaining};
+use crate::engine::{Source, deadline, remaining};
 use crate::memory::checked_range;
 use crate::{
     EngineConfig, Error, Notification, NotificationEffect, NotificationFailure, Permission,
-    RemoteEffect, RemoteRegion, RemoteSegment, Result, SourceEpoch, TransferOp, Transport,
+    RemoteRegion, RemoteSegment, Result, SourceEpoch,
 };
-
-#[cfg(feature = "rdma")]
-mod rdma;
-#[cfg(feature = "rdma")]
-use rdma::{serve as rdma_serve, transfer as rdma_transfer};
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
 const VERSION: u16 = 7;
-const REQUEST_SIZE: usize = 52;
+pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
 const REGION_SIZE: usize = 32;
@@ -27,25 +22,25 @@ const IO_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 #[repr(u8)]
-enum Operation {
+pub(crate) enum Operation {
     Describe = 0,
-    Read = 1,
-    Write = 2,
+    TcpRead = 1,
+    TcpWrite = 2,
     Notify = 3,
     RdmaRead = 4,
     RdmaWrite = 5,
 }
 
-struct Request {
-    operation: Operation,
-    epoch: SourceEpoch,
-    region: u64,
-    offset: u64,
-    length: u64,
+pub(crate) struct Request {
+    pub(crate) operation: Operation,
+    pub(crate) epoch: SourceEpoch,
+    pub(crate) region: u64,
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
 }
 
 impl Request {
-    fn encode(&self) -> [u8; REQUEST_SIZE] {
+    pub(crate) fn encode(&self) -> [u8; REQUEST_SIZE] {
         let mut bytes = [0; REQUEST_SIZE];
         bytes[..8].copy_from_slice(MAGIC);
         bytes[8..10].copy_from_slice(&VERSION.to_be_bytes());
@@ -61,8 +56,8 @@ impl Request {
         validate_prefix(bytes)?;
         let operation = match bytes[10] {
             0 => Operation::Describe,
-            1 => Operation::Read,
-            2 => Operation::Write,
+            1 => Operation::TcpRead,
+            2 => Operation::TcpWrite,
             3 => Operation::Notify,
             4 => Operation::RdmaRead,
             5 => Operation::RdmaWrite,
@@ -103,20 +98,20 @@ fn epoch_at(bytes: &[u8]) -> SourceEpoch {
     SourceEpoch(epoch)
 }
 
-fn u64_at(bytes: &[u8], offset: usize) -> u64 {
+pub(crate) fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     let mut value = [0; 8];
     value.copy_from_slice(&bytes[offset..offset + 8]);
     u64::from_be_bytes(value)
 }
 
-struct Reply {
-    status: u8,
-    epoch: SourceEpoch,
-    length: u64,
+pub(crate) struct Reply {
+    pub(crate) status: u8,
+    pub(crate) epoch: SourceEpoch,
+    pub(crate) length: u64,
 }
 
 impl Reply {
-    fn encode(&self) -> [u8; REPLY_SIZE] {
+    pub(crate) fn encode(&self) -> [u8; REPLY_SIZE] {
         let mut bytes = [0; REPLY_SIZE];
         bytes[..8].copy_from_slice(MAGIC);
         bytes[8..10].copy_from_slice(&VERSION.to_be_bytes());
@@ -126,7 +121,7 @@ impl Reply {
         bytes
     }
 
-    fn read(channel: &mut Channel<'_>, expected: SourceEpoch) -> Result<Self> {
+    pub(crate) fn read(channel: &mut ControlChannel<'_>, expected: SourceEpoch) -> Result<Self> {
         let mut bytes = [0; REPLY_SIZE];
         channel.read_exact(&mut bytes)?;
         validate_prefix(&bytes)?;
@@ -176,7 +171,7 @@ fn error_status(error: &Error) -> u8 {
     }
 }
 
-fn buffer(length: usize) -> Result<Vec<u8>> {
+pub(crate) fn buffer(length: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -190,7 +185,7 @@ pub(crate) fn open_segment(
     epoch: SourceEpoch,
     deadline: Instant,
 ) -> Result<RemoteSegment> {
-    let mut channel = Channel::connect(endpoint, deadline)?;
+    let mut channel = ControlChannel::connect(endpoint, deadline)?;
     channel.write_all(
         &Request {
             operation: Operation::Describe,
@@ -255,7 +250,7 @@ pub(crate) fn notify(
 ) -> std::result::Result<(), NotificationFailure> {
     let mut effect = NotificationEffect::None;
     let result = (|| {
-        let mut channel = Channel::connect(peer.endpoint, deadline)?;
+        let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
         channel.write_all(
             &Request {
                 operation: Operation::Notify,
@@ -286,77 +281,14 @@ pub(crate) fn notify(
     result.map_err(|error| NotificationFailure { error, effect })
 }
 
-pub(crate) fn transfer(
-    operation: TransferOp,
-    peer: &RemoteSegment,
-    request: &PreparedTransfer,
-    source: &Source,
-    deadline: Instant,
-) -> std::result::Result<(), (Error, RemoteEffect)> {
-    if request.transport == Transport::Rdma {
-        #[cfg(feature = "rdma")]
-        return rdma_transfer(operation, peer, request, source, deadline);
-        #[cfg(not(feature = "rdma"))]
-        return Err((
-            Error::Unavailable("build with --features rdma"),
-            RemoteEffect::None,
-        ));
-    }
-    let _ = source;
-    let mut effect = RemoteEffect::None;
-    let result = (|| {
-        let mut bytes = buffer(request.length)?;
-        if operation == TransferOp::Write {
-            request.local.read(request.local_offset, &mut bytes)?;
-        }
-        let mut channel = Channel::connect(peer.endpoint, deadline)?;
-        let operation_code = if operation == TransferOp::Read {
-            Operation::Read
-        } else {
-            Operation::Write
-        };
-        channel.write_all(
-            &Request {
-                operation: operation_code,
-                epoch: peer.epoch,
-                region: request.remote.id,
-                offset: request.remote_offset as u64,
-                length: request.length as u64,
-            }
-            .encode(),
-        )?;
-        let reply = Reply::read(&mut channel, peer.epoch)?;
-        if operation == TransferOp::Read {
-            if reply.status != 0 || reply.length != request.length as u64 {
-                return Err(Error::Protocol("READ payload length/status"));
-            }
-            channel.read_exact(&mut bytes)?;
-            remaining(deadline)?;
-            request.local.write(request.local_offset, &bytes)?;
-        } else {
-            if reply.status != 9 {
-                return Err(Error::Protocol("WRITE missing ready response"));
-            }
-            effect = RemoteEffect::Unknown;
-            channel.write_all(&bytes)?;
-            let reply = Reply::read(&mut channel, peer.epoch)?;
-            if reply.status != 0 || reply.length != 0 {
-                return Err(Error::Protocol("WRITE acknowledgement length/status"));
-            }
-        }
-        Ok(())
-    })();
-    result.map_err(|error| (error, effect))
+pub(crate) struct ControlChannel<'a> {
+    pub(crate) stream: TcpStream,
+    pub(crate) deadline: Instant,
+    pub(crate) stopping: Option<&'a AtomicBool>,
 }
 
-struct Channel<'a> {
-    stream: TcpStream,
-    deadline: Instant,
-    stopping: Option<&'a AtomicBool>,
-}
-
-impl Channel<'_> {
-    fn connect(endpoint: SocketAddr, deadline: Instant) -> Result<Self> {
+impl ControlChannel<'_> {
+    pub(crate) fn connect(endpoint: SocketAddr, deadline: Instant) -> Result<Self> {
         let stream = TcpStream::connect_timeout(&endpoint, remaining(deadline)?)?;
         stream.set_nodelay(true)?;
         Ok(Self {
@@ -376,7 +308,7 @@ impl Channel<'_> {
         Ok(remaining(self.deadline)?.min(IO_POLL))
     }
 
-    fn read_exact(&mut self, mut bytes: &mut [u8]) -> Result<()> {
+    pub(crate) fn read_exact(&mut self, mut bytes: &mut [u8]) -> Result<()> {
         while !bytes.is_empty() {
             self.stream.set_read_timeout(Some(self.poll_timeout()?))?;
             match self.stream.read(bytes) {
@@ -389,7 +321,7 @@ impl Channel<'_> {
         Ok(())
     }
 
-    fn write_all(&mut self, mut bytes: &[u8]) -> Result<()> {
+    pub(crate) fn write_all(&mut self, mut bytes: &[u8]) -> Result<()> {
         while !bytes.is_empty() {
             self.stream.set_write_timeout(Some(self.poll_timeout()?))?;
             match self.stream.write(bytes) {
@@ -402,10 +334,10 @@ impl Channel<'_> {
         Ok(())
     }
 
-    fn reply(&mut self, source: &Source, status: u8, length: u64) -> Result<()> {
+    pub(crate) fn reply(&mut self, epoch: SourceEpoch, status: u8, length: u64) -> Result<()> {
         self.write_all(
             &Reply {
-                epoch: source.epoch,
+                epoch,
                 status,
                 length,
             }
@@ -421,14 +353,14 @@ fn retryable(error: &io::Error) -> bool {
     )
 }
 
-pub(crate) struct TcpTransport {
+pub(crate) struct ControlService {
     endpoint: SocketAddr,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
     workers: Vec<JoinHandle<()>>,
 }
 
-impl TcpTransport {
+impl ControlService {
     pub(crate) fn start(source: Arc<Source>, config: &EngineConfig) -> Result<Self> {
         let listener = TcpListener::bind(config.bind_addr)?;
         listener.set_nonblocking(true)?;
@@ -436,7 +368,7 @@ impl TcpTransport {
         let stopping = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<(TcpStream, Instant)>(config.handler_threads);
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut transport = Self {
+        let mut service = Self {
             endpoint,
             stopping,
             acceptor: None,
@@ -445,10 +377,10 @@ impl TcpTransport {
         for index in 0..config.handler_threads {
             let receiver = Arc::clone(&receiver);
             let source = Arc::clone(&source);
-            let stopping = Arc::clone(&transport.stopping);
+            let stopping = Arc::clone(&service.stopping);
             let max_bytes = config.max_transfer_bytes;
             let worker = thread::Builder::new()
-                .name(format!("orbitte-tcp-{index}"))
+                .name(format!("orbitte-control-{index}"))
                 .spawn(move || {
                     loop {
                         if stopping.load(Ordering::Acquire) {
@@ -466,7 +398,7 @@ impl TcpTransport {
                         if stopping.load(Ordering::Acquire) {
                             return;
                         }
-                        let mut channel = Channel {
+                        let mut channel = ControlChannel {
                             stream,
                             deadline,
                             stopping: Some(&stopping),
@@ -475,28 +407,32 @@ impl TcpTransport {
                         let _ = serve(&mut channel, &source, max_bytes);
                     }
                 })?;
-            transport.workers.push(worker);
+            service.workers.push(worker);
         }
-        let stopping = Arc::clone(&transport.stopping);
+        let stopping = Arc::clone(&service.stopping);
         let timeout = config.handler_timeout;
-        transport.acceptor = Some(thread::Builder::new().name("orbitte-accept".into()).spawn(
-            move || {
-                while !stopping.load(Ordering::Acquire) {
-                    match listener.accept() {
-                        Ok((stream, _)) => {
-                            let Ok(deadline) = deadline(timeout) else {
-                                continue;
-                            };
-                            // The queue and worker count bound sockets and payloads.
-                            let _ = sender.try_send((stream, deadline));
+        service.acceptor = Some(
+            thread::Builder::new()
+                .name("orbitte-control-accept".into())
+                .spawn(move || {
+                    while !stopping.load(Ordering::Acquire) {
+                        match listener.accept() {
+                            Ok((stream, _)) => {
+                                let Ok(deadline) = deadline(timeout) else {
+                                    continue;
+                                };
+                                // The queue and worker count bound sockets and payloads.
+                                let _ = sender.try_send((stream, deadline));
+                            }
+                            Err(error) if retryable(&error) => {
+                                thread::sleep(Duration::from_millis(2))
+                            }
+                            Err(_) => break,
                         }
-                        Err(error) if retryable(&error) => thread::sleep(Duration::from_millis(2)),
-                        Err(_) => break,
                     }
-                }
-            },
-        )?);
-        Ok(transport)
+                })?,
+        );
+        Ok(service)
     }
 
     pub(crate) fn endpoint(&self) -> SocketAddr {
@@ -504,7 +440,7 @@ impl TcpTransport {
     }
 }
 
-impl Drop for TcpTransport {
+impl Drop for ControlService {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
         if let Some(acceptor) = self.acceptor.take() {
@@ -516,24 +452,24 @@ impl Drop for TcpTransport {
     }
 }
 
-fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> Result<()> {
+fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usize) -> Result<()> {
     let mut bytes = [0; REQUEST_SIZE];
     channel.read_exact(&mut bytes)?;
     let request = match Request::decode(&bytes) {
         Ok(request) => request,
         Err(error) => {
-            channel.reply(source, error_status(&error), 0)?;
+            channel.reply(source.epoch, error_status(&error), 0)?;
             return Ok(());
         }
     };
     if request.epoch != source.epoch {
-        channel.reply(source, 1, 0)?;
+        channel.reply(source.epoch, 1, 0)?;
         return Ok(());
     }
     let admission = match source.admit() {
         Ok(admission) => admission,
         Err(error) => {
-            channel.reply(source, error_status(&error), 0)?;
+            channel.reply(source.epoch, error_status(&error), 0)?;
             return Ok(());
         }
     };
@@ -552,7 +488,7 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
                 entry[16..24].copy_from_slice(&(region.length as u64).to_be_bytes());
                 entry[24] = region.permission as u8;
             }
-            channel.reply(source, 0, payload.len() as u64)?;
+            channel.reply(source.epoch, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;
             return Ok(());
         }
@@ -564,7 +500,7 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
             let reservation = source.notifications.reserve(name_length, message_length)?;
             let mut name = buffer(name_length)?;
             let mut message = buffer(message_length)?;
-            channel.reply(source, 9, 0)?;
+            channel.reply(source.epoch, 9, 0)?;
             channel.read_exact(&mut name)?;
             channel.read_exact(&mut message)?;
             let mut marker = [0; 1];
@@ -578,7 +514,7 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
                 .map_err(|_| Error::Protocol("notification message is not UTF-8"))?;
             remaining(channel.deadline)?;
             reservation.commit(Notification { name, message })?;
-            channel.reply(source, 0, 0)?;
+            channel.reply(source.epoch, 0, 0)?;
             return Ok(());
         }
         let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
@@ -590,7 +526,7 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
         checked_range(offset, length, memory.len())?;
         if !memory.0.descriptor.permission.allows(matches!(
             request.operation,
-            Operation::Write | Operation::RdmaWrite
+            Operation::TcpWrite | Operation::RdmaWrite
         )) {
             return Err(Error::PermissionDenied);
         }
@@ -598,28 +534,27 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
         let memory = retained_memory
             .as_ref()
             .ok_or(Error::Internal("missing source memory"))?;
-        if matches!(
-            request.operation,
-            Operation::RdmaRead | Operation::RdmaWrite
-        ) {
-            #[cfg(feature = "rdma")]
-            return rdma_serve(channel, source, &request, memory, offset, length);
-            #[cfg(not(feature = "rdma"))]
-            return Err(Error::Unavailable("build with --features rdma"));
+        match request.operation {
+            Operation::TcpRead | Operation::TcpWrite => crate::transport::tcp::TcpTransport::serve(
+                channel,
+                source.epoch,
+                &request,
+                memory,
+                offset,
+                length,
+            ),
+            Operation::RdmaRead | Operation::RdmaWrite => {
+                #[cfg(feature = "rdma")]
+                return source
+                    .rdma
+                    .as_ref()
+                    .ok_or(Error::Unavailable("RDMA is not configured"))?
+                    .serve(channel, source.epoch, &request, memory, offset, length);
+                #[cfg(not(feature = "rdma"))]
+                return Err(Error::Unavailable("build with --features rdma"));
+            }
+            _ => Err(Error::Protocol("unexpected data transport operation")),
         }
-        let mut payload = buffer(length)?;
-        if request.operation == Operation::Read {
-            memory.read(offset, &mut payload)?;
-            channel.reply(source, 0, length as u64)?;
-            channel.write_all(&payload)?;
-        } else {
-            channel.reply(source, 9, 0)?;
-            channel.read_exact(&mut payload)?;
-            remaining(channel.deadline)?;
-            memory.write(offset, &payload)?;
-            channel.reply(source, 0, 0)?;
-        }
-        Ok(())
     })();
     if let Err(error) = prepared {
         if matches!(error, Error::Unquiesced { .. }) {
@@ -629,12 +564,12 @@ fn serve(channel: &mut Channel<'_>, source: &Arc<Source>, max_bytes: usize) -> R
         }
         // After an I/O error the connection cannot safely carry another frame.
         if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
-            channel.reply(source, error_status(&error), 0)?;
+            channel.reply(source.epoch, error_status(&error), 0)?;
         }
     }
     Ok(())
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/tcp.rs"]
-mod tests;
+#[path = "../../tests/unit/runtime/control_plane.rs"]
+pub(crate) mod tests;

@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use crate::batch::{AllocationBudget, Batch, BatchProgress};
 use crate::memory::MemoryRegistry;
 use crate::notification::NotificationInbox;
-use crate::tcp::{self, TcpTransport};
+use crate::runtime::control_plane::{self, ControlService};
+use crate::transport::tcp::TcpTransport;
 use crate::{
     EngineConfig, Error, HostMemory, Notification, NotificationFailure, NotificationStatus,
     Permission, RegisteredMemory, RemoteRegion, RemoteSegment, Result, SourceEpoch,
@@ -86,7 +87,7 @@ pub struct EngineStats {
     pub allocated_requests: usize,
     pub requester_workers: usize,
     #[cfg(feature = "rdma")]
-    pub rdma: Option<crate::rdma::RdmaStats>,
+    pub rdma: Option<crate::transport::rdma::RdmaStats>,
     pub retained_regions: usize,
     pub retained_bytes: usize,
     pub active_source_operations: usize,
@@ -98,11 +99,11 @@ pub struct EngineStats {
     pub retained_notification_bytes: usize,
 }
 
-/// Engine, source registry and bounded TCP handler ownership.
+/// Engine, source registry and bounded control-service handler ownership.
 pub struct TransferEngine {
     config: EngineConfig,
     source: Arc<Source>,
-    transport: TcpTransport,
+    control: ControlService,
     batches: Arc<RequesterAdmission>,
     allocations: Arc<AllocationBudget>,
 }
@@ -115,7 +116,7 @@ impl TransferEngine {
         let rdma = config
             .rdma
             .clone()
-            .map(crate::rdma::Runtime::new)
+            .map(crate::transport::rdma::RdmaTransport::new)
             .transpose()?;
         let source = Arc::new(Source {
             epoch,
@@ -137,18 +138,18 @@ impl TransferEngine {
             }),
             drained: Condvar::new(),
         });
-        let transport = TcpTransport::start(Arc::clone(&source), &config)?;
+        let control = ControlService::start(Arc::clone(&source), &config)?;
         Ok(Self {
             config,
             source,
-            transport,
+            control,
             batches: Arc::default(),
             allocations: Arc::new(AllocationBudget::new()),
         })
     }
 
     pub fn endpoint(&self) -> SocketAddr {
-        self.transport.endpoint()
+        self.control.endpoint()
     }
     pub fn source_epoch(&self) -> SourceEpoch {
         self.source.epoch
@@ -285,7 +286,7 @@ impl TransferEngine {
     ) -> Result<RemoteSegment> {
         let deadline = deadline(timeout)?;
         let _admission = self.admit_batch(0)?;
-        tcp::open_segment(endpoint, expected_epoch, deadline)
+        control_plane::open_segment(endpoint, expected_epoch, deadline)
     }
 
     /// Validates the entire batch before sending any request. Admission and
@@ -447,9 +448,35 @@ impl TransferEngine {
                     break;
                 }
             }
-            if let Err((error, remote_effect)) =
-                tcp::transfer(*operation, peer, request, &self.source, *deadline)
-            {
+            let result = match request.transport {
+                Transport::Tcp => TcpTransport::transfer(*operation, peer, request, *deadline),
+                Transport::Rdma => {
+                    #[cfg(feature = "rdma")]
+                    {
+                        match &self.source.rdma {
+                            Some(transport) => transport.transfer(
+                                *operation,
+                                peer,
+                                request,
+                                self.source.epoch,
+                                *deadline,
+                            ),
+                            None => Err((
+                                Error::Unavailable("RDMA is not configured"),
+                                RemoteEffect::None,
+                            )),
+                        }
+                    }
+                    #[cfg(not(feature = "rdma"))]
+                    {
+                        Err((
+                            Error::Unavailable("build with --features rdma"),
+                            RemoteEffect::None,
+                        ))
+                    }
+                }
+            };
+            if let Err((error, remote_effect)) = result {
                 report.locally_drained = !matches!(error, Error::Unquiesced { .. });
                 report.failure = Some(TransferFailure {
                     request_index: index,
@@ -552,7 +579,7 @@ impl TransferEngine {
             self.send_local_notification(notification)
                 .map_err(Into::into)
         } else {
-            tcp::notify(peer, notification, deadline)
+            control_plane::notify(peer, notification, deadline)
         }
     }
 
@@ -698,7 +725,7 @@ pub(crate) struct Source {
     pub(crate) registry: MemoryRegistry,
     pub(crate) notifications: NotificationInbox,
     #[cfg(feature = "rdma")]
-    pub(crate) rdma: Option<Arc<crate::rdma::Runtime>>,
+    pub(crate) rdma: Option<Arc<crate::transport::rdma::RdmaTransport>>,
     admission: Mutex<SourceAdmission>,
     drained: Condvar,
 }

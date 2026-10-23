@@ -1,7 +1,7 @@
 use std::net::Shutdown;
 
 use super::*;
-use crate::{TransferEngine, TransferRequest};
+use crate::{RemoteEffect, TransferEngine, TransferOp, TransferRequest};
 
 use crate::test_support as common;
 
@@ -13,8 +13,9 @@ fn wire_request(
     id: u64,
     offset: u64,
     length: u64,
-) -> Channel<'static> {
-    let mut channel = Channel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+) -> ControlChannel<'static> {
+    let mut channel =
+        ControlChannel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel
         .write_all(
             &Request {
@@ -33,7 +34,7 @@ fn wire_request(
 #[test]
 fn request_fixture_and_decoder_reject_protocol_drift() {
     let request = Request {
-        operation: Operation::Read,
+        operation: Operation::TcpRead,
         epoch: SourceEpoch([0x11; 16]),
         region: 1,
         offset: 2,
@@ -73,12 +74,12 @@ fn source_validates_untrusted_ranges_permissions_epochs_and_budgets() {
         .register_memory(vec![7; 8].into_boxed_slice(), Permission::RemoteRead)
         .unwrap();
     for (operation, id, offset, length, expected) in [
-        (Operation::Write, memory.id(), 0, 4, 3),
-        (Operation::Read, memory.id(), 7, 2, 4),
-        (Operation::Read, memory.id(), u64::MAX, 2, 4),
-        (Operation::Read, memory.id(), 0, 0, 4),
-        (Operation::Read, memory.id(), 0, 9, 6),
-        (Operation::Read, 999, 0, 4, 2),
+        (Operation::TcpWrite, memory.id(), 0, 4, 3),
+        (Operation::TcpRead, memory.id(), 7, 2, 4),
+        (Operation::TcpRead, memory.id(), u64::MAX, 2, 4),
+        (Operation::TcpRead, memory.id(), 0, 0, 4),
+        (Operation::TcpRead, memory.id(), 0, 9, 6),
+        (Operation::TcpRead, 999, 0, 4, 2),
         (Operation::RdmaRead, memory.id(), 0, 4, 10),
         (Operation::RdmaWrite, memory.id(), 0, 4, 3),
     ] {
@@ -87,11 +88,12 @@ fn source_validates_untrusted_ranges_permissions_epochs_and_budgets() {
         channel.read_exact(&mut bytes).unwrap();
         assert_eq!(bytes[10], expected);
     }
-    let mut channel = Channel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+    let mut channel =
+        ControlChannel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel
         .write_all(
             &Request {
-                operation: Operation::Read,
+                operation: Operation::TcpRead,
                 epoch: SourceEpoch([0; 16]),
                 region: memory.id(),
                 offset: 0,
@@ -117,9 +119,10 @@ fn fragmented_write_keeps_backing_and_close_waits_for_actual_handler_exit() {
     let memory = engine
         .register_memory(vec![0; 8].into_boxed_slice(), Permission::RemoteReadWrite)
         .unwrap();
-    let mut channel = Channel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+    let mut channel =
+        ControlChannel::connect(engine.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     let request = Request {
-        operation: Operation::Write,
+        operation: Operation::TcpWrite,
         epoch: engine.source_epoch(),
         region: memory.id(),
         offset: 0,
@@ -164,7 +167,7 @@ fn incomplete_write_never_commits_and_engine_drop_interrupts_idle_connections() 
     let memory = engine
         .register_memory(vec![7; 8].into_boxed_slice(), Permission::RemoteReadWrite)
         .unwrap();
-    let mut channel = wire_request(&engine, Operation::Write, memory.id(), 0, 8);
+    let mut channel = wire_request(&engine, Operation::TcpWrite, memory.id(), 0, 8);
     assert_eq!(
         Reply::read(&mut channel, engine.source_epoch())
             .unwrap()
@@ -182,7 +185,7 @@ fn incomplete_write_never_commits_and_engine_drop_interrupts_idle_connections() 
     let memory = engine
         .register_memory(vec![7; 8].into_boxed_slice(), Permission::RemoteReadWrite)
         .unwrap();
-    let mut _idle = wire_request(&engine, Operation::Write, memory.id(), 0, 8);
+    let mut _idle = wire_request(&engine, Operation::TcpWrite, memory.id(), 0, 8);
     assert_eq!(
         Reply::read(&mut _idle, engine.source_epoch())
             .unwrap()
@@ -231,7 +234,7 @@ fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
         let epoch = peer.epoch;
         let handler = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
@@ -312,7 +315,7 @@ fn a_trickling_response_cannot_extend_the_absolute_deadline() {
     let epoch = peer.epoch;
     let handler = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut channel = Channel {
+        let mut channel = ControlChannel {
             stream,
             deadline: deadline(TIMEOUT).unwrap(),
             stopping: None,
@@ -377,7 +380,7 @@ fn external_owner_survives_unregister_until_the_handler_really_exits() {
         )
         .unwrap();
     drop(fixture.memory);
-    let mut channel = wire_request(&engine, Operation::Write, memory.id(), 0, 8);
+    let mut channel = wire_request(&engine, Operation::TcpWrite, memory.id(), 0, 8);
     assert_eq!(
         Reply::read(&mut channel, engine.source_epoch())
             .unwrap()
@@ -414,7 +417,7 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
         let epoch = SourceEpoch::generate().unwrap();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
@@ -579,14 +582,14 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
         let handler = thread::spawn(move || {
             if attached {
                 let (stream, _) = listener.accept().unwrap();
-                let mut channel = Channel {
+                let mut channel = ControlChannel {
                     stream,
                     deadline: deadline(TIMEOUT).unwrap(),
                     stopping: None,
                 };
                 let mut header = [0; REQUEST_SIZE];
                 channel.read_exact(&mut header).unwrap();
-                assert!(Request::decode(&header).unwrap().operation == Operation::Read);
+                assert!(Request::decode(&header).unwrap().operation == Operation::TcpRead);
                 channel
                     .write_all(
                         &Reply {
@@ -600,7 +603,7 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
                 channel.write_all(&[0xa7; 8]).unwrap();
             }
             let (stream, _) = listener.accept().unwrap();
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
@@ -686,7 +689,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
     let (release_tx, release_rx) = mpsc::channel();
     let handler = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut channel = Channel {
+        let mut channel = ControlChannel {
             stream,
             deadline: deadline(TIMEOUT).unwrap(),
             stopping: None,
@@ -771,7 +774,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
         let (release_tx, release_rx) = mpsc::channel();
         let handler = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
@@ -917,7 +920,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     let handler = thread::spawn(move || {
         for index in 0..2 {
             let (stream, _) = listener.accept().unwrap();
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
@@ -995,4 +998,11 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
         thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(feature = "rdma")]
+pub(crate) fn read_request(channel: &mut ControlChannel<'_>) -> Request {
+    let mut bytes = [0; REQUEST_SIZE];
+    channel.read_exact(&mut bytes).unwrap();
+    Request::decode(&bytes).unwrap()
 }

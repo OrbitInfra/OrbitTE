@@ -41,14 +41,13 @@ mod engine;
 mod error;
 mod memory;
 mod notification;
+mod runtime;
 mod segment;
-mod tcp;
+pub mod transport;
 
 pub use batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus};
 #[cfg(feature = "cuda")]
 pub mod cuda;
-#[cfg(feature = "rdma")]
-pub mod rdma;
 
 pub use config::EngineConfig;
 pub use engine::{

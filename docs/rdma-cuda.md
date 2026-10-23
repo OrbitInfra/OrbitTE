@@ -555,7 +555,7 @@ concurrent reruns exercise those boundaries. These are ownership controls, not
 physical fault receipts.
 
 The explicit ignored test
-`rdma::cq::tests::hardware::shared_cq_peer` constructs four actual RC QPs per
+`transport::rdma::workers::tests::hardware::shared_cq_peer` constructs four actual RC QPs per
 phase and performs READ then WRITE between two physical hosts. A test-only gate
 pauses the first native dispatch until the other requests have queued. It
 never synthesizes WRs, CQEs or bytes; the provider executes all posts/polls.
@@ -660,7 +660,7 @@ six-request public RDMA source profile requires six allocations/binds/INVs and
 zero remaining MWs. TCP/requester peers have zero MWs. Four-QP source profiles
 require eight binds/INVs over READ and WRITE phases.
 
-The ignored `rdma::cq::tests::hardware::source_window_peer` gate, selected by
+The ignored `transport::rdma::workers::tests::hardware::source_window_peer` gate, selected by
 `runner: orbitte-window`, accepts `window_probe: revoked` or `parent` on CPU
 RDMA peers. It intentionally submits one WRITE with an invalidated key or the
 unadvertised non-remote parent key after successful source BIND. The source
@@ -811,6 +811,143 @@ Physical tag/index exhaustion, stale-key replay across native MW reallocation,
 delayed/replayed native completions, arbitrary cleanup/device/port faults and
 full P4 remain unqualified. No connected reuse,
 GDR, multirail, performance advantage or OrbitKV qualification is inferred.
+
+### Transport boundaries and connection/grant retirement
+
+P4.7c implements the following owner and module boundaries. Its independent
+source/CPU and declared native regression acceptance is recorded below; the
+historical P4.7b evidence remains scoped to its own source tree.
+
+| Frozen TENT owner | Current Rust owner | Responsibility |
+| --- | --- | --- |
+| `runtime/control_plane.h::ControlService` | `src/runtime/control_plane.rs::ControlService` | Socket service, descriptor/notification RPC, source admission, range/permission checks and dispatch |
+| `transport/tcp/tcp_transport.h::TcpTransport` | `src/transport/tcp.rs::TcpTransport` | TCP payload READ/WRITE and their acknowledgements |
+| `transport/rdma/rdma_transport.h::RdmaTransport` | `src/transport/rdma/rdma_transport.rs`, `mod.rs` | RDMA bootstrap/grant protocol, native transport resources and data transfer |
+| `transport/rdma/context.h::RdmaContext` | `src/transport/rdma/context.rs::RdmaContext` | Actual RNIC context/PD, async events, key history and connection/grant generations |
+| `transport/rdma/buffers.h::LocalBufferManager` | `src/transport/rdma/buffers.rs::LocalBufferManager` | Existing requester local-only MR cache and physical retirement |
+| `transport/rdma/endpoint.h::RdmaEndPoint` | `src/transport/rdma/endpoint.rs::RdmaEndpoint` | Current connection/grant lifecycle and physical close handoff |
+| `transport/rdma/endpoint_store.h::EndpointStore` | `src/transport/rdma/endpoint_store.rs::EndpointStore` | Bounded live/detached ownership and exact-object retirement |
+| `transport/rdma/workers.h::Workers`, `cq.h::RdmaCQ`, `slice.h` | `src/transport/rdma/workers.rs::Workers`, `cq.rs::RdmaCq`, `slice.rs::SendQueue` | One shared-CQ worker, physical CQ ownership and bounded signaled slice debt |
+
+Frozen TENT's `LocalBufferManager` keeps registrations separate from endpoint
+connections. Its `EndpointStore::getOrInsert` reuses nonterminal endpoints and
+retains terminal endpoints in `waiting_list_` until retirement. This stage
+implements the separate owners and detached retirement; caching ready connected
+QPs remains the next contract.
+
+The engine directly selects `TcpTransport` or `RdmaTransport`. RDMA owns its
+bootstrap, binding, verbs submission, DONE/ACK and error cleanup; TCP payload
+code contains no RDMA branch or forwarding call. Both can use the shared
+`ControlChannel`. This follows TENT's behavior/resource boundaries rather than
+copying C++ classes mechanically: frozen TENT's `ControlService` itself also
+contains the TCP SendData/RecvData RPC handlers invoked by `TcpTransport`.
+Here the service retains common validation and dispatch, while `TcpTransport`
+owns those byte operations. No empty transport trait or compatibility facade
+was added. The pre-1.0 configuration path is now
+`orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaStats}`; the old
+root `orbit_te::rdma` module is removed. OrbitKV remains on its existing provider.
+OrbitTE wire v7 is unchanged and is still not TENT wire interoperability.
+
+`ConnectionResources` owns `ConnectionHandles` (QP and shared CQ reference),
+its actual `RdmaContext`, immutable QP-only routing, connection identity and
+physical endpoint quota. `GrantResources` independently owns `MemoryHandles`
+(MR/MW/key), context, source grant generation, its creating connection identity,
+exact DMA loan or staging, MR borrow and byte quota. Only a completed BIND can
+publish memory authority. A connection descriptor always has zero address/key.
+The workers' per-grant record retains slice/completion debt alongside these
+owners; it does not reset an old WR namespace for a new connection.
+
+A grant accepts a physical drain receipt only from its creating connection
+in the same actual context. Successful QP destruction releases its connection
+quota even if later MW/MR cleanup fails. Grant cleanup then deallocates the MW
+and deregisters/releases the MR; the DMA loan unlocks only after both native
+memory handles are clear and all signaled-WR debt is resolved. Failed QP cleanup
+cannot start grant teardown. Failed MW/MR cleanup retains the real memory owner,
+loan, bytes and context and fences further admission, even when the QP quota
+is already zero. The failure path never retries retained native resources.
+
+`active_endpoints` and `retained_endpoints` count physical connection quota;
+`active_grants` and `retained_grants` separately count request memory owners.
+A completed staging output can retain grant/byte quota after its QP has closed.
+Dropping a stale progress snapshot cannot keep a closed connection charged.
+Runtime close waits for both connection and grant owners before closing the
+MR cache, shared CQ and actual PD/context.
+
+`EndpointStore` removes a terminal record from the live set into a strong
+retirement list before native cleanup. Detachment does not repay quotas or
+WR debt; completion routing still finds the detached owner. Native destruction
+runs outside the store lock, and final removal compares the exact `Arc`.
+Whole-lane abort first closes every QP, then the shared CQ, before quiescing
+unresolved work and releasing grant memory. Lost async-event consumption between
+QP and MW cleanup retains the grants instead of trusting the earlier check.
+The reusable native runner also verifies its exact test selector matches one
+test before deployment; renamed or empty `--exact` filters cannot pass a gate.
+Native peers check and report both connection and grant counts at normal drain.
+
+This store supplies terminal lifetime management for the current per-request
+QP model. It does not yet cache idle connected QPs, rebind a MW or remove either
+peer's physical QP close barrier. The local MR cache remains requester-only;
+`Workers` still uses one polling worker/shared CQ. Physical cleanup/replay
+faults, source persistent MRs, connected reuse and full P4 remain open.
+
+A candidate persistent-connection drain protocol is a same-requester-SQ fenced
+SEND_WITH_INV followed by the source's actual successful RQ CQE, with exact
+invalidated rkey, byte length and full grant binding checks. The selected
+[rdma-core v55 send manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_post_send.3)
+and [CQ manual](https://github.com/linux-rdma/rdma-core/blob/v55.0/libibverbs/man/ibv_poll_cq.3)
+describe these operations and fields. The
+[RDMA maintainer's ordering discussion](https://lists.infradead.org/pipermail/linux-nvme/2017-November/013829.html)
+explains why execution ordering of READ and SEND/invalidate needs a fence.
+This is a candidate contract, not an implemented or proven incoming-DMA drain:
+RQ buffer/MR ownership, receive/CQ admission (including CQ capacity one),
+nonrepeating per-grant WR identities, stale/partial/failed receipt handling and
+the complete operation-level ordering proof still need implementation and
+qualification. A requester SEND CQE or TCP DONE alone cannot replace the proposed
+source receive receipt. This stage continues to release source bytes only after
+actual physical QP close.
+
+### Connection/grant retirement qualification
+
+Source [`1b88240`](https://github.com/OrbitInfra/OrbitTE/commit/1b88240192822f1a80e61873d6f88a46b4764c38)
+is independently accepted for the boundaries and physical-QP-close behavior
+above. The reviewer independently reran stable and Rust 1.85 across default,
+RDMA, CUDA and combined features: check, strict all-target Clippy and tests.
+The combined profile passes 115 unit, 3 notification, 5 TCP and 1 documentation
+test; hardware-only tests remain explicit gates. Both CPU trace runs, the five
+supervision/selector controls, packaging, and 20 single-CPU/16-thread release
+runs per independent build pass. Thirty CPU old-logic/owner regressions each
+fail twice as intended (60 negative controls), with an unchanged passing control.
+Four rejected children terminate at fake-provider assertions; these remain CPU
+logic controls, not physical fault evidence.
+Initial feature-fixture/MSRV failures and the early surviving terminal-store
+control remain preserved; they do not qualify their superseded source trees.
+
+The implementation stable build and an independently built MSRV artifact each
+pass the declared 24-case native profile: four invalidated/parent-key rejection
+cases, six four-QP shared-CQ cases and fourteen public DRAM, pinned-memory,
+staged GPU and TCP regressions. Each role reports separate connection/grant
+counts at zero after drain. Each run records all 48 successful SSH waits and
+three controller waits, 96 absent owned PIDs, unchanged file/VMA identities and
+hashes, and reacquisition of both original NIC locks and A's original GPU7 lock.
+Only A's selected H20 GPU7 is used; it returns to zero memory with no compute
+applications. B's GPUs are not selected. CUDA uses the frozen 13.1 compatibility
+driver, with no mapped TENT/Mooncake/libcudart libraries.
+
+Evidence lives outside the checkout in
+`/root/orbitte-artifacts/rdma-connection-owners-20261023`.
+`implementation-source-1b88240/manifest.json` and
+`review/independent-source-1b88240/gates.json` pin source gates;
+`review/independent-source-1b88240/mutations/manifest.json` records the negative
+controls. `native-1b88240/implementation-hardware-review.json` and
+`independent-hardware-1b88240/independent-review.json` pin the two
+native runs. `review/independent-scoped-acceptance-1b88240.json` records the independent scoped
+verdict. The [PR checks](https://github.com/OrbitInfra/OrbitTE/pull/21/checks)
+cover the feature matrix and unmodified frozen TENT CPU comparison.
+
+This accepts the declared healthy and key-rejection profile with both actual
+QP-close barriers. It does not qualify failed physical teardown, arbitrary
+device/CQ faults, key exhaustion/replay, incoming DMA drain without QP close,
+connected QP reuse, GDR, multirail, performance, OrbitKV or full P4.
 
 ### Run the native gate
 

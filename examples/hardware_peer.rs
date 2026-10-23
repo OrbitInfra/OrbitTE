@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::cuda::{self, CudaMemory};
-use orbit_te::rdma::{RdmaConfig, RdmaHostMemory};
+use orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory};
 use orbit_te::{
     BatchState, EngineConfig, Error, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, Result, SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
@@ -129,6 +129,9 @@ fn finish(
     } else {
         0
     };
+    if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != 0 {
+        return Err(Error::Internal("connection/grant owners did not drain"));
+    }
     if idle.active_windows != 0
         || idle.retained_windows != 0
         || idle.opened_windows != windows
@@ -180,6 +183,8 @@ fn finish(
         || rdma.persistent_mr_bytes != 0
         || rdma.retained_persistent_mrs != 0
         || rdma.active_endpoints != 0
+        || rdma.active_grants != 0
+        || rdma.retained_grants != 0
         || rdma.staging_bytes != 0
         || rdma.direct_bytes != 0
         || rdma.work_requests != 0
@@ -204,6 +209,15 @@ fn finish(
     println!(
         "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
         idle.async_event_workers, rdma.async_event_workers, rdma.acknowledged_async_events
+    );
+    println!(
+        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        idle.active_endpoints,
+        idle.active_grants,
+        rdma.active_endpoints,
+        rdma.active_grants,
+        rdma.retained_endpoints,
+        rdma.retained_grants
     );
     println!(
         "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",

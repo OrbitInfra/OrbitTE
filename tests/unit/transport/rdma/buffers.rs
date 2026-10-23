@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::memory::MemoryRegistry;
-use crate::rdma::tests::{events, runtime};
+use crate::transport::rdma::tests::{events, runtime};
 use crate::{Permission, SourceEpoch};
 
 #[test]
@@ -74,13 +74,17 @@ fn whole_registration_mr_is_reused_while_request_dma_lease_stays_exact() {
     assert!(mr < pd);
 }
 
-fn limited_runtime(mode: &str, regions: usize, bytes: usize) -> crate::rdma::Runtime {
+fn limited_runtime(
+    mode: &str,
+    regions: usize,
+    bytes: usize,
+) -> crate::transport::rdma::RdmaTransport {
     let mut runtime = runtime(mode);
     runtime.config.max_endpoints = 3;
     runtime.config.max_cached_mrs = regions;
     runtime.config.max_cached_mr_bytes = bytes;
     runtime.registrations =
-        HostRegistrations::new(&runtime.config, Arc::clone(&runtime.usage), runtime.verbs);
+        LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), runtime.verbs);
     runtime
 }
 
@@ -190,7 +194,7 @@ fn creating_mr_can_be_retired_without_blocking_unregister_or_resurrecting_an_idl
         .register(vec![4; 16].into_boxed_slice(), Permission::LocalOnly)
         .unwrap();
     let runtime = Arc::new(limited_runtime("direct:register_pause", 1, 16));
-    let pause = crate::rdma::tests::pause(&runtime);
+    let pause = crate::transport::rdma::tests::pause(&runtime);
     let events = events(&runtime);
     let task_runtime = Arc::clone(&runtime);
     let task_memory = memory.clone();
@@ -262,7 +266,7 @@ fn concurrent_request_ranges_share_one_creating_mr_and_keep_independent_dma_leas
         .register(vec![5; 16].into_boxed_slice(), Permission::LocalOnly)
         .unwrap();
     let runtime = Arc::new(limited_runtime("direct:register_pause", 1, 16));
-    let pause = crate::rdma::tests::pause(&runtime);
+    let pause = crate::transport::rdma::tests::pause(&runtime);
     let barrier = Arc::new(Barrier::new(3));
     let mut workers = Vec::new();
     for offset in [0, 8] {
@@ -431,7 +435,7 @@ fn engine_close_waits_for_native_close_already_started_by_unregister() {
         .unwrap()
         .close()
         .unwrap();
-    let pause = crate::rdma::tests::pause(&runtime);
+    let pause = crate::transport::rdma::tests::pause(&runtime);
     let events = events(&runtime);
     registry.unregister(&memory).unwrap();
     let retiring = Arc::clone(&runtime);

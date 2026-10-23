@@ -23,24 +23,35 @@ impl Default for DeviceHandles {
     }
 }
 
-// libibverbs contexts and PDs support calls from multiple threads. Device owns
+// libibverbs contexts and PDs support calls from multiple threads. RdmaContext owns
 // these handles behind a mutex and retains them through every child endpoint.
 unsafe impl Send for DeviceHandles {}
 
 #[repr(C)]
-pub(super) struct Handles {
+pub(super) struct ConnectionHandles {
     pub cq: *mut c_void,
     pub qp: *mut c_void,
+}
+
+impl Default for ConnectionHandles {
+    fn default() -> Self {
+        Self {
+            cq: std::ptr::null_mut(),
+            qp: std::ptr::null_mut(),
+        }
+    }
+}
+
+#[repr(C)]
+pub(super) struct MemoryHandles {
     pub mr: *mut c_void,
     pub mw: *mut c_void,
     pub window_key: u32,
 }
 
-impl Default for Handles {
+impl Default for MemoryHandles {
     fn default() -> Self {
         Self {
-            cq: std::ptr::null_mut(),
-            qp: std::ptr::null_mut(),
             mr: std::ptr::null_mut(),
             mw: std::ptr::null_mut(),
             window_key: 0,
@@ -94,15 +105,17 @@ pub(super) struct AsyncVerbs {
     pub ack: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent),
 }
 
-type Close = unsafe extern "C" fn(*mut Handles) -> c_int;
+type CloseConnection = unsafe extern "C" fn(*mut ConnectionHandles) -> c_int;
+type CloseMemory = unsafe extern "C" fn(*mut MemoryHandles) -> c_int;
 pub(super) struct Verbs {
     pub asynchronous: Option<AsyncVerbs>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
-    pub create_cq: unsafe extern "C" fn(*mut Handles, *const DeviceHandles, u32) -> c_int,
+    pub create_cq: unsafe extern "C" fn(*mut ConnectionHandles, *const DeviceHandles, u32) -> c_int,
     pub register_local:
-        unsafe extern "C" fn(*mut Handles, *const DeviceHandles, *mut c_void, usize) -> c_int,
+        unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles, *mut c_void, usize) -> c_int,
     pub open: unsafe extern "C" fn(
-        *mut Handles,
+        *mut ConnectionHandles,
+        *mut MemoryHandles,
         *const DeviceHandles,
         u8,
         u8,
@@ -114,7 +127,7 @@ pub(super) struct Verbs {
         *mut Descriptor,
     ) -> c_int,
     pub connect: unsafe extern "C" fn(
-        *mut Handles,
+        *mut ConnectionHandles,
         *const Descriptor,
         *const Descriptor,
         u8,
@@ -123,7 +136,8 @@ pub(super) struct Verbs {
         u8,
     ) -> c_int,
     pub post: unsafe extern "C" fn(
-        *mut Handles,
+        *mut ConnectionHandles,
+        *const MemoryHandles,
         *const WorkRequest,
         usize,
         u64,
@@ -133,13 +147,21 @@ pub(super) struct Verbs {
         c_int,
         *mut PostResult,
     ) -> c_int,
-    pub window:
-        unsafe extern "C" fn(*mut Handles, u64, u64, usize, u32, bool, *mut PostResult) -> c_int,
-    pub dealloc_window: Close,
-    pub poll: unsafe extern "C" fn(*mut Handles, *mut Completion) -> c_int,
-    pub destroy_qp: Close,
-    pub deregister: Close,
-    pub destroy_cq: Close,
+    pub window: unsafe extern "C" fn(
+        *mut ConnectionHandles,
+        *mut MemoryHandles,
+        u64,
+        u64,
+        usize,
+        u32,
+        bool,
+        *mut PostResult,
+    ) -> c_int,
+    pub dealloc_window: CloseMemory,
+    pub poll: unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
+    pub destroy_qp: CloseConnection,
+    pub deregister: CloseMemory,
+    pub destroy_cq: CloseConnection,
     pub dealloc_pd: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
     pub close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
 }
@@ -155,7 +177,7 @@ fn failure() -> c_int {
 }
 
 unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_char) -> c_int {
-    // SAFETY: Device owns initialized handles, including partial construction.
+    // SAFETY: RdmaContext owns initialized handles, including partial construction.
     unsafe {
         let h = &mut *handles;
         let mut count = 0;
@@ -191,11 +213,11 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
 }
 
 unsafe extern "C" fn create_cq(
-    handles: *mut Handles,
+    handles: *mut ConnectionHandles,
     device: *const DeviceHandles,
     capacity: u32,
 ) -> c_int {
-    // SAFETY: the progress owner retains this CQ and its actual Device/PD.
+    // SAFETY: the progress owner retains this CQ and its actual RdmaContext/PD.
     unsafe {
         (*handles).cq = ffi::ibv_create_cq(
             (*device).context.cast(),
@@ -216,7 +238,7 @@ unsafe extern "C" fn create_cq(
 }
 
 unsafe extern "C" fn register_local(
-    handles: *mut Handles,
+    handles: *mut MemoryHandles,
     device: *const DeviceHandles,
     buffer: *mut c_void,
     length: usize,
@@ -240,7 +262,8 @@ unsafe extern "C" fn register_local(
 }
 
 unsafe extern "C" fn open(
-    handles: *mut Handles,
+    handles: *mut ConnectionHandles,
+    memory: *mut MemoryHandles,
     device: *const DeviceHandles,
     port: u8,
     gid_index: u8,
@@ -251,10 +274,11 @@ unsafe extern "C" fn open(
     max_send_wr: u32,
     local: *mut Descriptor,
 ) -> c_int {
-    // SAFETY: Endpoint retains the shared Device and exclusive stable bytes.
+    // SAFETY: RdmaEndpoint retains the shared RdmaContext and exclusive stable bytes.
     // Re-query addressing for each endpoint instead of caching a stale GID/LID.
     unsafe {
         let h = &mut *handles;
+        let memory = &mut *memory;
         let device = &*device;
         let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
         // The published binding exposes the stable compatibility symbol.
@@ -294,9 +318,9 @@ unsafe extern "C" fn open(
             } else {
                 0
             };
-        if h.mr.is_null() {
-            h.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
-            if h.mr.is_null() {
+        if memory.mr.is_null() {
+            memory.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
+            if memory.mr.is_null() {
                 return failure();
             }
         } else if permission != 0 {
@@ -343,20 +367,20 @@ unsafe extern "C" fn open(
             let Some(allocate) = context.ops.alloc_mw else {
                 return libc::EOPNOTSUPP;
             };
-            h.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
-            if h.mw.is_null() {
+            memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
+            if memory.mw.is_null() {
                 return failure();
             }
-            let key = (*h.mw.cast::<ffi::ibv_mw>()).rkey;
-            // Device selects and permanently burns a fresh full key in its PD.
-            h.window_key = key;
+            let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
+            // RdmaContext selects and permanently burns a fresh full key in its PD.
+            memory.window_key = key;
         }
         *local = Descriptor {
             address: buffer as u64,
             rkey: if permission != 0 {
-                h.window_key
+                memory.window_key
             } else {
-                (*h.mr.cast::<ffi::ibv_mr>()).rkey
+                (*memory.mr.cast::<ffi::ibv_mr>()).rkey
             },
             qpn: (*h.qp.cast::<ffi::ibv_qp>()).qp_num,
             psn,
@@ -370,7 +394,7 @@ unsafe extern "C" fn open(
 }
 
 unsafe extern "C" fn connect(
-    handles: *mut Handles,
+    handles: *mut ConnectionHandles,
     local: *const Descriptor,
     remote: *const Descriptor,
     port: u8,
@@ -378,7 +402,7 @@ unsafe extern "C" fn connect(
     traffic_class: u8,
     hop_limit: u8,
 ) -> c_int {
-    // SAFETY: Endpoint owns an initialized QP and validates both descriptors
+    // SAFETY: RdmaEndpoint owns an initialized QP and validates both descriptors
     // before this call. Each mask matches the initialized fields for its state.
     unsafe {
         let h = &mut *handles;
@@ -429,7 +453,8 @@ unsafe extern "C" fn connect(
 }
 
 unsafe extern "C" fn window(
-    handles: *mut Handles,
+    handles: *mut ConnectionHandles,
+    memory: *mut MemoryHandles,
     id: u64,
     address: u64,
     length: usize,
@@ -441,7 +466,8 @@ unsafe extern "C" fn window(
     unsafe {
         *result = PostResult::default();
         let h = &mut *handles;
-        if h.qp.is_null() || h.mw.is_null() || h.mr.is_null() || id == 0 {
+        let memory = &mut *memory;
+        if h.qp.is_null() || memory.mw.is_null() || memory.mr.is_null() || id == 0 {
             return libc::EINVAL;
         }
         let qp = h.qp.cast::<ffi::ibv_qp>();
@@ -460,17 +486,17 @@ unsafe extern "C" fn window(
             if permission & 2 != 0 {
                 access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
             }
-            request.__bindgen_anon_2.bind_mw.mw = h.mw.cast();
-            request.__bindgen_anon_2.bind_mw.rkey = h.window_key;
+            request.__bindgen_anon_2.bind_mw.mw = memory.mw.cast();
+            request.__bindgen_anon_2.bind_mw.rkey = memory.window_key;
             request.__bindgen_anon_2.bind_mw.bind_info = ffi::ibv_mw_bind_info {
-                mr: h.mr.cast(),
+                mr: memory.mr.cast(),
                 addr: address,
                 length: length as u64,
                 mw_access_flags: access,
             };
         } else {
             request.opcode = ffi::ibv_wr_opcode::IBV_WR_LOCAL_INV;
-            request.__bindgen_anon_1.invalidate_rkey = h.window_key;
+            request.__bindgen_anon_1.invalidate_rkey = memory.window_key;
         }
         let mut bad = std::ptr::null_mut();
         let code = post(qp, &mut request, &mut bad);
@@ -483,7 +509,7 @@ unsafe extern "C" fn window(
     }
 }
 
-unsafe extern "C" fn dealloc_window(handles: *mut Handles) -> c_int {
+unsafe extern "C" fn dealloc_window(handles: *mut MemoryHandles) -> c_int {
     unsafe {
         let h = &mut *handles;
         if h.mw.is_null() {
@@ -502,7 +528,8 @@ unsafe extern "C" fn dealloc_window(handles: *mut Handles) -> c_int {
 }
 
 unsafe extern "C" fn post(
-    h: *mut Handles,
+    h: *mut ConnectionHandles,
+    memory: *const MemoryHandles,
     requests: *const WorkRequest,
     count: usize,
     local_address: u64,
@@ -512,7 +539,7 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: Endpoint owns the MR/QP and bytes until successful teardown. The
+    // SAFETY: RdmaEndpoint owns the MR/QP and bytes until successful teardown. The
     // provider consumes these WR/SGE descriptors synchronously during post.
     unsafe {
         *result = PostResult::default();
@@ -524,7 +551,7 @@ unsafe extern "C" fn post(
         let Some(post_send) = (*(*qp).context).ops.post_send else {
             return libc::EOPNOTSUPP;
         };
-        let mr = &*h.mr.cast::<ffi::ibv_mr>();
+        let mr = &*(*memory).mr.cast::<ffi::ibv_mr>();
         let Some(local_offset) = local_address.checked_sub(mr.addr as u64) else {
             return libc::EINVAL;
         };
@@ -604,8 +631,8 @@ unsafe extern "C" fn post(
     }
 }
 
-unsafe extern "C" fn poll(h: *mut Handles, result: *mut Completion) -> c_int {
-    // SAFETY: Endpoint retains the CQ; one initialized output receives one CQE.
+unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Completion) -> c_int {
+    // SAFETY: RdmaEndpoint retains the CQ; one initialized output receives one CQE.
     unsafe {
         let cq = (*h).cq.cast::<ffi::ibv_cq>();
         let Some(poll_cq) = (*(*cq).context).ops.poll_cq else {
@@ -651,9 +678,9 @@ macro_rules! destroy {
         }
     };
 }
-destroy!(destroy_qp, Handles, qp, ibv_destroy_qp);
-destroy!(deregister, Handles, mr, ibv_dereg_mr);
-destroy!(destroy_cq, Handles, cq, ibv_destroy_cq);
+destroy!(destroy_qp, ConnectionHandles, qp, ibv_destroy_qp);
+destroy!(deregister, MemoryHandles, mr, ibv_dereg_mr);
+destroy!(destroy_cq, ConnectionHandles, cq, ibv_destroy_cq);
 destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
@@ -697,5 +724,5 @@ pub(super) static REAL: Verbs = Verbs {
 };
 
 #[cfg(test)]
-#[path = "../../tests/unit/rdma/sys.rs"]
+#[path = "../../../tests/unit/transport/rdma/sys.rs"]
 mod tests;

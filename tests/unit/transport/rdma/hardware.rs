@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use super::*;
 use crate::memory::MemoryRegistry;
-use crate::rdma::{RdmaHostMemory, registration};
+use crate::transport::rdma::{RdmaHostMemory, buffers};
 use crate::{HostMemory, Permission, SourceEpoch};
 
 const COUNT: usize = 4;
@@ -22,7 +22,8 @@ struct DispatchGate {
 static GATE: OnceLock<(Mutex<DispatchGate>, Condvar)> = OnceLock::new();
 
 unsafe extern "C" fn gated_post(
-    h: *mut sys::Handles,
+    h: *mut sys::ConnectionHandles,
+    memory: *const sys::MemoryHandles,
     requests: *const sys::WorkRequest,
     count: usize,
     local: u64,
@@ -45,7 +46,7 @@ unsafe extern "C" fn gated_post(
     drop(state);
     unsafe {
         (sys::REAL.post)(
-            h, requests, count, local, length, remote, rkey, write, result,
+            h, memory, requests, count, local, length, remote, rkey, write, result,
         )
     }
 }
@@ -115,8 +116,8 @@ fn shared_cq_peer() {
     config.max_cqes = capacity;
     config.max_send_wr = window;
     let usage = Arc::default();
-    let runtime = Runtime {
-        registrations: registration::HostRegistrations::new(&config, Arc::clone(&usage), &VERBS),
+    let runtime = RdmaTransport {
+        registrations: buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &VERBS),
         config,
         usage,
         verbs: &VERBS,
@@ -205,7 +206,7 @@ fn shared_cq_peer() {
             }
         }
         for _ in 0..COUNT {
-            let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
+            let mut bytes = [0; crate::transport::rdma::DESCRIPTOR_SIZE];
             stream.read_exact(&mut bytes).unwrap();
             remote.push(Descriptor::decode_connection(&bytes).unwrap());
         }
@@ -226,7 +227,7 @@ fn shared_cq_peer() {
             }
         } else {
             for descriptor in &mut remote {
-                let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
+                let mut bytes = [0; crate::transport::rdma::DESCRIPTOR_SIZE];
                 stream.read_exact(&mut bytes).unwrap();
                 let grant = Descriptor::decode(&bytes).unwrap();
                 assert_eq!(grant.connection_bytes(), descriptor.connection_bytes());
@@ -373,7 +374,25 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            idle.active_grants,
+            idle.retained_grants,
+            closed.active_grants,
+            closed.retained_grants
+        ),
+        (0, 0, 0, 0)
+    );
     assert_eq!(closed.window_key_indices, 0);
+    println!(
+        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        idle.active_endpoints,
+        idle.active_grants,
+        closed.active_endpoints,
+        closed.active_grants,
+        closed.retained_endpoints,
+        closed.retained_grants
+    );
     println!(
         "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
         idle.window_key_indices,
@@ -437,7 +456,7 @@ fn source_window_peer() {
     config.hop_limit = 64;
     config.max_cqes = 1;
     config.max_send_wr = 1;
-    let runtime = Runtime::new(config).unwrap();
+    let runtime = RdmaTransport::new(config).unwrap();
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
     let expected = vec![if source { 0x5a } else { 0xc3 }; length];
     let backing = Arc::new(HostMemory::new(expected.clone().into_boxed_slice()).unwrap());
@@ -481,7 +500,7 @@ fn source_window_peer() {
     if source {
         stream.write_all(&endpoint.connection()).unwrap();
     }
-    let mut bytes = [0; crate::rdma::DESCRIPTOR_SIZE];
+    let mut bytes = [0; crate::transport::rdma::DESCRIPTOR_SIZE];
     stream.read_exact(&mut bytes).unwrap();
     let connection = Descriptor::decode_connection(&bytes).unwrap();
     if !source {
@@ -502,7 +521,7 @@ fn source_window_peer() {
             // A deliberately hostile test peer receives the unadvertised parent key.
             // Production bootstrap never exposes either parent key or parent address.
             let request = endpoint.record.lock().unwrap();
-            let h = &request.resources.as_ref().unwrap().handles;
+            let h = &request.resources.as_ref().unwrap().grant.handles;
             grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
         }
         stream.write_all(&grant.encode()).unwrap();
@@ -571,7 +590,25 @@ fn source_window_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            idle.active_grants,
+            idle.retained_grants,
+            closed.active_grants,
+            closed.retained_grants
+        ),
+        (0, 0, 0, 0)
+    );
     assert_eq!(closed.window_key_indices, 0);
+    println!(
+        "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
+        idle.active_endpoints,
+        idle.active_grants,
+        closed.active_endpoints,
+        closed.active_grants,
+        closed.retained_endpoints,
+        closed.retained_grants
+    );
     println!(
         "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
         idle.window_key_indices,

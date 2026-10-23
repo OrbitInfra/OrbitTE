@@ -114,7 +114,7 @@ pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         epoch,
-        rdma: Some(Arc::new(crate::rdma::tests::runtime(mode))),
+        rdma: Some(Arc::new(crate::transport::rdma::tests::runtime(mode))),
         registry: MemoryRegistry::new(epoch, 8, 4096),
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {
@@ -123,18 +123,18 @@ pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
         }),
         drained: Condvar::new(),
     });
-    let transport = TcpTransport::start(Arc::clone(&source), &config).unwrap();
+    let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
         config,
         source,
-        transport,
+        control,
         batches: Arc::default(),
         allocations: Arc::new(AllocationBudget::new()),
     }
 }
 
 #[cfg(feature = "rdma")]
-pub(crate) fn source_runtime(engine: &TransferEngine) -> &crate::rdma::Runtime {
+pub(crate) fn source_runtime(engine: &TransferEngine) -> &crate::transport::rdma::RdmaTransport {
     engine.source.rdma.as_ref().unwrap()
 }
 
@@ -216,9 +216,11 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
             rdma.active_endpoints,
             rdma.staging_bytes,
             rdma.retained_endpoints,
-            rdma.retained_bytes
+            rdma.retained_bytes,
+            rdma.active_grants,
+            rdma.retained_grants
         ),
-        (1, 8, 1, 8)
+        (0, 8, 0, 8, 1, 1)
     );
     assert!(weak.upgrade().is_some());
     assert!(matches!(
@@ -286,7 +288,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
     let requester = rdma_fixture("post_close0");
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = Arc::clone(&captured);
-    crate::rdma::tests::on_requester_close(move |endpoint, transfer| {
+    crate::transport::rdma::tests::on_requester_close(move |endpoint, transfer| {
         assert!(matches!(
             transfer,
             Err(Error::Backend {
@@ -410,7 +412,7 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
         let source = rdma_fixture(mode);
         let requester = rdma_fixture("copy");
         let runtime = source.source.rdma.as_ref().unwrap();
-        let pause = crate::rdma::tests::pause(runtime);
+        let pause = crate::transport::rdma::tests::pause(runtime);
         let remote = source
             .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
             .unwrap();
@@ -681,9 +683,10 @@ fn failed_direct_read_receipt_preserves_local_changes_and_retains_remote_access_
             stats.direct_bytes,
             stats.staging_bytes,
             stats.retained_bytes,
-            stats.retained_endpoints
+            stats.retained_endpoints,
+            stats.retained_grants
         ),
-        (8, 0, 8, 1)
+        (8, 0, 8, 0, 1)
     );
 }
 
@@ -693,9 +696,9 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     let source = rdma_fixture("direct:ok");
     let requester = Arc::new(rdma_fixture("direct:pause_copy"));
     let runtime = requester.source.rdma.as_ref().unwrap();
-    let pause = crate::rdma::tests::pause(runtime);
-    let events = crate::rdma::tests::events(runtime);
-    let usage = crate::rdma::tests::work_usage(runtime);
+    let pause = crate::transport::rdma::tests::pause(runtime);
+    let events = crate::transport::rdma::tests::events(runtime);
+    let usage = crate::transport::rdma::tests::work_usage(runtime);
     let remote = source
         .register_memory(vec![0x44; 8].into_boxed_slice(), Permission::RemoteRead)
         .unwrap();

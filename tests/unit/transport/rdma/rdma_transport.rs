@@ -1,6 +1,8 @@
 use super::*;
+use crate::engine::deadline;
 use crate::engine::tests::{rdma_fixture, source_runtime};
-use crate::{Permission, TransferEngine, TransferRequest};
+use crate::{Permission, RemoteRegion, TransferEngine, TransferRequest, Transport};
+use std::{io, net::TcpListener, thread, time::Duration};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -13,11 +15,12 @@ fn identity(epoch: u8, domain: u8, generation: u64) -> Identity {
     }
 }
 
-fn channels() -> (Channel<'static>, Channel<'static>) {
+fn channels() -> (ControlChannel<'static>, ControlChannel<'static>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let sender =
-        Channel::connect(listener.local_addr().unwrap(), deadline(TIMEOUT).unwrap()).unwrap();
-    let receiver = Channel {
+        ControlChannel::connect(listener.local_addr().unwrap(), deadline(TIMEOUT).unwrap())
+            .unwrap();
+    let receiver = ControlChannel {
         stream: listener.accept().unwrap().0,
         deadline: deadline(TIMEOUT).unwrap(),
         stopping: None,
@@ -25,7 +28,7 @@ fn channels() -> (Channel<'static>, Channel<'static>) {
     (sender, receiver)
 }
 
-fn expect_closed_without_next_phase(channel: &mut Channel<'_>) {
+fn expect_closed_without_next_phase(channel: &mut ControlChannel<'_>) {
     let mut next = [0];
     let result = channel.read_exact(&mut next);
     assert!(
@@ -44,7 +47,7 @@ fn request(epoch: SourceEpoch, region: u64) -> Request {
     }
 }
 
-fn send_frame(channel: &mut Channel<'_>, phase: u8, bytes: &[u8; BINDING_SIZE]) {
+fn send_frame(channel: &mut ControlChannel<'_>, phase: u8, bytes: &[u8; BINDING_SIZE]) {
     channel.write_all(&[phase]).unwrap();
     channel.write_all(bytes).unwrap();
 }
@@ -76,8 +79,14 @@ fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receip
 fn source_offer(
     source: &TransferEngine,
     request: &Request,
-) -> (Channel<'static>, Identity, u64, [u8; DESCRIPTOR_SIZE]) {
-    let mut channel = Channel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+) -> (
+    ControlChannel<'static>,
+    Identity,
+    u64,
+    [u8; DESCRIPTOR_SIZE],
+) {
+    let mut channel =
+        ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel.write_all(&request.encode()).unwrap();
     let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
     assert_eq!((reply.status, reply.length), (0, OFFER_SIZE as u64));
@@ -142,7 +151,7 @@ fn source_rejects_stale_accept_before_connect_or_bind_and_releases_actual_owners
             (0, 0, 0, 0),
             "case {case}"
         );
-        let runtime_log = crate::rdma::tests::events(source_runtime(&source));
+        let runtime_log = crate::transport::rdma::tests::events(source_runtime(&source));
         assert!(
             !runtime_log.lock().unwrap().contains(&"connect"),
             "case {case}"
@@ -245,14 +254,12 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             }],
         };
         let handler = thread::spawn(move || {
-            let mut channel = Channel {
+            let mut channel = ControlChannel {
                 stream: listener.accept().unwrap().0,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
             };
-            let mut bytes = [0; REQUEST_SIZE];
-            channel.read_exact(&mut bytes).unwrap();
-            let wire = Request::decode(&bytes).unwrap();
+            let wire = crate::runtime::control_plane::tests::read_request(&mut channel);
             let payload = vec![0x42u8; 8].into_boxed_slice();
             let descriptor = grant_descriptor(payload.as_ptr() as u64);
             let local = identity(7, 8, 9);
@@ -361,7 +368,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             assert!(matches!(failure.error, Error::Protocol(_)), "{failure:?}");
         }
         if stage == 0 {
-            let log = crate::rdma::tests::events(source_runtime(&requester));
+            let log = crate::transport::rdma::tests::events(source_runtime(&requester));
             assert!(!log.lock().unwrap().contains(&"connect"));
         }
         assert!(report.locally_drained);
