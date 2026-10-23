@@ -1360,6 +1360,12 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
             .unwrap();
         let remote = endpoint.descriptor();
         endpoint.connect(&remote).unwrap();
+        if mode.ends_with("close1") {
+            // Retire while the borrower is held: the worker can finish failed
+            // posting before transfer() returns to this test thread.
+            registry.unregister(&memory).unwrap();
+            runtime.registrations.retire(&memory).unwrap();
+        }
         let result = endpoint.transfer(
             &remote,
             TransferOp::Read,
@@ -1369,9 +1375,6 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         let stats = runtime.stats().unwrap();
         assert_eq!(stats.peak_work_requests, 4);
         assert_eq!(stats.post_calls, if mode == "reverse" { 2 } else { 1 });
-        if mode.ends_with("close1") {
-            registry.unregister(&memory).unwrap();
-        }
         let closed = endpoint.close();
         assert_eq!(
             matches!(closed, Err(Error::Unquiesced { .. })),

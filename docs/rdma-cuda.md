@@ -196,10 +196,10 @@ A requester SEND CQE or TCP DONE alone cannot prove source completion.
 The requester still physically destroys its QP and releases its MR borrow/loan
 before bound TCP DONE. The source requires both DONE and the validated RQ
 receipt, then physically destroys its QP and MW before returning its parent MR
-borrow to `LocalBufferManager`. An idle active parent remains registered; final
-unregister, LRU eviction or engine close physically deregisters it. Only afterward may
-it release its loan or commit WRITE staging, drop its output charge and send
-bound ACK. READ staging copies back only after ACK. Both QP barriers remain;
+borrow to `LocalBufferManager`. It may then release its exact loan or commit
+WRITE staging, drop its output charge and send bound ACK. An idle active parent
+remains registered; final unregister, LRU eviction or engine close can physically
+deregister it later. READ staging copies back only after ACK. Both QP barriers remain;
 this stage does not qualify release of incoming-DMA owners without QP close.
 The public success path uses remote invalidation instead of LOCAL_INV. Historical
 LOCAL_INV and parent-key native probes remain separate regression controls.
