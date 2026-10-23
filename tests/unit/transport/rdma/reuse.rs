@@ -68,6 +68,22 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
                     endpoint.cached_peer.unwrap(),
                     endpoint.claim,
                 ));
+                drop(state);
+                if round != 0 {
+                    endpoint
+                        .progress
+                        .retire_idle(&endpoint.record, endpoint.claim - 1, endpoint.deadline)
+                        .unwrap();
+                    assert!(
+                        !endpoint
+                            .record
+                            .terminal
+                            .load(std::sync::atomic::Ordering::Acquire)
+                    );
+                    assert!(
+                        endpoint.record.lock().unwrap().phase == super::super::super::Phase::Ready
+                    );
+                }
             });
             let (offset, length) = if round % 2 == 0 { (0, 8) } else { (2, 4) };
             local.write(0, &[0x63 + round; 8]).unwrap();
@@ -378,7 +394,20 @@ fn completion_requires_data_drain_exact_payload_key_and_exact_current_native_bin
     endpoint
         .send_completion(&binding.0, descriptor.rkey)
         .unwrap();
-    for index in [10, 44, REQUEST_SIZE + IDENTITY_SIZE + 16, BINDING_SIZE - 1] {
+    for index in [
+        10,
+        11,
+        28,
+        36,
+        44,
+        REQUEST_SIZE,
+        REQUEST_SIZE + 16,
+        REQUEST_SIZE + 32,
+        REQUEST_SIZE + IDENTITY_SIZE,
+        REQUEST_SIZE + IDENTITY_SIZE + 16,
+        BINDING_SIZE - 9,
+        BINDING_SIZE - 1,
+    ] {
         let mut changed = binding.0;
         changed[index] ^= 1;
         assert!(
@@ -624,7 +653,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
 
 #[test]
 fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
-    for case in 0..5 {
+    for case in 0..7 {
         let source = rdma_fixture("direct:copy");
         let remote = source
             .register_memory(
@@ -644,6 +673,7 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
         match case {
             0 => hello.expected_domain = [0xff; 16],
             1 => hello.requester.epoch = SourceEpoch([0; 16]),
+            6 => {}
             _ => {
                 hello.source = Some(Identity {
                     epoch: source.source_epoch(),
@@ -660,16 +690,28 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
                 if case == 3 {
                     hello.previous_grant = 0;
                 }
+                if case == 5 {
+                    hello.source.as_mut().unwrap().epoch.0[0] ^= 1;
+                }
             }
         }
         let wire = request(source.source_epoch(), remote.id());
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&wire.encode()).unwrap();
-        hello.write(&mut channel).unwrap();
+        if case == 6 {
+            let mut bytes = [0; HELLO_SIZE];
+            bytes[0] = 5;
+            bytes[1..1 + IDENTITY_SIZE].copy_from_slice(&hello.requester.encode());
+            channel.write_all(&bytes).unwrap();
+        } else {
+            hello.write(&mut channel).unwrap();
+        }
         let reply = Reply::read(&mut channel, source.source_epoch());
         if case == 4 {
             assert_eq!(reply.unwrap().status, CACHE_MISS);
+        } else if case == 5 {
+            assert!(matches!(reply, Err(Error::EpochMismatch)), "case {case}");
         } else {
             assert!(matches!(reply, Err(Error::Protocol(_))), "case {case}");
         }
@@ -691,7 +733,8 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
 
 #[test]
 fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expected_pd() {
-    for changed_domain in [false, true] {
+    for changed in ["grant", "connection", "domain"] {
+        let changed_domain = changed == "domain";
         let source = rdma_fixture("direct:copy");
         let requester = rdma_fixture("direct:copy");
         let local = requester
@@ -742,6 +785,9 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                         &offer[16..32]
                     );
                     offer[16..32].fill(0xff);
+                } else if changed == "connection" {
+                    let generation = u64_at(&offer, 32).checked_add(1).unwrap();
+                    offer[32..40].copy_from_slice(&generation.to_be_bytes());
                 } else {
                     offer[IDENTITY_SIZE..IDENTITY_SIZE + 8]
                         .copy_from_slice(&old_grant.to_be_bytes());
@@ -819,5 +865,95 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
         assert_eq!(stats.opened_connections, stats.closed_connections);
         assert_eq!((stats.active_grants, stats.idle_endpoints), (0, 0));
         requester.close(TIMEOUT).unwrap();
+    }
+}
+
+#[test]
+fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
+    let source = rdma_fixture("direct:copy");
+    let requester = rdma_fixture("direct:copy");
+    let local = requester
+        .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(
+            vec![0x29; 8].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let captured = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&captured);
+    on_requester_close(move |endpoint, result| {
+        result.as_ref().unwrap();
+        *capture.lock().unwrap() = endpoint.cached_peer;
+    });
+    transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+    let peer = captured.lock().unwrap().take().unwrap();
+    for changed in [
+        "source connection",
+        "requester epoch",
+        "requester domain",
+        "requester connection",
+        "previous grant",
+        "operation",
+    ] {
+        let mut hello = Hello {
+            requester: Identity {
+                epoch: requester.source_epoch(),
+                connection: peer.local,
+            },
+            source: Some(Identity {
+                epoch: source.source_epoch(),
+                connection: peer.connection,
+            }),
+            expected_domain: peer.connection.domain,
+            direct: true,
+            previous_grant: peer.generation,
+        };
+        let mut wire = request(source.source_epoch(), remote.id());
+        wire.operation = Operation::RdmaRead;
+        match changed {
+            "source connection" => hello.source.as_mut().unwrap().connection.generation += 1,
+            "requester epoch" => hello.requester.epoch.0[0] ^= 1,
+            "requester domain" => hello.requester.connection.domain[0] ^= 1,
+            "requester connection" => hello.requester.connection.generation += 1,
+            "previous grant" => hello.previous_grant += 1,
+            "operation" => wire.operation = Operation::RdmaWrite,
+            _ => unreachable!(),
+        }
+        let mut channel =
+            ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+        channel.write_all(&wire.encode()).unwrap();
+        hello.write(&mut channel).unwrap();
+        let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
+        assert_eq!((reply.status, reply.length), (CACHE_MISS, 0), "{changed}");
+        drop(channel);
+        let stats = source.stats().unwrap().rdma.unwrap();
+        assert_eq!(
+            (
+                stats.opened_connections,
+                stats.opened_windows,
+                stats.burned_window_keys,
+                stats.completed_window_binds,
+                stats.reused_connections
+            ),
+            (1, 1, 1, 1, 0),
+            "{changed} must not create fresh authority or claim the actual idle pair"
+        );
+        assert_eq!(
+            (
+                stats.active_grants,
+                stats.direct_bytes,
+                stats.idle_endpoints
+            ),
+            (0, 0, 1)
+        );
+    }
+    transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+    assert_eq!(bytes(&local), [0x29; 8]);
+    for engine in [&requester, &source] {
+        let stats = engine.stats().unwrap().rdma.unwrap();
+        assert_eq!((stats.opened_connections, stats.reused_connections), (1, 1));
+        engine.close(TIMEOUT).unwrap();
     }
 }
