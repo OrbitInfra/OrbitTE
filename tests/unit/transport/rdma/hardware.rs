@@ -461,11 +461,12 @@ fn source_window_peer() {
     let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
     config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
     config.hop_limit = 64;
+    config.host_memory = RdmaHostMemory::Direct;
     config.max_cqes = 1;
     config.max_send_wr = 1;
     let runtime = RdmaTransport::new(config).unwrap();
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
-    let expected = vec![if source { 0x5a } else { 0xc3 }; length];
+    let mut expected = vec![if source { 0x5a } else { 0xc3 }; length];
     let backing = Arc::new(HostMemory::new(expected.clone().into_boxed_slice()).unwrap());
     let memory = registry
         .register_host(Arc::clone(&backing), 0, length, Permission::RemoteReadWrite)
@@ -560,6 +561,7 @@ fn source_window_peer() {
             endpoint
                 .transfer(&grant, TransferOp::Read, Instant::now() + TIMEOUT)
                 .unwrap();
+            expected[GUARD..GUARD + 4096].fill(0x5a);
             endpoint
                 .send_completion(&[0x42; COMPLETION_MESSAGE_SIZE], grant.rkey)
                 .unwrap();
