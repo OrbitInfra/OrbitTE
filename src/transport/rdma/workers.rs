@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -153,7 +153,8 @@ pub(super) struct Shared {
     next_work_namespace: AtomicU64,
     completion_events: Option<Arc<CompletionEvents>>,
     control: Mutex<Control>,
-    wake: Condvar,
+    changed: Condvar,
+    progress_thread: OnceLock<thread::Thread>,
     usage: Arc<Mutex<RdmaStats>>,
     verbs: &'static sys::Verbs,
     config: RdmaConfig,
@@ -264,7 +265,8 @@ impl Workers {
                 fault: None,
                 retained: None,
             }),
-            wake: Condvar::new(),
+            changed: Condvar::new(),
+            progress_thread: OnceLock::new(),
             usage,
             verbs,
             config: config.clone(),
@@ -381,7 +383,7 @@ impl Workers {
         });
         control.endpoints.publish(Arc::clone(&record))?;
         control.dirty = true;
-        self.shared.wake.notify_one();
+        self.shared.wake();
         Ok(record)
     }
 
@@ -1130,11 +1132,11 @@ impl Workers {
             .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
         control.stopping = true;
         control.dirty = true;
-        self.shared.wake.notify_one();
+        self.shared.wake();
         while !control.finished {
             control = self
                 .shared
-                .wake
+                .changed
                 .wait_timeout(control, remaining(deadline)?)
                 .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?
                 .0;
@@ -1168,10 +1170,16 @@ impl Drop for Workers {
 }
 
 impl Shared {
+    pub(super) fn wake(&self) {
+        if let Some(worker) = self.progress_thread.get() {
+            worker.unpark();
+        }
+    }
+
     pub(super) fn signal(&self) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         control.dirty = true;
-        self.wake.notify_one();
+        self.wake();
     }
 
     fn fail(&self, fault: Fault) {
@@ -1190,7 +1198,7 @@ impl Shared {
                 .progress_failures += 1;
         }
         control.dirty = true;
-        self.wake.notify_all();
+        self.wake();
     }
 
     fn close_cq(&self) -> std::result::Result<(), (&'static str, i32)> {
@@ -1326,7 +1334,7 @@ impl Shared {
             events.retain();
         }
         std::mem::forget((cq, records));
-        self.wake.notify_all();
+        self.changed.notify_all();
     }
 
     fn unlock(request: &mut Request) -> std::result::Result<(), (&'static str, i32)> {
@@ -1497,7 +1505,7 @@ impl Shared {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         control.endpoints.clear_after_drain();
         control.finished = true;
-        self.wake.notify_all();
+        self.changed.notify_all();
     }
 
     fn post(&self, record: &Arc<Record>) -> bool {
@@ -1792,6 +1800,10 @@ impl Shared {
     }
 
     fn run(&self) {
+        if self.progress_thread.set(thread::current()).is_err() {
+            self.retain("RDMA progress worker already started", libc::EIO);
+            return;
+        }
         let mut records = Vec::with_capacity(self.config.max_endpoints);
         let mut cursor = 0usize;
         loop {
@@ -1835,7 +1847,7 @@ impl Shared {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .finished = true;
-                self.wake.notify_all();
+                self.changed.notify_all();
                 return;
             }
             if self.completion_events.is_some() {
@@ -1980,10 +1992,11 @@ impl Shared {
                 Some(Duration::from_micros(50))
             };
             records.clear();
-            let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
+            let control = self.control.lock().unwrap_or_else(|p| p.into_inner());
             if control.dirty || control.fault.is_some() || control.stopping {
                 continue;
             }
+            drop(control);
             if pending {
                 if self.completion_events.is_some() {
                     self.usage
@@ -1992,18 +2005,12 @@ impl Shared {
                         .cq_event_waits += 1;
                 }
                 if let Some(duration) = wait {
-                    drop(
-                        self.wake
-                            .wait_timeout(control, duration)
-                            .unwrap_or_else(|p| p.into_inner()),
-                    );
+                    thread::park_timeout(duration);
                 } else {
-                    drop(self.wake.wait(control).unwrap_or_else(|p| p.into_inner()));
+                    thread::park();
                 }
             } else {
-                while !control.dirty && control.fault.is_none() && !control.stopping {
-                    control = self.wake.wait(control).unwrap_or_else(|p| p.into_inner());
-                }
+                thread::park();
             }
         }
     }

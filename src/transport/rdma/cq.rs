@@ -63,6 +63,7 @@ unsafe impl Send for EventSource {}
 
 struct EventExit {
     asynchronous: Arc<events::State>,
+    counters: Arc<events::Counters>,
     usage: Arc<Mutex<RdmaStats>>,
     stopping: Arc<AtomicBool>,
 }
@@ -135,13 +136,12 @@ impl EventSource {
                         .lost_completion(if code == 0 { libc::EPROTO } else { code });
                     return;
                 }
-                // ACK the actual returned CQ before acquiring any progress/usage lock.
-                // Native destruction may be waiting for this exact event receipt.
+                // Native destruction may await any receipt in the burst. Neither
+                // telemetry nor progress wake may wait for a teardown-held lock.
                 unsafe { (self.verbs.ack)(cq) };
-                exit.usage
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .completion_events += 1;
+                exit.counters
+                    .completion_events
+                    .fetch_add(1, Ordering::Relaxed);
                 exit.asynchronous.notify();
                 if exit.stopping.load(Ordering::Acquire) {
                     return;
@@ -195,6 +195,7 @@ impl CompletionEvents {
                 return Err(Error::Internal("missing RDMA completion fd"));
             }
             let state = Arc::clone(&asynchronous);
+            let counters = Arc::clone(&resources._device.counters);
             let usage = Arc::clone(&resources.usage);
             let stopping = Arc::clone(&resources.stopping);
             usage
@@ -206,6 +207,7 @@ impl CompletionEvents {
                 .spawn(move || {
                     let exit = EventExit {
                         asynchronous: state,
+                        counters,
                         usage,
                         stopping,
                     };

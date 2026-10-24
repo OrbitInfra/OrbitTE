@@ -214,6 +214,7 @@ fn shared_cq_peer() {
         registrations: buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &VERBS),
         config,
         usage,
+        counters: Arc::default(),
         verbs: &VERBS,
         device: Mutex::default(),
         drained: Arc::default(),

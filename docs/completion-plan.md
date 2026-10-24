@@ -624,15 +624,18 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 - [ ] **P4.9 — optional CQ event progress (Implemented; independent and native
   qualification open).** Default polling remains the frozen TENT behavior.
   Event mode shares one native completion channel between the existing SQ/RQ
-  CQs. A separate channel consumer ACKs each actual returned event before
-  progress locks; the data worker arms before polling and waits on its existing
-  condition variable with the earliest unresolved SQ/RQ deadline. Event receipts
+  CQs. A separate channel consumer ACKs each actual returned event without
+  acquiring progress or budget locks between receipts. Atomic ACK counters and
+  a retained thread wake token keep event bursts independent of native teardown.
+  The data worker arms before polling and parks until a wake or the earliest
+  unresolved SQ/RQ deadline; its close waiters retain a condition variable. Event receipts
   never complete a WR or grant. Actual QP/CQ destruction precedes consumer
   stop/join and channel destruction. Lost consumption or failed cleanup retains
   real owners and charges without retry. Source controls exercise public
   READ/WRITE/connected reuse in both modes, real native-notify ABI dispatch,
-  wakeups, deadline retirement, partial construction and ACK during blocked
-  native destruction. The physical runner accepts an explicit `rdma_events`
+  wakeups, deadline retirement, partial construction and eight-event ACK bursts
+  during native destruction with progress, budget or both locks held. Context
+  asynchronous events obey the same burst contract. The physical runner accepts an explicit `rdma_events`
   flag without changing RNIC/GPU locks. New binaries still need both-mode native
   regressions and independent review; P4.8's independent native repeat remains
   a prerequisite for accepting dependent hardware work. See

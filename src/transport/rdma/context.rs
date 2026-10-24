@@ -13,6 +13,7 @@ pub(super) struct RdmaContext {
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
     pub(super) asynchronous: Arc<events::State>,
+    pub(super) counters: Arc<events::Counters>,
 }
 
 enum State {
@@ -49,12 +50,19 @@ impl RdmaContext {
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<events::Counters>,
     ) -> Result<Arc<Self>> {
         let (topology, candidates) = (verbs.discover)(config)?;
         let mut last_error = Error::Unavailable("no RDMA discovery candidate");
         for address in candidates {
-            match Self::open_selected(config, verbs, Arc::clone(&usage), address, topology.clone())
-            {
+            match Self::open_selected(
+                config,
+                verbs,
+                Arc::clone(&usage),
+                Arc::clone(&counters),
+                address,
+                topology.clone(),
+            ) {
                 Ok(owner) => return Ok(owner),
                 Err(error @ Error::Unquiesced { .. }) => return Err(error),
                 Err(error) => last_error = error,
@@ -67,6 +75,7 @@ impl RdmaContext {
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<events::Counters>,
         address: RdmaAddress,
         topology: crate::Topology,
     ) -> Result<Arc<Self>> {
@@ -91,6 +100,7 @@ impl RdmaContext {
             }))),
             verbs,
             asynchronous: Arc::default(),
+            counters,
         });
         let initialized = {
             let mut state = owner
@@ -121,6 +131,7 @@ impl RdmaContext {
                         asynchronous,
                         Arc::clone(&owner.asynchronous),
                         Arc::clone(&resources.usage),
+                        Arc::clone(&owner.counters),
                     )?);
                 }
                 resources

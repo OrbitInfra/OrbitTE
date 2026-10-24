@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code)]
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -253,6 +254,7 @@ pub struct RdmaStats {
 pub(crate) struct RdmaTransport {
     config: RdmaConfig,
     usage: Arc<Mutex<RdmaStats>>,
+    counters: Arc<events::Counters>,
     verbs: &'static sys::Verbs,
     device: Mutex<ContextCache>,
     drained: Arc<Condvar>,
@@ -276,6 +278,7 @@ impl RdmaTransport {
         Ok(Arc::new(Self {
             config,
             usage,
+            counters: Arc::default(),
             verbs: &sys::REAL,
             device: Mutex::default(),
             drained: Arc::default(),
@@ -284,10 +287,16 @@ impl RdmaTransport {
     }
 
     pub(crate) fn stats(&self) -> Result<RdmaStats> {
-        self.usage
+        let mut stats = *self
+            .usage
             .lock()
-            .map(|usage| *usage)
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+        stats.acknowledged_async_events = self
+            .counters
+            .acknowledged_async_events
+            .load(Ordering::Relaxed);
+        stats.completion_events = self.counters.completion_events.load(Ordering::Relaxed);
+        Ok(stats)
     }
 
     pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
@@ -316,7 +325,12 @@ impl RdmaTransport {
         if let Some(owner) = &cache.owner {
             return Ok(Arc::clone(owner));
         }
-        match RdmaContext::open(&self.config, self.verbs, Arc::clone(&self.usage)) {
+        match RdmaContext::open(
+            &self.config,
+            self.verbs,
+            Arc::clone(&self.usage),
+            Arc::clone(&self.counters),
+        ) {
             Ok(owner) => {
                 cache.owner = Some(Arc::clone(&owner));
                 Ok(owner)

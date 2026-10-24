@@ -1683,16 +1683,24 @@ The data worker arms both CQs with `solicited_only=0` **before** polling. A
 completion already present when arming is consumed by that poll; a later
 completion produces a native event. Progressed CQEs cause another full pass
 instead of sleeping with unposted slices or an undrained poll budget. The
-existing control mutex, dirty flag and condition variable synchronize local
-submissions, native wakeups, cancellation and shutdown. Pending work waits at
-most until its earliest unresolved SQ/RQ deadline; completed requests do not
-keep an expired timer in that minimum. Idle workers still wake for local work
-or context faults. No extra data-posting worker is introduced.
+control mutex and dirty flag serialize local submissions, cancellation and
+shutdown. A thread wake token (`unpark`/`park`) wakes the one data worker without
+acquiring that mutex; a wake received before parking remains pending. The worker
+registers its thread before its first scan, so work or faults published during
+startup are observed by that scan. Pending work waits at most until its earliest
+unresolved SQ/RQ deadline; completed requests do not keep an expired timer in
+that minimum. Idle workers still wake for local work or context faults. The
+condition variable only reports worker termination to close waiters. No extra
+data-posting worker is introduced.
 
 Teardown first destroys every affiliated QP and both CQs **while the completion
 consumer remains alive**. Native `ibv_destroy_cq` can wait for event ACKs, so the
-consumer ACKs before acquiring statistics, endpoint or progress locks. Only
-after all actual CQ owners close and release their channel references does the
+consumer never acquires budget, endpoint or progress locks between receipts.
+Merely ACKing the first event before those locks is insufficient: a later event
+in the same burst can still block native destruction. Both native event
+consumers use atomic ACK counters and the lock-independent thread wake token;
+resource charges remain under their existing budget owner. Only after all
+actual CQ owners close and release their channel references does the
 owner stop/join the consumer and destroy the channel. Context/PD destruction
 comes afterward. A failed native destroy is never retried. Failure retains the
 remaining actual channel/context/CQ/QP/MR/backing owners and their charges.
@@ -1701,15 +1709,21 @@ destroy calls that could wait forever for an unavailable ACK owner.
 
 `RdmaStats` reports active/opened/retained completion channels, completion-event
 workers, acknowledged completion events, successful notification arms and event
-waits. These counters describe ownership and the exercised path; they are not
+waits. ACK counters are cumulative transport-owned atomics and remain readable
+after native context/channel closure. They are observations, never admission or
+completion authority; their snapshot need not be simultaneous with resource
+charges. These counters describe ownership and the exercised path; they are not
 a throughput or CPU-efficiency claim.
 
 Source tests cover both modes of the public READ/WRITE and connected-QP reuse
 contract, a withheld completion that must wake the existing data worker,
 earliest-deadline retirement, partial channel/first-CQ/second-CQ construction,
 native `req_notify_cq` ABI dispatch, arm failure, lost consumption, retained
-channel close and a native-destroy control that waits for an ACK while the
-progress lock is held. Test implementations stay in `tests/unit/`.
+channel close and native-destroy controls that wait for eight event ACKs while
+the progress lock, budget lock or both are held. Context asynchronous event
+bursts exercise the same three cases. The previous source fails the CQ burst
+regression with `ibv_destroy_cq`/`EBUSY`; the single-event control alone did not
+expose this inter-event blocking. Test implementations stay in `tests/unit/`.
 
 The existing physical runner accepts `"rdma_events": true` for native RDMA
 cases, including connected/duplex peers. The flag is a strict boolean and does
@@ -1722,8 +1736,9 @@ cleanup controls remain required. Keep polling and event-mode regressions
 separate, using newly frozen binaries.
 
 External implementation evidence is under
-`/root/orbitte-artifacts/rdma-cq-events-20261024`. Native runs have not been
-executed for this substage. A fresh authorized two-host profile is required for
+`/root/orbitte-artifacts/rdma-cq-events-20261024`; burst-hardening evidence is
+under `/root/orbitte-artifacts/rdma-event-burst-20261024`, including the failing
+pre-fix regression. Native runs have not been executed for this substage. A fresh authorized two-host profile is required for
 the outstanding P4.8 independent repeat and P4.9 both-mode native qualification.
 Physical partial-post/CQ/device/destroy faults, multirail, GDR, performance,
 full P4 and OrbitKV linkage remain open.

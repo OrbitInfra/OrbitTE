@@ -198,7 +198,12 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         entry.retiring.store(true, Ordering::Release);
         entry
     };
-    if entry.channel.mode == "completion_destroy_event" {
+    let count = match entry.channel.mode.as_str() {
+        "completion_destroy_event" => 1,
+        "completion_destroy_burst" => 8,
+        _ => 0,
+    };
+    for _ in 0..count {
         entry.armed.store(true, Ordering::Release);
         entry.emit();
     }
