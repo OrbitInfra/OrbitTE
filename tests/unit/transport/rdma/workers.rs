@@ -1,8 +1,8 @@
 use super::*;
+use crate::transport::rdma::endpoint::{ConnectionLease, GrantLease};
 use crate::transport::rdma::tests::{events, pause, runtime};
 use crate::transport::rdma::{
-    ConnectionLease, ConnectionResources, GrantLease, GrantResources, RdmaEndpoint, RdmaTransport,
-    Staging,
+    ConnectionResources, GrantResources, RdmaEndpoint, RdmaTransport, Staging,
 };
 
 fn deadline() -> Instant {
@@ -153,6 +153,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             cached_mr: None,
             buffer: Buffer::Staged(Staging::new(8).unwrap()),
             _lease: GrantLease {
+                _selection: runtime.allocate(8, u64::MAX).unwrap(),
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),
                 length: 8,

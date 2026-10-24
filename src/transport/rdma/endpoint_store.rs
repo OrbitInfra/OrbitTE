@@ -9,6 +9,7 @@ use crate::{Error, Result, SourceEpoch, TransferOp};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Peer {
     pub(super) route: Option<SocketAddr>,
+    pub(super) source_nic_id: usize,
     pub(super) epoch: SourceEpoch,
     pub(super) local: ConnectionId,
     pub(super) connection: ConnectionId,
@@ -20,6 +21,7 @@ pub(super) struct Peer {
 impl Peer {
     pub(super) fn same_pair(&self, other: &Self) -> bool {
         self.route == other.route
+            && self.source_nic_id == other.source_nic_id
             && self.epoch == other.epoch
             && self.local == other.local
             && self.connection == other.connection
@@ -96,12 +98,14 @@ impl EndpointStore {
         self.idle.len() != was_idle
     }
 
-    pub(super) fn detach_all(&mut self) {
+    pub(super) fn detach_all(&mut self) -> usize {
+        let idle = self.idle.len();
         self.idle.clear();
         for endpoint in &self.live {
             endpoint.terminal.store(true, Ordering::Release);
         }
         self.retiring.append(&mut self.live);
+        idle
     }
 
     pub(super) fn remove_retired(&mut self, endpoint: &Arc<Record>) {

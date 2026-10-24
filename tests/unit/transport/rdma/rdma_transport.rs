@@ -88,10 +88,11 @@ fn source_offer(
     let mut channel =
         ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel.write_all(&request.encode()).unwrap();
+    let paths = rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
     Hello {
         requester: identity(9, 8, 7),
         source: None,
-        expected_domain: [0; 16],
+        expected_domain: paths[0].domain,
         direct: false,
         previous_grant: 0,
     }
@@ -269,6 +270,23 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 stopping: None,
             };
             let wire = crate::runtime::control_plane::tests::read_request(&mut channel);
+            rail_monitor::write_paths(
+                &mut channel,
+                epoch,
+                &[NicPath {
+                    nic_id: 0,
+                    name: "copy".into(),
+                    domain: [8; 16],
+                    gid_type: crate::transport::rdma::discovery::GidType::Ib,
+                    descriptor: Descriptor {
+                        lid: 1,
+                        mtu: 3,
+                        link_layer: 1,
+                        ..Default::default()
+                    },
+                }],
+            )
+            .unwrap();
             let hello = Hello::read(&mut channel, epoch).unwrap();
             let payload = vec![0x42u8; 8].into_boxed_slice();
             let descriptor = grant_descriptor(payload.as_ptr() as u64);
@@ -424,10 +442,11 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     channel.deadline = deadline(Duration::from_secs(1)).unwrap();
     thread::scope(|scope| {
         let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory, 0, 8));
+        let paths = rail_monitor::read_paths(&mut peer, epoch).unwrap();
         Hello {
             requester: identity(9, 8, 7),
             source: None,
-            expected_domain: [0; 16],
+            expected_domain: paths[0].domain,
             direct: false,
             previous_grant: 0,
         }
@@ -500,3 +519,5 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
 
 #[path = "reuse.rs"]
 mod reuse;
+
+mod rails;

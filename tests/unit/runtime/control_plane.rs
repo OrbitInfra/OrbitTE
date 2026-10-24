@@ -40,7 +40,7 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x09\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x0a\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);

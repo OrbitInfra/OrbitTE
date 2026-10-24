@@ -1186,11 +1186,11 @@ impl Shared {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.fault.is_none() {
             control.accepting = false;
-            control.endpoints.detach_all();
+            let idle = control.endpoints.detach_all();
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .idle_endpoints = 0;
+                .idle_endpoints -= idle;
             control.fault = Some(fault);
             self.usage
                 .lock()
@@ -1256,11 +1256,11 @@ impl Shared {
             }
             control.fault = Some(Fault::Unquiesced(operation, code));
             control.accepting = false;
+            let idle = control.endpoints.detach_all();
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .idle_endpoints = 0;
-            control.endpoints.detach_all();
+                .idle_endpoints -= idle;
             control.endpoints.take_all()
         };
         let mut count = 0;

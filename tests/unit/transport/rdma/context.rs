@@ -6,8 +6,12 @@ use std::sync::Barrier;
 use std::thread;
 
 pub(crate) fn events(runtime: &RdmaTransport) -> Arc<Mutex<Vec<&'static str>>> {
-    let cache = runtime.device.lock().unwrap();
-    let owner = cache.owner.as_ref().unwrap();
+    let cache = runtime.context_set.lock().unwrap();
+    let owner = cache
+        .slots
+        .iter()
+        .find_map(|slot| slot.owner.as_ref())
+        .unwrap();
     let state = owner.state.lock().unwrap();
     let State::Open(resources) = &*state else {
         panic!("device is not open");
@@ -229,7 +233,7 @@ fn partial_device_construction_cleans_up_or_poison_retains_its_charge() {
         if retained {
             assert!(matches!(
                 runtime.staging_endpoint(8, 0),
-                Err(Error::Unavailable(_))
+                Err(Error::Unquiesced { .. })
             ));
             assert!(matches!(
                 runtime.close(Instant::now() + Duration::from_secs(2)),
@@ -634,8 +638,15 @@ pub(in crate::transport::rdma) fn change_route(
     runtime: &RdmaTransport,
     change: impl FnOnce(&mut RdmaAddress),
 ) {
-    let cache = runtime.device.lock().unwrap();
-    let state = cache.owner.as_ref().unwrap().state.lock().unwrap();
+    let cache = runtime.context_set.lock().unwrap();
+    let state = cache
+        .slots
+        .iter()
+        .find_map(|slot| slot.owner.as_ref())
+        .unwrap()
+        .state
+        .lock()
+        .unwrap();
     let State::Open(resources) = &*state else {
         panic!("not open");
     };
@@ -842,4 +853,30 @@ fn second_native_query_failure_cannot_reopen_a_restored_tuple_or_replace_the_pd(
         .close(Instant::now() + Duration::from_secs(2))
         .unwrap();
     assert_eq!(runtime.stats().unwrap().active_devices, 0);
+}
+
+impl RdmaContext {
+    pub(in crate::transport::rdma) fn open(
+        config: &RdmaConfig,
+        verbs: &'static sys::Verbs,
+        usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<events::Counters>,
+    ) -> Result<Arc<Self>> {
+        let (_, candidates) = (verbs.discover)(config)?;
+        let mut last_error = Error::Unavailable("no RDMA discovery candidate");
+        for address in candidates {
+            match Self::open_selected(
+                config,
+                verbs,
+                Arc::clone(&usage),
+                Arc::clone(&counters),
+                address,
+            ) {
+                Ok(owner) => return Ok(owner),
+                Err(error @ Error::Unquiesced { .. }) => return Err(error),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
 }

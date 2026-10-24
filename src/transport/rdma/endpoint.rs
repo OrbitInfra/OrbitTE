@@ -21,6 +21,7 @@ impl Drop for ConnectionLease {
 }
 
 pub(super) struct GrantLease {
+    pub(super) _selection: super::quota::DeviceLease,
     pub(super) usage: Arc<Mutex<RdmaStats>>,
     pub(super) length: usize,
     pub(super) is_direct: bool,
