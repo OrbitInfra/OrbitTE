@@ -694,9 +694,25 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   receipts. Two CPU and four native controls reject omitted context/capability
   keys without timeouts or inconclusive runs. These are same-agent scoped gates;
   independent acceptance remains open. This is registration groundwork;
-  transport context fan-out, device masks, multirail scheduling and the complete
-  P4 exit remain open. See
+  transport dispatch is implemented separately in P4.12b; single-request
+  striping and the complete P4 exit remain open. See
   [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
+- [ ] **P4.12b — context set, DeviceSelector and request-level rail routing
+  (Implemented; source/CPU gates pass, native regression and independent
+  acceptance pending).** Keep topology NIC IDs stable across clean construction
+  failures. Each enabled NIC owns its actual PD/key ledger, shared SQ/RQ CQs,
+  progress worker and endpoint store. Wire v10 advertises bounded NIC/PD paths
+  before authority; device masks, compatible GID profiles, name affinity,
+  topology ranks and charged bytes select one path per request. Cached pairs
+  retain their source NIC/PD binding; cache-miss retry pins both PD domains.
+  Exact device-byte leases survive failed native cleanup. MR, connection,
+  message and outstanding-WR budgets remain aggregate. Idle eviction crosses
+  contexts, while a worker fault only debits its own idle store. Close fences
+  every context and preserves partial-construction retained PDs. CPU controls
+  cover the public data path, ownership, masks and wire rejection. Physical
+  two-RNIC dispatch, single-request striping, circuit-breaker/failover behavior
+  and full P4 remain open. See
+  [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
@@ -1007,13 +1023,15 @@ and native profiles. P4.8 host/RNIC discovery is implemented with independent
 source/CPU acceptance and a qualified 39-case implementation native run. Its
 independently built native repeat awaits a new authorized two-host profile,
 because the original selected stage's attempts terminated before that repeat.
-Complete that gate before accepting P4.8. P4.9's opt-in CQ event mode is now
-implemented with source controls, while its independent review and native
-profiles remain unqualified. Qualify both progress modes on the new source,
-then advance physical fault qualification and multirail work. Follow the frozen
-TENT context/buffer/endpoint/worker architecture while preserving actual-owner
-retention and generation fences. Build NVIDIA P5 capabilities against those
-owners, then qualify direct GPU registration and topology profiles separately.
+Complete that gate before accepting P4.8. P4.9-P4.12a have scoped implementation
+native evidence; independent acceptance remains open. P4.12b now connects
+multiple contexts, strict masks and request-level rail selection to the public
+data path. Qualify its current single-RNIC regressions, then implement
+single-request cross-rail slice ownership/completion and eager multi-context
+registration publication. Physical multi-RNIC routing/fault gates need explicitly
+selected NICs and resource locks. Keep the frozen TENT context/buffer/endpoint/
+worker boundaries and exact PD/grant fencing. Complete the P4 native stage
+before advancing OrbitKV integration or wider NVIDIA P5 qualification.
 The complete P4 exit and independent acceptance form the first large native
 stage boundary; do not substitute a substage's successful CI for that boundary.
 

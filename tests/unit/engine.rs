@@ -110,15 +110,23 @@ fn invalid_configuration_fails_before_binding_or_spawning_threads() {
 
 #[cfg(feature = "rdma")]
 pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
+    let runtime = if let Some(mode) = mode.strip_prefix("events:") {
+        crate::transport::rdma::tests::event_runtime(mode)
+    } else {
+        crate::transport::rdma::tests::runtime(mode)
+    };
+    rdma_fixture_with_runtime(runtime)
+}
+
+#[cfg(feature = "rdma")]
+pub(crate) fn rdma_fixture_with_runtime(
+    runtime: crate::transport::rdma::RdmaTransport,
+) -> TransferEngine {
     let config = EngineConfig::default();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         epoch,
-        rdma: Some(Arc::new(if let Some(mode) = mode.strip_prefix("events:") {
-            crate::transport::rdma::tests::event_runtime(mode)
-        } else {
-            crate::transport::rdma::tests::runtime(mode)
-        })),
+        rdma: Some(Arc::new(runtime)),
         registry: MemoryRegistry::new(epoch, 8, 4096),
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {

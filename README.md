@@ -24,7 +24,7 @@ Host registration batches preflight every range before publishing changes.
 Transfers accept absolute addresses and retain the resolved backing during I/O;
 local and remote lookup follows TENT's containing-buffer order.
 
-Opt-in `rdma` and `cuda` features add single-rail RC verbs with actual application
+Opt-in `rdma` and `cuda` features add RC verbs with per-NIC contexts and actual application
 host MRs or explicit private staging, retained NVIDIA device/pinned allocations
 and synchronized CUDA copies. Direct host DMA leases retain actual registration
 owners and exclude conflicting access across aliases; disjoint ranges remain
@@ -32,7 +32,7 @@ usable. Failed native cleanup retains those owners and charges. Device
 allocations still use the declared staging path; GPUDirect is not implemented.
 They use the existing `ibverbs-sys` and `cudarc` Rust bindings, share batch
 owners and conservatively retain unquiesced failures.
-Each engine lazily reuses one RNIC context/PD. Requester local-only and source MW-bind host MRs now persist across requests
+Each engine lazily initializes a stable NIC-indexed context/PD list (P4.12b). Requester local-only and source MW-bind host MRs now persist across requests
 in one bounded `LocalBufferManager` (P4.7e). P4.7f implements connected QP reuse
 for negotiated host Direct peers, with one grant per fixed-role/operation pair.
 Staged peers retain both physical QP-close barriers. Independent source/CPU review and two
@@ -100,9 +100,15 @@ acceptance, full fault qualification and P4 acceptance remain open.
 P4.12a makes persistent MR reuse specific to the actual `RdmaContext`/PD,
 registered memory identity and local/source capability. Each physical copy
 shares the bounded MR budget; final unregister retires every context's copy.
-Scoped native gates pass with two actual PDs on the same locked RNIC. The
-data transport still selects one active rail per engine. Independent acceptance,
-multiple RNIC dispatch and striping remain open.
+Scoped native gates pass with two actual PDs on the same locked RNIC.
+P4.12b connects the transport context list to TENT-style `DeviceSelector` and
+NIC-path selection. Wire v10 advertises bounded NIC/PD paths before authority;
+compatible paths, strict device masks, topology ranks and in-flight byte charges
+select one rail per request. Requests can rotate across contexts while QPs and
+MRs remain attached to their actual PD. Global budgets and fail-closed teardown
+remain shared. Single-request striping, two-physical-RNIC qualification,
+independent acceptance and full P4 remain open. See the
+[current architecture and TENT mapping](docs/rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

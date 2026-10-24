@@ -1,10 +1,10 @@
 #![allow(unsafe_code)]
 
-use crate::TransferOp;
+use crate::{RegisteredMemory, SourceEpoch, TransferOp};
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) use super::context::tests::{events, pause};
 pub(crate) use super::cq::tests::event_runtime;
@@ -1075,7 +1075,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         counters: Arc::default(),
         drained: Arc::default(),
         verbs,
-        device: Mutex::default(),
+        context_set: Mutex::default(),
         registrations,
     }
 }
@@ -1199,6 +1199,10 @@ fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
     }
     for config in [
         RdmaConfig::new(""),
+        RdmaConfig {
+            device_mask: 0,
+            ..RdmaConfig::default()
+        },
         RdmaConfig::new("x\0y"),
         RdmaConfig {
             max_window_key_indices: 0,
@@ -1694,5 +1698,37 @@ pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaEndpoin
         while !state.1 {
             state = changed.wait(state).unwrap();
         }
+    }
+}
+
+impl RdmaTransport {
+    pub(in crate::transport::rdma) fn device(&self) -> Result<Arc<RdmaContext>> {
+        let mut contexts = self.context_set.lock().unwrap();
+        self.initialize_contexts(&mut contexts)?;
+        contexts
+            .slots
+            .iter()
+            .find_map(|slot| slot.owner.clone())
+            .ok_or(Error::Unavailable("no enabled RDMA context"))
+    }
+
+    pub(crate) fn endpoint(
+        &self,
+        memory: &RegisteredMemory,
+        offset: usize,
+        length: usize,
+        permission: u32,
+        deadline: Instant,
+        reuse: Option<RdmaEndpoint>,
+    ) -> Result<RdmaEndpoint> {
+        let selection = self.allocate(length, u64::MAX)?;
+        self.endpoint_on(
+            selection,
+            memory,
+            offset..offset.checked_add(length).ok_or(Error::InvalidRange)?,
+            permission,
+            deadline,
+            reuse,
+        )
     }
 }

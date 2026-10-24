@@ -1,0 +1,113 @@
+use std::sync::{Arc, Mutex};
+
+use crate::{Error, Result, Topology};
+
+/// TENT's DeviceSelector boundary: stable NIC IDs, topology tiers and byte charges.
+pub(super) struct DeviceSelector {
+    topology: Topology,
+    available: u64,
+    state: Mutex<State>,
+}
+
+struct State {
+    inflight: Vec<usize>,
+    cursor: usize,
+}
+
+/// Lives with the actual grant, including retained native resources after failure.
+pub(super) struct DeviceLease {
+    selector: Arc<DeviceSelector>,
+    device_id: usize,
+    length: usize,
+}
+
+impl DeviceLease {
+    pub(super) fn device_id(&self) -> usize {
+        self.device_id
+    }
+    pub(super) fn length(&self) -> usize {
+        self.length
+    }
+}
+
+impl Drop for DeviceLease {
+    fn drop(&mut self) {
+        let mut state = self
+            .selector
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        state.inflight[self.device_id] -= self.length;
+    }
+}
+
+impl DeviceSelector {
+    pub(super) fn new(topology: Topology, available: u64) -> Arc<Self> {
+        let count = topology.nic_list.len();
+        Arc::new(Self {
+            topology,
+            available,
+            state: Mutex::new(State {
+                inflight: vec![0; count],
+                cursor: 0,
+            }),
+        })
+    }
+
+    pub(super) fn allocate(
+        self: &Arc<Self>,
+        length: usize,
+        numa: Option<u32>,
+        mask: u64,
+    ) -> Result<DeviceLease> {
+        if length == 0 {
+            return Err(Error::InvalidRange);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA selector lock poisoned"))?;
+        let count = state.inflight.len();
+        let memory = numa
+            .and_then(|node| {
+                self.topology
+                    .mem_list
+                    .iter()
+                    .find(|entry| entry.numa_node == Some(node))
+            })
+            .or_else(|| {
+                self.topology
+                    .mem_list
+                    .iter()
+                    .find(|entry| entry.name == "*")
+            });
+        let chosen = (0..count)
+            .filter(|id| mask & self.available & (1u64 << id) != 0)
+            .min_by_key(|id| {
+                let rank = memory
+                    .and_then(|entry| entry.device_list.iter().position(|tier| tier.contains(id)))
+                    .unwrap_or(2);
+                (
+                    rank,
+                    state.inflight[*id],
+                    (id + count - state.cursor) % count,
+                )
+            })
+            .ok_or(Error::Unavailable(
+                "no enabled RDMA device matches rail mask",
+            ))?;
+        state.inflight[chosen] = state.inflight[chosen]
+            .checked_add(length)
+            .ok_or(Error::ResourceExhausted)?;
+        state.cursor = (chosen + 1) % count;
+        Ok(DeviceLease {
+            selector: Arc::clone(self),
+            device_id: chosen,
+            length,
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/transport/rdma/quota.rs"]
+mod tests;

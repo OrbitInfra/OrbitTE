@@ -1,13 +1,10 @@
-//! Opt-in single-rail RC verbs with owned direct host registration or staging.
+//! RC verbs with per-NIC contexts, shared progress and owned memory grants.
 
 #![allow(unsafe_code)]
 
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Instant;
 
-use crate::engine::remaining;
-use crate::{Error, RegisteredMemory, Result, SourceEpoch};
+use crate::{Error, Result};
 
 mod buffers;
 mod context;
@@ -17,6 +14,8 @@ mod endpoint;
 mod endpoint_store;
 mod events;
 mod keys;
+mod quota;
+mod rail_monitor;
 mod rdma_transport;
 mod receive;
 mod slice;
@@ -25,8 +24,8 @@ mod workers;
 
 use context::RdmaContext;
 use endpoint::{
-    Buffer, ConnectionId, ConnectionLease, ConnectionResources, Descriptor, GrantLease,
-    GrantResources, Phase, RdmaEndpoint, Resources, Staging,
+    Buffer, ConnectionId, ConnectionResources, Descriptor, GrantResources, Phase, RdmaEndpoint,
+    Resources, Staging,
 };
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
@@ -52,7 +51,7 @@ pub enum RdmaProgressMode {
     EventDriven,
 }
 
-/// Automatic or pinned single-rail selection. Direct host peers can retain RC QPs.
+/// Automatic or pinned NIC discovery and bounded request-level rail selection.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
     /// None discovers an accessible provider device; Some is a strict pin.
@@ -66,6 +65,8 @@ pub struct RdmaConfig {
     pub rdma_blacklist: Vec<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
+    /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
+    pub device_mask: u64,
     pub progress_mode: RdmaProgressMode,
     pub traffic_class: u8,
     pub hop_limit: u8,
@@ -94,6 +95,7 @@ impl Default for RdmaConfig {
             rdma_whitelist: Vec::new(),
             rdma_blacklist: Vec::new(),
             preferred_numa_node: None,
+            device_mask: u64::MAX,
             progress_mode: RdmaProgressMode::Polling,
             traffic_class: 0,
             hop_limit: 1,
@@ -139,6 +141,7 @@ impl RdmaConfig {
                 .device
                 .as_deref()
                 .is_some_and(|name| !discovery::permitted(self, name))
+            || self.device_mask == 0
             || self.port == Some(0)
             || self.hop_limit == 0
             || self.max_cached_mrs == 0
@@ -204,6 +207,7 @@ pub struct RdmaStats {
     pub acknowledged_async_events: u64,
     /// A fatal shared-lane fault permanently fences new RDMA admission.
     pub progress_failures: u64,
+    /// Highest pending data-QP count observed by any single context worker.
     pub peak_pending_qps: usize,
     pub active_endpoints: usize,
     pub idle_endpoints: usize,
@@ -256,373 +260,24 @@ pub(crate) struct RdmaTransport {
     usage: Arc<Mutex<RdmaStats>>,
     counters: Arc<events::Counters>,
     verbs: &'static sys::Verbs,
-    device: Mutex<ContextCache>,
+    context_set: Mutex<ContextSet>,
     drained: Arc<Condvar>,
     pub(crate) registrations: Arc<buffers::LocalBufferManager>,
 }
 
 #[derive(Default)]
-struct ContextCache {
+struct ContextSet {
     closed: bool,
-    owner: Option<Arc<RdmaContext>>,
-    progress: Option<Arc<workers::Workers>>,
+    topology: Option<crate::Topology>,
+    slots: Vec<ContextSlot>,
+    selector: Option<Arc<quota::DeviceSelector>>,
     failure: Option<(&'static str, i32)>,
 }
 
-impl RdmaTransport {
-    pub(crate) fn new(config: RdmaConfig) -> Result<Arc<Self>> {
-        config.validate()?;
-        let usage = Arc::default();
-        let registrations =
-            buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &sys::REAL);
-        Ok(Arc::new(Self {
-            config,
-            usage,
-            counters: Arc::default(),
-            verbs: &sys::REAL,
-            device: Mutex::default(),
-            drained: Arc::default(),
-            registrations,
-        }))
-    }
-
-    pub(crate) fn stats(&self) -> Result<RdmaStats> {
-        let mut stats = *self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        stats.acknowledged_async_events = self
-            .counters
-            .acknowledged_async_events
-            .load(Ordering::Relaxed);
-        stats.completion_events = self.counters.completion_events.load(Ordering::Relaxed);
-        Ok(stats)
-    }
-
-    pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
-        let cache = self
-            .device
-            .lock()
-            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-        cache
-            .owner
-            .as_ref()
-            .map(|owner| owner.topology())
-            .transpose()
-    }
-
-    fn device(&self) -> Result<Arc<RdmaContext>> {
-        let mut cache = self
-            .device
-            .lock()
-            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-        if cache.closed {
-            return Err(Error::Unavailable("RDMA runtime is closed"));
-        }
-        if let Some((operation, code)) = cache.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        if let Some(owner) = &cache.owner {
-            return Ok(Arc::clone(owner));
-        }
-        match RdmaContext::open(
-            &self.config,
-            self.verbs,
-            Arc::clone(&self.usage),
-            Arc::clone(&self.counters),
-        ) {
-            Ok(owner) => {
-                cache.owner = Some(Arc::clone(&owner));
-                Ok(owner)
-            }
-            Err(error) => {
-                if let Error::Unquiesced { operation, code } = error {
-                    cache.failure = Some((operation, code));
-                }
-                Err(error)
-            }
-        }
-    }
-
-    fn progress(&self, device: Arc<RdmaContext>) -> Result<Arc<workers::Workers>> {
-        let mut cache = self
-            .device
-            .lock()
-            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-        if cache.closed {
-            return Err(Error::Unavailable("RDMA runtime is closed"));
-        }
-        if let Some((operation, code)) = cache.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        if let Some(progress) = &cache.progress {
-            return Ok(Arc::clone(progress));
-        }
-        match workers::Workers::new(&self.config, device, Arc::clone(&self.usage), self.verbs) {
-            Ok(progress) => {
-                cache.progress = Some(Arc::clone(&progress));
-                Ok(progress)
-            }
-            Err(error) => {
-                if let Error::Unquiesced { operation, code } = error {
-                    cache.failure = Some((operation, code));
-                }
-                Err(error)
-            }
-        }
-    }
-
-    pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
-        let (owner, progress) = {
-            let mut cache = self
-                .device
-                .lock()
-                .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-            cache.closed = true;
-            if let Some((operation, code)) = cache.failure {
-                return Err(Error::Unquiesced { operation, code });
-            }
-            (cache.owner.clone(), cache.progress.clone())
-        };
-        if let Some(progress) = &progress {
-            progress.fence(deadline)?;
-        }
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        loop {
-            if usage.retained_endpoints != 0 || usage.retained_grants != 0 {
-                return Err(Error::Unquiesced {
-                    operation: "RDMA endpoint resources retained",
-                    code: libc::EIO,
-                });
-            }
-            if usage.active_endpoints == 0 && usage.active_grants == 0 {
-                break;
-            }
-            usage = self
-                .drained
-                .wait_timeout(usage, remaining(deadline)?)
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                .0;
-        }
-        drop(usage);
-        self.registrations.close(deadline)?;
-        if let Some(progress) = progress {
-            progress.close(deadline)?;
-        }
-        if let Some(owner) = owner {
-            owner.close()?;
-        }
-        let mut cache = self
-            .device
-            .lock()
-            .map_err(|_| Error::Internal("RDMA device cache lock poisoned"))?;
-        cache.progress = None;
-        cache.owner = None;
-        Ok(())
-    }
-
-    pub(crate) fn endpoint(
-        &self,
-        memory: &RegisteredMemory,
-        offset: usize,
-        length: usize,
-        permission: u32,
-        deadline: Instant,
-        reuse: Option<RdmaEndpoint>,
-    ) -> Result<RdmaEndpoint> {
-        remaining(deadline)?;
-        if length == 0 || length > u32::MAX as usize {
-            return Err(Error::InvalidRange);
-        }
-        crate::memory::checked_range(offset, length, memory.len())?;
-        let direct = if self.config.host_memory == RdmaHostMemory::Direct {
-            memory.host_dma_lease(offset, length)?
-        } else {
-            None
-        };
-        let is_direct = direct.is_some();
-        if reuse.is_some() && !is_direct {
-            return Err(Error::Protocol(
-                "RDMA reuse requires host Direct on both peers",
-            ));
-        }
-        let grant_lease = {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-            let (charged, limit) = if is_direct {
-                (usage.direct_bytes, self.config.max_direct_bytes)
-            } else {
-                (usage.staging_bytes, self.config.max_staging_bytes)
-            };
-            let bytes = charged
-                .checked_add(length)
-                .ok_or(Error::ResourceExhausted)?;
-            if usage.retained_endpoints != 0
-                || usage.retained_grants != 0
-                || usage.retained_devices != 0
-                || usage.retained_cqs != 0
-                || usage.retained_completion_channels != 0
-                || usage.retained_persistent_mrs != 0
-                || usage.progress_failures != 0
-            {
-                return Err(Error::Unavailable(
-                    "RDMA admission is poisoned by retained native resources",
-                ));
-            }
-            if bytes > limit {
-                return Err(Error::ResourceExhausted);
-            }
-            usage.active_grants += 1;
-            if is_direct {
-                usage.direct_bytes = bytes;
-            } else {
-                usage.staging_bytes = bytes;
-            }
-            GrantLease {
-                usage: Arc::clone(&self.usage),
-                length,
-                is_direct,
-                drained: Arc::clone(&self.drained),
-            }
-        };
-        let buffer = match direct {
-            Some(loan) => Buffer::Direct {
-                address: loan.address(),
-                length: loan.len(),
-                loan: Some(loan),
-            },
-            None => Buffer::Staged(Staging::new(length)?),
-        };
-        let device = self.device()?;
-        let progress = self.progress(Arc::clone(&device))?;
-        let new_connection_lease = if reuse.is_none() {
-            Some(loop {
-                let mut usage = self
-                    .usage
-                    .lock()
-                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-                if usage.active_endpoints < self.config.max_endpoints {
-                    usage.active_endpoints += 1;
-                    break ConnectionLease {
-                        usage: Arc::clone(&self.usage),
-                        drained: Arc::clone(&self.drained),
-                    };
-                }
-                drop(usage);
-                if !progress.evict_idle(deadline)? {
-                    return Err(Error::ResourceExhausted);
-                }
-            })
-        } else {
-            None
-        };
-        let cached_mr = if is_direct {
-            Some(self.registrations.acquire(
-                Arc::clone(&device),
-                memory,
-                permission != 0,
-                deadline,
-            )?)
-        } else {
-            None
-        };
-        let mut memory_handles = sys::MemoryHandles::default();
-        if let Some(registration) = &cached_mr {
-            memory_handles.mr = registration.handle()?;
-        }
-        let mut grant = GrantResources {
-            device: Arc::clone(&device),
-            handles: memory_handles,
-            cached_mr,
-            buffer,
-            _lease: grant_lease,
-            max_read_slices: if memory.is_cuda() { 32 } else { 64 },
-            permission,
-            generation: 0,
-            rkey: 0,
-            connection: None,
-            window_used: false,
-            window_bound: false,
-            message: None,
-        };
-        let mut endpoint = if let Some(endpoint) = reuse {
-            {
-                let mut request = endpoint.record.lock()?;
-                request.check_claim(endpoint.claim)?;
-                let resources = request
-                    .resources
-                    .as_mut()
-                    .ok_or(Error::Internal("missing cached connection"))?;
-                if resources.grant.is_some() || !Arc::ptr_eq(&resources.connection.device, &device)
-                {
-                    return Err(Error::Internal("RDMA reuse grant ownership"));
-                }
-                if resources.connection.permission != permission {
-                    return Err(Error::Protocol("RDMA reuse changed QP capability"));
-                }
-                grant.connection = resources.connection.incarnation;
-                resources.grant = Some(grant);
-            }
-            endpoint
-        } else {
-            let connection_lease = new_connection_lease
-                .ok_or(Error::Internal("missing physical connection reservation"))?;
-            let connection_handles = sys::ConnectionHandles {
-                cq: progress.handle(false)?,
-                receive_cq: progress.handle(true)?,
-                ..Default::default()
-            };
-            let record = progress.register(Box::new(Resources {
-                connection: ConnectionResources {
-                    device,
-                    handles: connection_handles,
-                    incarnation: None,
-                    local: Descriptor::default(),
-                    remote: None,
-                    permission,
-                    closed: false,
-                    lease: Some(connection_lease),
-                },
-                grant: Some(grant),
-            }))?;
-            RdmaEndpoint {
-                record,
-                progress,
-                local: Descriptor::default(),
-                incarnation: None,
-                config: self.config.clone(),
-                deadline,
-                output: None,
-                claim: 1,
-                released: false,
-                cached_peer: None,
-            }
-        };
-        #[cfg(test)]
-        tests::before_reused_open(self, &endpoint);
-        let epoch = SourceEpoch::generate()?;
-        let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
-        if let Err(error) = endpoint.open(permission, psn) {
-            endpoint.close()?;
-            return Err(error);
-        }
-        if is_direct {
-            self.usage
-                .lock()
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                .opened_direct_endpoints += 1;
-        }
-        Ok(endpoint)
-    }
-
-    fn host_direct(&self, memory: &RegisteredMemory) -> bool {
-        self.config.host_memory == RdmaHostMemory::Direct && !memory.is_cuda()
-    }
+#[derive(Default)]
+struct ContextSlot {
+    owner: Option<Arc<RdmaContext>>,
+    progress: Option<Arc<workers::Workers>>,
 }
 
 fn check(operation: &'static str, code: i32) -> Result<()> {

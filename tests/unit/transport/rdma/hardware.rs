@@ -239,7 +239,7 @@ fn shared_cq_peer() {
         usage,
         counters: Arc::default(),
         verbs: &VERBS,
-        device: Mutex::default(),
+        context_set: Mutex::default(),
         drained: Arc::default(),
     };
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);

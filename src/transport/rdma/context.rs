@@ -31,7 +31,6 @@ struct Resources {
     next_grant: u64,
     keys: keys::Keys,
     address: RdmaAddress,
-    topology: crate::Topology,
 }
 
 impl Drop for Resources {
@@ -46,38 +45,12 @@ impl Drop for Resources {
 }
 
 impl RdmaContext {
-    pub(super) fn open(
-        config: &RdmaConfig,
-        verbs: &'static sys::Verbs,
-        usage: Arc<Mutex<RdmaStats>>,
-        counters: Arc<events::Counters>,
-    ) -> Result<Arc<Self>> {
-        let (topology, candidates) = (verbs.discover)(config)?;
-        let mut last_error = Error::Unavailable("no RDMA discovery candidate");
-        for address in candidates {
-            match Self::open_selected(
-                config,
-                verbs,
-                Arc::clone(&usage),
-                Arc::clone(&counters),
-                address,
-                topology.clone(),
-            ) {
-                Ok(owner) => return Ok(owner),
-                Err(error @ Error::Unquiesced { .. }) => return Err(error),
-                Err(error) => last_error = error,
-            }
-        }
-        Err(last_error)
-    }
-
-    fn open_selected(
+    pub(super) fn open_selected(
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
         counters: Arc<events::Counters>,
         address: RdmaAddress,
-        topology: crate::Topology,
     ) -> Result<Arc<Self>> {
         let name = CString::new(address.device.as_str())
             .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
@@ -96,7 +69,6 @@ impl RdmaContext {
                 next_grant: 1,
                 keys: keys::Keys::new(config.max_window_key_indices),
                 address,
-                topology,
             }))),
             verbs,
             asynchronous: Arc::default(),
@@ -124,7 +96,6 @@ impl RdmaContext {
                     ));
                 }
                 resources.address = observed;
-                resources.address.publish(&mut resources.topology)?;
                 if let Some(asynchronous) = verbs.asynchronous {
                     resources.events = Some(events::Events::start(
                         &resources.handles,
@@ -149,18 +120,14 @@ impl RdmaContext {
         Ok(owner)
     }
 
-    pub(super) fn topology(&self) -> Result<crate::Topology> {
+    pub(super) fn address(&self) -> Result<RdmaAddress> {
         let state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
         match &*state {
-            State::Open(resources) => Ok(resources.topology.clone()),
-            State::Closed => Err(Error::Unavailable("RDMA device is closed")),
-            State::Retained { operation, code } => Err(Error::Unquiesced {
-                operation,
-                code: *code,
-            }),
+            State::Open(resources) => Ok(resources.address.clone()),
+            _ => Err(Error::Unavailable("RDMA device is closed or retained")),
         }
     }
 
