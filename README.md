@@ -92,7 +92,11 @@ Scoped host-native polling/event gates now pass; independent review and full
 native qualification remain open.
 The native fragment-error gate also checks a successful prefix followed by a
 real RNIC access error, with outstanding WR/MR/loan ownership through native
-QP/CQ drain. Full fault qualification and P4 acceptance remain open.
+QP/CQ drain. The partial-post native gate uses the actual mlx5 `bad_wr`
+receipt to distinguish an admitted prefix from an unposted suffix; it preserves
+the prefix's MR, DMA loan and WR debt until native drain and never replays the
+failed operation. This gate's hardware qualification and independent acceptance
+remain open, as do full fault qualification and P4 acceptance.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

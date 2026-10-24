@@ -77,7 +77,7 @@ class ResourceSelection(unittest.TestCase):
             base = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
                     'transport': 'rdma', 'payload': 12288, 'seed': 1,
                     'rdma_max_cqes': 3, 'rdma_max_send_wr': 3}
-            for probe in ['fragment-read', 'fragment-write']:
+            for probe in ['fragment-read', 'fragment-write', 'partial-read', 'partial-write']:
                 for events in [False, True]:
                     controller = runner.Controller(profile, binary, root)
 

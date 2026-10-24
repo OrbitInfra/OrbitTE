@@ -7,6 +7,7 @@ struct Probe {
     usage: Arc<Mutex<RdmaStats>>,
     pending: Vec<usize>,
     receipts: usize,
+    partial: bool,
 }
 
 static PROBE: OnceLock<Mutex<Option<Probe>>> = OnceLock::new();
@@ -35,7 +36,7 @@ unsafe extern "C" fn destroy_cq(handles: *mut sys::CqHandles) -> i32 {
         let pending = probe.usage.lock().unwrap().work_requests;
         assert_eq!(
             pending, 1,
-            "the flushed WR debt must survive both CQ barriers"
+            "the admitted WR debt must survive both CQ barriers"
         );
         probe.pending.push(pending);
     }
@@ -57,6 +58,7 @@ pub(super) fn arm(
     runtime: &RdmaTransport,
     endpoint: &RdmaEndpoint,
     memory: crate::RegisteredMemory,
+    partial: bool,
 ) {
     let mut state = PROBE.get_or_init(Default::default).lock().unwrap();
     assert!(state.is_none());
@@ -66,6 +68,7 @@ pub(super) fn arm(
         usage: Arc::clone(&runtime.usage),
         pending: Vec::new(),
         receipts: 0,
+        partial,
     });
 }
 
@@ -77,16 +80,30 @@ pub(super) fn finish(stats: &RdmaStats) {
         stats.post_calls, 1,
         "the failed request must never be replayed"
     );
-    assert_eq!(stats.posted_work_requests, 3);
+    assert_eq!(
+        stats.posted_work_requests,
+        if probe.partial { 1 } else { 3 }
+    );
+    assert_eq!(stats.partial_posts, u64::from(probe.partial));
+    assert_eq!(stats.uncertain_posts, 0);
     assert_eq!(stats.peak_work_requests, 3);
-    assert_eq!(stats.completed_reads + stats.completed_writes, 1);
+    assert_eq!(
+        stats.completed_reads + stats.completed_writes,
+        u64::from(!probe.partial)
+    );
     assert_eq!(
         stats.completed_read_bytes + stats.completed_write_bytes,
-        4096
+        if probe.partial { 0 } else { 4096 }
     );
-    assert_eq!(stats.completion_errors, 1);
+    assert_eq!(stats.completion_errors, u64::from(!probe.partial));
     assert_eq!(stats.progress_failures, 1);
     assert_eq!((stats.work_requests, stats.retained_work_requests), (0, 0));
+    if probe.partial {
+        println!(
+            "ORBITTE_PARTIAL_DRAIN {{\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true,\"post_calls\":1}}"
+        );
+        return;
+    }
     println!(
         "ORBITTE_FRAGMENT_DRAIN {{\"posted_wr\":3,\"completed_prefix_bytes\":4096,\"pending_wr_before_cq\":[1,1],\"native_cq_receipts\":2,\"post_calls\":1,\"qp_destroyed_before_cqs\":true,\"mr_and_loan_held_until_native_drain\":true}}"
     );

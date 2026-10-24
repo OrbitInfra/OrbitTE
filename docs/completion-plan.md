@@ -655,6 +655,17 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   cancellation on P4.4 slices. This gate does not qualify partial post admission,
   lost completion/device faults, arbitrary cancellation or full P4. See
   [the native fragment-error gate](rdma-cuda.md#fragmented-cq-error-and-native-drain).
+- [ ] **P4.11 — native partial post admission (Implemented; qualification
+  and independent acceptance open).** The exact native test installs a
+  requester-only post-send adapter before starting its context workers. It
+  changes WR 1's SGE count and invokes the actual mlx5 provider; production
+  code builds the three-WR chain and decodes the real `bad_wr` pointer. The
+  known accepted prefix keeps one WR charge, its MR and the application loan
+  through actual QP/CQ destruction; only the proven unposted suffix loses its
+  reservation. READ/WRITE validation allows unknown effects within the first
+  4 KiB and requires unchanged suffixes/guards. Neither a successful CQE nor
+  zero WRITE effects may be inferred from the post error. No automatic replay.
+  Hardware results and independent review remain separate acceptance gates.
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.

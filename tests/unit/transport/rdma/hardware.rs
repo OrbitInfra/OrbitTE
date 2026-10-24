@@ -122,7 +122,18 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         (0, 0, 0)
     );
     if enabled {
-        assert!(closed.completion_events > 0 && closed.cq_notification_arms >= 2);
+        assert!(closed.cq_notification_arms >= 2);
+        if closed.completed_reads
+            + closed.completed_writes
+            + closed.completed_window_binds
+            + closed.completed_window_invalidations
+            + closed.completed_sends
+            + closed.completed_receives
+            + closed.completion_errors
+            > 0
+        {
+            assert!(closed.completion_events > 0);
+        }
     }
     println!(
         "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_workers\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"workers\":0}}",
@@ -564,7 +575,7 @@ fn shared_cq_peer() {
 }
 
 #[test]
-#[ignore = "requires selected physical RNIC hosts and original resource locks; intentional remote-access error"]
+#[ignore = "requires selected physical RNIC hosts and original resource locks; intentional provider/completion error"]
 fn source_window_peer() {
     println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
@@ -573,9 +584,17 @@ fn source_window_peer() {
     let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
     assert!(matches!(
         probe.as_str(),
-        "revoked" | "parent" | "remote" | "range" | "fragment-read" | "fragment-write"
+        "revoked"
+            | "parent"
+            | "remote"
+            | "range"
+            | "fragment-read"
+            | "fragment-write"
+            | "partial-read"
+            | "partial-write"
     ));
-    let fragmented = probe.starts_with("fragment-");
+    let partial = probe.starts_with("partial-");
+    let fragmented = probe.starts_with("fragment-") || partial;
     let length = if fragmented { 3 * 4096 } else { 4096 } + 2 * GUARD;
     let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
@@ -584,7 +603,11 @@ fn source_window_peer() {
     config.block_size = 4096;
     let mut runtime = RdmaTransport::new(config).unwrap();
     if fragmented && !source {
-        Arc::get_mut(&mut runtime).unwrap().verbs = &fragmented::VERBS;
+        Arc::get_mut(&mut runtime).unwrap().verbs = if partial {
+            &partial::VERBS
+        } else {
+            &fragmented::VERBS
+        };
     }
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
     let mut expected = vec![if source { 0x5a } else { 0xc3 }; length];
@@ -621,9 +644,13 @@ fn source_window_peer() {
         .endpoint(
             &memory,
             GUARD,
-            if source { 4096 } else { length - 2 * GUARD },
+            if source && !partial {
+                4096
+            } else {
+                length - 2 * GUARD
+            },
             if source {
-                if matches!(probe.as_str(), "remote" | "fragment-read") {
+                if matches!(probe.as_str(), "remote" | "fragment-read" | "partial-read") {
                     1
                 } else {
                     2
@@ -681,14 +708,18 @@ fn source_window_peer() {
             stream.write_all(&[9]).unwrap();
         }
         token(&mut stream, 4);
-        // The peer has observed REM_ACCESS_ERR and physically closed its QP.
+        // The peer has observed the native error and physically closed its QP.
         let close = endpoint.close();
         assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
         drop(endpoint);
         if probe == "fragment-write" {
             expected[GUARD..GUARD + 4096].fill(0xc3);
         }
-        verify(&memory, &expected);
+        if probe == "partial-write" {
+            partial::verify_prefix(&memory, &expected, 0xc3);
+        } else {
+            verify(&memory, &expected);
+        }
         stream.write_all(&[5]).unwrap();
     } else {
         stream.read_exact(&mut bytes).unwrap();
@@ -712,12 +743,12 @@ fn source_window_peer() {
             endpoint.record.lock().unwrap().message_sent = false;
         }
         if fragmented {
-            fragmented::arm(&runtime, &endpoint, memory.clone());
+            fragmented::arm(&runtime, &endpoint, memory.clone(), partial);
         }
         let error = endpoint
             .transfer(
                 &grant,
-                if matches!(probe.as_str(), "remote" | "fragment-read") {
+                if matches!(probe.as_str(), "remote" | "fragment-read" | "partial-read") {
                     TransferOp::Read
                 } else {
                     TransferOp::Write
@@ -725,16 +756,29 @@ fn source_window_peer() {
                 Instant::now() + TIMEOUT,
             )
             .unwrap_err();
-        assert!(
-            matches!(
-                error,
-                Error::Backend {
-                    operation: "RDMA work completion",
-                    code: 10
-                }
-            ),
-            "expected real REM_ACCESS_ERR: {error:?}"
-        );
+        if partial {
+            assert!(
+                matches!(
+                    error,
+                    Error::Backend {
+                        operation: "ibv_post_send",
+                        code: libc::ENOMEM
+                    }
+                ),
+                "expected native partial post rejection: {error:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    error,
+                    Error::Backend {
+                        operation: "RDMA work completion",
+                        code: 10
+                    }
+                ),
+                "expected real REM_ACCESS_ERR: {error:?}"
+            );
+        }
         let close = endpoint.close();
         assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
         drop(endpoint);
@@ -744,7 +788,11 @@ fn source_window_peer() {
                 expected[GUARD..GUARD + 4096].fill(0x5a);
             }
         }
-        verify(&memory, &expected);
+        if probe == "partial-read" {
+            partial::verify_prefix(&memory, &expected, 0x5a);
+        } else {
+            verify(&memory, &expected);
+        }
         stream.write_all(&[4]).unwrap();
         token(&mut stream, 5);
     }
@@ -774,7 +822,7 @@ fn source_window_peer() {
         idle.completed_window_invalidations,
         u64::from(source && matches!(probe.as_str(), "revoked" | "remote"))
     );
-    assert_eq!(idle.completion_errors, u64::from(!source));
+    assert_eq!(idle.completion_errors, u64::from(!source && !partial));
     assert_eq!(
         (idle.completed_write_bytes, idle.completed_read_bytes),
         (
@@ -853,8 +901,13 @@ fn source_window_peer() {
     );
     println!(
         "{{\"role\":\"{role}\",\"status\":\"passed\",\"probe\":\"{probe}\",\"real_remote_access_error\":{},\"completed_window_binds\":{},\"completed_window_invalidations\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",
-        !source, idle.completed_window_binds, idle.completed_window_invalidations
+        !source && !partial,
+        idle.completed_window_binds,
+        idle.completed_window_invalidations
     );
+    if partial && !source {
+        partial::finish();
+    }
 }
 
 fn source_mr_stats(idle: &RdmaStats, closed: &RdmaStats) {
@@ -1236,3 +1289,6 @@ mod connected;
 
 #[path = "fragmented.rs"]
 mod fragmented;
+
+#[path = "partial.rs"]
+mod partial;

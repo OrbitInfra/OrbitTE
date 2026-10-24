@@ -1803,3 +1803,67 @@ Two separately compiled toolchains are not an independent review. P4.8/P4.9 inde
 physical partial-post admission, device loss, lost CQEs, arbitrary destroy
 failures, multirail, GDR, performance and complete P4 remain open. OrbitKV
 integration remains deferred.
+
+
+## Native partial post admission
+
+P4.11 extends `orbitte-window` with `partial-read` and `partial-write`. Each
+host range has a 12288-byte payload and two 64-byte guards. The source grants
+the entire payload, so a mistakenly submitted suffix would be authorized and
+the full-buffer check would detect its effects. Three signaled 4096-byte WRs
+share one production post call.
+
+The exact ignored test installs a requester-only adapter in its private native
+context's `post_send` slot before starting any context child or worker. It
+preserves the actual provider function, changes only WR 1's SGE count to exceed
+the mlx5 limit, invokes that function and forwards its return code and
+`bad_wr` unchanged. The provider must return `ENOMEM` with the actual WR 1
+pointer after accepting WR 0. Production `sys::post` still builds and links
+every native WR/SGE and decodes the returned pointer. Neither `PostResult`
+nor a completion is synthesized. The original function is restored only after
+context children have joined and before actual native context close. This
+test adapter is absent from the production library.
+
+This exercises the boundary in [rdma-core v55.0's mlx5 provider](https://github.com/linux-rdma/rdma-core/blob/v55.0/providers/mlx5/qp.c#L778-L800):
+the provider validates each WR's SGE limit before traversing its SGE list;
+its error exit still rings the doorbell for the accepted prefix. Hardware
+qualification must separately record the deployed provider's actual identity.
+
+The worker repays only the two proven unposted reservations. One admitted WR
+remains charged, the actual MR stays present and conflicting application access
+is rejected until actual QP destruction followed by both CQ destruction
+receipts. The test checks all those boundaries through the P4.10 observer.
+Production progress fences the lane immediately on this post error and does not
+poll it for a success claim or replay the failed request. The completion-byte
+counters therefore remain zero; this does **not** prove that the admitted WR
+had no effect. After physical drain, the affected host verifies every byte:
+the first 4096 bytes may contain old or incoming data, while the unposted
+8192-byte suffix and both guards must remain unchanged. This is a failure
+ownership gate, not a transactional or prefix-completion guarantee.
+
+In frozen TENT `e2d6e8e0`, `RdmaEndPoint::submitPostSend` reserves CQ/QP quota,
+builds signaled slices, cancels only the `bad_wr` suffix and queues accepted
+slices with `completions_owed`. OrbitTE's `SendQueue::reserve/posted` owns the
+same reservation/admission boundary, with exact pointer-membership checking
+and conservative retention when `bad_wr` is missing or foreign. The Rust worker
+uses native whole-lane QP/CQ retirement for unresolved failure, rather than
+claiming that a post error itself ended DMA. Unknown `bad_wr` remains covered
+by CPU ABI/ownership controls and has no physical-provider qualification here.
+
+Use the same identity-pinned two-host profile and RNIC locks as P4.10, with
+`payload=12288`, `rdma_max_send_wr=3`, `rdma_max_cqes=3`, host memory and a named
+`partial-read` or `partial-write` probe. Run both directions in polling and
+event modes. `ORBITTE_PARTIAL_POST`, `ORBITTE_PARTIAL_DRAIN` and
+`ORBITTE_PARTIAL_BYTES` record actual admission, native drain and bounded byte
+effects alongside the existing channel, key, MR, DSO and supervised-process
+evidence. Event mode must create/arm its channel, but a synchronous post failure
+need not deliver a CQ event before retirement; any profile that actually consumes
+a CQE must still prove an event receipt. All workers/channels/retained resources
+must be zero after close.
+
+Source/build, physical results and effective controls are recorded externally
+under `/root/orbitte-artifacts/rdma-partial-post-20261024`. Qualification and
+independent review remain open until those results are recorded. This gate
+does not qualify device loss, missing CQEs, failed native destruction, arbitrary
+cancellation, multiple rails, GDR, TENT wire interoperability, performance or
+complete P4. OrbitKV integration remains deferred.
