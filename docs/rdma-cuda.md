@@ -2140,8 +2140,8 @@ open. OrbitKV integration remains deferred until the P4 stage boundary.
 
 ## Eager publication and cross-rail slice completion
 
-P4.12c implements these source paths. CPU controls pass; the physical profiles
-and independent acceptance are recorded separately. This does not complete P4.
+P4.12c implements these source paths. Source/CPU and the scoped native gates
+below pass; physical multi-RNIC and independent acceptance remain open. This does not complete P4.
 
 | Frozen TENT implementation | OrbitTE implementation | Deliberate boundary |
 | --- | --- | --- |
@@ -2215,9 +2215,49 @@ duplicate bumps, capability/context omissions and premature backing release.
 The selected native registration helper additionally prepares two actual PDs
 on one authorized RNIC: four published capability/context MRs, same-key reuse,
 idle/borrowed retirement, and a capacity-limited attempt that rolls back three
-actual MR registrations before the fourth copy. Native execution and its exact
-receipt counts must be recorded before qualifying that profile. Public v11
-connected/duplex regression uses one physical RNIC per host.
+actual MR registrations before the fourth copy. Public v11 connected/duplex
+regression uses one physical RNIC per host.
+
+Frozen source `14c0ace76456bb6d451f4e8d8caf0cd6a08f91b7` passes 17 sequential
+stable/Rust 1.85 source/build gates: formatting, default/RDMA/RDMA+CUDA Clippy
+and tests, both release binaries, and eight runner-supervision controls. Each
+toolchain passes 187 all-feature units, plus notification/process and doc tests.
+The source archive and explicit compiler/binding environment are recorded in
+`gates-14c0ace/manifest.json` under the artifact root below.
+
+Both binaries pass 48 two-host CPU DRAM/IPv6 RoCEv2 cases: eight two-PD
+publication/shared-CQ cases, sixteen actual CQ-error cases, sixteen actual
+partial-post cases, four public v11 connected-reuse cases and four duplex cases.
+All 96 peer processes and their supervisors are reaped with original NIC locks
+released. Sixteen registration helpers account for 32 actual PD constructions,
+64 published MR copies, 48 rolled-back MR copies and 112 native registration
+and deregistration receipts. Native maps and library hashes, node/boot identity,
+bytes/guards, child waits and resource locks are audited from raw evidence.
+
+The stable release binary SHA-256 is
+`41cb68da6124549ab7f8528c1e76b1fc00254214bfdcb61aa2f5b8500811d24f`;
+the Rust 1.85 binary is
+`aae4734efaa61fd217600914993ec95ff2ad93a236c00014772a35cd1a46ce8c`.
+The actual mapped providers are system `libibverbs.so.1.14.47.0` and
+`libmlx5.so.1.24.47.0`. These tests select no additional NIC or GPU.
+
+Four mutations in external frozen source copies omit all-context publication,
+publication rollback, the planned-PD guard or the last slice receipt. Every
+mutant is rejected at its target assertion, with no surviving mutant or test
+timeout. Initial log classifiers expected scalar rather than tuple MR counts,
+and a later MR assertion rather than the earlier retained-backing assertion.
+Both initial records and logs are preserved; the source mutations and test
+assertions were unchanged when correcting those classifiers.
+
+Reproduce source gates with the commands in the build guide, then build the
+release all-feature libtest binary with `cargo test --release --locked
+--features rdma,cuda --lib --no-run`. Use `tests/hardware/run.py` with an explicit
+identity-pinned external profile, binary and output directory, retaining the
+original NIC locks. `multi-context-profile.json`, `fragment-profile.json`,
+`partial-profile.json`, `connected-regression-profile.json` and
+`duplex-regression-profile.json` define the declared cases. A replacement
+machine/profile needs its own authorization and qualification; copying a
+hostname into a new profile does not reproduce this evidence.
 
 Source gates, frozen binaries, native logs and controls belong outside Git in
 `/root/orbitte-artifacts/rdma-multirail-20261024/`. Physical two-RNIC scheduling,

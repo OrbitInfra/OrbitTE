@@ -14,10 +14,21 @@ GPU direct transfer or performance.
 ## Current source delivery
 
 P4.12c implements eager all-context host Direct MR publication and cross-rail
-slice ownership/completion. Source/CPU controls cover registration rollback,
-one source handler, concurrent context workers and exact retained-loan behavior.
-Its native profiles and independent acceptance remain separately qualified;
-see [the P4.12c gate contract](rdma-cuda.md#p412c-gates).
+slice ownership/completion. Frozen source `14c0ace` passes 17 stable/Rust 1.85
+checks, with 187 all-feature unit tests per toolchain and four effective CPU
+mutation controls. These cover registration rollback, one source handler,
+concurrent context workers and exact retained-loan behavior.
+
+Both release binaries pass 48 two-host CPU DRAM/IPv6 RoCEv2 cases, including
+actual registration rollback, CQ errors, partial post admission, connected
+reuse and duplex transfers. All 96 peers exit with locks released. Sixteen
+same-RNIC/two-PD helpers verify 32 real PD constructions and 112 MR registration
+and deregistration receipts; 48 copies belong to rejected publication attempts.
+
+These are same-agent scoped gates on one selected RNIC per host. Cross-rail
+protocol/ownership has CPU controls; physical two-RNIC striping/faults and
+independent acceptance remain open. See [the P4.12c gate contract](rdma-cuda.md#p412c-gates)
+for frozen artifacts and reproduction boundaries.
 
 ## Previous native RDMA evidence
 

@@ -719,8 +719,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   and full P4 remain open. See
   [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 - [ ] **P4.12c — eager multi-context publication and cross-rail slices
-  (Implemented; source/CPU controls pass, native and independent qualification
-  recorded separately).** Prepare every enabled context's local/MW-bind MRs
+  (Implemented; source/CPU and scoped native gates pass, independent and
+  physical two-RNIC qualification remain open).** Prepare every enabled context's local/MW-bind MRs
   before registry visibility or duplicate-reference commit. Failed batches
   retire only newly created copies; failed native cleanup retains unpublished
   backing and charges. Active published copies cannot be evicted. TENT's bounded
@@ -731,6 +731,12 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   CPU controls cover all host Direct/Staged READ/WRITE combinations, both
   progress modes, concurrent workers, masks/window limits, malformed plans,
   changed planned PDs, unregister/close, publication rollback and retained loans.
+  Source `14c0ace` passes 17 sequential stable/MSRV gates, 187 all-feature units
+  per toolchain and four effective CPU mutation controls. Both frozen release
+  binaries pass 48 two-host host-DRAM/IPv6 RoCEv2 cases; all 96 peers are reaped
+  with locks released. Sixteen same-RNIC/two-PD helper invocations verify 32 PD
+  constructions and 112 native MR registration/deregistration receipts,
+  including 48 rolled-back copies. These are same-agent scoped gates.
   Physical two-RNIC selection/striping/faults and independent acceptance remain
   open. See [the contracts and TENT correspondence](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
 - [ ] Qualify multirail slicing, masks, initial routing, retry/timeout budgets,
@@ -1048,9 +1054,10 @@ native evidence; independent acceptance remains open. P4.12b now connects
 multiple contexts, strict masks and request-level rail selection to the public
 data path; its declared single-RNIC native regressions now pass. P4.12c implements
 single-request cross-rail slice ownership/completion and eager multi-context
-registration publication. Next qualify the real registration rollback and public
-v11 native regressions, then physical multi-RNIC routing/faults using explicitly
-selected NICs and resource locks. Keep the frozen TENT context/buffer/endpoint/
+registration publication. Its real registration rollback and public v11 native
+regressions now pass in the declared single-RNIC profile. Next qualify physical
+multi-RNIC routing/slicing/faults using explicitly selected NICs and resource
+locks, and complete the pending independent acceptance gates. Keep the frozen TENT context/buffer/endpoint/
 worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.
 The complete P4 exit and independent acceptance form the first large native
