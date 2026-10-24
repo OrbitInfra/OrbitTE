@@ -33,6 +33,7 @@ completion contracts.
 | `DeviceSelector` | Intersect masks, topology tiers and in-flight byte charges | `DeviceSelector` in `quota.h` |
 | `RdmaContext` | Own actual context/PD, frozen route and persistent key history | `RdmaContext` |
 | `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
+| `ReceiveCredits` | Atomically reserve a parent's source RQ capacity; transfer credits to actual receive owners | OrbitTE source-completion admission alongside TENT's bounded slice queues |
 | `CqQuota` | Wake blocked context workers after actual aggregate SQ/RQ capacity returns | Rust notification adaptation for TENT's worker iteration across context CQs; separate from native cross-process QoS |
 | Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
 | Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
@@ -95,6 +96,28 @@ transport facade, bandwidth policy or cross-process quota implementation.
 Capacity returns through validated data/control completions, proven unposted
 suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains
 its charges. See the [concurrent native profile](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
+
+## Source receive admission
+
+Each parent prepares every grant before payload submission. Reserving RQ slots
+one slice at a time can leave concurrent parents holding incomplete plans with
+no payload able to complete. `ReceiveCredits` acquires the whole validated plan
+under the aggregate budget lock, then moves one credit into each `ReceiveQueue`.
+Insufficient capacity returns `ResourceExhausted` before either peer creates a
+new QP for that parent. This is immediate bounded admission; callers decide when
+to retry. Single-path source requests acquire one credit through the same owner.
+
+Wire v12 adds a source admission reply after the multirail plan. Requesters wait
+for it before preparing endpoints. Previous wire versions are rejected. Unused
+credits roll back on preparation failure; accepted or uncertain receives retain
+their own credits until validated CQ completion or successful native QP/CQ drain.
+`receive_credits` includes unposted reservations; `receive_work_requests` counts
+actual reserved/possibly posted WR debt. Neither is payload-byte progress.
+
+TENT's `Workers`, `RdmaSlice`, `DeviceSelector`, context set and endpoint store
+remain the architectural reference. This additional RQ credit owner belongs to
+OrbitTE's exact source receive/invalidation protocol, rather than a native TENT
+wire contract or its cross-process bandwidth arbitration.
 
 ## Completion and failure
 

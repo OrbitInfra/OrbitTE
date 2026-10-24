@@ -199,7 +199,7 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v11 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
+Protocol v12 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
 Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
@@ -281,7 +281,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v11 explicitly rejects v1-v10; it is OrbitTE-only. A WRITE attempt is marked
+Wire v12 explicitly rejects v1-v11; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -2566,3 +2566,40 @@ folded/larger workloads, strict fairness, bandwidth/priority policy, physical IB
 link/device loss, lost completions, native cleanup failure or process restart.
 Independent acceptance and full P4 remain open. OrbitKV integration stays
 deferred until that native-stage boundary.
+
+
+## Whole-parent source RQ admission
+
+P4.12f introduces an atomic source receive-credit reservation for each parent.
+Every slice requires a completion RQ before its grant is published. Partial
+per-slice admission could otherwise leave multiple parents holding incomplete
+plans while every requester waits to submit payloads. `ReceiveCredits` reserves
+the complete validated plan under the existing aggregate budget lock. A parent
+that does not fit receives `ResourceExhausted` with no remote payload effect.
+The wire v12 admission reply precedes all requester endpoint construction;
+single-path requests reserve one credit before publishing bootstrap paths.
+
+Each prepared slice takes one credit into its actual `ReceiveQueue`. Dropping
+unassigned credits rolls them back. A known unposted receive, a validated CQE or
+successful native QP/CQ teardown releases its own credit. An uncertain post or
+failed native cleanup retains it with the actual WR/DMA owner. The new
+`receive_credits`, `peak_receive_credits` and `receive_admission_rejections`
+statistics distinguish admission reservations from `receive_work_requests` debt.
+Admission is fail-fast and does not introduce an implicit retry or fairness
+policy. Byte and endpoint budgets remain independent admission constraints.
+
+The reference remains TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+`Workers` and bounded `RdmaSlice` dispatch, `DeviceSelector`, context-specific
+buffers and the endpoint store retain their existing responsibilities. TENT
+uses registered-region rkeys; this RQ reservation is specific to OrbitTE's exact
+MW source-completion protocol. It is not native wire compatibility or TENT's
+cross-process shared bandwidth quota.
+
+The native fixture declares four concurrent public parents, three 8 KiB slices
+per parent, three aggregate requester SQ credits and thirteen source RQ credits.
+A fifth three-slice parent must be rejected atomically despite one remaining
+source credit; neither peer may create a QP for it. All twelve accepted QPs must
+reuse across rounds. Paused unregister/close and either-rail native CQ errors
+exercise the same geometry. Source observers reconcile actual posted receive
+IDs and delivered CQEs against each owner's pending debt and credit before CQ
+destruction. Native execution and independent qualification are pending.

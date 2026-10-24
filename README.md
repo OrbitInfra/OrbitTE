@@ -50,7 +50,8 @@ checkout for the implementation described here.
   priorities and in-flight byte charges select compatible paths per RDMA slice.
   Parent completion requires every slice and its source receipt.
 - **Shared quotas.** Concurrent parents share SQ/RQ, byte and connection limits.
-  Returning completion capacity wakes waiting context workers in event mode.
+  Source admission reserves every slice's receive credit together before
+  granting authority. Returning completion capacity wakes waiting context workers in event mode.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
   owned by native work. Failed cleanup retains its resources and charges.
 

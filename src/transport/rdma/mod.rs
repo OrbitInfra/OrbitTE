@@ -184,6 +184,10 @@ pub struct RdmaStats {
     pub retained_windows: usize,
     pub completed_window_binds: u64,
     pub completed_window_invalidations: u64,
+    /// Source completion credits, including unposted parts of admitted parents.
+    pub receive_credits: usize,
+    pub peak_receive_credits: usize,
+    pub receive_admission_rejections: u64,
     pub receive_work_requests: usize,
     pub retained_receive_work_requests: usize,
     pub peak_receive_work_requests: usize,

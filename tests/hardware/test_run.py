@@ -174,7 +174,7 @@ class ResourceSelection(unittest.TestCase):
             with self.assertRaises(CapturedStart):
                 controller.case(0, case)
             for mode in ['concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
-                         'concurrent-cq-error']:
+                         'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error']:
                 def concurrent_start(*args):
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')

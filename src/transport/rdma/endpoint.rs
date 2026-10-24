@@ -520,12 +520,13 @@ impl RdmaEndpoint {
         })
     }
 
-    pub(crate) fn post_receive(
+    pub(super) fn post_receive(
         &mut self,
         binding: &[u8; super::COMPLETION_MESSAGE_SIZE],
+        credits: super::receive::ReceiveCredits,
     ) -> Result<()> {
         self.progress
-            .post_receive(&self.record, self.claim, *binding, self.deadline)
+            .post_receive(&self.record, self.claim, *binding, credits, self.deadline)
     }
 
     pub(crate) fn receive_completion(&self) -> Result<()> {

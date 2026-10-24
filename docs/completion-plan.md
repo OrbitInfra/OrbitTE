@@ -27,6 +27,8 @@ identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse,
 paths. P4.12c adds eager multi-context publication and cross-rail slice ownership.
 P4.12d validates the declared two-RNIC host Direct profile and native fault/drain owners.
 P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent validation.
+P4.12f implements atomic whole-parent source RQ admission on wire v12; native
+qualification is pending until recorded below.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -778,6 +780,16 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   controls reject aggregate SQ overruns or early debt repayment. These are
   same-agent scoped gates; complete P4 and independent acceptance remain open.
   See [the concurrency contract and evidence](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
+- [ ] **P4.12f — whole-parent source RQ admission (Implemented; native gates pending).**
+  Acquire all completion receive credits for the validated parent before either
+  peer constructs a QP; reject insufficient capacity atomically with no remote
+  payload effect. Wire v12 adds the admission reply before slice rendezvous.
+  Unused reservations roll back; posted/uncertain receives retain their own
+  credits through actual CQ completion or native QP/CQ drain. CPU controls cover
+  exact residual capacity, rejected plans, retries and uncertain posting. The
+  native fixture extends the existing owner ledger to four parents and three
+  slices each, source RQ pressure, either-rail CQ errors and paused close.
+  Hardware gates and independent acceptance remain open until recorded.
 - [ ] Qualify wider multirail slice geometry and more than two parents/slices,
   source RQ admission pressure, topology ranks, timeout/retry and endpoint
   incarnations. Add physical link/device loss, lost completion, native cleanup failure and process

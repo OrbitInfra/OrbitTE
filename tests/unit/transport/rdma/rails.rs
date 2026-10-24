@@ -570,6 +570,12 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
             };
             a.write(&mut channel).unwrap();
             if case == 7 {
+                assert_eq!(
+                    Reply::read(&mut channel, source.source_epoch())
+                        .unwrap()
+                        .status,
+                    9
+                );
                 Hello {
                     requester: identity(9, 8, 7),
                     source: None,
@@ -1010,5 +1016,106 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
             ),
             (1, 0, 0)
         );
+    }
+}
+
+#[test]
+fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recovers() {
+    use super::super::super::receive::ReceiveCredits;
+    for event in [false, true] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            let source = rdma_fixture_with_runtime(sliced_runtime(
+                u64::MAX,
+                16,
+                4,
+                RdmaHostMemory::Direct,
+                event,
+            ));
+            let requester = rdma_fixture_with_runtime(sliced_runtime(
+                u64::MAX,
+                16,
+                3,
+                RdmaHostMemory::Direct,
+                event,
+            ));
+            let local = requester
+                .register_memory(vec![0x63; 20].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap();
+            let remote = source
+                .register_memory(
+                    vec![0x29; 20].into_boxed_slice(),
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap();
+            let peer = requester
+                .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+                .unwrap();
+            let credits =
+                ReceiveCredits::acquire(Arc::clone(&source_runtime(&source).usage), 4, 2).unwrap();
+            let request = TransferRequest {
+                transport: Transport::Rdma,
+                local_address: local.base_address() + 4,
+                remote_address: remote.base_address() + 4,
+                length: 12,
+            };
+            let report = requester
+                .submit_and_wait(operation, &peer, std::slice::from_ref(&request), TIMEOUT)
+                .unwrap();
+            assert!(
+                !report.is_complete() && report.locally_drained,
+                "{report:?}"
+            );
+            let failure = report.failure.unwrap();
+            assert!(matches!(failure.error, Error::ResourceExhausted));
+            assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
+            for engine in [&source, &requester] {
+                let stats = engine.stats().unwrap().rdma.unwrap();
+                assert_eq!(
+                    (
+                        stats.opened_connections,
+                        stats.active_grants,
+                        stats.receive_work_requests
+                    ),
+                    (0, 0, 0)
+                );
+            }
+            let stats = source.stats().unwrap().rdma.unwrap();
+            assert_eq!(
+                (stats.receive_credits, stats.receive_admission_rejections),
+                (2, 1)
+            );
+            drop(credits);
+            let report = requester
+                .submit_and_wait(operation, &peer, &[request], TIMEOUT)
+                .unwrap();
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            let mut bytes = [0; 20];
+            let target = if operation == TransferOp::Read {
+                &local
+            } else {
+                &remote
+            };
+            target.read(0, &mut bytes).unwrap();
+            let guard = if operation == TransferOp::Read {
+                0x63
+            } else {
+                0x29
+            };
+            assert_eq!(&bytes[..4], &[guard; 4]);
+            assert_eq!(
+                &bytes[4..16],
+                &[if operation == TransferOp::Read {
+                    0x29
+                } else {
+                    0x63
+                }; 12]
+            );
+            assert_eq!(&bytes[16..], &[guard; 4]);
+            requester.unregister_memory(&local).unwrap();
+            source.unregister_memory(&remote).unwrap();
+            requester.close(TIMEOUT).unwrap();
+            source.close(TIMEOUT).unwrap();
+            assert_eq!(source.stats().unwrap().rdma.unwrap().receive_credits, 0);
+        }
     }
 }
