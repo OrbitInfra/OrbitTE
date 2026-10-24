@@ -28,6 +28,14 @@ and budgets are immutable for that engine instance.
 authority. Repeated registration of the same range keeps its original
 permission. CPU access coordination is shared across aliases.
 
+For a configured RDMA engine with host Direct policy, host registration prepares
+every enabled context's MR copies before lookup/descriptor visibility and before
+duplicate reference increments commit. A failed batch retires only its newly
+created copies. Previously published ranges remain valid; failed native cleanup
+retains unpublished backing and its charges. This can fail at registration time
+when native resources or aggregate MR capacity are unavailable. See the
+[publication contract](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
+
 ## Peer authority
 
 ```rust
@@ -54,6 +62,10 @@ before transfer effects.
 failure information, notification status and local drain status. The completed
 prefix is not a transaction. `RemoteEffect::Unknown` means an attempted WRITE
 may have changed peer bytes; a failed report does not authorize automatic replay.
+For a cross-rail request, all slice receipts must complete before its one request
+and full byte count are added. Earlier slices may already have changed bytes if
+a later slice fails, including source-staged WRITE slices copied back after
+their own completion. Completion is not an atomic multi-rail commit.
 
 For asynchronous ownership, see [`Batch`](async-batches.md): submit groups,
 seal, inspect or wait for completion, and retain the handle until resource

@@ -101,7 +101,7 @@ fn barrier(stream: &mut TcpStream, phase: u8) {
 }
 
 #[test]
-#[ignore = "requires two selected RNIC hosts and original NIC locks; uses the public v10 protocol"]
+#[ignore = "requires two selected RNIC hosts and original NIC locks; uses the public v11 protocol"]
 fn connected_endpoint_peer() {
     println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
@@ -298,7 +298,7 @@ fn connected_endpoint_peer() {
             idle.opened_persistent_mrs,
             idle.reused_persistent_mrs
         ),
-        (2, 4, 12)
+        (2, 4, 16)
     );
     assert_eq!(
         (
@@ -306,7 +306,7 @@ fn connected_endpoint_peer() {
             idle.opened_source_mrs,
             idle.reused_source_mrs
         ),
-        (1, 2, 6)
+        (1, 2, 8)
     );
     assert_eq!(
         (

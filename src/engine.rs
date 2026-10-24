@@ -205,18 +205,30 @@ impl TransferEngine {
         })
     }
 
+    /// Registers owned host bytes, preparing configured host Direct RDMA MRs
+    /// in every enabled context before exposing the range.
     pub fn register_memory(
         &self,
         bytes: Box<[u8]>,
         permission: Permission,
     ) -> Result<RegisteredMemory> {
         let _admission = self.source.admit()?;
-        self.source.registry.register(bytes, permission)
+        let length = bytes.len();
+        self.source
+            .registry
+            .register_host_batch(
+                &[(Arc::new(HostMemory::new(bytes)?), 0, length)],
+                permission,
+                |memory| self.register_native(memory),
+            )?
+            .pop()
+            .ok_or(Error::Internal("single registration returned no handle"))
     }
 
     /// Registers an existing host allocation range. Exact duplicate ranges share
     /// a registration reference and retain the first permission, as in TENT.
-    /// Overlapping ranges must share the same HostMemory access lock.
+    /// Overlapping ranges must share the same HostMemory access lock. Configured
+    /// host Direct RDMA prepares all enabled contexts before publication.
     pub fn register_host_memory(
         &self,
         allocation: Arc<HostMemory>,
@@ -227,7 +239,11 @@ impl TransferEngine {
         let _admission = self.source.admit()?;
         self.source
             .registry
-            .register_host(allocation, offset, length, permission)
+            .register_host_batch(&[(allocation, offset, length)], permission, |memory| {
+                self.register_native(memory)
+            })?
+            .pop()
+            .ok_or(Error::Internal("single registration returned no handle"))
     }
 
     /// Registers `(allocation, offset, length)` ranges in input order. Admission
@@ -243,7 +259,18 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let _admission = self.source.admit()?;
-        self.source.registry.register_host_batch(ranges, permission)
+        self.source
+            .registry
+            .register_host_batch(ranges, permission, |memory| self.register_native(memory))
+    }
+
+    fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
+        #[cfg(feature = "rdma")]
+        if let Some(runtime) = &self.source.rdma {
+            return runtime.register_memory(memory, deadline(self.config.handler_timeout)?);
+        }
+        let _ = memory;
+        Ok(())
     }
 
     /// Registers retained CUDA device ranges, using the same transactional

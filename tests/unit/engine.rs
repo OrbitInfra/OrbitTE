@@ -122,7 +122,14 @@ pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
 pub(crate) fn rdma_fixture_with_runtime(
     runtime: crate::transport::rdma::RdmaTransport,
 ) -> TransferEngine {
-    let config = EngineConfig::default();
+    rdma_fixture_with_config(runtime, EngineConfig::default())
+}
+
+#[cfg(feature = "rdma")]
+pub(crate) fn rdma_fixture_with_config(
+    runtime: crate::transport::rdma::RdmaTransport,
+    config: EngineConfig,
+) -> TransferEngine {
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         epoch,

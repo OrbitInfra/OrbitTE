@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 10;
+const VERSION: u16 = 11;
 pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -29,6 +29,8 @@ pub(crate) enum Operation {
     Notify = 3,
     RdmaRead = 4,
     RdmaWrite = 5,
+    RdmaReadSlices = 6,
+    RdmaWriteSlices = 7,
 }
 
 pub(crate) struct Request {
@@ -61,6 +63,8 @@ impl Request {
             3 => Operation::Notify,
             4 => Operation::RdmaRead,
             5 => Operation::RdmaWrite,
+            6 => Operation::RdmaReadSlices,
+            7 => Operation::RdmaWriteSlices,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -526,7 +530,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         checked_range(offset, length, memory.len())?;
         if !memory.0.descriptor.permission.allows(matches!(
             request.operation,
-            Operation::TcpWrite | Operation::RdmaWrite
+            Operation::TcpWrite | Operation::RdmaWrite | Operation::RdmaWriteSlices
         )) {
             return Err(Error::PermissionDenied);
         }
@@ -543,13 +547,16 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 offset,
                 length,
             ),
-            Operation::RdmaRead | Operation::RdmaWrite => {
+            Operation::RdmaRead
+            | Operation::RdmaWrite
+            | Operation::RdmaReadSlices
+            | Operation::RdmaWriteSlices => {
                 #[cfg(feature = "rdma")]
                 return source
                     .rdma
                     .as_ref()
                     .ok_or(Error::Unavailable("RDMA is not configured"))?
-                    .serve(channel, source.epoch, &request, memory, offset, length);
+                    .serve(channel, source.epoch, &request, memory);
                 #[cfg(not(feature = "rdma"))]
                 return Err(Error::Unavailable("build with --features rdma"));
             }

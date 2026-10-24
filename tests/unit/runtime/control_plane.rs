@@ -40,7 +40,7 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x0a\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x0b\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
@@ -56,6 +56,8 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         (9, 6),
         (9, 7),
         (9, 8),
+        (9, 9),
+        (9, 10),
         (10, 255),
         (11, 1),
     ] {
@@ -84,6 +86,10 @@ fn source_validates_untrusted_ranges_permissions_epochs_and_budgets() {
         (Operation::TcpRead, 999, 0, 4, 2),
         (Operation::RdmaRead, memory.id(), 0, 4, 10),
         (Operation::RdmaWrite, memory.id(), 0, 4, 3),
+        (Operation::RdmaReadSlices, memory.id(), 0, 4, 10),
+        (Operation::RdmaWriteSlices, memory.id(), 0, 4, 3),
+        (Operation::RdmaReadSlices, memory.id(), 7, 2, 4),
+        (Operation::RdmaReadSlices, memory.id(), 0, 9, 6),
     ] {
         let mut channel = wire_request(&engine, operation, id, offset, length);
         let mut bytes = [0; REPLY_SIZE];

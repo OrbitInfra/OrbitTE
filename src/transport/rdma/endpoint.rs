@@ -653,7 +653,8 @@ impl RdmaEndpoint {
         deadline: Instant,
     ) -> Result<()> {
         self.progress
-            .transfer(&self.record, self.claim, *remote, operation, deadline)
+            .submit(&self.record, self.claim, *remote, operation, deadline)?;
+        self.progress.wait(&self.record, self.claim, deadline)
     }
 
     pub(super) fn finish_sent(

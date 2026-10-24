@@ -154,7 +154,7 @@ fn public_transfers_rotate_stable_contexts_reuse_only_the_selected_pair_and_reti
             assert_eq!(local_path.nic_id, ids[round % ids.len()]);
             assert_eq!(local_path.nic_id, remote_path.nic_id);
         }
-        for engine in [&requester, &source] {
+        for (engine, published) in [(&requester, 2), (&source, 4)] {
             let stats = engine.stats().unwrap().rdma.unwrap();
             assert_eq!(
                 stats.opened_devices, 2,
@@ -164,8 +164,8 @@ fn public_transfers_rotate_stable_contexts_reuse_only_the_selected_pair_and_reti
             assert_eq!(stats.active_cqs, ids.len() * 2);
             assert_eq!(stats.opened_connections, (ids.len() * 2) as u64);
             assert_eq!(stats.reused_connections, (8 - ids.len() * 2) as u64);
-            assert_eq!(stats.persistent_mrs, ids.len());
-            assert_eq!(stats.persistent_mr_bytes, ids.len() * 16);
+            assert_eq!(stats.persistent_mrs, published);
+            assert_eq!(stats.persistent_mr_bytes, published * 16);
             assert_eq!(
                 (
                     stats.direct_bytes,
@@ -265,4 +265,655 @@ fn one_context_fault_preserves_the_other_stores_idle_count_and_fences_new_grants
     assert_eq!(runtime.stats().unwrap().opened_direct_endpoints, before);
     requester.close(TIMEOUT).unwrap();
     source.close(TIMEOUT).unwrap();
+}
+
+fn sliced_runtime(
+    mask: u64,
+    endpoints: usize,
+    cqes: usize,
+    policy: RdmaHostMemory,
+    event: bool,
+) -> RdmaTransport {
+    static EVENT: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open,
+        ..super::super::super::cq::tests::VERBS
+    };
+    let mut owner = runtime(mask, endpoints);
+    owner.config.block_size = 4;
+    owner.config.max_send_wr = 1;
+    owner.config.max_cqes = cqes;
+    owner.config.host_memory = policy;
+    if event {
+        owner.config.progress_mode = super::super::super::RdmaProgressMode::EventDriven;
+        owner.verbs = &EVENT;
+    }
+    owner.registrations =
+        buffers::LocalBufferManager::new(&owner.config, Arc::clone(&owner.usage), owner.verbs);
+    owner
+}
+
+fn single_handler(runtime: RdmaTransport) -> TransferEngine {
+    crate::engine::tests::rdma_fixture_with_config(
+        runtime,
+        crate::EngineConfig {
+            handler_threads: 1,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn parent_slices_use_one_source_handler_and_aggregate_read_write_receipts_across_contexts() {
+    use RdmaHostMemory::{Direct, Staged};
+    for event in [false, true] {
+        for (source_policy, local_policy) in [
+            (Direct, Direct),
+            (Staged, Direct),
+            (Direct, Staged),
+            (Staged, Staged),
+        ] {
+            let source = single_handler(sliced_runtime(u64::MAX, 8, 2, source_policy, event));
+            let requester = single_handler(sliced_runtime(u64::MAX, 8, 2, local_policy, event));
+            let local = requester
+                .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap();
+            let remote = source
+                .register_memory(
+                    vec![0x29; 16].into_boxed_slice(),
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap();
+            let mut finished = 0;
+            for op in [TransferOp::Read, TransferOp::Write] {
+                for _ in 0..2 {
+                    local.write(0, &[0x63; 16]).unwrap();
+                    remote.write(0, &[0x29; 16]).unwrap();
+                    exchange(&requester, &source, &local, &remote, op);
+                    finished += 2;
+                    assert_eq!(
+                        requester.stats().unwrap().rdma.unwrap().completed_sends,
+                        finished
+                    );
+                    let receipts = source.stats().unwrap().rdma.unwrap();
+                    assert_eq!(receipts.completed_receives, finished);
+                    assert_eq!(receipts.completed_window_binds, finished);
+                    assert_eq!(receipts.completed_window_invalidations, finished);
+                }
+            }
+            for engine in [&source, &requester] {
+                let stats = engine.stats().unwrap().rdma.unwrap();
+                assert_eq!(stats.progress_workers, 2);
+                assert_eq!(
+                    stats.completed_reusable_grants,
+                    if source_policy == Direct && local_policy == Direct {
+                        8
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(
+                    (
+                        stats.active_grants,
+                        stats.direct_bytes,
+                        stats.staging_bytes,
+                        stats.work_requests,
+                        stats.receive_work_requests
+                    ),
+                    (0, 0, 0, 0, 0)
+                );
+            }
+            let data = requester.stats().unwrap().rdma.unwrap();
+            assert_eq!(
+                (
+                    data.completed_reads,
+                    data.completed_writes,
+                    data.completed_read_bytes,
+                    data.completed_write_bytes
+                ),
+                (4, 4, 16, 16)
+            );
+            assert_eq!(
+                data.opened_connections,
+                if source_policy == Direct && local_policy == Direct {
+                    4
+                } else {
+                    8
+                }
+            );
+            source.unregister_memory(&remote).unwrap();
+            requester.unregister_memory(&local).unwrap();
+            source.close(TIMEOUT).unwrap();
+            requester.close(TIMEOUT).unwrap();
+        }
+    }
+}
+
+#[test]
+fn slice_window_intersects_remote_mask_and_single_cq_capacity_before_grants() {
+    for (source_mask, cqes, expected) in [(1 << 2, 2, 1), (u64::MAX, 1, 1)] {
+        let source = single_handler(sliced_runtime(
+            source_mask,
+            8,
+            cqes,
+            RdmaHostMemory::Direct,
+            false,
+        ));
+        let requester = single_handler(sliced_runtime(
+            u64::MAX,
+            8,
+            8,
+            RdmaHostMemory::Direct,
+            false,
+        ));
+        let local = requester
+            .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 16].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        exchange(&requester, &source, &local, &remote, TransferOp::Read);
+        assert_eq!(
+            requester.stats().unwrap().rdma.unwrap().progress_workers,
+            expected
+        );
+        assert_eq!(
+            requester.stats().unwrap().rdma.unwrap().opened_connections,
+            if cqes == 1 { 1 } else { 2 }
+        );
+        assert_eq!(
+            source.stats().unwrap().rdma.unwrap().persistent_mrs,
+            4,
+            "publication retains every enabled context, including masked contexts"
+        );
+        source.close(TIMEOUT).unwrap();
+        requester.close(TIMEOUT).unwrap();
+    }
+}
+
+unsafe extern "C" fn open_paused(h: *mut sys::DeviceHandles, name: *const c_char) -> i32 {
+    if unsafe { CStr::from_ptr(name) }.to_bytes() == b"device_missing" {
+        return libc::ENODEV;
+    }
+    unsafe { fixture::open_device(h, c"pause_copy".as_ptr()) }
+}
+
+#[test]
+fn both_rail_workers_can_own_payloads_before_parent_completion_and_unregister_waits_for_exact_loans()
+ {
+    static PAUSED: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_paused,
+        ..fixture::VERBS
+    };
+    let source = Arc::new(single_handler(sliced_runtime(
+        u64::MAX,
+        8,
+        4,
+        RdmaHostMemory::Direct,
+        false,
+    )));
+    let mut local_runtime = sliced_runtime(u64::MAX, 8, 4, RdmaHostMemory::Direct, false);
+    local_runtime.verbs = &PAUSED;
+    local_runtime.registrations = buffers::LocalBufferManager::new(
+        &local_runtime.config,
+        Arc::clone(&local_runtime.usage),
+        &PAUSED,
+    );
+    let requester = Arc::new(single_handler(local_runtime));
+    let local = requester
+        .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(
+            vec![0x29; 16].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let pauses: Vec<_> = [0, 2]
+        .map(|id| {
+            super::super::super::context::tests::pause_device(
+                &source_runtime(&requester).device_at(id).unwrap(),
+            )
+        })
+        .into();
+    let task = {
+        let requester = Arc::clone(&requester);
+        let source = Arc::clone(&source);
+        let local = local.clone();
+        let remote = remote.clone();
+        thread::spawn(move || exchange(&requester, &source, &local, &remote, TransferOp::Read))
+    };
+    for pause in &pauses {
+        let (lock, changed) = &**pause;
+        let (guard, timed) = changed
+            .wait_timeout_while(lock.lock().unwrap(), TIMEOUT, |state| !state.0)
+            .unwrap();
+        assert!(
+            !timed.timed_out(),
+            "both native post owners must progress before either one is released"
+        );
+        drop(guard);
+    }
+    let stats = requester.stats().unwrap().rdma.unwrap();
+    assert_eq!(
+        (stats.active_grants, stats.work_requests, stats.direct_bytes),
+        (2, 2, 8)
+    );
+    requester.unregister_memory(&local).unwrap();
+    assert_eq!(requester.stats().unwrap().rdma.unwrap().persistent_mrs, 2);
+    for offset in [4, 8] {
+        assert!(local.read(offset, &mut [0; 4]).is_err());
+    }
+    local.write(0, &[0x63; 4]).unwrap();
+    assert!(matches!(
+        source.close_source(Duration::from_millis(10)),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(
+        requester.close_requester(Duration::from_millis(10)),
+        Err(Error::Timeout)
+    ));
+    for pause in pauses {
+        let (lock, changed) = &*pause;
+        lock.lock().unwrap().1 = true;
+        changed.notify_all();
+    }
+    task.join().unwrap();
+    assert_eq!(requester.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
+    source.close(TIMEOUT).unwrap();
+    requester.close(TIMEOUT).unwrap();
+}
+
+#[test]
+fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_authority() {
+    let source = single_handler(sliced_runtime(
+        u64::MAX,
+        8,
+        8,
+        RdmaHostMemory::Direct,
+        false,
+    ));
+    let remote = source
+        .register_memory(
+            vec![0x29; 16].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    for case in 0..8 {
+        let request = Request {
+            operation: Operation::RdmaReadSlices,
+            epoch: source.source_epoch(),
+            region: remote.id(),
+            offset: 4,
+            length: 8,
+        };
+        let mut channel =
+            ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+        channel.write_all(&request.encode()).unwrap();
+        let paths = rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+        let mut limit = [0];
+        channel.read_exact(&mut limit).unwrap();
+        if case == 0 {
+            channel.write_all(&[0]).unwrap();
+        } else if case == 1 {
+            channel.write_all(&[65]).unwrap();
+        } else {
+            channel.write_all(&[if case == 7 { 1 } else { 2 }]).unwrap();
+            let a = SliceRequest {
+                offset: 0,
+                length: if case == 7 { 8 } else { 4 },
+                domain: paths[0].domain,
+            };
+            a.write(&mut channel).unwrap();
+            if case == 7 {
+                Hello {
+                    requester: identity(9, 8, 7),
+                    source: None,
+                    expected_domain: paths[1].domain,
+                    direct: true,
+                    previous_grant: 0,
+                }
+                .write(&mut channel)
+                .unwrap();
+            } else {
+                SliceRequest {
+                    offset: if case == 2 {
+                        3
+                    } else if case == 3 {
+                        5
+                    } else {
+                        4
+                    },
+                    length: if case == 4 {
+                        0
+                    } else if case == 5 {
+                        5
+                    } else {
+                        4
+                    },
+                    domain: if case == 6 { [99; 16] } else { paths[1].domain },
+                }
+                .write(&mut channel)
+                .unwrap();
+            }
+        }
+        assert!(
+            matches!(
+                Reply::read(&mut channel, source.source_epoch()),
+                Err(Error::Protocol(_))
+            ),
+            "case {case}"
+        );
+    }
+    source.close_source(TIMEOUT).unwrap();
+    let stats = source.stats().unwrap().rdma.unwrap();
+    assert_eq!(
+        (
+            stats.opened_connections,
+            stats.opened_windows,
+            stats.active_grants
+        ),
+        (0, 0, 0)
+    );
+    source.close(TIMEOUT).unwrap();
+}
+
+unsafe extern "C" fn open_failed_rail(h: *mut sys::DeviceHandles, name: *const c_char) -> i32 {
+    let name = unsafe { CStr::from_ptr(name) }.to_bytes();
+    if name == b"device_missing" {
+        return libc::ENODEV;
+    }
+    unsafe {
+        fixture::open_device(
+            h,
+            if name == b"rail0" {
+                c"wc_close0".as_ptr()
+            } else {
+                c"copy".as_ptr()
+            },
+        )
+    }
+}
+
+#[test]
+fn one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_report_parent_drain() {
+    static FAILED: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_failed_rail,
+        ..fixture::VERBS
+    };
+    for op in [TransferOp::Read, TransferOp::Write] {
+        let source = single_handler(sliced_runtime(
+            u64::MAX,
+            8,
+            8,
+            RdmaHostMemory::Direct,
+            false,
+        ));
+        let mut failed = sliced_runtime(u64::MAX, 8, 8, RdmaHostMemory::Direct, false);
+        failed.verbs = &FAILED;
+        failed.registrations =
+            buffers::LocalBufferManager::new(&failed.config, Arc::clone(&failed.usage), &FAILED);
+        let requester = single_handler(failed);
+        let local = requester
+            .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 16].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+            .unwrap();
+        let report = requester
+            .submit_and_wait(
+                op,
+                &peer,
+                &[TransferRequest {
+                    transport: Transport::Rdma,
+                    local_address: local.base_address() + 4,
+                    remote_address: remote.base_address() + 4,
+                    length: 8,
+                }],
+                TIMEOUT,
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                report.completed_requests,
+                report.transferred_bytes,
+                report.locally_drained
+            ),
+            (0, 0, false)
+        );
+        let failure = report.failure.unwrap();
+        assert!(matches!(failure.error, Error::Unquiesced { .. }));
+        assert_eq!(
+            failure.remote_effect,
+            if op == TransferOp::Write {
+                RemoteEffect::Unknown
+            } else {
+                RemoteEffect::None
+            }
+        );
+        let stats = requester.stats().unwrap().rdma.unwrap();
+        assert_eq!(
+            (
+                stats.active_grants,
+                stats.retained_grants,
+                stats.direct_bytes
+            ),
+            (1, 1, 4)
+        );
+        assert!(local.read(4, &mut [0; 4]).is_err());
+        local.write(8, &[0x55; 4]).unwrap();
+        source.close(TIMEOUT).unwrap();
+    }
+}
+
+unsafe fn open_publication_mode(
+    h: *mut sys::DeviceHandles,
+    name: *const c_char,
+    mode: &CStr,
+) -> i32 {
+    let name = unsafe { CStr::from_ptr(name) }.to_bytes();
+    if name == b"device_missing" {
+        return libc::ENODEV;
+    }
+    unsafe {
+        fixture::open_device(
+            h,
+            if name == b"rail2" {
+                mode.as_ptr()
+            } else {
+                c"copy".as_ptr()
+            },
+        )
+    }
+}
+unsafe extern "C" fn open_publication_fault(
+    h: *mut sys::DeviceHandles,
+    name: *const c_char,
+) -> i32 {
+    unsafe { open_publication_mode(h, name, c"copy_publication_fault") }
+}
+unsafe extern "C" fn open_publication_retained(
+    h: *mut sys::DeviceHandles,
+    name: *const c_char,
+) -> i32 {
+    unsafe { open_publication_mode(h, name, c"copy_publication_close1") }
+}
+unsafe extern "C" fn open_publication_parent(
+    h: *mut sys::DeviceHandles,
+    name: *const c_char,
+) -> i32 {
+    unsafe { open_publication_mode(h, name, c"copy_publication_parent") }
+}
+unsafe extern "C" fn fail_later_registration(
+    h: *mut sys::MemoryHandles,
+    d: *const sys::DeviceHandles,
+    address: *mut std::ffi::c_void,
+    length: usize,
+    window_bind: bool,
+) -> i32 {
+    let device = unsafe { &*(*d).context.cast::<fixture::FakeDevice>() };
+    let previous = device
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| **event == "register_local")
+        .count();
+    let fail = device.mode.contains("publication")
+        && if device.mode.ends_with("parent") {
+            window_bind
+        } else {
+            previous != 0
+        };
+    let code = unsafe { (fixture::VERBS.register_memory)(h, d, address, length, window_bind) };
+    if code == 0 && fail {
+        libc::ENOMEM
+    } else {
+        code
+    }
+}
+
+fn publication_runtime(verbs: &'static sys::Verbs, capacity: usize) -> RdmaTransport {
+    let mut owner = runtime(u64::MAX, 8);
+    owner.config.max_cached_mrs = capacity;
+    owner.verbs = verbs;
+    owner.registrations =
+        buffers::LocalBufferManager::new(&owner.config, Arc::clone(&owner.usage), verbs);
+    owner
+}
+
+#[test]
+fn failed_new_publication_preserves_published_mrs_lookup_and_reference_counts_on_every_context() {
+    static FAIL: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_publication_fault,
+        register_memory: fail_later_registration,
+        ..fixture::VERBS
+    };
+    for capacity in [2, 8] {
+        let engine = single_handler(publication_runtime(&FAIL, capacity));
+        let a = Arc::new(crate::HostMemory::new(vec![1; 16].into_boxed_slice()).unwrap());
+        let b = Arc::new(crate::HostMemory::new(vec![2; 16].into_boxed_slice()).unwrap());
+        let original = engine
+            .register_host_memory(Arc::clone(&a), 0, 16, Permission::LocalOnly)
+            .unwrap();
+        let stats = engine.stats().unwrap().rdma.unwrap();
+        assert_eq!(
+            (stats.opened_persistent_mrs, stats.persistent_mrs),
+            (2, 2),
+            "both MRs exist before the first transfer"
+        );
+        let error = engine
+            .register_host_memory_batch(
+                &[(Arc::clone(&a), 0, 16), (Arc::clone(&b), 0, 16)],
+                Permission::RemoteReadWrite,
+            )
+            .unwrap_err();
+        assert!(if capacity == 2 {
+            matches!(error, Error::ResourceExhausted)
+        } else {
+            matches!(error, Error::Backend { .. })
+        });
+        assert!(matches!(
+            engine.resolve_local_address(b.base_address(), 16),
+            Err(Error::RegionNotFound)
+        ));
+        assert_eq!(engine.stats().unwrap().retained_regions, 1);
+        assert_eq!(engine.stats().unwrap().rdma.unwrap().persistent_mrs, 2);
+        assert_eq!(
+            engine
+                .resolve_local_address(a.base_address(), 16)
+                .unwrap()
+                .0
+                .id(),
+            original.id()
+        );
+        engine.unregister_memory(&original).unwrap();
+        assert!(
+            matches!(
+                engine.resolve_local_address(a.base_address(), 16),
+                Err(Error::RegionNotFound)
+            ),
+            "failed batch did not increment the duplicate reference"
+        );
+        assert_eq!(engine.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
+        engine.close(TIMEOUT).unwrap();
+    }
+}
+
+#[test]
+fn capability_fanout_rolls_back_as_one_publication_and_failed_cleanup_keeps_unpublished_backing() {
+    static PARENT: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_publication_parent,
+        register_memory: fail_later_registration,
+        ..fixture::VERBS
+    };
+    let engine = single_handler(publication_runtime(&PARENT, 8));
+    let backing = Arc::new(crate::HostMemory::new(vec![1; 16].into_boxed_slice()).unwrap());
+    assert!(matches!(
+        engine.register_host_memory(Arc::clone(&backing), 0, 16, Permission::RemoteReadWrite),
+        Err(Error::Backend { .. })
+    ));
+    assert_eq!(engine.stats().unwrap().retained_regions, 0);
+    assert_eq!(engine.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
+    assert_eq!(
+        engine.stats().unwrap().rdma.unwrap().persistent_source_mrs,
+        0
+    );
+    engine.close(TIMEOUT).unwrap();
+
+    static RETAINED: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_publication_retained,
+        register_memory: fail_later_registration,
+        ..fixture::VERBS
+    };
+    let engine = single_handler(publication_runtime(&RETAINED, 8));
+    let original = engine
+        .register_memory(vec![1; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let fresh = Arc::new(crate::HostMemory::new(vec![2; 16].into_boxed_slice()).unwrap());
+    let weak = Arc::downgrade(&fresh);
+    assert!(matches!(
+        engine.register_host_memory(Arc::clone(&fresh), 0, 16, Permission::LocalOnly),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(matches!(
+        engine.resolve_local_address(fresh.base_address(), 16),
+        Err(Error::RegionNotFound)
+    ));
+    assert_eq!(engine.stats().unwrap().retained_regions, 2);
+    let stats = engine.stats().unwrap().rdma.unwrap();
+    assert_eq!(
+        (stats.persistent_mrs, stats.retained_persistent_mrs),
+        (3, 1)
+    );
+    let mut bytes = [0; 16];
+    original.read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [1; 16]);
+    assert!(matches!(
+        engine.register_memory(vec![3; 16].into_boxed_slice(), Permission::LocalOnly),
+        Err(Error::Unquiesced { .. })
+    ));
+    drop(fresh);
+    assert!(
+        weak.upgrade().is_some(),
+        "failed native cleanup retains the real unpublished allocation"
+    );
+    assert!(matches!(
+        engine.close(TIMEOUT),
+        Err(Error::Unquiesced { .. })
+    ));
 }

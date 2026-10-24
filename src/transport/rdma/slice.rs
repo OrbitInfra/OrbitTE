@@ -21,6 +21,33 @@ impl From<TransferOp> for Operation {
     }
 }
 
+/// One exact-range grant and native endpoint owned by a parent RDMA request.
+pub(super) struct RdmaSlice {
+    pub(super) endpoint: super::RdmaEndpoint,
+    pub(super) binding: super::rdma_transport::Binding,
+    pub(super) remote: super::Descriptor,
+    pub(super) peer: super::endpoint_store::Peer,
+    pub(super) offset: usize,
+}
+
+/// Frozen TENT planRdmaSlices geometry, shared by task routing and WR windows.
+pub(super) fn plan_rdma_slices(length: usize, base: usize, cap: usize) -> Result<(usize, usize)> {
+    if length == 0
+        || length > u32::MAX as usize
+        || !(1..=64 << 20).contains(&base)
+        || !(1..=64).contains(&cap)
+    {
+        return Err(Error::InvalidRange);
+    }
+    let initial = length.div_ceil(base).min(cap);
+    let block = length.div_ceil(initial).div_ceil(base) * base;
+    let mut count = length.div_ceil(block);
+    if count > 1 && (length - (count - 1) * block) * 4 < block {
+        count -= 1;
+    }
+    Ok((block, count))
+}
+
 /// Owns the signaled-WR debt until validated CQ completion or native teardown.
 pub(super) struct SendQueue {
     requests: Vec<sys::WorkRequest>,
@@ -39,20 +66,9 @@ impl SendQueue {
         usage: Arc<Mutex<RdmaStats>>,
         first_id: u64,
     ) -> Result<Self> {
-        if length == 0
-            || length > u32::MAX as usize
-            || !(1..=64 << 20).contains(&base)
-            || first_id == 0
-            || first_id.checked_add(63).is_none()
-            || !(1..=64).contains(&cap)
-        {
+        let (block, count) = plan_rdma_slices(length, base, cap)?;
+        if first_id == 0 || first_id.checked_add(63).is_none() {
             return Err(Error::InvalidRange);
-        }
-        let initial = length.div_ceil(base).min(cap);
-        let block = length.div_ceil(initial).div_ceil(base) * base;
-        let mut count = length.div_ceil(block);
-        if count > 1 && (length - (count - 1) * block) * 4 < block {
-            count -= 1;
         }
         let mut requests = Vec::new();
         requests

@@ -29,8 +29,9 @@ physical work has drained.
 :class: dark-light
 :::
 
-The source implements CPU/TCP, persistent host RDMA resources, request-level
-rail selection and synchronized NVIDIA host staging. Qualification is scoped
+The source implements CPU/TCP, persistent host RDMA resources, cross-rail
+request slicing, eager multi-context MR publication and synchronized NVIDIA
+host staging. Qualification is scoped
 to the profiles recorded in the [capability matrix](capabilities.md). The
 published alpha reserves the crate name; the source implementation remains
 under development.
@@ -43,10 +44,12 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
-- **October 24, 2026:** Multi-context request routing connects stable NIC IDs,
-  device masks and topology/load selection to persistent per-context resources.
-  Scoped two-host host-RDMA regressions pass; physical multi-RNIC qualification
-  and single-request striping remain open.
+- **October 24, 2026:** Cross-rail slices share one parent control handler and
+  aggregate completion across existing context workers. Host Direct registration
+  prepares every context before publication and rolls back newly created MRs
+  on failure. Source/CPU controls pass; physical multi-RNIC qualification and
+  independent acceptance remain open. The documentation now publishes
+  automatically to GitHub Pages on updates to `main`.
 - **Current focus:** Complete OrbitTE's native RDMA stage using the frozen TENT
   architecture. OrbitKV integration resumes after that stage is accepted.
 

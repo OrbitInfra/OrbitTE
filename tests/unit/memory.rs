@@ -4,6 +4,29 @@ use crate::test_support as common;
 
 use std::sync::atomic::Ordering;
 
+impl MemoryRegistry {
+    pub(crate) fn register(
+        &self,
+        bytes: Box<[u8]>,
+        permission: Permission,
+    ) -> Result<RegisteredMemory> {
+        let length = bytes.len();
+        self.register_host(Arc::new(HostMemory::new(bytes)?), 0, length, permission)
+    }
+
+    pub(crate) fn register_host(
+        &self,
+        allocation: Arc<HostMemory>,
+        offset: usize,
+        length: usize,
+        permission: Permission,
+    ) -> Result<RegisteredMemory> {
+        self.register_host_batch(&[(allocation, offset, length)], permission, |_| Ok(()))?
+            .pop()
+            .ok_or(Error::Internal("single registration returned no handle"))
+    }
+}
+
 #[test]
 fn ranges_reject_empty_overflow_and_out_of_bounds() {
     for (offset, length, capacity) in [(0, 0, 8), (usize::MAX, 2, 8), (7, 2, 8), (9, 1, 8)] {
@@ -267,7 +290,7 @@ fn batch_registration_preserves_order_references_and_shared_allocator_ownership(
         (Arc::clone(&fixture.memory), 0, 16),
     ];
     let batch = registry
-        .register_host_batch(&ranges, Permission::RemoteReadWrite)
+        .register_host_batch(&ranges, Permission::RemoteReadWrite, |_| Ok(()))
         .unwrap();
     assert_eq!(batch.len(), 4);
     assert_eq!(batch[0].id(), existing.id());
@@ -329,7 +352,7 @@ fn batch_registration_failures_leave_no_new_ranges_or_duplicate_references() {
             ),
         ];
         let error = registry
-            .register_host_batch(&ranges, Permission::RemoteReadWrite)
+            .register_host_batch(&ranges, Permission::RemoteReadWrite, |_| Ok(()))
             .unwrap_err();
         assert!(
             if case == "range" {
@@ -380,7 +403,7 @@ fn batch_rejects_foreign_alias_locks_before_publication_or_reference_changes() {
         let before = registry.usage().unwrap();
         let ranges = [(Arc::clone(&fixture.memory), 0, 8), (conflicting, 4, 8)];
         assert!(matches!(
-            registry.register_host_batch(&ranges, Permission::RemoteRead),
+            registry.register_host_batch(&ranges, Permission::RemoteRead, |_| Ok(())),
             Err(Error::RegistrationConflict)
         ));
         assert!(registry.descriptors().unwrap().is_empty());
@@ -483,4 +506,49 @@ fn direct_loan_retains_registration_charge_and_actual_external_allocation() {
     assert_eq!(registry.usage().unwrap(), (0, 0));
     assert!(fixture.owner.upgrade().is_none());
     assert_eq!(fixture.drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn native_preparation_precedes_lookup_and_duplicate_commit_and_keeps_failed_owners_charged() {
+    let registry = MemoryRegistry::new(SourceEpoch([7; 16]), 4, 64);
+    let a = Arc::new(HostMemory::new(vec![1; 8].into_boxed_slice()).unwrap());
+    let b = Arc::new(HostMemory::new(vec![2; 8].into_boxed_slice()).unwrap());
+    let existing = registry
+        .register_host(Arc::clone(&a), 0, 8, Permission::RemoteRead)
+        .unwrap();
+    let mut retained = None;
+    assert!(matches!(
+        registry.register_host_batch(
+            &[(a, 0, 8), (Arc::clone(&b), 0, 8), (b, 0, 8)],
+            Permission::RemoteReadWrite,
+            |new| {
+                assert_eq!(new.len(), 1);
+                assert_ne!(new[0].id(), existing.id());
+                assert!(registry.entries.try_lock().is_err());
+                retained = Some(new[0].clone());
+                Err(Error::Unavailable("native publication control"))
+            }
+        ),
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(registry.descriptors().unwrap().len(), 1);
+    let retained = retained.unwrap();
+    assert!(matches!(
+        registry.get(retained.id()),
+        Err(Error::RegionNotFound)
+    ));
+    assert!(matches!(
+        registry.resolve_address(retained.base_address(), 8),
+        Err(Error::RegionNotFound)
+    ));
+    #[cfg(feature = "rdma")]
+    assert!(!retained.is_active());
+    assert_eq!(registry.usage().unwrap(), (2, 16));
+    drop(retained);
+    assert_eq!(registry.usage().unwrap(), (1, 8));
+    registry.unregister(&existing).unwrap();
+    assert!(
+        registry.descriptors().unwrap().is_empty(),
+        "failed batch did not add a duplicate reference"
+    );
 }

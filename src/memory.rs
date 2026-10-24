@@ -528,31 +528,11 @@ impl MemoryRegistry {
         }
     }
 
-    pub(crate) fn register(
-        &self,
-        bytes: Box<[u8]>,
-        permission: Permission,
-    ) -> Result<RegisteredMemory> {
-        let length = bytes.len();
-        self.register_host(Arc::new(HostMemory::new(bytes)?), 0, length, permission)
-    }
-
-    pub(crate) fn register_host(
-        &self,
-        allocation: Arc<HostMemory>,
-        offset: usize,
-        length: usize,
-        permission: Permission,
-    ) -> Result<RegisteredMemory> {
-        self.register_host_batch(&[(allocation, offset, length)], permission)?
-            .pop()
-            .ok_or(Error::Internal("single registration returned no handle"))
-    }
-
     pub(crate) fn register_host_batch(
         &self,
         ranges: &[(Arc<HostMemory>, usize, usize)],
         permission: Permission,
+        publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
     ) -> Result<Vec<RegisteredMemory>> {
         let mut allocations = Vec::new();
         allocations
@@ -561,7 +541,7 @@ impl MemoryRegistry {
         for (allocation, offset, length) in ranges {
             allocations.push((Allocation::Host(Arc::clone(allocation)), *offset, *length));
         }
-        self.register_batch(&allocations, permission)
+        self.register_batch(&allocations, permission, publish)
     }
 
     #[cfg(feature = "cuda")]
@@ -577,22 +557,27 @@ impl MemoryRegistry {
         for (allocation, offset, length) in ranges {
             allocations.push((Allocation::Cuda(Arc::clone(allocation)), *offset, *length));
         }
-        self.register_batch(&allocations, permission)
+        self.register_batch(&allocations, permission, |_| Ok(()))
     }
 
     fn register_batch(
         &self,
         ranges: &[(Allocation, usize, usize)],
         permission: Permission,
+        publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
     ) -> Result<Vec<RegisteredMemory>> {
         let mut plans: Vec<RegistrationPlan> = Vec::new();
         let mut selections = Vec::new();
         let mut registered: Vec<RegisteredMemory> = Vec::new();
+        let mut unpublished = Vec::new();
         let mut result = Vec::new();
         plans
             .try_reserve_exact(ranges.len())
             .map_err(|_| Error::ResourceExhausted)?;
         selections
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        unpublished
             .try_reserve_exact(ranges.len())
             .map_err(|_| Error::ResourceExhausted)?;
         registered
@@ -692,13 +677,13 @@ impl MemoryRegistry {
             .try_reserve(added_regions)
             .map_err(|_| Error::ResourceExhausted)?;
 
-        // All fallible checks precede publication, including duplicate bumps.
+        // Unpublished owners are charged too: failed native cleanup can retain them.
         usage.regions = new_regions;
         usage.bytes = new_bytes;
         entries.next_id = next_id;
-        for plan in plans {
-            if let Some(entry) = entries.regions.get_mut(&plan.id) {
-                entry.references = plan.references;
+        drop(usage);
+        for plan in &plans {
+            if let Some(entry) = entries.regions.get(&plan.id) {
                 registered.push(entry.memory.clone());
             } else {
                 let (allocation, offset, length) = &ranges[plan.input];
@@ -722,15 +707,25 @@ impl MemoryRegistry {
                     address: plan.address,
                     end: plan.end,
                 });
-                entries.regions.insert(
-                    plan.id,
-                    RegistryEntry {
-                        memory: memory.clone(),
-                        references: plan.references,
-                    },
-                );
+                unpublished.push(memory.clone());
                 registered.push(memory);
             }
+        }
+        publish(&unpublished).inspect_err(|_| {
+            #[cfg(feature = "rdma")]
+            for memory in &unpublished {
+                memory.0.active.store(false, Ordering::Release);
+            }
+        })?;
+        // Native preparation completed; lookup visibility and duplicate bumps commit together.
+        for (plan, memory) in plans.iter().zip(&registered) {
+            entries.regions.insert(
+                plan.id,
+                RegistryEntry {
+                    memory: memory.clone(),
+                    references: plan.references,
+                },
+            );
         }
         for index in selections {
             result.push(registered[index].clone());

@@ -29,12 +29,12 @@ completion contracts.
 | Owner | Responsibility | Native TENT correspondence |
 | --- | --- | --- |
 | `Topology`, host discovery | Inventory NICs and NUMA locations; retain stable NIC IDs | `Topology`, `CpuPlatform::probe` |
-| `RdmaTransport`, context set | Initialize permitted NICs and route each request to a compatible context | `RdmaTransport::initializeContexts`, `context_set_` |
+| `RdmaTransport`, context set | Initialize permitted NICs and route each request or slice to a compatible context | `RdmaTransport::initializeContexts`, `context_set_` |
 | `DeviceSelector` | Intersect masks, topology tiers and in-flight byte charges | `DeviceSelector` in `quota.h` |
 | `RdmaContext` | Own actual context/PD, frozen route and persistent key history | `RdmaContext` |
-| `LocalBufferManager` | Cache physical MRs by context, range identity and capability | Context-keyed `mem_reg_map` |
+| `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
 | Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
-| Grant resources | Own one request's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
+| Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
 | `Workers`, CQ and queue owners | Post bounded WR windows, validate real completions and retire resources | `Workers`, RDMA CQ and slice owners |
 
 The `platform/cpu_probe.rs` filename comes directly from TENT's
@@ -54,9 +54,23 @@ authority. The requester selects a compatible path using its device mask,
 NUMA hint and in-flight byte load. A cached pair remains bound to the selected
 source NIC/PD, both process/connection identities and the previous grant.
 
-Current routing selects one rail per request. Single-request cross-rail slicing,
-eager registration publication over all contexts and cross-rail fault recovery
-remain in the [completion plan](completion-plan.md).
+Host Direct registration prepares a local-only MR in every enabled context,
+plus a separate MW-bind parent for remotely accessible ranges. A batch becomes
+visible only after all copies succeed. Dispatch masks select paths; they do not
+remove enabled contexts from publication. Published copies remain pinned until
+unregister or close, with aggregate context/capability byte and count limits.
+
+Large multi-context requests use TENT's bounded, short-tail-folding slice
+geometry and select a path per slice. One source control handler owns the parent
+and prepares every slice grant before payload submission. Existing per-context
+workers post slices concurrently; each slice retains its own PD, connection,
+MR borrow, exact-range DMA loan, WR identity and bound completion receipts.
+The parent succeeds only after every slice completes. No thread is created per
+slice. Small or single-context requests retain the single-path protocol.
+
+Physical multi-RNIC routing/fault qualification and cross-rail recovery remain
+in the [completion plan](completion-plan.md). CPU tests establish ownership
+and protocol contracts, not physical multi-RNIC support.
 
 ## Completion and failure
 

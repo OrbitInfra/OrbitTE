@@ -1,11 +1,12 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12b/P5.1 add opt-in source implementations. Acceptance is scoped to the
+P4.1-P4.12c/P5.1 add opt-in source implementations. Acceptance is scoped to the
 exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
-budgets and per-NIC context owners. P4.12b implements request-level rail
-selection; single-request striping and physical multi-RNIC qualification remain open. Neither establishes full B04/B01 or native TENT compatibility.
+budgets and per-NIC context owners. P4.12c adds eager all-context host MR
+publication and cross-rail slices with aggregate parent completion. Physical
+multi-RNIC qualification remains open. Neither establishes full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
 
@@ -76,7 +77,8 @@ bound each engine's charged native bytes (64 MiB each by default); both share
 fallback. This policy selects host backing only: `CudaMemory` is explicitly
 staged in either mode, because direct GPU MR/GDR is not implemented. An
 Ethernet GID must be nonzero; select a routable GID/type from the real device.
-There is no automatic device, rail or topology discovery/selection yet.
+Automatic device/port/GID discovery and topology-based selection are available;
+explicit pins remain strict. Physical multi-RNIC qualification is separate.
 Each `TransferRequest` now includes `transport: Transport::Tcp` or `Rdma`.
 An uncompiled/unconfigured RDMA request fails preflight, with no fallback.
 The peer also rejects unavailable RDMA before exposing a descriptor.
@@ -104,7 +106,8 @@ RDMA staging: CPU/GPU -> owned host MR <-> RC RDMA READ/WRITE <-> owned host MR 
 CUDA copy: device <-> private CUDA-pinned staging <-> caller host slice
 ```
 
-P4.2b lazily opens one RNIC context and protection domain (PD) per engine.
+P4.12c opens enabled RNIC contexts and protection domains (PDs) during host
+Direct registration; other paths initialize them on first native use.
 Overlapping and successive requests retain that actual shared owner; separate
 engines do not share PDs. P4.6 introduced shared progress. P4.7d gives that context separate shared SQ
 and RQ CQs, polled by one post/poll worker. Each grant owns an exact direct range
@@ -133,16 +136,17 @@ of its handler. P4.7f adds the [scoped connected reuse](#connected-qp-reuse)
 described below. Resource reuse alone is no performance result.
 
 The persistent cache uses the actual `RdmaContext`/PD owner together with
-`RegisteredMemory` identity and capability. The engine currently selects one
-active context; the cache itself isolates entries in distinct contexts. It
-registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
+`RegisteredMemory` identity and capability. Host Direct registration prepares
+all enabled contexts atomically before publication. The cache registers the
+entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
 or `LOCAL_WRITE|MW_BIND` for a source, and retains its real allocation and device.
 Capability is part of the cache key: one view used in both roles needs two actual
 MRs, with two full-view byte charges. A local-only MR is never silently upgraded. `max_cached_mrs` and
 `max_cached_mr_bytes` bound physical count and full-view bytes (defaults 64 and
 64 MiB), independently of exact active DMA bytes. Creating, closing and retained
-MRs remain charged. Idle entries are evicted in least-recently-used order;
-borrowed or creating entries cannot be evicted. A view larger than the byte
+MRs remain charged. Published active registrations cannot be evicted. Other
+unpublished idle entries are evicted in least-recently-used order; borrowed
+or creating entries cannot be evicted. A view larger than the byte
 budget or a cache full of busy owners returns `ResourceExhausted`; registration
 errors never trigger staging. Concurrent callers share one in-progress
 registration. Waiting for another creator uses the existing request deadline;
@@ -192,7 +196,7 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v10 first advertises the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
+Protocol v11 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
 Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
@@ -245,8 +249,8 @@ pay current queue debt. These namespaces cannot be reset while live QPs remain;
 worker/CQ replacement with live connections is not implemented.
 RDMA READ credit stays at one; SQ/CQ capacity is not a throughput claim. Window
 metadata remains bounded to at most 64 slices. Discovery and optional event progress are scoped below. P4.12b adds
-request-level rail selection; single-request striping and multirail fault
-recovery remain open. Connected host Direct reuse is scoped below.
+request-level rail selection; P4.12c adds the cross-rail parent/slice protocol
+described below. Physical multirail and fault recovery remain unqualified. Connected host Direct reuse is scoped below.
 
 Before a post dispatch, all window slots become charged. A known `bad_wr`
 identity proves only an accepted prefix and an unposted suffix. A null/foreign
@@ -274,7 +278,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v10 explicitly rejects v1-v9; it is OrbitTE-only. A WRITE attempt is marked
+Wire v11 explicitly rejects v1-v10; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -1984,8 +1988,8 @@ later-stage acceptance remain open. OrbitKV integration remains deferred.
 ## Multiple contexts, device selection and request-level rails
 
 P4.12b consumes P4.12a's context-specific MR cache in the production transport.
-It implements dispatch across multiple contexts at request granularity. One
-request still owns one QP/grant path; it does not stripe a request across QPs.
+It introduced dispatch across multiple contexts at request granularity. P4.12c
+now adds eager publication and a cross-rail parent/slice protocol below.
 Two physical RNICs, circuit-breaker/failover behavior and full P4 remain unqualified.
 
 The reference is frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
@@ -1996,7 +2000,7 @@ The reference is frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
 | `quota.h` / `DeviceSelector::allocate` | `quota.rs` / `DeviceSelector::allocate` | Mask intersection, topology tiers and exact in-flight byte charging; equal loads rotate. This initial deterministic policy has no bandwidth EWMA or deadline prediction |
 | `RailMonitor::localDeviceMask`, NIC paths | `rail_monitor.rs`, `NicPath` | Compatible IB/RoCE type and GID family, same-name NIC affinity, bounded remote NIC/PD inventory; no cooldown/probe/half-open or physical reachability inference |
 | `RdmaContext`, `Workers`, `EndpointStore` | Existing context/worker/store owners, one set per enabled NIC | QP reuse and actual SQ/RQ CQ routing stay inside the selected context; TENT uses transport workers over its context set, while OrbitTE retains its existing per-context worker design |
-| `LocalBufferManager`, context-keyed `mem_reg_map` | Shared `LocalBufferManager` with actual-context MR keys | Every lazily acquired physical copy shares the aggregate MR limits. This does not implement TENT's eager all-context buffer publication |
+| `LocalBufferManager`, context-keyed `mem_reg_map` | Shared `LocalBufferManager` with actual-context MR keys | P4.12c prepares all enabled contexts before lookup publication, sharing aggregate MR limits across all physical copies |
 | `platform/cpu_probe.cpp`, `CpuPlatform::probe` | `platform/cpu_probe.rs` plus RDMA discovery/verbs | The filename comes directly from TENT. It discovers host NUMA/RNIC locality; it is not a CPU benchmark. Native provider access stays in the RDMA module |
 
 ```mermaid
@@ -2010,7 +2014,9 @@ flowchart TD
     T --> B[Context B: PD, key ledger, Workers, SQ/RQ CQs, EndpointStore]
     A --> M[LocalBufferManager: per-context physical MRs, aggregate limits]
     B --> M
-    S -. future: one request across several rails .-> F[Cross-rail slice completion]
+    S --> F[RdmaSlice: path selection and aggregate parent completion]
+    F --> A
+    F --> B
 ```
 
 `mod.rs` now declares the RDMA surface and modules. `rdma_transport.rs` owns
@@ -2040,7 +2046,7 @@ those pairs; otherwise it uses compatible paths in stable NIC order. Matching
 names/families is a routing policy, not proof that two fabric ports can connect.
 No compatible path or empty effective mask fails before local authority.
 
-Wire v10 sends a successful reply with `1..=64` fixed 187-byte path records
+Wire v11 sends a successful reply with `1..=64` fixed 187-byte path records
 after source epoch/range/permission admission and before HELLO. Each record has
 NIC ID (1), name length (1), zero-padded UTF-8 name (128), PD domain (16), GID
 type (1), and the existing 40-byte descriptor with zero address, key, QPN and
@@ -2130,3 +2136,130 @@ These are same-agent scoped regression/qualification runs. Independent review,
 the complete P4.8 native repeat, physical two-RNIC selection/striping/faults,
 eager all-context publication, GDR, performance and the complete P4 exit remain
 open. OrbitKV integration remains deferred until the P4 stage boundary.
+
+
+## Eager publication and cross-rail slice completion
+
+P4.12c implements these source paths. Source/CPU and the scoped native gates
+below pass; physical multi-RNIC and independent acceptance remain open. This does not complete P4.
+
+| Frozen TENT implementation | OrbitTE implementation | Deliberate boundary |
+| --- | --- | --- |
+| `buffers.cpp`, `LocalBufferManager::addBufferInternal` registers all enabled contexts before exposing keys, undoing newly created copies on error | `MemoryRegistry::register_host_batch` and `LocalBufferManager::publish` prepare every enabled PD before lookup visibility and duplicate-reference commit | Local-only and MW-bind capabilities remain separate. Published parent keys are never exported; failed cleanup retains the actual unpublished owner and budget |
+| `rdma_transport.cpp`, `planRdmaSlices`, `RdmaSlice` and task slice counters | `slice.rs::plan_rdma_slices`, `RdmaSlice` and the parent request's owned slice vector | Same bounded geometry and quarter-tail folding; success requires every slice's native and bound control receipt |
+| `workers.cpp`, `Workers::allocateDevices` and `generatePostPath` | `DeviceSelector::allocate` per slice; existing per-context `Workers::submit` and `wait` | Exact bytes stay charged through each grant's actual drain; no per-slice thread or automatic ambiguous-WRITE replay |
+
+The reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+The native TENT buffer code publishes context-indexed region rkeys. OrbitTE
+preserves its existing one-use exact-range MW authorization, bilateral QP
+incarnations and PD-lifetime key history. This is architecture correspondence,
+not TENT wire compatibility.
+
+### Registration visibility and rollback
+
+With host Direct policy, each new local-only view prepares one actual MR per
+enabled context. A remotely accessible view prepares two per context: a local
+MR and a separate `LOCAL_WRITE|MW_BIND` parent. Dispatch masks do not reduce
+this fan-out. Full-view count/bytes are aggregate, including temporary creation,
+closing and failed cleanup. Published active copies cannot be evicted.
+
+The registry preflights an entire batch, charges unpublished backing and burns
+registration IDs, then prepares native copies without holding the backing
+budget mutex. Lookup/descriptor visibility and duplicate-reference increments
+commit together only after preparation succeeds. Failure retires newly created
+copies across contexts/capabilities and preserves earlier published copies and
+reference counts. Unquiesced cleanup retains the real allocation, MR and PD,
+keeps their charges, and fences new native admission. Dropping a failed result
+does not manufacture a deregistration receipt. Final unregister retires all
+copies while outstanding slice borrows/loans keep their actual owners.
+
+### Parent protocol and progress
+
+Wire v11 adds `RdmaReadSlices=6` and `RdmaWriteSlices=7`. After the ordinary
+epoch/range/permission admission and NIC path table, the source sends a one-byte
+slice-window limit, bounded by its endpoint/CQ budgets and 64. The requester
+intersects that limit with its own budgets and access-lock capacity (64 host
+READ slices; 32 for WRITE or device-backed memory). Existing small/single-context
+requests retain the ordinary one-path operations, still on v11.
+
+One parent carries a count byte and 24 bytes per slice: relative offset (4),
+length (4), selected source PD domain (16). The source checks nonzero count,
+exact ordered coverage, lengths and advertised PDs before creating any endpoint
+authority. Each HELLO must retain that planned PD. Child binding/receipts use
+the existing exact-range READ/WRITE identities and fresh grant generations.
+
+One source control handler owns all children. It prepares every grant before
+the requester submits any payload. Existing per-context workers post the
+children concurrently, with independent QPs/WR identities and the existing
+aggregate budgets. Per-slice CQ completion, same-QP fenced completion messaging,
+source receive/invalidation and bound DONE/ACK/READY remain mandatory.
+Only an explicit pre-authority cache miss permits one fresh same-PD attempt.
+
+The parent contributes one completed request and its full byte count only after
+all children succeed. Cleanup visits every slice even if an earlier rail fails;
+one unquiesced rail prevents a parent drain claim and retains its exact loan,
+physical MR, WR debt and device-byte charge. Healthy siblings still retire.
+Failure can leave earlier slices changed. Source-staged WRITE copy-back occurs
+per successfully finished slice, so this is not an atomic multi-rail transaction.
+
+### P4.12c gates
+
+CPU controls cover READ/WRITE, all host Direct/Staged combinations, polling and
+event progress, repeated pair reuse, remote masks and a one-CQ window. Two paused
+context workers prove concurrent payload ownership. Concurrent unregister and
+close preserve exact loans until native drain. Malformed/incomplete plans and
+changed planned PDs fail before authority. A retained rail cannot be reported
+drained by its healthy sibling. Registration controls reject partial visibility,
+duplicate bumps, capability/context omissions and premature backing release.
+
+The selected native registration helper additionally prepares two actual PDs
+on one authorized RNIC: four published capability/context MRs, same-key reuse,
+idle/borrowed retirement, and a capacity-limited attempt that rolls back three
+actual MR registrations before the fourth copy. Public v11 connected/duplex
+regression uses one physical RNIC per host.
+
+Frozen source `14c0ace76456bb6d451f4e8d8caf0cd6a08f91b7` passes 17 sequential
+stable/Rust 1.85 source/build gates: formatting, default/RDMA/RDMA+CUDA Clippy
+and tests, both release binaries, and eight runner-supervision controls. Each
+toolchain passes 187 all-feature units, plus notification/process and doc tests.
+The source archive and explicit compiler/binding environment are recorded in
+`gates-14c0ace/manifest.json` under the artifact root below.
+
+Both binaries pass 48 two-host CPU DRAM/IPv6 RoCEv2 cases: eight two-PD
+publication/shared-CQ cases, sixteen actual CQ-error cases, sixteen actual
+partial-post cases, four public v11 connected-reuse cases and four duplex cases.
+All 96 peer processes and their supervisors are reaped with original NIC locks
+released. Sixteen registration helpers account for 32 actual PD constructions,
+64 published MR copies, 48 rolled-back MR copies and 112 native registration
+and deregistration receipts. Native maps and library hashes, node/boot identity,
+bytes/guards, child waits and resource locks are audited from raw evidence.
+
+The stable release binary SHA-256 is
+`41cb68da6124549ab7f8528c1e76b1fc00254214bfdcb61aa2f5b8500811d24f`;
+the Rust 1.85 binary is
+`aae4734efaa61fd217600914993ec95ff2ad93a236c00014772a35cd1a46ce8c`.
+The actual mapped providers are system `libibverbs.so.1.14.47.0` and
+`libmlx5.so.1.24.47.0`. These tests select no additional NIC or GPU.
+
+Four mutations in external frozen source copies omit all-context publication,
+publication rollback, the planned-PD guard or the last slice receipt. Every
+mutant is rejected at its target assertion, with no surviving mutant or test
+timeout. Initial log classifiers expected scalar rather than tuple MR counts,
+and a later MR assertion rather than the earlier retained-backing assertion.
+Both initial records and logs are preserved; the source mutations and test
+assertions were unchanged when correcting those classifiers.
+
+Reproduce source gates with the commands in the build guide, then build the
+release all-feature libtest binary with `cargo test --release --locked
+--features rdma,cuda --lib --no-run`. Use `tests/hardware/run.py` with an explicit
+identity-pinned external profile, binary and output directory, retaining the
+original NIC locks. `multi-context-profile.json`, `fragment-profile.json`,
+`partial-profile.json`, `connected-regression-profile.json` and
+`duplex-regression-profile.json` define the declared cases. A replacement
+machine/profile needs its own authorization and qualification; copying a
+hostname into a new profile does not reproduce this evidence.
+
+Source gates, frozen binaries, native logs and controls belong outside Git in
+`/root/orbitte-artifacts/rdma-multirail-20261024/`. Physical two-RNIC scheduling,
+striping/faults, GPU direct registration, performance and independent P4
+acceptance remain open. OrbitKV integration remains deferred.
