@@ -47,6 +47,8 @@ struct Trace {
     accepted_wr: BTreeSet<(usize, u32, u64)>,
     delivered_wr: BTreeSet<(usize, u32, u64)>,
     native_error_receipts: usize,
+    injected_error_receipts: usize,
+    error_statuses: BTreeMap<u32, usize>,
     accepted_receive: BTreeSet<(usize, u32, u64)>,
     delivered_receive: BTreeSet<(usize, u32, u64)>,
     source_rq_checks: usize,
@@ -397,7 +399,17 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
             "native CQE redelivery"
         );
         if completion.status != 0 {
-            assert_eq!(completion.status, ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR);
+            if trace.owners.iter().any(|owner| {
+                owner.qp == trace.injected_qp && owner.cq == cq && owner.qpn == completion.qpn
+            }) {
+                assert_eq!(
+                    completion.status,
+                    ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
+                    "the injected WR must have an actual remote-access-error CQE"
+                );
+                trace.injected_error_receipts += 1;
+            }
+            *trace.error_statuses.entry(completion.status).or_default() += 1;
             trace.native_error_receipts += 1;
         }
     }
@@ -627,7 +639,7 @@ pub(super) fn finish() {
                 (1, 2, shape.parents * shape.slices)
             );
             assert_eq!(trace.fault_debt.len(), 2);
-            assert_eq!(trace.native_error_receipts, 1);
+            assert_eq!(trace.injected_error_receipts, 1);
         } else {
             assert!(
                 trace
@@ -669,6 +681,15 @@ pub(super) fn finish() {
             trace.delivered_receive.len()
         );
     }
+    let statuses = trace
+        .error_statuses
+        .iter()
+        .map(|(status, count)| [*status, *count as u32])
+        .collect::<Vec<_>>();
+    println!(
+        "ORBITTE_NATIVE_ERRORS {{\"injected_wr_error_receipts\":{},\"all_error_receipts\":{},\"statuses\":{:?}}}",
+        trace.injected_error_receipts, trace.native_error_receipts, statuses
+    );
     trace.memory = None;
     trace.owners.clear();
     trace.injected_record = None;
