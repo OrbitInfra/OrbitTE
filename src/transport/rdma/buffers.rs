@@ -28,6 +28,7 @@ struct Entry {
     creating: bool,
     borrowers: usize,
     retiring: bool,
+    published: bool,
 }
 
 struct MemoryRegion {
@@ -71,6 +72,7 @@ pub(super) struct MrLease {
     cache: Arc<LocalBufferManager>,
     owner: Arc<MemoryRegion>,
     released: bool,
+    created: bool,
 }
 
 impl LocalBufferManager {
@@ -142,6 +144,7 @@ impl LocalBufferManager {
                     cache: Arc::clone(self),
                     owner,
                     released: false,
+                    created: false,
                 });
             }
             let mut usage = self
@@ -160,7 +163,7 @@ impl LocalBufferManager {
                 let index = cache
                     .entries
                     .iter()
-                    .position(|entry| !entry.creating && entry.borrowers == 0)
+                    .position(|entry| !entry.creating && entry.borrowers == 0 && !entry.published)
                     .ok_or(Error::ResourceExhausted)?;
                 let entry = cache.entries.remove(index);
                 cache.closing += 1;
@@ -198,6 +201,7 @@ impl LocalBufferManager {
                 creating: true,
                 borrowers: 1,
                 retiring: !memory.is_active(),
+                published: false,
             });
             drop(cache);
             let initialized = owner.open();
@@ -225,8 +229,89 @@ impl LocalBufferManager {
                 cache: Arc::clone(self),
                 owner,
                 released: false,
+                created: true,
             });
         }
+    }
+
+    pub(super) fn publish(
+        self: &Arc<Self>,
+        devices: &[Arc<RdmaContext>],
+        memories: &[RegisteredMemory],
+        deadline: Instant,
+    ) -> Result<()> {
+        let mut leases = Vec::new();
+        let result = (|| {
+            for memory in memories {
+                for device in devices {
+                    for window_bind in [false, true] {
+                        if window_bind && memory.permission() == crate::Permission::LocalOnly {
+                            continue;
+                        }
+                        leases
+                            .try_reserve(1)
+                            .map_err(|_| Error::ResourceExhausted)?;
+                        leases.push(self.acquire(
+                            Arc::clone(device),
+                            memory,
+                            window_bind,
+                            deadline,
+                        )?);
+                    }
+                }
+            }
+            let mut cache = self
+                .state
+                .lock()
+                .map_err(|_| Error::Internal("MR cache lock poisoned"))?;
+            if let Some((operation, code)) = cache.failure {
+                return Err(Error::Unquiesced { operation, code });
+            }
+            if cache.closed {
+                return Err(Error::Unavailable("MR cache is closed"));
+            }
+            if leases.iter().any(|lease| {
+                !cache
+                    .entries
+                    .iter()
+                    .any(|entry| Arc::ptr_eq(&entry.owner, &lease.owner))
+            }) {
+                return Err(Error::Internal("MR publication owner missing"));
+            }
+            for entry in &mut cache.entries {
+                if leases
+                    .iter()
+                    .any(|lease| Arc::ptr_eq(&entry.owner, &lease.owner))
+                {
+                    entry.published = true;
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let mut cache = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            for lease in &leases {
+                if lease.created {
+                    if let Some(entry) = cache
+                        .entries
+                        .iter_mut()
+                        .find(|entry| Arc::ptr_eq(&entry.owner, &lease.owner))
+                    {
+                        entry.retiring = true;
+                        entry.published = false;
+                    }
+                }
+            }
+        }
+        let mut result = result;
+        for lease in &mut leases {
+            if let Err(error) = lease.release() {
+                if result.is_ok() || matches!(error, Error::Unquiesced { .. }) {
+                    result = Err(error);
+                }
+            }
+        }
+        result
     }
 
     pub(crate) fn retire(&self, memory: &RegisteredMemory) -> Result<()> {

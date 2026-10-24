@@ -441,7 +441,7 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     let (mut peer, mut channel) = channels();
     channel.deadline = deadline(Duration::from_secs(1)).unwrap();
     thread::scope(|scope| {
-        let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory, 0, 8));
+        let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory));
         let paths = rail_monitor::read_paths(&mut peer, epoch).unwrap();
         Hello {
             requester: identity(9, 8, 7),

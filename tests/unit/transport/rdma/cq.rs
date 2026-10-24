@@ -293,7 +293,7 @@ unsafe extern "C" fn poll(
     unsafe { (BASE.poll)(h, completion) }
 }
 
-static VERBS: sys::Verbs = sys::Verbs {
+pub(in crate::transport::rdma) static VERBS: sys::Verbs = sys::Verbs {
     completion: Some(sys::CqEventVerbs {
         create: create_channel,
         get,

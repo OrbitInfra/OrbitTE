@@ -27,11 +27,22 @@ An explicit device/port/GID pin is strict. `RdmaConfig::new` selects port 1 and
 GID 0 explicitly; use `Default` and optional selectors for discovery. A nonempty
 whitelist takes precedence over the blacklist and still intersects a device
 pin. `device_mask` uses topology NIC IDs, including inert slots after failed
-construction. Inspect `TransferEngine::topology()` after first RDMA use.
+construction. Host Direct registration itself initializes contexts; inspect
+`TransferEngine::topology()` after registration or first RDMA use.
 
 Matching GID families or NIC names does not prove that two fabric ports can
 connect. The current implementation does not replay a failed transfer through
 another rail.
+
+## Host registration returns a native error or ResourceExhausted
+
+Host Direct registration prepares MRs on all enabled contexts before publishing
+the range. Check the original device error and count physical copies: one MR
+per context for local-only ranges, two per context for remotely accessible
+ranges. Both limits charge the full view for each copy. Published registrations
+cannot be evicted to fit a new range; retire unused registrations or adjust the
+aggregate count/byte budgets. A dispatch mask does not reduce publication fan-out.
+Registration errors do not automatically switch to staging.
 
 ## A peer is rejected after restart or protocol change
 

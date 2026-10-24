@@ -80,7 +80,10 @@ pub struct RdmaConfig {
     pub max_send_wr: usize,
     /// Capacity of each shared send/receive CQ (1..=4096), charged separately.
     pub max_cqes: usize,
+    /// Aggregate physical MR copies, including every enabled context/capability.
+    /// Published host Direct registrations are pinned until unregister or close.
     pub max_cached_mrs: usize,
+    /// Aggregate full-view bytes of every physical MR copy.
     pub max_cached_mr_bytes: usize,
     /// Historical MW indices retained without eviction until the PD is destroyed.
     pub max_window_key_indices: usize,

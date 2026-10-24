@@ -78,6 +78,29 @@ pub(super) fn registration() {
     let duplicate = registry
         .register_host(Arc::clone(&backing), 0, length, Permission::LocalOnly)
         .unwrap();
+    // Fail after three actual ibv_reg_mr receipts, before the fourth copy.
+    let mut limited = config.clone();
+    limited.max_cached_mrs = 3;
+    let rejected = buffers::LocalBufferManager::new(&limited, Arc::clone(&usage), &VERBS);
+    assert!(matches!(
+        rejected.publish(
+            &owners,
+            std::slice::from_ref(&memory),
+            Instant::now() + TIMEOUT
+        ),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(usage.lock().unwrap().persistent_mrs, 0);
+    assert!(NATIVE.get().unwrap().lock().unwrap().active.is_empty());
+    rejected.close(Instant::now() + TIMEOUT).unwrap();
+    cache
+        .publish(
+            &owners,
+            std::slice::from_ref(&memory),
+            Instant::now() + TIMEOUT,
+        )
+        .unwrap();
+    assert_eq!(usage.lock().unwrap().persistent_mrs, 4);
     let mut handles = Vec::new();
     let mut leases = Vec::new();
     for context in &owners {
@@ -114,7 +137,7 @@ pub(super) fn registration() {
     );
     assert_eq!(
         (stats.opened_persistent_mrs, stats.reused_persistent_mrs),
-        (4, 4)
+        (7, 8)
     );
     for lease in &mut leases[..2] {
         lease.release().unwrap();
@@ -164,11 +187,11 @@ pub(super) fn registration() {
             native.registrations,
             native.deregistrations
         ),
-        (2, 4, 4)
+        (2, 7, 7)
     );
     assert!(native.active.is_empty());
     println!(
-        "ORBITTE_MULTI_CONTEXT_MR {{\"contexts\":2,\"protection_domains\":2,\"registered_mrs\":4,\"reused_mrs\":4,\"peak_mr_bytes\":{},\"retired_idle_mrs\":2,\"retired_borrowed_mrs\":2,\"native_deregistration_receipts\":4,\"closed_contexts\":2,\"retained_mrs\":0,\"allocation_released\":true,\"same_rnic\":true}}",
+        "ORBITTE_MULTI_CONTEXT_MR {{\"contexts\":2,\"protection_domains\":2,\"registered_mrs\":7,\"published_mrs\":4,\"rolled_back_mrs\":3,\"reused_mrs\":8,\"peak_mr_bytes\":{},\"retired_idle_mrs\":2,\"retired_borrowed_mrs\":2,\"native_deregistration_receipts\":7,\"closed_contexts\":2,\"retained_mrs\":0,\"allocation_released\":true,\"same_rnic\":true}}",
         4 * length
     );
 }

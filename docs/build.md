@@ -28,6 +28,15 @@ CC=gcc CXX=g++ LIBCLANG_PATH=/usr/lib/llvm-18/lib \
 `libibverbs.so.1`. Each execution node also needs its RNIC provider, accessible
 uverbs character nodes, an active port and a compatible GID.
 
+With a configured RDMA engine and host Direct policy, host registration opens
+the enabled contexts and prepares all physical MR copies before returning a
+visible range. Native/device or MR-budget errors can therefore occur during
+registration. Each local-only view uses one full-view MR per enabled context;
+remotely accessible views use two per context (local-only and MW-bind parent).
+Published copies are not evicted while their registration is active. Size
+`max_cached_mrs` and `max_cached_mr_bytes` for this fan-out. Staged host policy
+and CUDA device registration do not eagerly register application backing.
+
 The current CI baseline is Ubuntu 24.04 with Clang 18. A different libclang can
 change generated bindings; use the declared baseline when reproducing a
 binding-layout failure. See [troubleshooting](troubleshooting.md).

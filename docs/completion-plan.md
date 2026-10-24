@@ -24,7 +24,8 @@ tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
 progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
 authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
 identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery, P4.9 optional CQ event progress and P4.1/P5.1 RDMA/CUDA staging
-paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
+paths. P4.12c adds eager multi-context publication and cross-rail slice ownership.
+P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
 Use these states for each substage and each claimed hardware profile:
@@ -717,7 +718,22 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   helper. Raw evidence stays outside Git. Physical two-RNIC dispatch, single-request striping, circuit-breaker/failover behavior
   and full P4 remain open. See
   [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
-- [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
+- [ ] **P4.12c — eager multi-context publication and cross-rail slices
+  (Implemented; source/CPU controls pass, native and independent qualification
+  recorded separately).** Prepare every enabled context's local/MW-bind MRs
+  before registry visibility or duplicate-reference commit. Failed batches
+  retire only newly created copies; failed native cleanup retains unpublished
+  backing and charges. Active published copies cannot be evicted. TENT's bounded
+  slice geometry and per-slice DeviceSelector feed the existing context workers.
+  One source handler prepares all exact-range grants before payload submission;
+  parent success requires every child's native and bound control receipts.
+  Cleanup visits all children and cannot mask one rail's retained DMA debt.
+  CPU controls cover all host Direct/Staged READ/WRITE combinations, both
+  progress modes, concurrent workers, masks/window limits, malformed plans,
+  changed planned PDs, unregister/close, publication rollback and retained loans.
+  Physical two-RNIC selection/striping/faults and independent acceptance remain
+  open. See [the contracts and TENT correspondence](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
+- [ ] Qualify multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
 - [ ] Extend P4.6's single-lane shared CQ/SQ quotas and persistent local MR
@@ -1030,9 +1046,10 @@ because the original selected stage's attempts terminated before that repeat.
 Complete that gate before accepting P4.8. P4.9-P4.12a have scoped implementation
 native evidence; independent acceptance remains open. P4.12b now connects
 multiple contexts, strict masks and request-level rail selection to the public
-data path; its declared single-RNIC native regressions now pass. Next implement
+data path; its declared single-RNIC native regressions now pass. P4.12c implements
 single-request cross-rail slice ownership/completion and eager multi-context
-registration publication. Physical multi-RNIC routing/fault gates need explicitly
+registration publication. Next qualify the real registration rollback and public
+v11 native regressions, then physical multi-RNIC routing/faults using explicitly
 selected NICs and resource locks. Keep the frozen TENT context/buffer/endpoint/
 worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.

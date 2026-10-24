@@ -11,7 +11,15 @@ OrbitTE distinguishes three states:
 A successful build or CPU fixture does not qualify physical DMA, a new fabric,
 GPU direct transfer or performance.
 
-## Current native RDMA evidence
+## Current source delivery
+
+P4.12c implements eager all-context host Direct MR publication and cross-rail
+slice ownership/completion. Source/CPU controls cover registration rollback,
+one source handler, concurrent context workers and exact retained-loan behavior.
+Its native profiles and independent acceptance remain separately qualified;
+see [the P4.12c gate contract](rdma-cuda.md#p412c-gates).
+
+## Previous native RDMA evidence
 
 The latest context-selection source, `4b3638c`, passes 13 sequential stable /
 Rust 1.85 source and build gates, with 179 all-feature unit tests per toolchain.
@@ -50,6 +58,7 @@ preserves those records and their limits.
 
 The [completion plan](completion-plan.md) owns the delivery sequence. Complete
 P4 before renewing OrbitKV integration. Outstanding work includes physical
-multi-RNIC selection, cross-rail request slicing, eager context registration
-publication, physical fault/shutdown controls and independent acceptance.
+multi-RNIC selection/slicing/fault qualification, physical shutdown controls
+and independent acceptance. The eager publication and cross-rail source paths
+are implemented; a missing hardware gate is not missing code.
 GDR and optional storage transports have their own stages.

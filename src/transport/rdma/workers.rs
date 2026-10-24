@@ -387,7 +387,7 @@ impl Workers {
         Ok(record)
     }
 
-    pub(super) fn transfer(
+    pub(super) fn submit(
         &self,
         record: &Arc<Record>,
         claim: u64,
@@ -443,7 +443,9 @@ impl Workers {
             });
             request.phase = Phase::Queued;
         }
-        self.wait(record, claim, deadline)
+        record.actions.fetch_or(WORK, Ordering::Release);
+        self.shared.signal();
+        Ok(())
     }
 
     pub(super) fn window(
@@ -685,7 +687,7 @@ impl Workers {
         self.wait(record, claim, deadline)
     }
 
-    fn wait(&self, record: &Arc<Record>, claim: u64, deadline: Instant) -> Result<()> {
+    pub(super) fn wait(&self, record: &Arc<Record>, claim: u64, deadline: Instant) -> Result<()> {
         record.actions.fetch_or(WORK, Ordering::Release);
         self.shared.signal();
         let mut request = record.lock()?;

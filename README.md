@@ -28,8 +28,10 @@ transports; a shared control service handles discovery, grants and receipts.
 Applications retain cache identity, recovery policy and replica ownership.
 
 **Under development.** TCP, host RDMA and synchronized NVIDIA host staging are
-implemented with scoped validation. Full TENT parity, cross-rail request
-striping, GPUDirect RDMA and optional SSD transports remain in development.
+implemented with scoped validation. Cross-rail request slicing and eager
+multi-context MR publication have source/CPU controls; physical multi-RNIC
+qualification remains open. Full TENT parity, GPUDirect RDMA and optional SSD
+transports remain in development.
 The published `orbit-te` alpha reserves the package identity; use the source
 checkout for the implementation described here.
 
@@ -41,9 +43,11 @@ checkout for the implementation described here.
   notifications share bounded admission and explicit completion contracts.
 - **Persistent RDMA resources.** Context-specific MRs, connected QP reuse,
   shared SQ/RQ CQs and per-context progress keep native resources with their
-  physical owners.
+  physical owners. Host Direct registration prepares all enabled contexts
+  before exposing a range.
 - **Topology-aware device selection.** Stable NIC IDs, device masks, NUMA
-  priorities and in-flight byte charges select a compatible rail per request.
+  priorities and in-flight byte charges select compatible paths per RDMA slice.
+  Parent completion requires every slice and its source receipt.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
   owned by native work. Failed cleanup retains its resources and charges.
 

@@ -120,7 +120,7 @@ fn finish(
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
     let cached = expect_direct;
-    let source_cached = role == "source" && cached;
+    let source_cached = cached;
     let idle = engine
         .stats()?
         .rdma
@@ -188,15 +188,20 @@ fn finish(
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
         || idle.async_event_workers != usize::from(transport == Transport::Rdma)
         || idle.progress_failures != 0
-        || idle.persistent_mrs != usize::from(cached)
-        || idle.persistent_mr_bytes != if cached { memory.len() } else { 0 }
-        || idle.opened_persistent_mrs != u64::from(cached)
-        || idle.reused_persistent_mrs != if cached { 5 } else { 0 }
+        || idle.persistent_mrs != 2 * usize::from(cached)
+        || idle.persistent_mr_bytes != if cached { 2 * memory.len() } else { 0 }
+        || idle.opened_persistent_mrs != 2 * u64::from(cached)
+        || idle.reused_persistent_mrs != if cached { 6 } else { 0 }
         || idle.evicted_persistent_mrs != 0
         || idle.retained_persistent_mrs != 0
         || idle.persistent_source_mrs != usize::from(source_cached)
         || idle.opened_source_mrs != u64::from(source_cached)
-        || idle.reused_source_mrs != if source_cached { 5 } else { 0 }
+        || idle.reused_source_mrs
+            != if source_cached && role == "source" {
+                6
+            } else {
+                0
+            }
         || idle.retained_source_mrs != 0
     {
         return Err(Error::Internal("persistent MR reuse counters differ"));
