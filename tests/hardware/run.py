@@ -146,6 +146,13 @@ class Controller:
         if type(cq_events) is not bool or (cq_events and (case['transport'] != 'rdma' or consumer)):
             raise ValueError('rdma_events requires a boolean native RDMA profile')
 
+        multi_context = case.get('rdma_multi_context', False)
+        if type(multi_context) is not bool or (multi_context and (
+                self.profile.get('runner') != 'orbitte-shared-cq' or case.get('duplex')
+                or case['transport'] != 'rdma'
+                or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu')):
+            raise ValueError('rdma_multi_context requires a boolean host shared-CQ profile')
+
         def command(node, role, kind, root, readiness=None):
             if shared:
                 if case['transport'] != 'rdma' or kind != 'cpu':
@@ -169,6 +176,8 @@ class Controller:
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
                 environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
+                if multi_context:
+                    environment['ORBITTE_RDMA_MULTI_CONTEXT'] = '1'
                 if discovery:
                     environment['ORBITTE_RDMA_DISCOVERY'] = '1'
                 if case.get('duplex'):

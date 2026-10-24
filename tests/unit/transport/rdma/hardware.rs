@@ -208,6 +208,9 @@ fn shared_cq_peer() {
         duplex_completion_peer();
         return;
     }
+    if env::var("ORBITTE_RDMA_MULTI_CONTEXT").as_deref() == Ok("1") {
+        multi_context::registration();
+    }
     // Keep readiness and JSON on their own lines after libtest's name prefix.
     println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();
@@ -1292,3 +1295,6 @@ mod fragmented;
 
 #[path = "partial.rs"]
 mod partial;
+
+#[path = "multi_context.rs"]
+mod multi_context;

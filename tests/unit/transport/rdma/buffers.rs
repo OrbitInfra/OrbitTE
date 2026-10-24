@@ -893,3 +893,309 @@ fn retirement_marks_every_capability_before_native_failure_can_interrupt_cleanup
         "retained parents never retry native cleanup"
     );
 }
+
+#[test]
+fn context_and_capability_select_distinct_physical_mrs_and_retire_every_copy() {
+    let registry = MemoryRegistry::new(SourceEpoch([21; 16]), 2, 16);
+    let backing = Arc::new(crate::HostMemory::new(vec![0x35; 16].into_boxed_slice()).unwrap());
+    let memory = registry
+        .register_host(Arc::clone(&backing), 0, 16, Permission::RemoteReadWrite)
+        .unwrap();
+    let duplicate = registry
+        .register_host(backing, 0, 16, Permission::LocalOnly)
+        .unwrap();
+    let first = limited_runtime("direct:ok", 4, 64);
+    let second = runtime("direct:ok");
+    let contexts = [first.device().unwrap(), second.device().unwrap()];
+    let cache = &first.registrations;
+    let mut leases = Vec::new();
+    let mut handles = Vec::new();
+    for context in &contexts {
+        for bind in [false, true] {
+            let lease = cache
+                .acquire(
+                    Arc::clone(context),
+                    &memory,
+                    bind,
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .unwrap();
+            let handle = lease.handle().unwrap();
+            assert!(
+                !handles.contains(&handle),
+                "a physical MR belongs to one context and capability"
+            );
+            handles.push(handle);
+            leases.push(lease);
+        }
+    }
+    for (index, context) in contexts.iter().enumerate() {
+        for (capability, bind) in [false, true].into_iter().enumerate() {
+            let same = cache
+                .acquire(
+                    Arc::clone(context),
+                    &memory,
+                    bind,
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .unwrap();
+            assert_eq!(same.handle().unwrap(), handles[2 * index + capability]);
+        }
+    }
+    let stats = first.stats().unwrap();
+    assert_eq!(
+        (
+            stats.persistent_mrs,
+            stats.persistent_source_mrs,
+            stats.persistent_mr_bytes
+        ),
+        (4, 2, 64)
+    );
+    assert_eq!(
+        (stats.opened_persistent_mrs, stats.reused_persistent_mrs),
+        (4, 4)
+    );
+    for lease in &mut leases[..2] {
+        lease.release().unwrap();
+    }
+    registry.unregister(&memory).unwrap();
+    cache.retire(&memory).unwrap();
+    assert_eq!(first.stats().unwrap().persistent_mrs, 4);
+    registry.unregister(&duplicate).unwrap();
+    cache.retire(&memory).unwrap();
+    assert_eq!(first.stats().unwrap().persistent_mrs, 2);
+    assert!(
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .all(|entry| entry.retiring)
+    );
+    for lease in &mut leases[2..] {
+        lease.release().unwrap();
+    }
+    assert_eq!(first.stats().unwrap().persistent_mr_bytes, 0);
+    drop(leases);
+    first
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    second
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}
+
+#[test]
+fn shared_mr_limits_charge_busy_copies_in_every_context() {
+    for (regions, bytes) in [(1, 32), (2, 31)] {
+        for bind in [false, true] {
+            let registry = MemoryRegistry::new(SourceEpoch([22; 16]), 1, 16);
+            let memory = registry
+                .register(vec![0; 16].into_boxed_slice(), Permission::RemoteReadWrite)
+                .unwrap();
+            let first = limited_runtime("direct:ok", regions, bytes);
+            let second = runtime("direct:ok");
+            let a = first.device().unwrap();
+            let b = second.device().unwrap();
+            let mut lease = first
+                .registrations
+                .acquire(a, &memory, bind, Instant::now() + Duration::from_secs(2))
+                .unwrap();
+            assert!(
+                matches!(
+                    first.registrations.acquire(
+                        b,
+                        &memory,
+                        bind,
+                        Instant::now() + Duration::from_secs(2)
+                    ),
+                    Err(Error::ResourceExhausted)
+                ),
+                "another PD cannot bypass the aggregate MR budget"
+            );
+            assert_eq!(first.stats().unwrap().persistent_mrs, 1);
+            lease.release().unwrap();
+            first
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
+            second
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_failed_context_registration_preserves_previous_context_owners() {
+    for bind in [false, true] {
+        for retain in [false, true] {
+            let fixture = crate::test_support::external_memory(&[0x26; 16]);
+            let registry = MemoryRegistry::new(SourceEpoch([23; 16]), 1, 16);
+            let memory = registry
+                .register_host(
+                    Arc::clone(&fixture.memory),
+                    0,
+                    16,
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap();
+            let first = limited_runtime("direct:ok", 2, 32);
+            let second = runtime(if retain {
+                "direct:register_fail_close1"
+            } else {
+                "direct:register_fail"
+            });
+            let a = first.device().unwrap();
+            let b = second.device().unwrap();
+            let weak_b = Arc::downgrade(&b);
+            let cache = &first.registrations;
+            let mut healthy = cache
+                .acquire(
+                    Arc::clone(&a),
+                    &memory,
+                    bind,
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .unwrap();
+            let handle = healthy.handle().unwrap();
+            let failure = cache.acquire(
+                Arc::clone(&b),
+                &memory,
+                bind,
+                Instant::now() + Duration::from_secs(2),
+            );
+            if retain {
+                assert!(matches!(failure, Err(Error::Unquiesced { .. })));
+                assert!(matches!(
+                    cache.acquire(a, &memory, bind, Instant::now() + Duration::from_secs(2)),
+                    Err(Error::Unquiesced { .. })
+                ));
+            } else {
+                assert!(matches!(
+                    failure,
+                    Err(Error::Backend {
+                        operation: "ibv_reg_mr",
+                        ..
+                    })
+                ));
+                let previous = cache
+                    .acquire(a, &memory, bind, Instant::now() + Duration::from_secs(2))
+                    .unwrap();
+                assert_eq!(previous.handle().unwrap(), handle);
+            }
+            assert_eq!(
+                healthy.handle().unwrap(),
+                handle,
+                "a different context's failure cannot revoke this borrow"
+            );
+            registry.unregister(&memory).unwrap();
+            assert_eq!(cache.retire(&memory).is_err(), retain);
+            healthy.release().unwrap();
+            assert_eq!(first.stats().unwrap().persistent_mrs, usize::from(retain));
+            assert_eq!(
+                first.stats().unwrap().retained_persistent_mrs,
+                usize::from(retain)
+            );
+            let events = events(&second);
+            let attempts = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    **event
+                        == if bind {
+                            "deregister_parent"
+                        } else {
+                            "deregister_local"
+                        }
+                })
+                .count();
+            assert_eq!(attempts, 1);
+            assert_eq!(
+                cache
+                    .close(Instant::now() + Duration::from_secs(2))
+                    .is_err(),
+                retain
+            );
+            drop(b);
+            drop(second);
+            drop(healthy);
+            drop(memory);
+            drop(fixture.memory);
+            assert_eq!(weak_b.upgrade().is_some(), retain);
+            assert_eq!(fixture.owner.upgrade().is_some(), retain);
+            if retain {
+                assert_eq!(
+                    events
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| **event
+                            == if bind {
+                                "deregister_parent"
+                            } else {
+                                "deregister_local"
+                            })
+                        .count(),
+                    1,
+                    "retained native cleanup is never retried"
+                );
+            } else {
+                first
+                    .close(Instant::now() + Duration::from_secs(2))
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn creating_mrs_in_different_contexts_do_not_share_a_registration_wait() {
+    let registry = MemoryRegistry::new(SourceEpoch([24; 16]), 1, 16);
+    let memory = registry
+        .register(vec![0; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let first = limited_runtime("direct:register_pause", 2, 32);
+    let second = runtime("direct:ok");
+    let a = first.device().unwrap();
+    let b = second.device().unwrap();
+    let pause = crate::transport::rdma::tests::pause(&first);
+    let cache = Arc::clone(&first.registrations);
+    let task_memory = memory.clone();
+    let task = std::thread::spawn(move || {
+        cache.acquire(
+            a,
+            &task_memory,
+            false,
+            Instant::now() + Duration::from_secs(5),
+        )
+    });
+    let (lock, changed) = &*pause;
+    let (state, timed) = changed
+        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |state| {
+            !state.0
+        })
+        .unwrap();
+    assert!(!timed.timed_out() && state.0);
+    drop(state);
+    let other =
+        first
+            .registrations
+            .acquire(b, &memory, false, Instant::now() + Duration::from_secs(2));
+    lock.lock().unwrap().1 = true;
+    changed.notify_all();
+    let mut original = task.join().unwrap().unwrap();
+    let mut other = other.expect("a different PD must not wait for this registration");
+    assert_ne!(original.handle().unwrap(), other.handle().unwrap());
+    registry.unregister(&memory).unwrap();
+    first.registrations.retire(&memory).unwrap();
+    original.release().unwrap();
+    other.release().unwrap();
+    first
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    second
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}

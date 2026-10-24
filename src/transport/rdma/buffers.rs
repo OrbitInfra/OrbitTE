@@ -31,6 +31,7 @@ struct Entry {
 }
 
 struct MemoryRegion {
+    context: Weak<RdmaContext>,
     key: Weak<crate::memory::Registration>,
     window_bind: bool,
     state: Mutex<State>,
@@ -95,6 +96,7 @@ impl LocalBufferManager {
         window_bind: bool,
         deadline: Instant,
     ) -> Result<MrLease> {
+        let context = Arc::downgrade(&device);
         loop {
             let mut cache = self
                 .state
@@ -108,7 +110,9 @@ impl LocalBufferManager {
             }
             remaining(deadline)?;
             if let Some(index) = cache.entries.iter().position(|entry| {
-                entry.owner.matches(memory) && entry.owner.window_bind == window_bind
+                Weak::ptr_eq(&entry.owner.context, &context)
+                    && entry.owner.matches(memory)
+                    && entry.owner.window_bind == window_bind
             }) {
                 if cache.entries[index].creating {
                     drop(
@@ -177,6 +181,7 @@ impl LocalBufferManager {
             usage.persistent_mr_bytes = bytes;
             drop(usage);
             let owner = Arc::new(MemoryRegion {
+                context: context.clone(),
                 key: Arc::downgrade(&memory.0),
                 window_bind,
                 state: Mutex::new(State::Open(Box::new(Resources {
@@ -236,7 +241,7 @@ impl LocalBufferManager {
             if memory.is_active() {
                 return Ok(());
             }
-            // One registration can have local and MW-bind entries; revoke both.
+            // Retire every context and capability for this registration identity.
             for entry in &mut cache.entries {
                 if entry.owner.matches(memory) {
                     entry.retiring = true;
