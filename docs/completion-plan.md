@@ -698,8 +698,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   striping and the complete P4 exit remain open. See
   [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
 - [ ] **P4.12b — context set, DeviceSelector and request-level rail routing
-  (Implemented; source/CPU gates pass, native regression and independent
-  acceptance pending).** Keep topology NIC IDs stable across clean construction
+  (Implemented; source/CPU and scoped native regression gates pass,
+  independent acceptance and two-physical-RNIC qualification pending).** Keep topology NIC IDs stable across clean construction
   failures. Each enabled NIC owns its actual PD/key ledger, shared SQ/RQ CQs,
   progress worker and endpoint store. Wire v10 advertises bounded NIC/PD paths
   before authority; device masks, compatible GID profiles, name affinity,
@@ -708,9 +708,13 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Exact device-byte leases survive failed native cleanup. MR, connection,
   message and outstanding-WR budgets remain aggregate. Idle eviction crosses
   contexts, while a worker fault only debits its own idle store. Close fences
-  every context and preserves partial-construction retained PDs. CPU controls
-  cover the public data path, ownership, masks and wire rejection. Physical
-  two-RNIC dispatch, single-request striping, circuit-breaker/failover behavior
+  every context and preserves partial-construction retained PDs. Source
+  `4b3638c` passes 13 stable/MSRV source/build gates (179 all-feature unit tests
+  per toolchain) and 48 two-host CPU DRAM/IPv6 RoCEv2 regression cases. All
+  96 peers exit with original locks released; three CPU mutations reject ignored
+  masks, compacted NIC slots and removed cached-PD guards. These are same-agent
+  gates on one selected RNIC per host, including the earlier two-PD registration
+  helper. Raw evidence stays outside Git. Physical two-RNIC dispatch, single-request striping, circuit-breaker/failover behavior
   and full P4 remain open. See
   [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
@@ -1026,7 +1030,7 @@ because the original selected stage's attempts terminated before that repeat.
 Complete that gate before accepting P4.8. P4.9-P4.12a have scoped implementation
 native evidence; independent acceptance remains open. P4.12b now connects
 multiple contexts, strict masks and request-level rail selection to the public
-data path. Qualify its current single-RNIC regressions, then implement
+data path; its declared single-RNIC native regressions now pass. Next implement
 single-request cross-rail slice ownership/completion and eager multi-context
 registration publication. Physical multi-RNIC routing/fault gates need explicitly
 selected NICs and resource locks. Keep the frozen TENT context/buffer/endpoint/

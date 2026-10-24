@@ -2079,5 +2079,54 @@ Source/CPU tests cover inert slots, masks, topology tiers, concurrent byte
 charges/overflow, public READ/WRITE across contexts, PD-local QP reuse, all-MR
 retirement, cross-context eviction and fault accounting. Protocol controls
 reject path authority, duplicate identities, stale PD replacement and old
-grant receipts. Native regression and independent acceptance are separate
-gates; CPU fixtures do not qualify physical multirail.
+grant receipts. CPU fixtures do not qualify physical multirail. The frozen source and scoped
+native regression evidence below remain separate from independent acceptance.
+
+
+### Scoped P4.12b validation
+
+Frozen code `4b3638cd7e241beb4e665439d238d21fe3a6d0b2` passes 13 sequential
+stable/Rust 1.85 source/build gates: formatting, RDMA and RDMA/CUDA Clippy/tests,
+both frozen release test binaries and eight runner-supervision controls. Each
+toolchain passes 179 all-feature unit tests. Three mutation controls reject an
+ignored device mask, compacted context slots and omitted cached-PD guard at the
+specific selection/identity assertions. The last control initially expected a
+later grant-count failure; the unchanged mutant is rejected earlier when it
+sends a reused HELLO after a replacement PD table. The initial classifier
+record and both assertion logs remain archived.
+
+Both release binaries pass 48 two-host CPU DRAM/IPv6 RoCEv2 regression cases
+in total: 8 per-context MR helper/shared-CQ cases, 16 fragmented-CQ error cases,
+16 real partial-post cases, 4 connected reuse cases and 4 duplex cases. The
+connected/duplex cases consume the public wire v10 path-table bootstrap. The
+native error and partial-post cases preserve the existing actual-DMA drain
+contracts. Each group includes both declared progress modes/directions.
+All 96 peers and their supervisors are reaped, original NIC locks are released,
+actual mapped verbs/provider libraries are checked and no GPU compute process
+is left on either node.
+
+The registration helper constructs two actual PDs on the same selected RNIC.
+Across 16 helper invocations, receipts account for 32 actual PDs and 64 native
+MR registrations/deregistrations. This checks physical context-specific MR
+ownership alongside the transport regressions; it does not qualify dispatch
+over two physical RNICs. No additional NIC or GPU is selected.
+
+The stable binary SHA-256 is
+`564fbf04d31e489562852bf64c3aa979c387399dfcefa03e45f81cd43a20aa2f`;
+the Rust 1.85 binary is
+`083c4b7c131a1512a3446e831408ab6df877067830d086806a969f9846501d35`.
+Native maps resolve `/usr/lib/x86_64-linux-gnu/libibverbs.so.1.14.47.0`
+and `libmlx5.so.1.24.47.0`; node-side hashes and full process/lock receipts are
+archived. Binding version and installed provider version are separate facts.
+
+Raw source/build manifests, native cases, cleanup receipts, controls and failed
+development/setup records remain outside Git at
+`/root/orbitte-artifacts/rdma-device-selector-20261024/`. The maintained
+`tests/hardware/run.py` and `supervise.py` own the declared native gate. The
+final delivery manifest binds documentation-only delivery changes to these
+frozen operational sources/binaries.
+
+These are same-agent scoped regression/qualification runs. Independent review,
+the complete P4.8 native repeat, physical two-RNIC selection/striping/faults,
+eager all-context publication, GDR, performance and the complete P4 exit remain
+open. OrbitKV integration remains deferred until the P4 stage boundary.

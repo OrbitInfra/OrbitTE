@@ -107,7 +107,8 @@ compatible paths, strict device masks, topology ranks and in-flight byte charges
 select one rail per request. Requests can rotate across contexts while QPs and
 MRs remain attached to their actual PD. Global budgets and fail-closed teardown
 remain shared. Single-request striping, two-physical-RNIC qualification,
-independent acceptance and full P4 remain open. See the
+independent acceptance and full P4 remain open. Its scoped stable/MSRV source
+gates and 48-case two-host single-RNIC native regression pass. See the
 [current architecture and TENT mapping](docs/rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
