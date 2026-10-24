@@ -815,6 +815,19 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   RQ-credit return in polling/event modes. These are same-agent scoped gates;
   full P4 and independent acceptance remain open. See
   [the geometry contract and evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+- [ ] **P4.12h — native QP errors, lost CQEs and process restart
+  (Implemented; declared native gates pending, physical port/device gate open).**
+  Give all slices in one parent's teardown an independent thirty-second
+  destruction deadline, matching frozen TENT's endpoint destroy window. An
+  expired data deadline remains a transfer failure; only actual native teardown
+  releases admission and backing. Add actual QP ERR/query/flush, deliberately
+  dropped successful SQ/RQ CQEs, and direct-child SIGKILL/restart fixtures.
+  Keep both original RNIC locks through old-child reap and replacement exit;
+  rebind the same public RPC address and reject the old source epoch before
+  new QPs. New epochs resume READ/WRITE and connected reuse in fresh processes.
+  The selected containers lack CAP_NET_ADMIN, so physical port/device-down
+  remains unqualified. Runtime gates and independent acceptance are recorded
+  separately from implementation.
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, lost completion, native cleanup failure and process

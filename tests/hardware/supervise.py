@@ -3,6 +3,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import socket
 import subprocess
@@ -37,24 +38,62 @@ def supervise(config_path):
         # Protect direct peer connections from process-wide HTTP proxy settings.
         for name in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
             environment.pop(name, None)
+        restart = config.get('restart_role')
+        if restart is not None and restart not in ('source', 'requester'):
+            raise ValueError('restart_role must name the configured native peer')
         result['command'] = [str(binary), *config['arguments']]
-        with (root / 'stdout.log').open('wb') as stdout, (root / 'stderr.log').open('wb') as stderr:
-            process = subprocess.Popen(result['command'], stdout=stdout, stderr=stderr, env=environment)
-            result['native_pid'] = process.pid
-            write(root / 'running.json', result)
-            try:
-                result['exit_code'] = process.wait(timeout=config['timeout_seconds'])
-            except subprocess.TimeoutExpired:
-                result['timeout'] = True
-                # Only this direct child belongs to this test. Never kill job
-                # resource holders, arbitrary groups or a discovered process.
-                process.terminate()
+        phases = []
+        for generation in range(2 if restart else 1):
+            if restart:
+                environment['ORBITTE_RESTART_GENERATION'] = str(generation)
+                environment['ORBITTE_RESTART_ROOT'] = str(root)
+            mode = 'ab' if restart else 'wb'
+            with (root / 'stdout.log').open(mode) as stdout, (root / 'stderr.log').open(mode) as stderr:
+                process = subprocess.Popen(result['command'], stdout=stdout, stderr=stderr, env=environment)
+                result['native_pid'] = process.pid
+                if restart:
+                    result['generation'] = generation
+                write(root / 'running.json', result)
+                intentional = False
                 try:
-                    result['exit_code'] = process.wait(timeout=5)
+                    if restart == 'source' and generation == 0:
+                        deadline = time.monotonic() + config['timeout_seconds']
+                        marker = root / 'restart-request.txt'
+                        while process.poll() is None:
+                            if marker.exists():
+                                fields = marker.read_text().split()
+                                if len(fields) != 4 or int(fields[0]) != process.pid:
+                                    raise RuntimeError('restart marker does not identify this direct child')
+                                # The Popen handle owns this child. Keep both leases
+                                # through waitpid and the complete second process.
+                                process.kill()
+                                intentional = True
+                                break
+                            if time.monotonic() >= deadline:
+                                raise subprocess.TimeoutExpired(result['command'], config['timeout_seconds'])
+                            time.sleep(0.01)
+                    result['exit_code'] = process.wait(timeout=config['timeout_seconds'])
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    result['exit_code'] = process.wait(timeout=5)
-        result['status'] = 'passed' if result['exit_code'] == 0 else 'failed'
+                    result['timeout'] = True
+                    process.terminate()
+                    try:
+                        result['exit_code'] = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        result['exit_code'] = process.wait(timeout=5)
+            if restart:
+                phases.append(dict(generation=generation, native_pid=process.pid,
+                                   exit_code=result['exit_code'], child_reaped=True,
+                                   intentional_sigkill=intentional))
+                if (root / 'maps.txt').exists():
+                    shutil.copy2(root / 'maps.txt', root / ('maps-' + str(generation) + '.txt'))
+                write(root / 'restart.json', dict(phases=phases, locks_held=True))
+                result['phases'] = phases
+            expected = -9 if restart == 'source' and generation == 0 else 0
+            passed = result['exit_code'] == expected and (expected != -9 or intentional) and not result.get('timeout')
+            result['status'] = 'passed' if passed else 'failed'
+            if not passed:
+                break
     except Exception as error:
         result.update(status='failed', error=str(error))
     finally:

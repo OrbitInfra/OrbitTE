@@ -2793,3 +2793,52 @@ cleanup failure and process restart/death remain unqualified. Independent
 acceptance (including the earlier P4.8 repeat), installed-consumer qualification,
 full P4, GPUDirect and performance remain open. OrbitKV integration stays
 deferred until the P4 stage boundary is accepted.
+
+## Native endpoint faults, lost completions and restart
+
+P4.12h keeps the frozen TENT context/buffer/endpoint/worker boundaries and wire
+v12. TENT `RdmaEndPoint::beginDestroyNoLock` transitions owned QPs to ERR;
+`finishDestroy` waits for WR depth/notification debt using the separate
+`kFinishDestroyTimeoutSec = 30.0` window before deconstruction. The reference is
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+
+OrbitTE's `close_slices` now gives all endpoints in one parent's cleanup one
+fresh thirty-second destruction deadline. Previously an exhausted data deadline
+could make successful native teardown return Unquiesced, permanently retaining
+the surrounding requester or source admission. The transfer still fails when
+its data deadline expires. Validated QP/CQ teardown must complete before its
+owners return; actual unproven teardown still quarantines them. This destruction
+window can extend a failed operation beyond its data deadline by up to thirty
+seconds. Native provider calls remain non-preemptible. There is no WRITE replay,
+fabricated CQE or implicit transport retry.
+
+Private native fixtures extend the eight-parent 5 MiB/folded profiles:
+
+- `large-qp-error` / `folded-qp-error` query a real process-owned QP in ERR,
+  submit an actual two-WR window and require native flush CQEs. This is an
+  endpoint-state fault, separately scoped from physical port or device loss.
+- `large-lost-send-cqe` / `folded-lost-send-cqe` consume one actual successful
+  payload CQE without delivering it to the worker. Its exact CQ/QPN/WR debt,
+  direct loan and MR must survive through native CQ destruction.
+- `large-lost-recv-cqe` / `folded-lost-recv-cqe` drop an actual successful source
+  completion receive. The source RQ credit, receive debt and exact grant remain
+  owned until the corresponding native barrier.
+- `large-peer-exit` kills only the supervisor's own source child after eight
+  parents hold forty real grants. Both NIC leases remain held through waitpid
+  and replacement exit. A fresh source process rebinds the same RPC address;
+  a fresh requester process rejects the old descriptor and RDMA operation with
+  EpochMismatch before any new QP or remote effect. Both then run two healthy
+  READ/WRITE rounds with real forty-QP reuse and different payload generations.
+
+Operation timeouts and process death trigger cleanup; neither is a drain
+receipt. The killed source has no in-process zero-counter claim. Its supervisor
+records intentional SIGKILL, waitpid and continuous leases; surviving/fresh
+processes must prove their own actual native teardown and allocation lifetime.
+Restart uses fresh processes and explicit descriptors; transparent recovery of
+a poisoned live engine and automatic replay are outside this profile.
+
+Physical port/device-down is not executed: both selected containers report
+CAP_NET_ADMIN absent. That gate needs an isolated authorized RNIC operation path
+and remains open. GPU/GDR, independent acceptance and the full P4 exit remain
+open. OrbitKV integration stays deferred. Executed gates will be recorded here
+after the frozen source and native matrices settle.

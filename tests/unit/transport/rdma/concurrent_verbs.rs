@@ -26,6 +26,9 @@ struct Trace {
     injected_qp: usize,
     injected_wr: Option<(usize, u32, u64)>,
     injected_window: usize,
+    qp_errors: usize,
+    lost_completions: usize,
+    lost_receive: bool,
     injected_parent: Option<usize>,
     injected_record: Option<Arc<Record>>,
     held_cqes: BTreeMap<usize, VecDeque<sys::Completion>>,
@@ -151,6 +154,13 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
             .len(),
         trace.shape.parents * trace.shape.slices
     );
+    if trace.requester && trace.mode.ends_with("peer-exit") {
+        trace.failed_cqs = trace
+            .owners
+            .iter()
+            .flat_map(|owner| [owner.cq, owner.receive_cq])
+            .collect();
+    }
     for nic in 0..2 {
         let count = trace.owners.iter().filter(|owner| owner.nic == nic).count();
         if trace.shape.parents == 8 {
@@ -162,6 +172,10 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
             assert_eq!(count, trace.shape.parents * trace.shape.slices / 2);
         }
     }
+}
+
+pub(super) fn arm() {
+    TRACE.get().unwrap().lock().unwrap().armed = true;
 }
 
 pub(super) fn release() {
@@ -263,7 +277,7 @@ unsafe extern "C" fn post(
         let inject = trace.armed
             && trace.injected == 0
             && nic == trace.fault_rail
-            && trace.mode.ends_with("cq-error")
+            && (trace.mode.ends_with("cq-error") || trace.mode.ends_with("qp-error"))
             && (shape.parents != 8 || count == 2);
         if inject {
             trace.injected = 1;
@@ -288,6 +302,53 @@ unsafe extern "C" fn post(
         trace.posts += 1;
         (parent, slice, inject)
     };
+    if inject
+        && TRACE
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .mode
+            .ends_with("qp-error")
+    {
+        let mut attributes = ffi::ibv_qp_attr {
+            qp_state: ffi::ibv_qp_state::IBV_QPS_ERR,
+            ..Default::default()
+        };
+        assert_eq!(
+            unsafe {
+                ffi::ibv_modify_qp(
+                    (*h).qp.cast(),
+                    &mut attributes,
+                    ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
+                )
+            },
+            0
+        );
+        let mut observed = ffi::ibv_qp_attr::default();
+        let mut initial = ffi::ibv_qp_init_attr::default();
+        assert_eq!(
+            unsafe {
+                ffi::ibv_query_qp(
+                    (*h).qp.cast(),
+                    &mut observed,
+                    ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
+                    &mut initial,
+                )
+            },
+            0
+        );
+        assert_eq!(observed.qp_state, ffi::ibv_qp_state::IBV_QPS_ERR);
+        TRACE.get().unwrap().lock().unwrap().qp_errors += 1;
+    }
+    let bad_key = inject
+        && TRACE
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .mode
+            .ends_with("cq-error");
     let code = unsafe {
         (sys::REAL.post)(
             h,
@@ -297,13 +358,19 @@ unsafe extern "C" fn post(
             local,
             length,
             remote,
-            if inject { rkey ^ 0x4000_0000 } else { rkey },
+            if bad_key { rkey ^ 0x4000_0000 } else { rkey },
             write,
             result,
         )
     };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     let accepted = unsafe { (*result).accepted };
+    if inject && trace.mode.ends_with("qp-error") {
+        assert_eq!(
+            accepted, count,
+            "the ERR QP must accept the actual flush window"
+        );
+    }
     for request in unsafe { std::slice::from_raw_parts(requests, accepted) } {
         assert_eq!(
             request.offset as usize, trace.accepted[parent][slice],
@@ -383,6 +450,9 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
             if let Some(completion) = trace.held_cqes.entry(cq).or_default().pop_front() {
                 unsafe { out.write(completion) };
                 trace.delivered_held += 1;
+                if lose_completion(&mut trace, cq, unsafe { &*out }) {
+                    return 0;
+                }
                 delivered(&mut trace, cq, unsafe { &*out });
                 return 1;
             }
@@ -399,10 +469,53 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
         0
     } else {
         if code == 1 {
+            if lose_completion(&mut trace, cq, unsafe { &*out }) {
+                return 0;
+            }
             delivered(&mut trace, cq, unsafe { &*out });
         }
         code
     }
+}
+
+fn lose_completion(trace: &mut Trace, cq: usize, completion: &sys::Completion) -> bool {
+    let receive = !trace.requester && trace.mode.ends_with("lost-recv-cqe");
+    let send = trace.requester && trace.mode.ends_with("lost-send-cqe");
+    let id = (cq, completion.qpn, completion.id);
+    if !trace.armed
+        || trace.injected != 0
+        || completion.status != 0
+        || !(receive || send)
+        || !(if receive {
+            trace.accepted_receive.contains(&id)
+        } else {
+            trace.accepted_wr.contains(&id)
+        })
+    {
+        return false;
+    }
+    let Some(owner) = trace.owners.iter().find(|owner| {
+        owner.nic == trace.fault_rail
+            && owner.qpn == completion.qpn
+            && (owner.cq == cq || owner.receive_cq == cq)
+    }) else {
+        return false;
+    };
+    trace.injected = 1;
+    trace.injected_qp = owner.qp;
+    trace.injected_wr = Some(id);
+    trace.injected_window = 1;
+    trace.injected_record = Some(Arc::clone(&owner.record));
+    let request = owner.record.lock().unwrap();
+    let grant = request.resources.as_ref().unwrap().grant().unwrap();
+    let offset = (grant.buffer.address().as_ptr() as u64
+        - trace.memory.as_ref().unwrap().base_address()) as usize;
+    trace.injected_parent = Some(offset / trace.shape.bank);
+    drop(request);
+    trace.failed_cqs = [owner.cq, owner.receive_cq].into();
+    trace.lost_completions = 1;
+    trace.lost_receive = receive;
+    true
 }
 
 fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
@@ -431,8 +544,12 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
             if trace.injected_wr == Some((cq, completion.qpn, completion.id)) {
                 assert_eq!(
                     completion.status,
-                    ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
-                    "the injected WR must have an actual remote-access-error CQE"
+                    if trace.mode.ends_with("qp-error") {
+                        ffi::ibv_wc_status::IBV_WC_WR_FLUSH_ERR
+                    } else {
+                        ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR
+                    },
+                    "the injected WR must receive its own native error"
                 );
                 trace.injected_error_receipts += 1;
             }
@@ -517,7 +634,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         trace.source_rq_checks += checked;
         trace.source_pending_rq_checks += pending;
     }
-    if observed {
+    if observed && trace.requester {
         let mut checked = 0;
         let mut live = 0;
         let mut drained = 0;
@@ -525,7 +642,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         for owner in trace
             .owners
             .iter()
-            .filter(|owner| owner.nic == trace.fault_rail)
+            .filter(|owner| owner.cq == cq || owner.receive_cq == cq)
         {
             checked += 1;
             assert!(
@@ -552,7 +669,10 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 debt, expected,
                 "admitted parent lost unresolved WR debt before shared CQ drain"
             );
-            let injected = Arc::ptr_eq(&owner.record, trace.injected_record.as_ref().unwrap());
+            let injected = trace
+                .injected_record
+                .as_ref()
+                .is_some_and(|record| Arc::ptr_eq(&owner.record, record));
             if let Some(grant) = request
                 .resources
                 .as_ref()
@@ -592,7 +712,11 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 }
                 drained += 1;
             }
-            if Arc::ptr_eq(&owner.record, trace.injected_record.as_ref().unwrap()) {
+            if trace
+                .injected_record
+                .as_ref()
+                .is_some_and(|record| Arc::ptr_eq(&owner.record, record))
+            {
                 bad_debt = Some(debt);
             }
         }
@@ -601,11 +725,18 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
             trace
                 .owners
                 .iter()
-                .filter(|owner| owner.nic == trace.fault_rail)
+                .filter(|owner| owner.cq == cq || owner.receive_cq == cq)
                 .count()
         );
-        let debt = bad_debt.unwrap();
-        if trace.shape.parents == 8 {
+        let debt = bad_debt.unwrap_or(0);
+        if trace.mode.ends_with("peer-exit") {
+            assert!(trace.injected_record.is_none());
+        } else if trace.mode.ends_with("lost-send-cqe") {
+            assert_eq!(
+                debt, 1,
+                "the dropped native CQE must remain charged until CQ drain"
+            );
+        } else if trace.shape.parents == 8 {
             assert_eq!(trace.injected_window, 2);
             assert!(
                 debt < trace.injected_window,
@@ -621,6 +752,16 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         trace.owner_checks += checked;
         trace.live_owner_checks += live;
         trace.drained_owner_checks += drained;
+    }
+    if observed && trace.lost_receive {
+        let owner = trace.injected_record.as_ref().unwrap().lock().unwrap();
+        let receive = owner.receive.as_ref().unwrap();
+        assert!(
+            receive.pending() && receive.credits.is_some(),
+            "a dropped receive CQE lost its credit before native CQ drain"
+        );
+        drop(owner);
+        trace.fault_debt.push(1);
     }
     let code = unsafe { (sys::REAL.destroy_cq)(h) };
     if code == 0 {
@@ -675,7 +816,12 @@ pub(super) fn finish() {
     assert!(trace.held_cqes.values().all(VecDeque::is_empty));
     if trace.requester {
         assert!(trace.delivered_held > 0);
-        if trace.mode.ends_with("cq-error") {
+        if trace.mode.ends_with("peer-exit") {
+            assert_eq!(
+                (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
+                (0, 4, 2 * shape.parents * shape.slices)
+            );
+        } else if is_fault(&trace.mode) && !trace.mode.ends_with("lost-recv-cqe") {
             assert_eq!(
                 (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
                 (
@@ -689,8 +835,11 @@ pub(super) fn finish() {
                 )
             );
             assert_eq!(trace.fault_debt.len(), 2);
-            assert_eq!(trace.injected_error_receipts, 1);
-        } else {
+            assert_eq!(
+                trace.injected_error_receipts,
+                usize::from(!trace.mode.ends_with("lost-send-cqe"))
+            );
+        } else if !is_fault(&trace.mode) {
             for (parent, row) in trace.accepted.iter().enumerate() {
                 for (index, accepted) in row.iter().enumerate() {
                     assert_eq!(*accepted, shape.range(index).len());
@@ -733,6 +882,29 @@ pub(super) fn finish() {
             trace.delivered_receive.len()
         );
     }
+    if trace.mode.ends_with("lost-recv-cqe") && !trace.requester {
+        assert_eq!(
+            (
+                trace.injected,
+                trace.failed_cq_receipts,
+                trace.lost_completions
+            ),
+            (1, 2, 1)
+        );
+        assert_eq!(trace.fault_debt, [1, 1]);
+    }
+    println!(
+        "ORBITTE_NATIVE_FAULT {{\"requester\":{},\"qp_err_transitions\":{},\"lost_cqes\":{},\"lost_receive\":{},\"target\":{:?},\"debt_before_cq\":{:?}}}",
+        trace.requester,
+        trace.qp_errors,
+        trace.lost_completions,
+        trace.lost_receive,
+        trace
+            .injected_wr
+            .map(|(cq, qpn, id)| [cq as u64, qpn as u64, id])
+            .unwrap_or([0; 3]),
+        trace.fault_debt
+    );
     let statuses = trace
         .error_statuses
         .iter()
