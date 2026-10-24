@@ -6,6 +6,7 @@ project = "OrbitTE"
 author = "OrbitInfra"
 copyright = "2026, OrbitInfra"
 html_title = project
+html_baseurl = "https://orbitinfra.github.io/OrbitTE/"
 html_theme = "sphinx_book_theme"
 html_logo = "_static/orbitte-logo.svg"
 html_favicon = "_static/orbit-icon.svg"

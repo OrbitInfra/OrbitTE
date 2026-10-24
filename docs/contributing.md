@@ -47,6 +47,13 @@ validation reports stay outside Git. Docs CI runs the same strict build and
 local-link check without CUDA, RDMA devices or a Rust native build. The
 `orbitte-docs` CI artifact contains the generated website for preview.
 
+The public site is [orbitinfra.github.io/OrbitTE](https://orbitinfra.github.io/OrbitTE/).
+Every push to `main` builds and checks the site, uploads the Pages artifact and
+deploys it through the `github-pages` environment. Pull requests run the build
+and local-link checks and provide the preview artifact. A manual workflow run
+on `main` can redeploy the same source. Deployments use GitHub's scoped Pages
+and OIDC permissions, with one deployment running at a time.
+
 Add new pages to the appropriate `toctree` in `docs/index.md`. Keep source
 claims aligned with the [capability matrix](capabilities.md), and label planned
 paths in architecture figures. The theme stays upstream; Orbit-specific
