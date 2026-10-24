@@ -796,6 +796,16 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   two native controls reject early receive-credit return. These are same-agent
   scoped gates; full P4 and independent acceptance remain open. See
   [the RQ contract and evidence](rdma-cuda.md#whole-parent-source-rq-admission).
+- [ ] **P4.12g — larger/folded geometry and eight-parent pressure
+  (Implemented; native gates pending).** Extend the existing native observers to
+  5 MiB, MiB-plus-one folded and exact-quarter-tail requests. Eight parents own
+  32 or 40 actual QPs, sharing five requester SQ credits and one residual source
+  RQ credit beyond the full group. Two-WR windows and exact injected CQ/QPN/WR
+  identities protect unresolved siblings. Validate byte-weighted rail selection,
+  whole-plan rejection, QP reuse, concurrent close and either-rail errors. A CPU
+  reference compares sixteen plans with the unchanged isolated frozen TENT
+  function and rejects inclusive-quarter or missing-fold mutations. Native
+  qualification and independent acceptance remain open until recorded below.
 - [ ] Qualify larger/folded multirail geometry, contention beyond the declared
   four-parent/three-slice RQ profile, topology ranks, timeout/retry and endpoint
   incarnations. Add physical link/device loss, lost completion, native cleanup failure and process

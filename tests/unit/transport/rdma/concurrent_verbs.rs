@@ -24,6 +24,8 @@ struct Trace {
     armed: bool,
     injected: usize,
     injected_qp: usize,
+    injected_wr: Option<(usize, u32, u64)>,
+    injected_window: usize,
     injected_parent: Option<usize>,
     injected_record: Option<Arc<Record>>,
     held_cqes: BTreeMap<usize, VecDeque<sys::Completion>>,
@@ -148,10 +150,15 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
         trace.shape.parents * trace.shape.slices
     );
     for nic in 0..2 {
-        assert_eq!(
-            trace.owners.iter().filter(|owner| owner.nic == nic).count(),
-            trace.shape.parents * trace.shape.slices / 2
-        );
+        let count = trace.owners.iter().filter(|owner| owner.nic == nic).count();
+        if trace.shape.parents == 8 {
+            assert!(
+                count > 0,
+                "all planned slices must use the actual device set"
+            );
+        } else {
+            assert_eq!(count, trace.shape.parents * trace.shape.slices / 2);
+        }
     }
 }
 
@@ -230,9 +237,18 @@ unsafe extern "C" fn post(
             "rejected parent reached native payload"
         );
         let start = if write == 0 { shape.destination } else { GUARD };
-        let slice = (offset % shape.bank - start) / (shape.payload / shape.slices);
-        assert_eq!(length, shape.payload / shape.slices);
-        assert!(slice < shape.slices);
+        let slice = ((offset % shape.bank - start) / shape.block).min(shape.slices - 1);
+        let range = shape.range(slice);
+        assert_eq!(
+            offset % shape.bank - start,
+            range.start,
+            "payload starts outside its admitted slice"
+        );
+        assert_eq!(
+            length,
+            range.len(),
+            "payload changed the folded slice range"
+        );
         assert!(nic < 2, "payload route left the selected device set");
         if trace.armed {
             let owner = trace
@@ -245,10 +261,15 @@ unsafe extern "C" fn post(
         let inject = trace.armed
             && trace.injected == 0
             && nic == trace.fault_rail
-            && matches!(trace.mode.as_str(), "concurrent-cq-error" | "rq-cq-error");
+            && trace.mode.ends_with("cq-error")
+            && (shape.parents != 8 || count == 2);
         if inject {
             trace.injected = 1;
             trace.injected_qp = qp as *const _ as usize;
+            trace.injected_wr = Some((unsafe { (*h).cq } as usize, qp.qp_num, unsafe {
+                (*requests).id
+            }));
+            trace.injected_window = count;
             trace.injected_parent = Some(parent);
             trace.injected_record = Some(Arc::clone(
                 &trace
@@ -399,9 +420,7 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
             "native CQE redelivery"
         );
         if completion.status != 0 {
-            if trace.owners.iter().any(|owner| {
-                owner.qp == trace.injected_qp && owner.cq == cq && owner.qpn == completion.qpn
-            }) {
+            if trace.injected_wr == Some((cq, completion.qpn, completion.id)) {
                 assert_eq!(
                     completion.status,
                     ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
@@ -434,7 +453,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     let cq = unsafe { (*h).cq } as usize;
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     let observed = trace.failed_cqs.contains(&cq);
-    if !trace.requester && trace.mode.starts_with("rq-") {
+    if !trace.requester && trace.shape.parents >= 4 {
         let mut checked = 0;
         let mut pending = 0;
         for owner in trace
@@ -569,12 +588,27 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 bad_debt = Some(debt);
             }
         }
-        assert_eq!(checked, trace.shape.parents * trace.shape.slices / 2);
-        let debt = bad_debt.unwrap();
         assert_eq!(
-            debt, 0,
-            "the error CQE has resolved the injected one-WR window"
+            checked,
+            trace
+                .owners
+                .iter()
+                .filter(|owner| owner.nic == trace.fault_rail)
+                .count()
         );
+        let debt = bad_debt.unwrap();
+        if trace.shape.parents == 8 {
+            assert_eq!(trace.injected_window, 2);
+            assert!(
+                debt < trace.injected_window,
+                "the injected WR's CQE must resolve its own debt"
+            );
+        } else {
+            assert_eq!(
+                debt, 0,
+                "the error CQE has resolved the injected one-WR window"
+            );
+        }
         trace.fault_debt.push(debt);
         trace.owner_checks += checked;
         trace.live_owner_checks += live;
@@ -633,21 +667,27 @@ pub(super) fn finish() {
     assert!(trace.held_cqes.values().all(VecDeque::is_empty));
     if trace.requester {
         assert!(trace.delivered_held > 0);
-        if matches!(trace.mode.as_str(), "concurrent-cq-error" | "rq-cq-error") {
+        if trace.mode.ends_with("cq-error") {
             assert_eq!(
                 (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
-                (1, 2, shape.parents * shape.slices)
+                (
+                    1,
+                    2,
+                    2 * trace
+                        .owners
+                        .iter()
+                        .filter(|owner| owner.nic == trace.fault_rail)
+                        .count()
+                )
             );
             assert_eq!(trace.fault_debt.len(), 2);
             assert_eq!(trace.injected_error_receipts, 1);
         } else {
-            assert!(
-                trace
-                    .accepted
-                    .iter()
-                    .flatten()
-                    .all(|value| *value == shape.payload / shape.slices)
-            );
+            for row in &trace.accepted {
+                for (index, accepted) in row.iter().enumerate() {
+                    assert_eq!(*accepted, shape.range(index).len());
+                }
+            }
         }
     }
     println!(
@@ -668,7 +708,7 @@ pub(super) fn finish() {
         trace.native_error_receipts,
         trace.accepted
     );
-    if !trace.requester && trace.mode.starts_with("rq-") {
+    if !trace.requester && trace.shape.parents >= 4 {
         assert_eq!(
             trace.source_rq_checks,
             2 * trace.shape.parents * trace.shape.slices
@@ -689,6 +729,10 @@ pub(super) fn finish() {
     println!(
         "ORBITTE_NATIVE_ERRORS {{\"injected_wr_error_receipts\":{},\"all_error_receipts\":{},\"statuses\":{:?}}}",
         trace.injected_error_receipts, trace.native_error_receipts, statuses
+    );
+    println!(
+        "ORBITTE_INJECTED_WINDOW {{\"accepted_wr_count\":{},\"debt_before_cq\":{:?}}}",
+        trace.injected_window, trace.fault_debt
     );
     trace.memory = None;
     trace.owners.clear();

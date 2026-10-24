@@ -2676,3 +2676,43 @@ physical IB/link/device loss, lost completions, native cleanup failure and
 process restart/death remain unqualified. Independent acceptance, full P4,
 GPUDirect, performance and installed-consumer qualification remain open.
 OrbitKV integration stays deferred until the P4 stage boundary is accepted.
+
+
+## Larger requests, folded tails and eight-parent admission
+
+P4.12g extends qualification of the existing runtime. Production source,
+dependencies and wire v12 are unchanged from PR #36. The reference remains
+TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
+[`planRdmaSlices`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/slice.h#L69)
+rounds the block to the base quantum, computes the resulting count, then folds
+a tail strictly smaller than one quarter of that block. An exact-quarter tail
+remains separate. OrbitTE uses this geometry for parent routing and WR queues.
+
+The extended native fixture declares eight parents over two actual RNICs:
+
+| Parent bytes | Base | Outer slice lengths | QPs per peer | Source RQ capacity |
+| --- | --- | --- | --- | --- |
+| 5 MiB | 64 KiB | Five 1 MiB slices | 40 | 41 |
+| 1 MiB + 1 byte | 64 KiB | Three 256 KiB slices, then 256 KiB + 1 byte | 32 | 33 |
+| 1 MiB + 64 KiB | 64 KiB | Four 256 KiB slices, then 64 KiB | 40 | 41 |
+
+All share five requester SQ credits and at most two WRs per post. The folded
+outer tail also folds inside its WR plan: the last 64 KiB WR absorbs the extra
+byte. A ninth parent must be rejected atomically despite one residual source
+RQ credit. The 5 MiB/folded profiles also exercise paused unregister/close and
+actual CQ errors on either rail. Native ledgers bind the injected fault to its
+exact CQ/QPN/WR, preserve any other unresolved WRs until native CQ teardown,
+and check each actual MR and DMA loan. TENT's selector charges bytes; unequal
+slices need not have equal QP counts per NIC. Both actual devices must be used.
+
+`tests/reference/rdma_geometry.py` compiles the exact isolated plan structure
+and inline function from the frozen Git blob without modifying their bodies.
+Sixteen valid plans are compared with the Rust unit trace; inclusive-quarter
+and missing-fold native mutations must disagree. The full frozen TENT CPU
+transport trace remains a separate gate. This isolated function comparison is
+not native RDMA transport differential execution or performance evidence.
+CI preserves both evidence sets, using Ubuntu 24.04 and Clang 18 for bindings.
+
+CPU/source and native gates will be recorded after execution. Larger/folded
+profile qualification, strict fairness, physical faults and independent
+acceptance remain open. Full P4 precedes OrbitKV integration.
