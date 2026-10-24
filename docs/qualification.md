@@ -13,6 +13,30 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12d validates the existing cross-rail runtime with two actual RNICs per host
+in a declared CPU DRAM/IPv4 RoCEv2 profile. Frozen source `8fc28cb` passes 17
+stable/Rust 1.85 source/build gates, with 187 all-feature unit tests per
+toolchain and ten hardware-runner controls. Production source and dependency
+manifests are unchanged from the merge of PR #33.
+
+Both frozen libtest binaries pass 152 native cases: READ/WRITE, masks 1/2/3,
+connected QP reuse, eager MR publication/rollback, real either-rail CQ errors
+and partial posts, and paused-post unregister/close. Both peer directions and
+polling/event progress are covered. All 304 peers and supervisors are reaped
+with both original NIC locks released. Native receipts account for 608 context
+opens/closes and 1,776 MR registrations/deregistrations, including completion
+messages. Four native negative controls reject one-payload-rail dispatch or
+early repayment of the failed record's own WR debt; none times out.
+
+These are same-agent gates over test-only native observers and public engine
+operations. They qualify the exact libtest artifacts/profile. They do not
+establish installed-consumer support, broader physical faults, performance,
+independent acceptance or full P4. See the
+[two-RNIC contract](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain)
+for binary hashes, raw evidence and reproduction.
+
+## Previous publication and slicing evidence
+
 P4.12c implements eager all-context host Direct MR publication and cross-rail
 slice ownership/completion. Frozen source `14c0ace` passes 17 stable/Rust 1.85
 checks, with 187 all-feature unit tests per toolchain and four effective CPU
@@ -25,14 +49,14 @@ reuse and duplex transfers. All 96 peers exit with locks released. Sixteen
 same-RNIC/two-PD helpers verify 32 real PD constructions and 112 MR registration
 and deregistration receipts; 48 copies belong to rejected publication attempts.
 
-These are same-agent scoped gates on one selected RNIC per host. Cross-rail
-protocol/ownership has CPU controls; physical two-RNIC striping/faults and
-independent acceptance remain open. See [the P4.12c gate contract](rdma-cuda.md#p412c-gates)
+That earlier profile used one selected RNIC per host; it did not qualify
+physical two-RNIC striping/faults. The current P4.12d profile above adds that
+bounded native scope. Independent acceptance remains open. See [the P4.12c gate contract](rdma-cuda.md#p412c-gates)
 for frozen artifacts and reproduction boundaries.
 
 ## Previous native RDMA evidence
 
-The latest context-selection source, `4b3638c`, passes 13 sequential stable /
+The earlier context-selection source, `4b3638c`, passes 13 sequential stable /
 Rust 1.85 source and build gates, with 179 all-feature unit tests per toolchain.
 Its two frozen binaries pass 48 two-host CPU DRAM / IPv6 RoCEv2 regression
 cases. All 96 peers are reaped and the original NIC locks are released.
@@ -68,8 +92,10 @@ preserves those records and their limits.
 ## Remaining stage boundary
 
 The [completion plan](completion-plan.md) owns the delivery sequence. Complete
-P4 before renewing OrbitKV integration. Outstanding work includes physical
-multi-RNIC selection/slicing/fault qualification, physical shutdown controls
-and independent acceptance. The eager publication and cross-rail source paths
-are implemented; a missing hardware gate is not missing code.
+P4 before renewing OrbitKV integration. Outstanding work includes broader
+multirail workload/topology coverage, physical link/device loss, lost completions,
+native cleanup failure, restart/shutdown profiles and independent acceptance.
+The declared two-RNIC routing/slicing, provider-fault and paused-shutdown gates
+now pass; they do not close those broader profiles. The source paths are
+implemented; a missing hardware gate is not missing code.
 GDR and optional storage transports have their own stages.

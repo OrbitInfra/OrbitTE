@@ -25,6 +25,7 @@ progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
 authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
 identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery, P4.9 optional CQ event progress and P4.1/P5.1 RDMA/CUDA staging
 paths. P4.12c adds eager multi-context publication and cross-rail slice ownership.
+P4.12d validates the declared two-RNIC host Direct profile and native fault/drain owners.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -700,7 +701,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
 - [ ] **P4.12b — context set, DeviceSelector and request-level rail routing
   (Implemented; source/CPU and scoped native regression gates pass,
-  independent acceptance and two-physical-RNIC qualification pending).** Keep topology NIC IDs stable across clean construction
+  independent acceptance open; two-RNIC profile added in P4.12d).** Keep topology NIC IDs stable across clean construction
   failures. Each enabled NIC owns its actual PD/key ledger, shared SQ/RQ CQs,
   progress worker and endpoint store. Wire v10 advertises bounded NIC/PD paths
   before authority; device masks, compatible GID profiles, name affinity,
@@ -716,12 +717,12 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   masks, compacted NIC slots and removed cached-PD guards. These are same-agent
   gates on one selected RNIC per host, including the earlier two-PD registration
   helper. Raw evidence stays outside Git. P4.12c implements single-request
-  slicing; physical two-RNIC dispatch/striping, circuit-breaker/failover behavior
-  and full P4 remain unqualified. See
+  slicing; P4.12d validates scoped physical two-RNIC dispatch/striping and native
+  faults. Circuit-breaker/failover behavior and full P4 remain open. See
   [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 - [ ] **P4.12c — eager multi-context publication and cross-rail slices
-  (Implemented; source/CPU and scoped native gates pass, independent and
-  physical two-RNIC qualification remain open).** Prepare every enabled context's local/MW-bind MRs
+  (Implemented; source/CPU and scoped native gates pass, independent acceptance
+  open; two-RNIC profile added in P4.12d).** Prepare every enabled context's local/MW-bind MRs
   before registry visibility or duplicate-reference commit. Failed batches
   retire only newly created copies; failed native cleanup retains unpublished
   backing and charges. Active published copies cannot be evicted. TENT's bounded
@@ -738,14 +739,36 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   with locks released. Sixteen same-RNIC/two-PD helper invocations verify 32 PD
   constructions and 112 native MR registration/deregistration receipts,
   including 48 rolled-back copies. These are same-agent scoped gates.
-  Physical two-RNIC selection/striping/faults and independent acceptance remain
-  open. See [the contracts and TENT correspondence](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
-- [ ] Qualify multirail slicing, masks, initial routing, retry/timeout budgets,
-  endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
-  registration even if another rail fails before publication.
-- [ ] Qualify the implemented multi-context shared CQ/SQ quotas and persistent
-  MR owners over multiple physical rails. Optional adaptive/deadline policies
-  remain disabled until P6 passes.
+  P4.12d adds physical two-RNIC selection/striping and scoped native faults;
+  independent acceptance remains open. See
+  [the contracts and TENT correspondence](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
+- [ ] **P4.12d — two-RNIC native qualification and failure drain
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Preserve the existing TENT context/buffer/endpoint/worker boundaries. Public
+  engine operations with test-only native observers validate actual MR/PD/QP
+  identity, two-rail payload dispatch, masks, two-round connected reuse and
+  all-context publication/rollback. Either rail can produce a real CQ error or
+  partial post; the failed record's own WR debt and exact loan survive actual
+  QP destruction until both native CQ receipts. Paused posts prove concurrent
+  unregister/close preserves borrowed MRs until release. Source `8fc28cb` passes
+  17 stable/MSRV gates, 187 all-feature units per toolchain and ten runner
+  controls. Both frozen release binaries pass 152 two-host CPU DRAM/IPv4 RoCEv2
+  cases across both directions/progress modes. All 304 peers are reaped with
+  both NIC locks released. Raw evidence accounts for 608 context opens/closes,
+  1,776 MR registration/deregistration receipts (including message MRs), 128
+  failed-CQ receipts and 32 partial admissions. Four native mutation controls
+  reject one payload rail or premature own-record WR-debt repayment without
+  timeouts. Production source/dependencies are unchanged from PR #33. These
+  are same-agent libtest-profile gates; full P4 and independent acceptance stay
+  open. See [the scoped contract and evidence](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
+- [ ] Qualify broader multirail slice geometry, concurrent parent requests,
+  topology ranks, timeout/retry and endpoint-incarnation handling. Add physical
+  link/device loss, lost completion, native cleanup failure and process
+  restart/death profiles; provider-owned WR faults do not qualify them.
+- [ ] Qualify aggregate multi-context CQ/SQ quota fairness and persistent MR
+  owners under concurrent physical-rail pressure. The declared bounded two-RNIC
+  publication/rollback profile passes; optional adaptive/deadline policies remain
+  disabled until P6 passes.
 - [ ] Establish the real source/requester quiescence contract for each verbs
   operation. Prevent stale rkeys, endpoints or remote accesses from reaching a
   reused allocation; local reference counts alone cannot establish this.
@@ -1056,10 +1079,13 @@ multiple contexts, strict masks and request-level rail selection to the public
 data path; its declared single-RNIC native regressions now pass. P4.12c implements
 single-request cross-rail slice ownership/completion and eager multi-context
 registration publication. Its real registration rollback and public v11 native
-regressions now pass in the declared single-RNIC profile. Next qualify physical
-multi-RNIC routing/slicing/faults using explicitly selected NICs and resource
-locks, and complete the pending independent acceptance gates. Keep the frozen
-TENT context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
+regressions pass in the declared single-RNIC profile. P4.12d adds scoped native
+two-RNIC masks/slicing, connected reuse, publication rollback, either-rail provider
+faults and paused shutdown validation with both original NIC locks. Next deliver
+broader workload/concurrency and physical-fault profiles, including lost
+completion, native cleanup failure, restart and independent acceptance. The
+earlier P4.8 independent native repeat remains open. Keep the frozen TENT
+context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.
 The complete P4 exit and independent acceptance form the first large native
 stage boundary; do not substitute a substage's successful CI for that boundary.

@@ -68,9 +68,15 @@ MR borrow, exact-range DMA loan, WR identity and bound completion receipts.
 The parent succeeds only after every slice completes. No thread is created per
 slice. Small or single-context requests retain the single-path protocol.
 
-Physical multi-RNIC routing/fault qualification and cross-rail recovery remain
-in the [completion plan](completion-plan.md). CPU tests establish ownership
-and protocol contracts, not physical multi-RNIC support.
+A declared two-host CPU DRAM/IPv4 RoCEv2 profile validates two actual RNICs per
+host: masked and cross-rail READ/WRITE, persistent QP reuse, all-context MR
+publication/rollback, and either-rail CQ/partial-post faults. Test-only native
+observers bind each receipt to the actual device, PD, QP, CQ and WR owner while
+public engine operations drive the existing transport. They add no production
+callback API, worker or hot-path layer. See the
+[native profile](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
+Physical link/device loss, broader concurrency/topology, cross-rail recovery
+and independent acceptance remain in the [completion plan](completion-plan.md).
 
 ## Completion and failure
 

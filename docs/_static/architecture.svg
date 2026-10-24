@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 450" role="img" aria-labelledby="title desc">
 <title id="title">OrbitTE architecture</title>
-<desc id="desc">A shared transfer engine owns memory and batches. TCP payload transport and RDMA payload transport are siblings, with a separate control service. RDMA contexts own protection domains, queues and endpoint stores. GPU staging, eager all-context MR publication and cross-rail slices are implemented. Physical multi-RNIC slicing is unqualified; direct GPU RDMA remains planned.</desc>
+<desc id="desc">A shared transfer engine owns memory and batches. TCP payload transport and RDMA payload transport are siblings, with a separate control service. RDMA contexts own protection domains, queues and endpoint stores. GPU staging, eager all-context MR publication and cross-rail slices are implemented. Two-RNIC CPU DRAM/RoCEv2 slicing and scoped fault/drain validation pass; broader physical faults and independent P4 acceptance remain open. Direct GPU RDMA remains planned.</desc>
 <style>
 .canvas{fill:#fff}.box{fill:#f7f9fc;stroke:#bcc9d8;stroke-width:1.5;rx:8}.label{font:600 18px Arial,sans-serif;fill:#1e293b}.small{font:14px Arial,sans-serif;fill:#475569}.edge{fill:none;stroke:#426a97;stroke-width:2}.future{fill:none;stroke:#64748b;stroke-width:1.5;stroke-dasharray:6 4}
 @media(prefers-color-scheme:dark){.canvas{fill:#14181e}.box{fill:#202735;stroke:#627289}.label{fill:#e2e8f0}.small{fill:#b9c5d6}.edge{stroke:#91b7df}.future{stroke:#a6b3c6}}
@@ -28,6 +28,6 @@
 <text class="label" x="295" y="292" text-anchor="middle">CPU DRAM · NVIDIA host staging</text>
 <text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>
 <rect class="future" x="20" y="374" width="840" height="54" rx="8"/>
-<text class="small" x="440" y="366" text-anchor="middle">Cross-rail slices implemented · physical multi-RNIC qualification open</text>
+<text class="small" x="440" y="366" text-anchor="middle">Two-RNIC RoCEv2 validation · broader faults and P4 acceptance open</text>
 <text class="small" x="440" y="406" text-anchor="middle">Planned: GPUDirect RDMA · optional SSD transports</text>
 </svg>

@@ -1,12 +1,14 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12c/P5.1 add opt-in source implementations. Acceptance is scoped to the
-exact native profiles below; the complete hardware and parity stages stay open.
+P4.1-P4.12d/P5.1 add opt-in source implementations and qualification gates.
+Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
 budgets and per-NIC context owners. P4.12c adds eager all-context host MR
-publication and cross-rail slices with aggregate parent completion. Physical
-multi-RNIC qualification remains open. Neither establishes full B04/B01 or native TENT compatibility.
+publication and cross-rail slices with aggregate parent completion. P4.12d
+validates the declared two-RNIC host Direct profile, including native faults
+and drain. Broader physical faults and independent P4 acceptance remain open;
+these substages do not establish full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
 
@@ -2141,7 +2143,10 @@ open. OrbitKV integration remains deferred until the P4 stage boundary.
 ## Eager publication and cross-rail slice completion
 
 P4.12c implements these source paths. Source/CPU and the scoped native gates
-below pass; physical multi-RNIC and independent acceptance remain open. This does not complete P4.
+below pass. Its original native profile used one RNIC per host. The subsequent
+[P4.12d profile](#two-rnic-native-qualification-and-failure-drain) adds two actual
+RNICs, either-rail faults and drain receipts. Independent acceptance and the
+complete P4 exit remain open.
 
 | Frozen TENT implementation | OrbitTE implementation | Deliberate boundary |
 | --- | --- | --- |
@@ -2260,6 +2265,163 @@ machine/profile needs its own authorization and qualification; copying a
 hostname into a new profile does not reproduce this evidence.
 
 Source gates, frozen binaries, native logs and controls belong outside Git in
-`/root/orbitte-artifacts/rdma-multirail-20261024/`. Physical two-RNIC scheduling,
-striping/faults, GPU direct registration, performance and independent P4
-acceptance remain open. OrbitKV integration remains deferred.
+`/root/orbitte-artifacts/rdma-multirail-20261024/`. That source/profile does not
+qualify physical two-RNIC scheduling or faults; the following P4.12d gate adds
+that bounded native profile. GPU direct registration, performance, independent
+P4 acceptance and OrbitKV integration remain deferred.
+
+## Two-RNIC native qualification and failure drain
+
+P4.12d validates the existing P4.12c runtime on two physical RNICs per host.
+Production `src/`, dependency manifests and wire v11 are unchanged from the
+merge of PR #33 (`be88d397`). The added ignored native test and hardware runner
+exercise public registration, segment and transfer operations with a test-only
+injected RDMA runtime and native observers. This qualifies the recorded libtest
+artifacts/profile, not a newly published crate, an installed consumer or a
+performance result. Independent review and the complete P4 exit remain open.
+
+### Native profile and TENT correspondence
+
+The frozen reference remains
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`, under
+`mooncake-transfer-engine/tent/src/transport/rdma/`:
+
+| Native TENT boundary | OrbitTE path exercised by this gate |
+| --- | --- |
+| `buffers.cpp`, all-context `LocalBufferManager` publication | Real registration on both RNIC PDs before visibility; duplicate-reference preservation and rollback of three newly created MRs when the fourth copy exceeds capacity |
+| `rdma_transport.cpp`, `planRdmaSlices`, `RdmaSlice` and task counters | A 12 KiB parent splits into two 6 KiB slices; parent success requires both slices and their bound source receipts |
+| `workers.cpp`, `Workers::allocateDevices`, `DeviceSelector` | Actual per-device payload posts, mask 1/2 isolation, mask 3 cross-rail dispatch and retained per-slice owners |
+| Context, buffer, endpoint and worker resource owners | Actual MR/PD/QP identity, persistent QP/PSN/incarnation snapshots and native QP/CQ destruction receipts before failed WR-debt repayment |
+
+OrbitTE retains its existing exact-range MW authority, bilateral connection
+incarnations and PD-lifetime key history. These stricter Rust contracts are
+not native TENT wire or cleanup equivalence. Progress remains per-context;
+there is no new per-slice thread or runtime wrapper in this delivery.
+
+The selected Forge stage is job `20749637`, stage `97096675`, with both attempts
+RUNNING and host/boot identities pinned in the external profile. Each host uses
+`mlx5_1` and `mlx5_2`, port 1, GID index 3, IPv4-mapped RoCEv2. They have distinct
+node GUIDs and PCI paths `0000:65:01.0` and `0000:67:01.0`; both remain ACTIVE
+in preflight and postflight. The test control sockets use IPv6 independently of
+the RDMA GID profile. Every peer holds both original NIC locks simultaneously,
+including mask 1/2 cases, because publication opens both enabled contexts.
+No GPU is selected and no physical port or driver state is changed.
+
+Host memory policy is Direct. One source handler prepares the parent grants;
+existing context workers submit 2 KiB WR blocks with a send window of two.
+Requester/source CQ budgets are four/two. Healthy cases run two rounds with
+different bytes, checking full buffers and guards, both actual payload device
+names, exact MR/QP PD identity, unchanged QP pointers/QPNs/PSNs/bilateral
+incarnations and the expected connection-reuse counters. Mask 1/2 cases retain
+one payload path while both contexts remain registered.
+
+### Fault and drain assertions
+
+`cq-error` changes only the selected child's rkey and invokes the real provider;
+the actual remote-access completion error follows the ordinary failure path.
+`partial-post` changes the second WR's SGE count in a process-private provider
+adapter. Actual mlx5 returns `ENOMEM` and `bad_wr` at that second WR, proving
+one accepted 2 KiB prefix and an unposted suffix. Either rail can be selected.
+The adapter is installed before workers start and restored at actual context
+close. Failed payloads are never replayed.
+
+Observers locate the failed record using the actual NIC and WR namespace,
+then bind checks to its own QP, MR and both CQs. Before each actual CQ destruction,
+the QP must already be destroyed, the MR must still be registered, conflicting
+application access must still be denied, and that failed record must retain
+its own unresolved WR debt. Both observed debts are one. Actual SQ/RQ CQ
+destruction precedes debt repayment, exact DMA-loan release and final MR drain.
+A healthy sibling's outstanding work cannot substitute for this proof.
+
+Failure reports zero completed parent requests/bytes; WRITE effects remain
+unknown and READ has no remote write effect. When the second child fails, the
+earlier child's completed receipt and exact changed bytes are required even
+though the parent fails. Otherwise, possibly affected bytes admit the old or
+incoming value. Unposted suffixes and every guard must remain unchanged.
+
+`paused-close` gates one process-owned payload post until a sibling has actually
+posted. Unregister on both peers retires every copy while borrowed MRs and
+exact-range access exclusion remain live; source/requester close must time out.
+Releasing the gate permits the public transfer and whole-engine close to drain.
+This is a controlled scheduling pause, not a physical link hang. When an earlier
+child has already retired, one live borrowed MR is sufficient for the blocked
+range; the assertion never requires an already drained sibling to stay live.
+`mr-rollback` separately keeps the original local-only registration and duplicate
+count intact after the capacity-limited multi-context batch fails.
+
+### Frozen gates and evidence
+
+Frozen source `8fc28cb602ee83625601150f34bc9a51b2975e1e` passes 17 sequential
+stable/Rust 1.85 source/build gates: formatting, default/RDMA/RDMA+CUDA Clippy
+and tests, both release libtest binaries and ten hardware-runner controls.
+Each toolchain passes 187 all-feature unit tests with four hardware tests
+ignored by default, plus integration and doc tests. Compiler/binding environment
+and the source archive hash are recorded in `gates-8fc28cb/manifest.json`.
+
+The two release binaries pass 152 native cases, 76 per toolchain. Every group
+covers both peer directions and polling/event progress. Fault/paused groups
+also cover READ/WRITE and selecting either rail:
+
+| Case group | Cases across both toolchains |
+| --- | ---: |
+| Healthy dual-rail READ/WRITE, two rounds | 16 |
+| Healthy masks 1 and 2, READ/WRITE, two rounds | 32 |
+| Real either-rail CQ errors | 32 |
+| Real either-rail partial post admission | 32 |
+| Paused either-rail unregister/close | 32 |
+| Actual two-RNIC publication rollback | 8 |
+| Total | 152 |
+
+All 304 positive peer processes and their supervisors are reaped, with both
+original NIC locks released. Final resource counters, tracked native MRs and
+allocation weak owners are empty. Raw evidence accounts for 608 actual context
+opens/closes, 1,776 MR registration/deregistration receipts, 128 failed-CQ
+destruction receipts and 32 real partial-admission receipts. MR totals include
+application registrations and completion-message MRs. The initial audit
+classifier counted only application MRs; its correction and failed audit record
+are retained without changing the tests or binaries.
+
+Actual process maps resolve system `libibverbs.so.1.14.47.0` and
+`libmlx5.so.1.24.47.0`, with matching node-side hashes. The stable libtest SHA-256
+is `a8424acda2a628025d3e25340c708ac8ec35066b094664e1eff193d4b606daab`;
+the Rust 1.85 SHA-256 is
+`a71d782aed841ca7c41822781f964c1e0cd894eff0f8d4807bdd204982f923e3`.
+
+Four native negative controls in external source copies force one payload rail
+or repay failed WR debt before native CQ destruction, each in both progress
+modes. All are rejected at the intended routing/own-record debt assertion,
+without supervisor timeouts or inconclusive cases. All eight negative peer
+processes are reaped and both locks are released. Their expected process
+failures are counterfactual evidence, not positive drain receipts.
+
+Build the release libtest binary from the frozen source, then use an explicitly
+authorized, identity-pinned external profile:
+
+```sh
+cargo test --release --locked --features rdma,cuda --lib --no-run
+python3 -B tests/hardware/run.py \
+  --profile /external/multirail-profile.json \
+  --binary /external/libtest \
+  --output /external/new-run
+```
+
+The profile selects `runner: orbitte-multirail`, two explicit `rails`, two
+distinct absolute `nic_locks` per node, and cases with `mode`, `operation`,
+`mask`, `fault_rail` and `rdma_events`. The runner validates case inputs before
+starting peers and resolves exactly one ignored native test before deployment. Its supervisor retains
+both locks until the direct child is actually reaped, including timeout cleanup.
+Fresh hardware or a changed profile needs its own qualification.
+
+Profiles, source archives, binaries, native logs, postflight, effective controls
+and corrected audit remain outside Git at
+`/root/orbitte-artifacts/rdma-multirail-qualification-20261024/`.
+`native-regression-manifest.json`, `native-raw-audit.json` and
+`native-controls-8fc28cb/manifest.json` index the final evidence. Earlier pilots,
+setup failures and the 104-case precursor remain archived separately. The final
+delivery manifest binds documentation-only commits to these tested sources.
+
+This profile does not qualify larger/folded requests, concurrent parents and
+quota fairness across rails, broader NUMA/topology ranks, physical IB, link or
+device loss, lost completions, native cleanup failure or process restart/death.
+Those profiles and independent acceptance remain in the completion plan.
+GPU direct registration, performance and OrbitKV integration remain deferred.
