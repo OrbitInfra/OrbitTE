@@ -711,13 +711,12 @@ impl MemoryRegistry {
                 registered.push(memory);
             }
         }
-        if let Err(error) = publish(&unpublished) {
+        publish(&unpublished).inspect_err(|_| {
             #[cfg(feature = "rdma")]
             for memory in &unpublished {
                 memory.0.active.store(false, Ordering::Release);
             }
-            return Err(error);
-        }
+        })?;
         // Native preparation completed; lookup visibility and duplicate bumps commit together.
         for (plan, memory) in plans.iter().zip(&registered) {
             entries.regions.insert(
