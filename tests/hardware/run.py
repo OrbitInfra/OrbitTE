@@ -151,7 +151,7 @@ class Controller:
                 if case['transport'] != 'rdma' or kind != 'cpu':
                     raise ValueError('shared CQ gate accepts host RDMA only')
                 capacity, window = case['rdma_max_cqes'], case['rdma_max_send_wr']
-                fragmented = window_probe and case.get('window_probe') in ['fragment-read', 'fragment-write']
+                fragmented = window_probe and case.get('window_probe') in ['fragment-read', 'fragment-write', 'partial-read', 'partial-write']
                 if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= (3 if fragmented else 2):
                     raise ValueError('invalid shared CQ/SQ profile')
                 if fragmented and (capacity != 3 or window != 3 or type(case['payload']) is not int or case['payload'] != 12288):
@@ -178,7 +178,7 @@ class Controller:
                         raise ValueError('invalid duplex CQ capacity')
                     environment['ORBITTE_SHARED_CQES'] = str(role_capacity)
                 if window_probe:
-                    if case.get('window_probe') not in ['revoked', 'parent', 'remote', 'range', 'fragment-read', 'fragment-write']:
+                    if case.get('window_probe') not in ['revoked', 'parent', 'remote', 'range', 'fragment-read', 'fragment-write', 'partial-read', 'partial-write']:
                         raise ValueError('invalid MW probe')
                     environment['ORBITTE_WINDOW_PROBE'] = case['window_probe']
                 if readiness is not None:

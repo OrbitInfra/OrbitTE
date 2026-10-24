@@ -652,9 +652,29 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   The failed request is never replayed. The event-stat gate distinguishes a
   healthy idle lane from a fault-drained lane while requiring actual channel
   creation and zero retained/closed resources. P4.6/P4.9 still own whole-lane
-  cancellation on P4.4 slices. This gate does not qualify partial post admission,
-  lost completion/device faults, arbitrary cancellation or full P4. See
+  cancellation on P4.4 slices. P4.11 separately qualifies scoped native partial
+  admission. Lost completion/device faults, arbitrary cancellation and full P4
+  remain open. See
   [the native fragment-error gate](rdma-cuda.md#fragmented-cq-error-and-native-drain).
+- [ ] **P4.11 — native partial post admission (Implemented; scoped native
+  gates pass, independent acceptance and full fault qualification open).** The
+  exact native test installs a
+  requester-only post-send adapter before starting its context workers. It
+  changes WR 1's SGE count and invokes the actual mlx5 provider; production
+  code builds the three-WR chain and decodes the real `bad_wr` pointer. The
+  known accepted prefix keeps one WR charge, its MR and the application loan
+  through actual QP/CQ destruction; only the proven unposted suffix loses its
+  reservation. READ/WRITE validation allows unknown effects within the first
+  4 KiB and requires unchanged suffixes/guards. Neither a successful CQE nor
+  zero WRITE effects may be inferred from the post error. No automatic replay.
+  Source `760c147` passes 13 stable/MSRV source/build gates and 76 two-host
+  CPU DRAM/IPv6 RoCEv2 cases, including 16 actual partial-admission cases. All
+  152 peers are reaped with locks released. Six native controls reject early
+  WR-debt repayment, early DMA-loan release and retained unposted-suffix quota
+  in both modes, with no timeouts or inconclusive runs. Raw native DSO, binary,
+  process, lock and byte evidence is archived outside the checkout. These are
+  same-agent gates; independent review and full P4 remain open. See
+  [the admission contract and TENT correspondence](rdma-cuda.md#native-partial-post-admission).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.

@@ -1742,8 +1742,8 @@ pre-fix regression. The initial P4.9 handoff executed zero native cases. The
 later [P4.10 host-native gate](#fragmented-cq-error-and-native-drain) now records
 polling/event regressions on replacement resources. P4.8's complete independent
 repeat, independent P4.9 review and the remaining native profiles stay open.
-Physical partial-post/device/destroy faults, multirail, GDR, performance, full
-P4 and OrbitKV linkage remain open.
+P4.11 separately covers scoped native partial admission. Device/destroy faults,
+multirail, GDR, performance, full P4 and OrbitKV linkage remain open.
 
 
 ## Fragmented CQ error and native drain
@@ -1799,7 +1799,92 @@ without timeouts; those failed runs remain archived. The raw audit checks actual
 `libibverbs`/`libmlx5` maps and each frozen binary identity. This is a CPU DRAM
 correctness and ownership profile.
 
-Two separately compiled toolchains are not an independent review. P4.8/P4.9 independent acceptance,
-physical partial-post admission, device loss, lost CQEs, arbitrary destroy
-failures, multirail, GDR, performance and complete P4 remain open. OrbitKV
-integration remains deferred.
+Two separately compiled toolchains are not an independent review. P4.11
+separately covers scoped native partial admission below. P4.8/P4.9 independent
+acceptance, device loss, lost CQEs, arbitrary destroy failures, multirail, GDR,
+performance and complete P4 remain open. OrbitKV integration remains deferred.
+
+
+## Native partial post admission
+
+P4.11 extends `orbitte-window` with `partial-read` and `partial-write`. Each
+host range has a 12288-byte payload and two 64-byte guards. The source grants
+the entire payload, so a mistakenly submitted suffix would be authorized and
+the full-buffer check would detect its effects. Three signaled 4096-byte WRs
+share one production post call.
+
+The exact ignored test installs a requester-only adapter in its private native
+context's `post_send` slot before starting any context child or worker. It
+preserves the actual provider function, changes only WR 1's SGE count to exceed
+the mlx5 limit, invokes that function and forwards its return code and
+`bad_wr` unchanged. The provider must return `ENOMEM` with the actual WR 1
+pointer after accepting WR 0. Production `sys::post` still builds and links
+every native WR/SGE and decodes the returned pointer. Neither `PostResult`
+nor a completion is synthesized. The original function is restored only after
+context children have joined and before actual native context close. This
+test adapter is absent from the production library.
+
+This exercises the boundary in [rdma-core v55.0's mlx5 provider](https://github.com/linux-rdma/rdma-core/blob/v55.0/providers/mlx5/qp.c#L778-L800):
+the provider validates each WR's SGE limit before traversing its SGE list;
+its error exit still rings the doorbell for the accepted prefix. Hardware
+qualification must separately record the deployed provider's actual identity.
+
+The worker repays only the two proven unposted reservations. One admitted WR
+remains charged, the actual MR stays present and conflicting application access
+is rejected until actual QP destruction followed by both CQ destruction
+receipts. The test checks all those boundaries through the P4.10 observer.
+Production progress fences the lane immediately on this post error and does not
+poll it for a success claim or replay the failed request. The completion-byte
+counters therefore remain zero; this does **not** prove that the admitted WR
+had no effect. After physical drain, the affected host verifies every byte:
+the first 4096 bytes may contain old or incoming data, while the unposted
+8192-byte suffix and both guards must remain unchanged. This is a failure
+ownership gate, not a transactional or prefix-completion guarantee.
+
+In frozen TENT `e2d6e8e0`, `Workers::asyncPostSend` calls
+`RdmaEndPoint::submitSlices`, which reserves CQ/QP quota,
+builds signaled WRs, cancels only the `bad_wr` suffix and queues accepted
+slices with `completions_owed`. OrbitTE's `SendQueue::reserve/posted` owns the
+same reservation/admission boundary, with exact pointer-membership checking
+and conservative retention when `bad_wr` is missing or foreign. The Rust worker
+uses native whole-lane QP/CQ retirement for unresolved failure, rather than
+claiming that a post error itself ended DMA. Unknown `bad_wr` remains covered
+by CPU ABI/ownership controls and has no physical-provider qualification here.
+
+Use the same identity-pinned two-host profile and RNIC locks as P4.10, with
+`payload=12288`, `rdma_max_send_wr=3`, `rdma_max_cqes=3`, host memory and a named
+`partial-read` or `partial-write` probe. Run both directions in polling and
+event modes. `ORBITTE_PARTIAL_POST`, `ORBITTE_PARTIAL_DRAIN` and
+`ORBITTE_PARTIAL_BYTES` record actual admission, native drain and bounded byte
+effects alongside the existing channel, key, MR, DSO and supervised-process
+evidence. Event mode must create/arm its channel, but a synchronous post failure
+need not deliver a CQ event before retirement; any profile that actually consumes
+a CQE must still prove an event receipt. All workers/channels/retained resources
+must be zero after close.
+
+Source `760c147` passes 13 sequential stable/Rust 1.85 source/build gates,
+including 166 all-feature unit tests per toolchain plus notification, process,
+documentation and seven runner controls. The two frozen release binaries pass
+76 two-host CPU DRAM/IPv6 RoCEv2 cases: 16 partial-admission cases and 60
+fragment-error, prior MW, shared-CQ, connected-reuse and duplex regressions.
+Every partial-admission run observes a changed 4096-byte prefix while its
+confirmed-completion counter stays zero; that observation is not a guarantee
+that every future failed post completes its prefix. All 152 peers are reaped
+with locks released. The raw audit verifies each binary identity and actual
+`libibverbs.so.1.14.47.0` / `libmlx5.so.1.24.47.0` maps.
+
+Six native negative controls mutate only external frozen source copies: early
+WR-debt repayment, early DMA-loan release and retained unposted-suffix quota,
+each in polling/event modes. All fail at the intended ownership assertion,
+with no timeout, control-build failure or surviving child. The mutations run
+after actual QP destruction when changing application ownership. Their failed
+runs remain archived with the positive evidence outside the checkout under
+`/root/orbitte-artifacts/rdma-partial-post-20261024`.
+
+The production library is unchanged in this substage; these results qualify
+its existing partial-post ownership path in the stated profile. Two toolchains
+and same-agent raw audits are not independent acceptance. Independent review,
+P4.8's complete independent repeat, device loss, missing CQEs, failed native
+destruction, arbitrary cancellation, multiple rails, GDR, TENT wire
+interoperability, performance and complete P4 remain open. OrbitKV integration
+remains deferred.
