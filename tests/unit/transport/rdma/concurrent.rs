@@ -312,7 +312,11 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         EngineConfig {
             bind_addr: restart::bind(source, generation),
             handler_threads: shape.parents + 1,
-            handler_timeout: TIMEOUT,
+            handler_timeout: if mode.ends_with("lost-recv-cqe") {
+                Duration::from_secs(10)
+            } else {
+                TIMEOUT
+            },
             max_registered_regions: 8,
             max_registered_bytes: (2 * shape.length).max(1 << 20),
             ..Default::default()

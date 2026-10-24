@@ -2842,3 +2842,8 @@ CAP_NET_ADMIN absent. That gate needs an isolated authorized RNIC operation path
 and remains open. GPU/GDR, independent acceptance and the full P4 exit remain
 open. OrbitKV integration stays deferred. Executed gates will be recorded here
 after the frozen source and native matrices settle.
+
+The lost-receive fixture uses a five-second requester deadline and a separate
+ten-second source-handler deadline. Other source handlers retain the existing
+35-second test deadline; endpoint destruction still uses the production
+thirty-second window. These are bounded test timings, not latency guarantees.
