@@ -94,14 +94,23 @@ fn rdma_config() -> RdmaConfig {
     config
 }
 
-fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats) {
+fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile: bool) {
     let enabled = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
+    let aborted = idle.progress_failures != 0;
+    assert!(
+        !aborted || fault_profile,
+        "healthy profile unexpectedly aborted its lane"
+    );
+    assert_eq!(idle.progress_workers, usize::from(!aborted));
     assert_eq!(
         (
             idle.active_completion_channels,
             idle.completion_event_workers
         ),
-        (usize::from(enabled), usize::from(enabled))
+        (
+            usize::from(enabled && !aborted),
+            usize::from(enabled && !aborted)
+        )
     );
     assert_eq!(closed.opened_completion_channels, u64::from(enabled));
     assert_eq!(
@@ -484,7 +493,7 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
-    record_completion_events(&idle, &closed);
+    record_completion_events(&idle, &closed, false);
     assert_eq!(
         (
             idle.active_grants,
@@ -564,14 +573,19 @@ fn source_window_peer() {
     let probe = env::var("ORBITTE_WINDOW_PROBE").unwrap();
     assert!(matches!(
         probe.as_str(),
-        "revoked" | "parent" | "remote" | "range"
+        "revoked" | "parent" | "remote" | "range" | "fragment-read" | "fragment-write"
     ));
-    let length = 4096 + 2 * GUARD;
+    let fragmented = probe.starts_with("fragment-");
+    let length = if fragmented { 3 * 4096 } else { 4096 } + 2 * GUARD;
     let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
-    config.max_cqes = 1;
-    config.max_send_wr = 1;
-    let runtime = RdmaTransport::new(config).unwrap();
+    config.max_cqes = if fragmented { 3 } else { 1 };
+    config.max_send_wr = if fragmented { 3 } else { 1 };
+    config.block_size = 4096;
+    let mut runtime = RdmaTransport::new(config).unwrap();
+    if fragmented && !source {
+        Arc::get_mut(&mut runtime).unwrap().verbs = &fragmented::VERBS;
+    }
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
     let mut expected = vec![if source { 0x5a } else { 0xc3 }; length];
     let backing = Arc::new(HostMemory::new(expected.clone().into_boxed_slice()).unwrap());
@@ -607,9 +621,13 @@ fn source_window_peer() {
         .endpoint(
             &memory,
             GUARD,
-            4096,
+            if source { 4096 } else { length - 2 * GUARD },
             if source {
-                if probe == "remote" { 1 } else { 2 }
+                if matches!(probe.as_str(), "remote" | "fragment-read") {
+                    1
+                } else {
+                    2
+                }
             } else {
                 0
             },
@@ -666,6 +684,9 @@ fn source_window_peer() {
         let close = endpoint.close();
         assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
         drop(endpoint);
+        if probe == "fragment-write" {
+            expected[GUARD..GUARD + 4096].fill(0xc3);
+        }
         verify(&memory, &expected);
         stream.write_all(&[5]).unwrap();
     } else {
@@ -689,10 +710,13 @@ fn source_window_peer() {
             // The old key is still submitted through the real provider/worker/CQ.
             endpoint.record.lock().unwrap().message_sent = false;
         }
+        if fragmented {
+            fragmented::arm(&runtime, &endpoint, memory.clone());
+        }
         let error = endpoint
             .transfer(
                 &grant,
-                if probe == "remote" {
+                if matches!(probe.as_str(), "remote" | "fragment-read") {
                     TransferOp::Read
                 } else {
                     TransferOp::Write
@@ -713,6 +737,12 @@ fn source_window_peer() {
         let close = endpoint.close();
         assert!(!matches!(close, Err(Error::Unquiesced { .. })), "{close:?}");
         drop(endpoint);
+        if fragmented {
+            fragmented::finish(&runtime.stats().unwrap());
+            if probe == "fragment-read" {
+                expected[GUARD..GUARD + 4096].fill(0x5a);
+            }
+        }
         verify(&memory, &expected);
         stream.write_all(&[4]).unwrap();
         token(&mut stream, 5);
@@ -744,8 +774,12 @@ fn source_window_peer() {
     assert_eq!(
         (idle.completed_write_bytes, idle.completed_read_bytes),
         (
-            0,
-            if !source && probe == "remote" {
+            if !source && probe == "fragment-write" {
+                4096
+            } else {
+                0
+            },
+            if !source && matches!(probe.as_str(), "remote" | "fragment-read") {
                 4096
             } else {
                 0
@@ -758,7 +792,7 @@ fn source_window_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
-    record_completion_events(&idle, &closed);
+    record_completion_events(&idle, &closed, true);
     assert_eq!(
         (
             idle.active_grants,
@@ -1132,7 +1166,7 @@ fn duplex_completion_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
-    record_completion_events(&idle, &closed);
+    record_completion_events(&idle, &closed, false);
     source_mr_stats(&idle, &closed);
     receive_stats(&closed);
     assert_eq!(
@@ -1195,3 +1229,6 @@ fn duplex_completion_peer() {
 
 #[path = "connected.rs"]
 mod connected;
+
+#[path = "fragmented.rs"]
+mod fragmented;

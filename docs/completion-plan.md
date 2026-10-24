@@ -628,23 +628,30 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   acquiring progress or budget locks between receipts. Atomic ACK counters and
   a retained thread wake token keep event bursts independent of native teardown.
   The data worker arms before polling and parks until a wake or the earliest
-  unresolved SQ/RQ deadline; its close waiters retain a condition variable. Event receipts
-  never complete a WR or grant. Actual QP/CQ destruction precedes consumer
+  unresolved SQ/RQ deadline; its close waiters retain a condition variable.
+  Event receipts never complete a WR or grant. Actual QP/CQ destruction precedes consumer
   stop/join and channel destruction. Lost consumption or failed cleanup retains
   real owners and charges without retry. Source controls exercise public
   READ/WRITE/connected reuse in both modes, real native-notify ABI dispatch,
   wakeups, deadline retirement, partial construction and eight-event ACK bursts
   during native destruction with progress, budget or both locks held. Context
-  asynchronous events obey the same burst contract. The physical runner accepts an explicit `rdma_events`
-  flag without changing RNIC/GPU locks. New binaries still need both-mode native
+  asynchronous events obey the same burst contract. The physical runner accepts
+  an explicit `rdma_events` flag without changing RNIC/GPU locks. New binaries still need both-mode native
   regressions and independent review; P4.8's independent native repeat remains
   a prerequisite for accepting dependent hardware work. See
   [the event-progress contract](rdma-cuda.md#optional-cq-event-progress).
-- [ ] Complete backend cancellation qualification for fragmented transfers.
-  P4.6/P4.9 implement shared progress, aggregate CQ admission and whole-lane
-  cancellation ownership on P4.4's adaptive slices. Real partial-post/CQ/endpoint
-  fault qualification remains open; CPU controls do not establish physical
-  abort/drain support.
+- [ ] **P4.10 — fragmented CQ-error and native lane drain (Implemented;
+  independent acceptance and complete fault qualification open).** The native
+  MW gate adds three signaled WRs in one post, a valid 4 KiB prefix and a real
+  remote-access error beyond the exact MW. READ/WRITE, both peer directions and
+  both progress modes assert actual QP destruction, an outstanding WR charge,
+  live MR and conflicting application access until both native CQ receipts.
+  The failed request is never replayed. The event-stat gate distinguishes a
+  healthy idle lane from a fault-drained lane while requiring actual channel
+  creation and zero retained/closed resources. P4.6/P4.9 still own whole-lane
+  cancellation on P4.4 slices. This gate does not qualify partial post admission,
+  lost completion/device faults, arbitrary cancellation or full P4. See
+  [the native fragment-error gate](rdma-cuda.md#fragmented-cq-error-and-native-drain).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
