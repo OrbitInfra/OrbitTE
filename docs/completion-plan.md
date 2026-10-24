@@ -695,8 +695,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   receipts. Two CPU and four native controls reject omitted context/capability
   keys without timeouts or inconclusive runs. These are same-agent scoped gates;
   independent acceptance remains open. This is registration groundwork;
-  transport dispatch is implemented separately in P4.12b; single-request
-  striping and the complete P4 exit remain open. See
+  transport dispatch is implemented separately in P4.12b and cross-rail slices
+  in P4.12c. The complete P4 exit remains open. See
   [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
 - [ ] **P4.12b — context set, DeviceSelector and request-level rail routing
   (Implemented; source/CPU and scoped native regression gates pass,
@@ -715,8 +715,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   96 peers exit with original locks released; three CPU mutations reject ignored
   masks, compacted NIC slots and removed cached-PD guards. These are same-agent
   gates on one selected RNIC per host, including the earlier two-PD registration
-  helper. Raw evidence stays outside Git. Physical two-RNIC dispatch, single-request striping, circuit-breaker/failover behavior
-  and full P4 remain open. See
+  helper. Raw evidence stays outside Git. P4.12c implements single-request
+  slicing; physical two-RNIC dispatch/striping, circuit-breaker/failover behavior
+  and full P4 remain unqualified. See
   [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
 - [ ] **P4.12c — eager multi-context publication and cross-rail slices
   (Implemented; source/CPU and scoped native gates pass, independent and
@@ -742,8 +743,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 - [ ] Qualify multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
-- [ ] Extend P4.6's single-lane shared CQ/SQ quotas and persistent local MR
-  owners to multiple rails. Optional adaptive/deadline policies
+- [ ] Qualify the implemented multi-context shared CQ/SQ quotas and persistent
+  MR owners over multiple physical rails. Optional adaptive/deadline policies
   remain disabled until P6 passes.
 - [ ] Establish the real source/requester quiescence contract for each verbs
   operation. Prevent stale rkeys, endpoints or remote accesses from reaching a
@@ -1057,8 +1058,8 @@ single-request cross-rail slice ownership/completion and eager multi-context
 registration publication. Its real registration rollback and public v11 native
 regressions now pass in the declared single-RNIC profile. Next qualify physical
 multi-RNIC routing/slicing/faults using explicitly selected NICs and resource
-locks, and complete the pending independent acceptance gates. Keep the frozen TENT context/buffer/endpoint/
-worker boundaries and exact PD/grant fencing. Complete the P4 native stage
+locks, and complete the pending independent acceptance gates. Keep the frozen
+TENT context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.
 The complete P4 exit and independent acceptance form the first large native
 stage boundary; do not substitute a substage's successful CI for that boundary.
