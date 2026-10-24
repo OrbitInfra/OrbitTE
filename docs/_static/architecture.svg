@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 450" role="img" aria-labelledby="title desc">
+<title id="title">OrbitTE architecture</title>
+<desc id="desc">A shared transfer engine owns memory and batches. TCP payload transport and RDMA payload transport are siblings, with a separate control service. RDMA contexts own protection domains, queues and endpoint stores. GPU staging is implemented; direct GPU RDMA and request striping remain planned.</desc>
+<style>
+.canvas{fill:#fff}.box{fill:#f7f9fc;stroke:#bcc9d8;stroke-width:1.5;rx:8}.label{font:600 18px Arial,sans-serif;fill:#1e293b}.small{font:14px Arial,sans-serif;fill:#475569}.edge{fill:none;stroke:#426a97;stroke-width:2}.future{fill:none;stroke:#64748b;stroke-width:1.5;stroke-dasharray:6 4}
+@media(prefers-color-scheme:dark){.canvas{fill:#14181e}.box{fill:#202735;stroke:#627289}.label{fill:#e2e8f0}.small{fill:#b9c5d6}.edge{stroke:#91b7df}.future{stroke:#a6b3c6}}
+</style>
+<rect class="canvas" width="880" height="450" rx="8"/>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#426a97"/></marker></defs>
+<rect class="box" x="270" y="18" width="340" height="72"/>
+<text class="label" x="440" y="48" text-anchor="middle">TransferEngine</text>
+<text class="small" x="440" y="72" text-anchor="middle">Memory owners · batches · completion</text>
+<path class="edge" d="M440 90V111H150V140M440 111V140M440 111H730V140" marker-end="url(#arrow)"/>
+<rect class="box" x="20" y="140" width="260" height="86"/>
+<text class="label" x="150" y="173" text-anchor="middle">ControlService</text>
+<text class="small" x="150" y="199" text-anchor="middle">Discovery · grants · receipts</text>
+<rect class="box" x="310" y="140" width="260" height="86"/>
+<text class="label" x="440" y="173" text-anchor="middle">TCP transport</text>
+<text class="small" x="440" y="199" text-anchor="middle">Bounded READ / WRITE</text>
+<rect class="box" x="600" y="140" width="260" height="86"/>
+<text class="label" x="730" y="173" text-anchor="middle">RDMA transport</text>
+<text class="small" x="730" y="199" text-anchor="middle">DeviceSelector · NIC paths</text>
+<path class="edge" d="M730 226V260" marker-end="url(#arrow)"/>
+<rect class="box" x="600" y="260" width="260" height="86"/>
+<text class="label" x="730" y="292" text-anchor="middle">Per-NIC contexts</text>
+<text class="small" x="730" y="318" text-anchor="middle">PD · MR · QP · CQ · Workers</text>
+<rect class="box" x="20" y="260" width="550" height="86"/>
+<text class="label" x="295" y="292" text-anchor="middle">CPU DRAM · NVIDIA host staging</text>
+<text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>
+<rect class="future" x="20" y="374" width="840" height="54" rx="8"/>
+<text class="small" x="440" y="406" text-anchor="middle">Planned: cross-rail request striping · GPUDirect RDMA · optional SSD transports</text>
+</svg>

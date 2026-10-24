@@ -1523,7 +1523,7 @@ A nonempty `rdma_whitelist` takes precedence over `rdma_blacklist`, matching
 TENT; it always intersects an explicit device pin. A pin excluded by the filter
 is rejected, not silently replaced.
 
-```rust,ignore
+```rust
 use orbit_te::transport::rdma::RdmaConfig;
 
 let rdma = RdmaConfig {
@@ -1668,7 +1668,7 @@ default polling behavior, and adds the completion-channel owner in `rdma/cq.rs`.
 It is a deliberate progress extension in the completion plan, not a claim that
 TENT's polling loop calls `ibv_get_cq_event`.
 
-```rust,ignore
+```rust
 use orbit_te::transport::rdma::{RdmaConfig, RdmaProgressMode};
 
 let rdma = RdmaConfig {
