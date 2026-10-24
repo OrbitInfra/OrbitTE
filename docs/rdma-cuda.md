@@ -1948,9 +1948,28 @@ and release of the backing allocation. `ORBITTE_MULTI_CONTEXT_MR` records that
 scope separately from the later transfer's normal counters. No WR or completion
 is fabricated by this observer.
 
-Evidence belongs outside the checkout under
-`/root/orbitte-artifacts/rdma-context-registrations-20261024`. Source/build,
-hardware and independent acceptance remain separate gates. One RNIC with two
-PDs does not qualify two physical RNICs, transport fan-out, cross-rail routing,
-striping, a multi-descriptor grant, hot device recovery, GDR, performance or full
-P4. OrbitKV integration remains deferred.
+Frozen source `721f95a` passes 13 sequential stable/Rust 1.85 source/build
+gates, including 170 all-feature units per toolchain, notification/process/doc
+tests and eight runner controls. Its two frozen release binaries pass 48
+two-host CPU DRAM/IPv6 RoCEv2 cases: eight double-PD/shared-CQ cases and forty
+fragment-error, partial-post, connected-reuse and duplex regressions. All 96
+peers are reaped with resource locks released. The double-PD helper runs sixteen
+times across the two toolchains, both peer directions and both progress modes,
+verifying 32 actual PD constructions and 64 actual MR registration and
+deregistration receipts. Its raw audit verifies each frozen binary identity,
+native `libibverbs`/`libmlx5` maps and each node/boot/lock identity.
+
+External frozen source copies omit either the context or capability key.
+Each mutant is rejected by the CPU key contract and by the actual native gate
+in polling/event modes: two CPU and four native effective controls, no survivor,
+timeout or inconclusive run. A control-only observer snapshots native maps
+before the failed key assertion; the native peers fail before transfer readiness
+and before any DMA post. Failed runs and actual supervised waits remain archived
+with the positive evidence outside the checkout under
+`/root/orbitte-artifacts/rdma-context-registrations-20261024`.
+
+Two toolchains and same-agent raw audits do not constitute independent
+acceptance. One RNIC with two PDs does not qualify two physical RNICs, transport
+fan-out, cross-rail routing, striping, a multi-descriptor grant, hot device
+recovery, GDR, performance or full P4. The complete independent P4.8 repeat and
+later-stage acceptance remain open. OrbitKV integration remains deferred.

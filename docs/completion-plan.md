@@ -676,7 +676,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   same-agent gates; independent review and full P4 remain open. See
   [the admission contract and TENT correspondence](rdma-cuda.md#native-partial-post-admission).
 - [ ] **P4.12a — per-context persistent MR ownership (Implemented;
-  source/native qualification and independent acceptance open).** The
+  source/CPU and scoped native gates pass, independent acceptance open).** The
   `LocalBufferManager` cache keys actual `RdmaContext` identity, registered view
   and local/MW-bind capability. Distinct contexts cannot reuse, coalesce or wait
   on each other's MR. Count and full-view byte limits remain aggregate across
@@ -687,8 +687,15 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   retry. The native gate opens two actual PDs on the one locked RNIC and checks
   provider MR/PD identity, same-key reuse, duplicate unregister, idle/borrowed
   retirement and actual deregistration/close receipts, followed by shared-CQ
-  traffic. This is registration groundwork; transport context fan-out, device
-  masks, multirail scheduling and the complete P4 exit remain open. See
+  traffic. Source `721f95a` passes 13 stable/MSRV source/build gates, including
+  170 all-feature units per toolchain, and 48 two-host CPU DRAM/IPv6 RoCEv2
+  cases. All 96 peers are reaped with locks released. Sixteen native helper
+  invocations verify 32 actual PDs and 64 MR registration/deregistration
+  receipts. Two CPU and four native controls reject omitted context/capability
+  keys without timeouts or inconclusive runs. These are same-agent scoped gates;
+  independent acceptance remains open. This is registration groundwork;
+  transport context fan-out, device masks, multirail scheduling and the complete
+  P4 exit remain open. See
   [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
