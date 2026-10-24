@@ -14,6 +14,7 @@ class NativePeerSelection(unittest.TestCase):
         for profile, expected in [(None, None), ('orbitte-shared-cq', prefix + 'shared_cq_peer'),
                                   ('orbitte-window', prefix + 'source_window_peer'),
                                   ('orbitte-connected', prefix + 'connected::connected_endpoint_peer'),
+                                  ('orbitte-multirail', prefix + 'multirail::multirail_peer'),
                                   ('orbitkv-peer-host', 'peer::orbitte::tests::rdma_host::registered_host_rdma_peer')]:
             with self.subTest(profile=profile):
                 self.assertEqual(runner.native_peer_test({'runner': profile}), expected)

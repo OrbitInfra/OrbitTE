@@ -1298,3 +1298,6 @@ mod partial;
 
 #[path = "multi_context.rs"]
 mod multi_context;
+
+#[path = "multirail.rs"]
+mod multirail;

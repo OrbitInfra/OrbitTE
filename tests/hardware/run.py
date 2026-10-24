@@ -15,6 +15,8 @@ import uuid
 
 def native_peer_test(profile):
     runner = profile.get('runner')
+    if runner == 'orbitte-multirail':
+        return 'transport::rdma::workers::tests::hardware::multirail::multirail_peer'
     if runner == 'orbitte-connected':
         return 'transport::rdma::workers::tests::hardware::connected::connected_endpoint_peer'
     if runner == 'orbitte-shared-cq':
@@ -79,7 +81,10 @@ class Controller:
         target = self.profile['nodes'][node]
         locks = []
         if transport == 'rdma':
-            locks.append(target['nic_lock'])
+            if self.profile.get('runner') == 'orbitte-multirail':
+                locks.extend(self.rail_locks(node))
+            else:
+                locks.append(target['nic_lock'])
         environment = {**target.get('env', {}), **(environment or {})}
         if kind != 'cpu':
             locks.append(target['gpu_lock'])
@@ -126,7 +131,24 @@ class Controller:
         (self.output / 'cleanup.json').write_text(json.dumps(result, indent=2) + '\n')
         return reaped
 
+    def rail_locks(self, node):
+        rails = self.profile.get('rails')
+        if (not isinstance(rails, list) or len(rails) != 2
+                or any(not isinstance(name, str) or not name
+                       or any(not (char.isascii() and (char.isalnum() or char in '_.-'))
+                              for char in name) for name in rails)
+                or len(set(rails)) != 2):
+            raise ValueError('multirail requires two distinct explicit RNIC names')
+        locks = self.profile['nodes'][node].get('nic_locks')
+        if (not isinstance(locks, dict) or set(locks) != set(rails)
+                or any(not isinstance(path, str) or not path.startswith('/') for path in locks.values())
+                or len(set(locks.values())) != 2):
+            raise ValueError('each multirail RNIC requires its own absolute lock path')
+        return [locks[name] for name in rails]
+
     def case(self, index, case):
+        if self.profile.get('runner') == 'orbitte-multirail':
+            return self.multirail_case(index, case)
         source, requester = case['source'], case['requester']
         source_root = self.remote + f'/{index:02}-source'
         requester_root = self.remote + f'/{index:02}-requester'
@@ -235,6 +257,47 @@ class Controller:
                 environment['ORBITTE_RDMA_DISCOVERY'] = '1'
             return arguments + (readiness[:3] if readiness else []), environment
 
+        return self.run_case(index, case, command)
+
+    def multirail_case(self, index, case):
+        source, requester = case['source'], case['requester']
+        for node in [source, requester]:
+            self.rail_locks(node)
+        if (case.get('transport') != 'rdma'
+                or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
+                or type(case.get('rdma_events')) is not bool
+                or case.get('mode') not in ['healthy', 'cq-error', 'partial-post', 'paused-close', 'mr-rollback']
+                or case.get('operation') not in ['read', 'write']
+                or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
+            raise ValueError('invalid explicit multirail profile')
+        if case['mode'] != 'healthy' and case['mask'] != 3:
+            raise ValueError('multirail fault controls require both RNICs')
+
+        def command(node, role, kind, root, readiness=None):
+            arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
+            environment = {
+                'ORBITTE_SHARED_ROLE': role,
+                'ORBITTE_SHARED_BIND': self.profile['nodes'][node]['bind'],
+                'ORBITTE_SHARED_RAILS': ','.join(self.profile['rails']),
+                'ORBITTE_SHARED_GID': str(self.profile['gid_index']),
+                'ORBITTE_SHARED_MAPS': root + '/maps.txt',
+                'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events'])),
+                'ORBITTE_RAIL_MODE': case['mode'],
+                'ORBITTE_RAIL_OPERATION': case['operation'],
+                'ORBITTE_RAIL_MASK': str(case['mask']),
+            }
+            if readiness is not None:
+                if len(readiness) != 1:
+                    raise ValueError('invalid multirail readiness')
+                environment['ORBITTE_SHARED_PEER'] = readiness[0]
+            return arguments, environment
+
+        return self.run_case(index, case, command)
+
+    def run_case(self, index, case, command):
+        source, requester = case['source'], case['requester']
+        source_root = self.remote + f'/{index:02}-source'
+        requester_root = self.remote + f'/{index:02}-requester'
         arguments, environment = command(source, 'source', case['source_kind'], source_root)
         self.start(source, source_root, case['source_kind'], arguments, case['transport'], environment)
         started = time.monotonic()

@@ -67,23 +67,25 @@ class SupervisionOwnership(unittest.TestCase):
             case.mkdir()
             binary = root / 'hardware_peer'
             binary.write_bytes(b'fixture-not-executed')
-            lock = root / 'resource.lock'
-            lock.touch()
+            locks = [root / 'nic1.lock', root / 'nic2.lock']
+            for lock in locks:
+                lock.touch()
             config = case / 'config.json'
-            config.write_text(json.dumps({'hostname': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'locks': [str(lock)], 'arguments': [], 'timeout_seconds': 1}))
+            config.write_text(json.dumps({'hostname': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'locks': [str(lock) for lock in locks], 'arguments': [], 'timeout_seconds': 1}))
             observations = []
             original = supervise.write
 
             def observe(path, value):
                 if path.name == 'result.json':
-                    with lock.open('a+') as contender:
-                        if value['child_reaped']:
-                            fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            self.assertTrue(value['resource_locks_released'])
-                        else:
-                            with self.assertRaises(BlockingIOError):
+                    for lock in locks:
+                        with lock.open('a+') as contender:
+                            if value['child_reaped']:
                                 fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            self.assertFalse(value['resource_locks_released'])
+                                self.assertTrue(value['resource_locks_released'])
+                            else:
+                                with self.assertRaises(BlockingIOError):
+                                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                self.assertFalse(value['resource_locks_released'])
                     observations.append(value['child_reaped'])
                 original(path, value)
 
