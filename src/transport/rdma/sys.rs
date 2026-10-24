@@ -50,9 +50,16 @@ impl Default for ConnectionHandles {
 }
 
 #[repr(C)]
-#[derive(Default)]
 pub(super) struct CqHandles {
     pub cq: *mut c_void,
+}
+
+impl Default for CqHandles {
+    fn default() -> Self {
+        Self {
+            cq: std::ptr::null_mut(),
+        }
+    }
 }
 
 #[repr(C)]
