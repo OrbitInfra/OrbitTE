@@ -142,6 +142,23 @@ and [source RQ contract](rdma-cuda.md#whole-parent-source-rq-admission).
 
 ## Completion and failure
 
+RDMA data and endpoint destruction have separate deadlines. `close_slices`
+shares one fresh thirty-second destruction window across a parent's slices,
+matching TENT's `RdmaEndPoint::finishDestroy` timeout. Exhausting the data
+deadline preserves the original failure. Only actual QP/CQ teardown permits
+resource return; unproven destruction retains admission and backing. The failed
+call may wait up to thirty additional seconds for this barrier, and native
+provider calls remain non-preemptible. This adds no retry or WRITE replay.
+
+The declared native profile now includes actual process-owned QP ERR/flush,
+lost successful SQ/RQ CQEs and source SIGKILL with leases held through waitpid
+and replacement exit. Fresh sources rebind the same RPC address and numeric
+registration ID; old source epochs fail before new QPs or remote effects.
+Healthy transfers resume with explicit new descriptors and fresh engine
+processes. Physical port/device-down and recovery of a poisoned live engine
+remain separate open profiles. See the
+[destruction and restart evidence](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
+
 Frozen TENT publishes context-specific region rkeys from its registered
 buffers. OrbitTE adds exact-range memory-window grants while retaining TENT's
 context, buffer and endpoint ownership boundaries. The MW handshake is an

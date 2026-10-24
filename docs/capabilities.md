@@ -15,6 +15,8 @@ contracts.
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
 | Concurrent multirail parents and aggregate quotas | Implemented | Scoped eight-parent MiB/folded/exact-quarter-tail profiles and retained two-/four-parent cases; shared SQ/RQ pressure, 32/40-QP reuse and two-WR fault/drain. Wider concurrency/QoS remains open |
 | Whole-parent source RQ admission | Implemented | Wire v12; residual-capacity rejection before QPs, caller retry, uncertain-post ownership and native receive-credit drain in declared four-/eight-parent profiles |
+| RDMA endpoint destruction | Implemented | One independent shared 30 s parent destruction window; data failure is preserved and actual unproven teardown retains owners |
+| Native fault and restart profile | Scoped tests | Actual QP ERR, dropped successful SQ/RQ CQEs and source SIGKILL/restart over two RNICs; fresh-process recovery, with physical port/device loss still unqualified |
 | Device/port/GID discovery | Implemented | CPU and scoped native evidence; complete independent native repeat remains open |
 | Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
 | NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |
