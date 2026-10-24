@@ -10,7 +10,8 @@ pub(crate) use super::context::tests::{events, pause};
 use super::*;
 
 pub(crate) struct FakeDevice {
-    mode: String,
+    pub(super) mode: String,
+    pub(super) route: Mutex<Option<discovery::RdmaAddress>>,
     asynchronous: Option<(
         Mutex<std::os::unix::net::UnixStream>,
         Mutex<std::os::unix::net::UnixStream>,
@@ -96,7 +97,10 @@ fn block(device: &FakeDevice) {
 }
 
 // CPU ABI controls, not a device emulator or proof that DMA completed.
-unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char) -> c_int {
+pub(super) unsafe extern "C" fn open_device(
+    h: *mut sys::DeviceHandles,
+    name: *const c_char,
+) -> c_int {
     let mode = unsafe { CStr::from_ptr(name) }.to_str().unwrap().to_owned();
     if mode == "device_missing" {
         return libc::ENODEV;
@@ -108,6 +112,7 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
     });
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
+        route: Mutex::default(),
         asynchronous,
         async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
@@ -284,6 +289,7 @@ unsafe extern "C" fn open(
     handles: *const sys::DeviceHandles,
     _: u8,
     _: u8,
+    _: *const Descriptor,
     bytes: *mut c_void,
     length: usize,
     permission: u32,
@@ -295,6 +301,9 @@ unsafe extern "C" fn open(
     let cq = unsafe { &*(*h).cq.cast::<FakeCq>() };
     assert_eq!(cq.device, device as *const FakeDevice);
     device.events.lock().unwrap().push("open_endpoint");
+    if device.mode == "route_second_query_error" {
+        return libc::ESTALE;
+    }
     if cq.retiring.load(Ordering::Acquire) {
         return libc::EIO;
     }
@@ -910,7 +919,62 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     h.context = std::ptr::null_mut();
     0
 }
-static VERBS: sys::Verbs = sys::Verbs {
+pub(super) fn discover(
+    config: &RdmaConfig,
+) -> Result<(crate::Topology, Vec<discovery::RdmaAddress>)> {
+    let name = config.device.as_deref().unwrap_or("ok");
+    let address = discovery::RdmaAddress {
+        device: name.into(),
+        port: config.port.unwrap_or(1),
+        gid_index: config.gid_index.unwrap_or(0),
+        gid_type: discovery::GidType::Ib,
+        net_device: None,
+        net_device_index: 0,
+        descriptor: Descriptor {
+            link_layer: 1,
+            ..Descriptor::default()
+        },
+    };
+    let topology = crate::Topology {
+        nic_list: vec![crate::NicEntry {
+            name: name.into(),
+            pci_bus_id: None,
+            kind: crate::NicType::Rdma,
+            numa_node: None,
+            device_attrs: Default::default(),
+        }],
+        mem_list: vec![],
+    };
+    Ok((topology, vec![address]))
+}
+
+unsafe fn query_address(
+    handles: *const sys::DeviceHandles,
+    address: &discovery::RdmaAddress,
+) -> Result<discovery::RdmaAddress> {
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    if let Some(route) = &*device.route.lock().unwrap() {
+        return Ok(route.clone());
+    }
+    if device.mode == "route_rejected" {
+        let mut observed = address.clone();
+        observed.descriptor.gid[15] ^= 1;
+        return Ok(observed);
+    }
+    Ok(discovery::RdmaAddress {
+        descriptor: Descriptor {
+            lid: 1,
+            mtu: 3,
+            link_layer: 1,
+            ..address.descriptor
+        },
+        ..address.clone()
+    })
+}
+
+pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    discover,
+    query_address,
     asynchronous: None,
     open_device,
     create_cq,
@@ -1037,7 +1101,8 @@ pub(crate) fn before_requester_close(endpoint: &mut RdmaEndpoint, result: &Resul
 }
 
 pub(crate) fn before_source_ack(runtime: &RdmaTransport) {
-    if std::ptr::eq(runtime.verbs, &VERBS) && runtime.config.device == "ack_pause" {
+    if std::ptr::eq(runtime.verbs, &VERBS) && runtime.config.device.as_deref() == Some("ack_pause")
+    {
         let pause = pause(runtime);
         let (lock, changed) = &*pause;
         let mut state = lock.lock().unwrap();
@@ -1152,7 +1217,7 @@ fn descriptor_wire_layout_and_untrusted_fields_are_checked_before_native_use() {
             ..RdmaConfig::new("x")
         },
         RdmaConfig {
-            port: 0,
+            port: Some(0),
             ..RdmaConfig::new("x")
         },
         RdmaConfig {
@@ -1614,7 +1679,9 @@ pub(super) fn deliver_completion(
 }
 
 pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaEndpoint) {
-    if endpoint.cached_peer.is_some() && runtime.config.device == "async_copy_reuse_open_pause" {
+    if endpoint.cached_peer.is_some()
+        && runtime.config.device.as_deref() == Some("async_copy_reuse_open_pause")
+    {
         let pause = pause(runtime);
         let (lock, changed) = &*pause;
         let mut state = lock.lock().unwrap();

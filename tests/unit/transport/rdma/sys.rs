@@ -635,3 +635,178 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
         );
     }
 }
+
+#[test]
+fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently() {
+    let address = RdmaAddress {
+        device: "mlx5_0".into(),
+        port: 1,
+        gid_index: 3,
+        gid_type: discovery::GidType::RoceV2,
+        net_device: Some("eth0".into()),
+        net_device_index: 7,
+        descriptor: Descriptor {
+            gid: [3; 16],
+            link_layer: 2,
+            mtu: 3,
+            ..Default::default()
+        },
+    };
+    for field in 0..7 {
+        let mut entry = ffi::ibv_gid_entry {
+            gid: ffi::ibv_gid {
+                raw: address.descriptor.gid,
+            },
+            gid_index: 3,
+            port_num: 1,
+            gid_type: ffi::IBV_GID_TYPE_ROCE_V2,
+            ndev_ifindex: 7,
+        };
+        match field {
+            0 => {}
+            1 => unsafe { entry.gid.raw[15] ^= 1 },
+            2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
+            3 => entry.ndev_ifindex += 1,
+            4 => entry.port_num += 1,
+            5 => entry.gid_index += 1,
+            _ => entry.gid_type = u32::MAX,
+        }
+        assert_eq!(
+            validate_gid_entry(&entry, &address).is_ok(),
+            field == 0,
+            "{field}"
+        );
+    }
+    let ib = RdmaAddress {
+        gid_type: discovery::GidType::Ib,
+        net_device: None,
+        net_device_index: 0,
+        descriptor: Descriptor {
+            link_layer: 1,
+            ..address.descriptor
+        },
+        ..address
+    };
+    let entry = ffi::ibv_gid_entry {
+        gid: ffi::ibv_gid {
+            raw: ib.descriptor.gid,
+        },
+        gid_index: 3,
+        port_num: 1,
+        gid_type: ffi::IBV_GID_TYPE_IB,
+        ndev_ifindex: 0,
+    };
+    validate_gid_entry(&entry, &ib).unwrap();
+}
+
+#[test]
+fn endpoint_requery_errors_are_route_faults_even_when_the_old_tuple_returns() {
+    let address = Descriptor {
+        gid: [3; 16],
+        lid: 1,
+        mtu: 3,
+        link_layer: 2,
+        ..Default::default()
+    };
+    assert_eq!(endpoint_address(Ok(address), &address).unwrap(), address);
+    for code in [libc::ENETDOWN, libc::EADDRNOTAVAIL, libc::EIO] {
+        assert_eq!(endpoint_address(Err(code), &address), Err(libc::ESTALE));
+    }
+    assert_eq!(
+        endpoint_address(Ok(Descriptor { mtu: 4, ..address }), &address),
+        Err(libc::ESTALE)
+    );
+}
+
+type AddressRead = Result<(RdmaAddress, ffi::ibv_gid_entry)>;
+thread_local! {
+    static ADDRESS_READ: std::cell::RefCell<Option<(usize, AddressRead)>> = const { std::cell::RefCell::new(None) };
+}
+struct AddressReadGuard;
+impl Drop for AddressReadGuard {
+    fn drop(&mut self) {
+        ADDRESS_READ.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
+pub(super) fn take_address_read(device: *const DeviceHandles) -> Option<AddressRead> {
+    ADDRESS_READ.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == device as usize)
+        {
+            slot.take().map(|(_, value)| value)
+        } else {
+            None
+        }
+    })
+}
+
+#[test]
+fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
+    let name = std::ffi::CString::new("lo").unwrap();
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    assert_ne!(index, 0, "Linux loopback interface must have an index");
+    let handles = DeviceHandles::default();
+    let address = RdmaAddress {
+        device: "fixture".into(),
+        port: 1,
+        gid_index: 3,
+        gid_type: discovery::GidType::RoceV2,
+        net_device: Some("lo".into()),
+        net_device_index: index,
+        descriptor: Descriptor {
+            gid: [3; 16],
+            link_layer: 2,
+            mtu: 3,
+            ..Default::default()
+        },
+    };
+    for field in 0..8 {
+        let mut observed = address.clone();
+        let mut entry = ffi::ibv_gid_entry {
+            gid: ffi::ibv_gid {
+                raw: address.descriptor.gid,
+            },
+            gid_index: 3,
+            port_num: 1,
+            gid_type: ffi::IBV_GID_TYPE_ROCE_V2,
+            ndev_ifindex: index,
+        };
+        match field {
+            0 => {}
+            1 => unsafe { entry.gid.raw[15] ^= 1 },
+            2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
+            3 => entry.ndev_ifindex += 1,
+            4 => entry.port_num += 1,
+            5 => entry.gid_index += 1,
+            6 => observed.net_device = Some("different-name".into()),
+            _ => {
+                observed.net_device_index = u32::MAX;
+                entry.ndev_ifindex = u32::MAX;
+            }
+        }
+        ADDRESS_READ.with(|slot| {
+            assert!(
+                slot.borrow_mut()
+                    .replace((
+                        &handles as *const DeviceHandles as usize,
+                        Ok((observed, entry))
+                    ))
+                    .is_none()
+            );
+        });
+        let _reset = AddressReadGuard;
+        let result = unsafe { (REAL.query_address)(&handles, &address) };
+        assert_eq!(result.is_ok(), field == 0, "{field}: {result:?}");
+        ADDRESS_READ.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "the actual query must consume native/sysfs facts"
+            )
+        });
+    }
+}

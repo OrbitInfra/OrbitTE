@@ -203,7 +203,9 @@ impl RdmaTransport {
         let mut effect = RemoteEffect::None;
         let result = (|| {
             let direct = self.host_direct(&request.local);
-            let progress = self.progress(self.device()?)?;
+            let device = self.device()?;
+            device.check_address()?;
+            let progress = self.progress(device)?;
             let mut reuse = if direct {
                 progress.claim(
                     |p| {
@@ -393,6 +395,7 @@ impl RdmaTransport {
         let hello = Hello::read(channel, epoch)?;
         let cacheable = hello.direct && self.host_direct(memory);
         let device = self.device()?;
+        device.check_address()?;
         if hello.expected_domain != [0; 16] && hello.expected_domain != device.domain()? {
             return Err(Error::Protocol(
                 "RDMA rendezvous protection domain mismatch",

@@ -201,6 +201,26 @@ fn finish(
     {
         return Err(Error::Internal("persistent MR reuse counters differ"));
     }
+    if transport == Transport::Rdma {
+        let topology = engine
+            .topology()?
+            .ok_or(Error::Internal("missing RDMA topology"))?;
+        let nic = topology
+            .nic_list
+            .iter()
+            .find(|nic| nic.device_attrs.contains_key("rdma.selected"))
+            .ok_or(Error::Internal("missing selected RDMA NIC"))?;
+        let attrs = &nic.device_attrs;
+        println!(
+            "ORBITTE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
+            nic.name,
+            attrs["rdma.port"],
+            attrs["rdma.gid_index"],
+            attrs["rdma.gid"],
+            attrs["rdma.gid_type"],
+            attrs["rdma.net_device_index"]
+        );
+    }
     engine.close(TIMEOUT)?;
     engine.unregister_memory(&memory)?;
     drop(memory);
@@ -345,8 +365,16 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let role = &args[1];
     let bind_addr: SocketAddr = args[2].parse()?;
-    let mut rdma = RdmaConfig::new(&args[3]);
-    rdma.gid_index = args[4].parse()?;
+    let mut rdma = if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+        RdmaConfig {
+            rdma_whitelist: vec![args[3].clone()],
+            ..Default::default()
+        }
+    } else {
+        let mut config = RdmaConfig::new(&args[3]);
+        config.gid_index = Some(args[4].parse()?);
+        config
+    };
     rdma.hop_limit = 64;
     rdma.host_memory = match env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() {
         Ok("staged") => RdmaHostMemory::Staged,

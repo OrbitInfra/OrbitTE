@@ -23,7 +23,7 @@ tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md), plus P4.3 direct host RDMA, P4.4 slice
 progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
 authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
-identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse and P4.1/P5.1 RDMA/CUDA staging
+identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery and P4.1/P5.1 RDMA/CUDA staging
 paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -605,8 +605,22 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   35-case profile, with actual QP continuity, all process waits and resource
   close verified. This accepts that scope; complete P4 remains open. See
   [the scope and architecture correspondence](rdma-cuda.md#connected-qp-reuse).
-- [ ] Complete automatic device/port/GID and topology discovery. Explicit
-  provider FFI, shared context/PD and fenced bootstrap are implemented above.
+- [ ] **P4.8 — device/port/GID and host topology discovery (Implemented;
+  source/CPU Accepted, implementation native Qualified, independent native
+  Unqualified).** `Topology` and `platform/cpu_probe` inventory and rank
+  host/RNIC locations; the actual `RdmaContext` validates and freezes one route.
+  Automatic selectors coexist with strict pins and pre-open whitelist filtering.
+  Both peers check the route before READY claims; changes fence the existing
+  lane without replacing its PD/key history. Failed candidate cleanup retains
+  the real owner and stops fallback. Source `97cc94f` passes independent
+  stable/MSRV gates, 153 unit tests, 42 effective controls and 40 single-CPU
+  release pressure runs. The implementation's 39-case IPv6 RoCEv2 profile passes
+  and its raw owners/DSO/process/lock evidence is independently audited. The
+  separately built MSRV repeat executes zero cases: fresh selected-stage History
+  finds A RELEASED/B KILLED, no RUNNING replacement. A newly authorized two-host
+  profile is needed before accepting this row. Physical IB, multiple RNIC/NUMA
+  rank comparisons, route/device faults and complete P4 remain open. See
+  [the scope and TENT correspondence](rdma-cuda.md#device-port-gid-and-host-topology-discovery).
 - [ ] Complete event-driven progress and backend cancellation qualification for
   fragmented transfers. P4.6 implements shared polling, aggregate CQ admission
   and whole-lane cancellation ownership on top of P4.4's adaptive slices.
@@ -918,8 +932,12 @@ P4.7d adds accepted source receive/WR-identity ownership for its declared
 source/CPU/native profiles, retaining both physical barriers. P4.7e now accepts
 source registration owners for its declared profile. P4.7f accepts the scoped
 operation-level drain protocol and connected reuse for its declared source/CPU
-and native profiles. Continue with the remaining device/topology discovery,
-event progress, native fault qualification and multirail work. Follow the frozen
+and native profiles. P4.8 host/RNIC discovery is implemented with independent
+source/CPU acceptance and a qualified 39-case implementation native run. Its
+independently built native repeat awaits a new authorized two-host profile,
+because the original selected stage's attempts terminated before that repeat.
+Complete that gate before accepting P4.8, then proceed to event progress,
+native fault qualification and multirail work. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.

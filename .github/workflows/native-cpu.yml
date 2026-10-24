@@ -9,6 +9,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/native-cpu.yml'
+      - '.github/scripts/install-native-deps.sh'
   workflow_dispatch:
 
 permissions:
@@ -16,16 +17,18 @@ permissions:
 
 jobs:
   cpu-oracle:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUSTUP_TOOLCHAIN: stable
+      CC: gcc
+      CXX: g++
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install reference build dependencies
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev
+          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev
           rustup toolchain install stable --profile minimal
       - name: Compare frozen native TENT and OrbitTE
         run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbitte-native-cpu"

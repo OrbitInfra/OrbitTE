@@ -2,9 +2,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-use super::{
-    DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, check, slice, sys, workers,
-};
+use super::{DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, slice, sys, workers};
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 pub(super) struct ConnectionLease {
@@ -250,7 +248,7 @@ impl Resources {
     }
 }
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct Descriptor {
     pub(super) address: u64,
@@ -414,7 +412,6 @@ pub(crate) struct RdmaEndpoint {
     pub(super) local: Descriptor,
     pub(super) incarnation: Option<ConnectionId>,
     pub(super) config: RdmaConfig,
-    pub(super) verbs: &'static sys::Verbs,
     pub(super) deadline: Instant,
     pub(super) output: Option<Box<GrantResources>>,
     pub(super) claim: u64,
@@ -447,7 +444,14 @@ impl RdmaEndpoint {
         let device = Arc::clone(&resources.connection.device);
         let mut local = Descriptor::default();
         let (incarnation, _) =
-            device.open_endpoint(resources, &self.config, permission, psn, &mut local)?;
+            match device.open_endpoint(resources, &self.config, permission, psn, &mut local) {
+                Ok(value) => value,
+                Err(error) => {
+                    drop(state);
+                    device.asynchronous.notify();
+                    return Err(error);
+                }
+            };
         local.validate()?;
         let connection = Descriptor {
             address: 0,
@@ -596,6 +600,18 @@ impl RdmaEndpoint {
     pub(crate) fn connect(&mut self, remote: &Descriptor) -> Result<()> {
         remote.validate_connection()?;
         self.record.require_live()?;
+        let device = {
+            let state = self.lock()?;
+            Arc::clone(
+                &state
+                    .resources
+                    .as_ref()
+                    .ok_or(Error::Internal("missing RDMA endpoint"))?
+                    .connection
+                    .device,
+            )
+        };
+        device.check_address()?;
         let mut state = self.lock()?;
         self.record.require_live()?;
         state.check()?;
@@ -613,17 +629,17 @@ impl RdmaEndpoint {
             state.phase = Phase::Connected;
             return Ok(());
         }
-        check("ibv_modify_qp RTR/RTS", unsafe {
-            (self.verbs.connect)(
-                &mut resources.connection.handles,
-                &resources.connection.local,
-                remote,
-                self.config.port,
-                self.config.gid_index,
-                self.config.traffic_class,
-                self.config.hop_limit,
-            )
-        })?;
+        let device = Arc::clone(&resources.connection.device);
+        if let Err(error) = device.connect(
+            &mut resources.connection.handles,
+            &resources.connection.local,
+            remote,
+            &self.config,
+        ) {
+            drop(state);
+            device.asynchronous.notify();
+            return Err(error);
+        }
         resources.connection.remote = Some(*remote);
         state.phase = Phase::Connected;
         Ok(())

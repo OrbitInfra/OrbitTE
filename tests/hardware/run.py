@@ -138,6 +138,10 @@ class Controller:
         if consumer and (case['transport'] != 'rdma' or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu'):
             raise ValueError('OrbitKV registered-read component gate accepts host RDMA only')
 
+        discovery = case.get('rdma_auto', False)
+        if type(discovery) is not bool or (discovery and case['transport'] != 'rdma'):
+            raise ValueError('rdma_auto requires a boolean RDMA profile')
+
         def command(node, role, kind, root, readiness=None):
             if shared:
                 if case['transport'] != 'rdma' or kind != 'cpu':
@@ -157,6 +161,8 @@ class Controller:
                     'ORBITTE_SHARED_WINDOW': str(window),
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
+                if discovery:
+                    environment['ORBITTE_RDMA_DISCOVERY'] = '1'
                 if case.get('duplex'):
                     environment['ORBITTE_SHARED_DUPLEX'] = '1'
                     role_capacity = case.get(role + '_rdma_max_cqes', capacity)
@@ -207,6 +213,8 @@ class Controller:
                     if type(value) is not int or not 1 <= value <= limit:
                         raise ValueError('invalid ' + key)
                     environment[variable] = str(value)
+            if discovery:
+                environment['ORBITTE_RDMA_DISCOVERY'] = '1'
             return arguments + (readiness[:3] if readiness else []), environment
 
         arguments, environment = command(source, 'source', case['source_kind'], source_root)

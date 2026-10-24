@@ -303,7 +303,6 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         local: descriptor,
         incarnation: Some(peer.local),
         config: runtime.config.clone(),
-        verbs: runtime.verbs,
         deadline: deadline(TIMEOUT).unwrap(),
         output: None,
         claim: old_claim,
@@ -955,5 +954,79 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
         let stats = engine.stats().unwrap().rdma.unwrap();
         assert_eq!((stats.opened_connections, stats.reused_connections), (1, 1));
         engine.close(TIMEOUT).unwrap();
+    }
+}
+
+#[test]
+fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd() {
+    for source_fault in [false, true] {
+        let source = rdma_fixture("direct:copy");
+        let requester = rdma_fixture("direct:copy");
+        assert_eq!(source.topology().unwrap(), None);
+        let local = requester
+            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 8].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+        let faulted = if source_fault { &source } else { &requester };
+        let runtime = source_runtime(faulted);
+        let before = runtime.stats().unwrap();
+        assert_eq!((before.opened_connections, before.idle_endpoints), (1, 1));
+        crate::transport::rdma::context::tests::change_route(runtime, |route| {
+            route.net_device_index += 1
+        });
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+            .unwrap();
+        let report = requester
+            .submit_and_wait(
+                TransferOp::Read,
+                &peer,
+                &[TransferRequest {
+                    transport: Transport::Rdma,
+                    local_address: local.base_address(),
+                    remote_address: remote.base_address(),
+                    length: 8,
+                }],
+                TIMEOUT,
+            )
+            .unwrap();
+        assert!(!report.is_complete());
+        let after = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                after.opened_devices,
+                after.opened_connections,
+                after.reused_connections
+            ),
+            (
+                before.opened_devices,
+                before.opened_connections,
+                before.reused_connections
+            )
+        );
+        for engine in [&requester, &source] {
+            let close = engine.close(TIMEOUT);
+            assert!(
+                !matches!(close, Err(Error::Unquiesced { .. } | Error::Timeout)),
+                "{close:?}"
+            );
+            let stats = source_runtime(engine).stats().unwrap();
+            assert_eq!(
+                (
+                    stats.active_devices,
+                    stats.active_endpoints,
+                    stats.active_grants,
+                    stats.active_windows,
+                    stats.persistent_mrs
+                ),
+                (0, 0, 0, 0, 0)
+            );
+        }
     }
 }

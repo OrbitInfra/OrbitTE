@@ -53,6 +53,8 @@ unsafe extern "C" fn gated_post(
 
 static VERBS: sys::Verbs = sys::Verbs {
     asynchronous: sys::REAL.asynchronous,
+    discover: sys::REAL.discover,
+    query_address: sys::REAL.query_address,
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
     register_memory: sys::REAL.register_memory,
@@ -71,6 +73,58 @@ static VERBS: sys::Verbs = sys::Verbs {
     dealloc_pd: sys::REAL.dealloc_pd,
     close_device: sys::REAL.close_device,
 };
+
+fn rdma_config() -> RdmaConfig {
+    let name = env::var("ORBITTE_SHARED_DEVICE").unwrap();
+    let mut config = if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+        RdmaConfig {
+            rdma_whitelist: vec![name],
+            ..Default::default()
+        }
+    } else {
+        let mut config = RdmaConfig::new(name);
+        config.gid_index = Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap());
+        config
+    };
+    config.hop_limit = 64;
+    config
+}
+
+fn record_topology(engine: &crate::TransferEngine) {
+    let topology = engine.topology().unwrap().unwrap();
+    let selected = topology
+        .nic_list
+        .iter()
+        .filter(|nic| nic.device_attrs.contains_key("rdma.selected"))
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 1);
+    let nic = selected[0];
+    let attrs = &nic.device_attrs;
+    assert_eq!(nic.name, env::var("ORBITTE_SHARED_DEVICE").unwrap());
+    assert_eq!(attrs["rdma.port"], "1");
+    assert_eq!(
+        attrs["rdma.gid_index"],
+        env::var("ORBITTE_SHARED_GID").unwrap()
+    );
+    assert_eq!(attrs["rdma.gid_type"], "RoCE v2");
+    assert_ne!(attrs["rdma.net_device_index"], "0");
+    if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
+        assert_eq!(
+            topology.nic_list.len(),
+            1,
+            "only the locked RNIC is eligible"
+        );
+    }
+    println!(
+        "ORBITTE_TOPOLOGY {{\"device\":\"{}\",\"port\":{},\"gid_index\":{},\"gid\":\"{}\",\"gid_type\":\"{}\",\"net_device_index\":{}}}",
+        nic.name,
+        attrs["rdma.port"],
+        attrs["rdma.gid_index"],
+        attrs["rdma.gid"],
+        attrs["rdma.gid_type"],
+        attrs["rdma.net_device_index"]
+    );
+}
 
 fn value(seed: u64, index: usize) -> u8 {
     let value = (index as u64)
@@ -112,9 +166,7 @@ fn shared_cq_peer() {
     let seed: u64 = env::var("ORBITTE_SHARED_SEED").unwrap().parse().unwrap();
     let stride = payload + 2 * GUARD;
     let length = COUNT * stride;
-    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
-    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
-    config.hop_limit = 64;
+    let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
     config.max_endpoints = COUNT;
     config.max_direct_bytes = length;
@@ -478,9 +530,7 @@ fn source_window_peer() {
         "revoked" | "parent" | "remote" | "range"
     ));
     let length = 4096 + 2 * GUARD;
-    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
-    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
-    config.hop_limit = 64;
+    let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
     config.max_cqes = 1;
     config.max_send_wr = 1;
@@ -802,9 +852,7 @@ fn duplex_completion_peer() {
     let length = 2 * bank;
     let role_seed = seed ^ if source { 0x1234_5678 } else { 0xfedc_ba98 };
     let peer_seed = seed ^ if source { 0xfedc_ba98 } else { 0x1234_5678 };
-    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
-    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
-    config.hop_limit = 64;
+    let mut config = rdma_config();
     config.host_memory = RdmaHostMemory::Direct;
     config.max_endpoints = 2 * COUNT;
     config.max_direct_bytes = length;

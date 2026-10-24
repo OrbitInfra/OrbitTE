@@ -629,3 +629,217 @@ fn reused_grant_exhaustion_and_pre_open_async_fault_preserve_its_creating_identi
         source.close(Duration::from_secs(3)).unwrap();
     }
 }
+
+pub(in crate::transport::rdma) fn change_route(
+    runtime: &RdmaTransport,
+    change: impl FnOnce(&mut RdmaAddress),
+) {
+    let cache = runtime.device.lock().unwrap();
+    let state = cache.owner.as_ref().unwrap().state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("not open");
+    };
+    let mut route = resources.address.clone();
+    change(&mut route);
+    *unsafe { &*resources.handles.context.cast::<FakeDevice>() }
+        .route
+        .lock()
+        .unwrap() = Some(route);
+}
+
+#[test]
+fn every_frozen_route_field_fences_the_same_pd_permanently() {
+    for field in 0..9 {
+        let runtime = runtime("direct:ok");
+        assert_eq!(runtime.topology().unwrap(), None);
+        let owner = runtime.device().unwrap();
+        let domain = owner.domain().unwrap();
+        let initial = runtime.topology().unwrap().unwrap();
+        assert_eq!(initial.nic_list[0].device_attrs["rdma.selected"], "true");
+        change_route(&runtime, |route| match field {
+            0 => route.descriptor.gid[15] ^= 1,
+            1 => route.descriptor.lid += 1,
+            2 => route.descriptor.mtu += 1,
+            3 => route.descriptor.link_layer = 2,
+            4 => route.gid_type = super::super::discovery::GidType::RoceV2,
+            5 => route.net_device = Some("new-netdev".into()),
+            6 => route.net_device_index = 7,
+            7 => route.gid_index += 1,
+            _ => route.port += 1,
+        });
+        assert!(
+            matches!(
+                owner.check_address(),
+                Err(Error::Backend {
+                    operation: "RDMA route changed",
+                    code: libc::ESTALE
+                })
+            ),
+            "field {field}"
+        );
+        let state = owner.state.lock().unwrap();
+        let State::Open(resources) = &*state else {
+            panic!("old owner lost");
+        };
+        assert_eq!(resources.domain, domain);
+        assert_eq!(runtime.stats().unwrap().opened_devices, 1);
+        *unsafe { &*resources.handles.context.cast::<FakeDevice>() }
+            .route
+            .lock()
+            .unwrap() = None;
+        drop(state);
+        assert!(
+            owner.check_address().is_err(),
+            "restoring a route cannot heal the old PD"
+        );
+        assert_eq!(runtime.topology().unwrap().unwrap(), initial);
+        runtime
+            .close(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(runtime.stats().unwrap().active_devices, 0);
+        assert_eq!(runtime.topology().unwrap(), None);
+    }
+}
+
+#[test]
+fn endpoint_construction_and_connect_cannot_bypass_frozen_route_checks() {
+    for stage in [0, 1] {
+        let runtime = runtime("direct:ok");
+        let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
+        let native_events = events(&runtime);
+        change_route(&runtime, |route| route.descriptor.mtu += 1);
+        let result = if stage == 0 {
+            endpoint.open(0, 3)
+        } else {
+            {
+                let local = endpoint.local;
+                endpoint.connect(&local)
+            }
+        };
+        assert!(result.is_err());
+        assert!(!native_events.lock().unwrap().contains(&"connect"));
+        let _ = endpoint.close();
+        drop(endpoint);
+        runtime
+            .close(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.opened_devices,
+                stats.opened_connections,
+                stats.active_endpoints,
+                stats.active_devices
+            ),
+            (1, 1, 0, 0)
+        );
+    }
+}
+
+type Probe = (String, Arc<Mutex<Vec<&'static str>>>);
+thread_local! {
+    static PROBES: std::cell::RefCell<Vec<Probe>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn probe_candidates(config: &RdmaConfig) -> Result<(crate::Topology, Vec<RdmaAddress>)> {
+    let (_, mut candidates) = super::super::tests::discover(&RdmaConfig::new("ok"))?;
+    let mut first = candidates[0].clone();
+    first.device = config.device.clone().unwrap();
+    candidates.insert(0, first);
+    let topology = crate::Topology {
+        nic_list: candidates
+            .iter()
+            .map(|route| crate::NicEntry {
+                name: route.device.clone(),
+                pci_bus_id: None,
+                kind: crate::NicType::Rdma,
+                numa_node: None,
+                device_attrs: Default::default(),
+            })
+            .collect(),
+        mem_list: vec![],
+    };
+    Ok((topology, candidates))
+}
+
+unsafe extern "C" fn probe_open(
+    handles: *mut sys::DeviceHandles,
+    name: *const std::ffi::c_char,
+) -> i32 {
+    let code = unsafe { super::super::tests::open_device(handles, name) };
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    PROBES.with(|probes| {
+        probes
+            .borrow_mut()
+            .push((device.mode.clone(), Arc::clone(&device.events)))
+    });
+    code
+}
+
+#[test]
+fn candidate_fallback_requires_actual_cleanup_and_retained_failure_stops_discovery() {
+    static VERBS: sys::Verbs = sys::Verbs {
+        discover: probe_candidates,
+        open_device: probe_open,
+        ..super::super::tests::VERBS
+    };
+    for (mode, retained) in [
+        ("device_open", false),
+        ("route_rejected", false),
+        ("device_open_close", true),
+        ("device_pd_close", true),
+    ] {
+        PROBES.with(|probes| probes.borrow_mut().clear());
+        let mut runtime = runtime(mode);
+        runtime.verbs = &VERBS;
+        let result = runtime.device();
+        assert_eq!(matches!(result, Err(Error::Unquiesced { .. })), retained);
+        let probes = PROBES.with(|probes| probes.borrow().clone());
+        assert_eq!(probes.len(), if retained { 1 } else { 2 });
+        let first = probes[0].1.lock().unwrap().clone();
+        if !retained {
+            assert_eq!(first.last(), Some(&"close_device"));
+            assert_eq!(
+                runtime.topology().unwrap().unwrap().nic_list[1].device_attrs["rdma.selected"],
+                "true"
+            );
+            runtime
+                .close(Instant::now() + Duration::from_secs(2))
+                .unwrap();
+            assert_eq!(runtime.stats().unwrap().active_devices, 0);
+        } else {
+            assert!(matches!(runtime.device(), Err(Error::Unquiesced { .. })));
+            assert!(matches!(
+                runtime.close(Instant::now() + Duration::from_secs(2)),
+                Err(Error::Unquiesced { .. })
+            ));
+            assert_eq!(runtime.stats().unwrap().retained_devices, 1);
+            drop(runtime);
+            assert_eq!(*probes[0].1.lock().unwrap(), first, "no hidden close retry");
+        }
+    }
+}
+
+#[test]
+fn second_native_query_failure_cannot_reopen_a_restored_tuple_or_replace_the_pd() {
+    let runtime = runtime("direct:route_second_query_error");
+    assert!(runtime.staging_endpoint(8, 0).is_err());
+    let owner = runtime.device().unwrap();
+    let native_events = events(&runtime);
+    assert!(owner.check_address().is_err());
+    assert!(runtime.staging_endpoint(8, 0).is_err());
+    assert_eq!(
+        native_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| **event == "open_endpoint")
+            .count(),
+        1
+    );
+    assert_eq!(runtime.stats().unwrap().opened_devices, 1);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(runtime.stats().unwrap().active_devices, 0);
+}

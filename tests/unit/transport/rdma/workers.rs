@@ -174,7 +174,6 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
         local: Descriptor::default(),
         incarnation: None,
         config: runtime.config.clone(),
-        verbs: runtime.verbs,
         deadline: deadline(),
         output: None,
         claim: 1,
@@ -721,7 +720,7 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
 }
 
 pub(super) fn before_abort_lock(shared: &Shared, record: &Record) {
-    if shared.config.device != "async_abort_lock_pause" || record.tag != 1 {
+    if shared.config.device.as_deref() != Some("async_abort_lock_pause") || record.tag != 1 {
         return;
     }
     let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
@@ -1136,7 +1135,7 @@ fn second_cq_partial_construction_cleans_only_proven_native_owners() {
 static IDLE_DEBIT: std::sync::OnceLock<(Mutex<(bool, bool)>, Condvar)> = std::sync::OnceLock::new();
 
 pub(super) fn before_idle_debit(shared: &Shared) {
-    if shared.config.device != "copy_idle_debit_pause" {
+    if shared.config.device.as_deref() != Some("copy_idle_debit_pause") {
         return;
     }
     let (lock, changed) = IDLE_DEBIT.get_or_init(Default::default);

@@ -6,6 +6,9 @@ use crate::{EngineConfig, TransferEngine, TransferRequest, Transport};
 type Observation = (u64, [u8; 24], u32, u32, u32, u32, usize, u32);
 
 fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
+    if round == 0 {
+        super::record_topology(engine);
+    }
     let runtime = source_runtime(engine);
     let progress = runtime.progress(runtime.device().unwrap()).unwrap();
     let mut records = Vec::new();
@@ -111,9 +114,7 @@ fn connected_endpoint_peer() {
     let length = 2 * payload + 3 * GUARD;
     let destination = payload + 2 * GUARD;
     let bind: std::net::SocketAddr = env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap();
-    let mut config = RdmaConfig::new(env::var("ORBITTE_SHARED_DEVICE").unwrap());
-    config.gid_index = env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap();
-    config.hop_limit = 64;
+    let mut config = super::rdma_config();
     config.max_endpoints = 4;
     config.max_cached_mrs = 2;
     config.max_direct_bytes = 2 * payload;

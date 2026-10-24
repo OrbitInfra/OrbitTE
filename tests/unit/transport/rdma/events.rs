@@ -180,3 +180,25 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
         "no native teardown retry without an ACK consumer"
     );
 }
+
+#[test]
+fn route_fault_is_permanent_but_lost_consumer_keeps_unquiesced_precedence() {
+    let state = State::default();
+    state.fence_route();
+    assert!(matches!(
+        state.check(),
+        Err(Error::Backend {
+            operation: "RDMA route changed",
+            code: libc::ESTALE
+        })
+    ));
+    state.lost(libc::EIO);
+    state.fence_route();
+    assert!(matches!(
+        state.check(),
+        Err(Error::Unquiesced {
+            operation: "RDMA asynchronous event consumer",
+            code: libc::EIO
+        })
+    ));
+}
