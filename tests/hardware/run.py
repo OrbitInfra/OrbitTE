@@ -268,6 +268,7 @@ class Controller:
                 or type(case.get('rdma_events')) is not bool
                 or case.get('mode') not in ['healthy', 'cq-error', 'partial-post', 'paused-close', 'mr-rollback']
                 or case.get('operation') not in ['read', 'write']
+                or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
             raise ValueError('invalid explicit multirail profile')
         if case['mode'] != 'healthy' and case['mask'] != 3:
@@ -284,6 +285,7 @@ class Controller:
                 'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events'])),
                 'ORBITTE_RAIL_MODE': case['mode'],
                 'ORBITTE_RAIL_OPERATION': case['operation'],
+                'ORBITTE_RAIL_FAULT': str(case['fault_rail']),
                 'ORBITTE_RAIL_MASK': str(case['mask']),
             }
             if readiness is not None:

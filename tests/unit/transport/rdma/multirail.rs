@@ -119,6 +119,7 @@ fn failed_bytes(
     incoming: &[u8],
     affected: bool,
     partial: bool,
+    fault_rail: usize,
 ) {
     let mut actual = vec![0; LENGTH];
     memory.read(0, &mut actual).unwrap();
@@ -126,9 +127,18 @@ fn failed_bytes(
         let relative = index.checked_sub(DESTINATION);
         let may_change = affected
             && relative.is_some_and(|offset| {
-                (6144..PAYLOAD).contains(&offset) || (partial && offset < 2048)
+                let bad_start = fault_rail * (PAYLOAD / 2);
+                let good_start = (1 - fault_rail) * (PAYLOAD / 2);
+                (good_start..good_start + PAYLOAD / 2).contains(&offset)
+                    || (partial && (bad_start..bad_start + 2048).contains(&offset))
             });
-        if may_change {
+        if affected && fault_rail == 1 && relative.is_some_and(|offset| offset < PAYLOAD / 2) {
+            assert_eq!(
+                actual[index],
+                incoming[GUARD + relative.unwrap()],
+                "earlier acknowledged slice lost its committed bytes"
+            );
+        } else if may_change {
             assert!(
                 actual[index] == before[index]
                     || actual[index] == incoming[GUARD + relative.unwrap()],
@@ -167,7 +177,9 @@ fn multirail_peer() {
     ));
     let mask: u64 = env::var("ORBITTE_RAIL_MASK").unwrap().parse().unwrap();
     let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
-    native::initialize(&mode, &rails[0], !source);
+    let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
+    assert!(fault_rail < 2);
+    native::initialize(&mode, &rails[fault_rail], !source);
     let config = super::super::super::RdmaConfig {
         rdma_whitelist: rails.clone(),
         port: Some(1),
@@ -314,13 +326,20 @@ fn multirail_peer() {
                 if mode == "paused-close" {
                     native::wait_paused();
                     let stats = engine.stats().unwrap().rdma.unwrap();
-                    assert_eq!((stats.active_grants, stats.direct_bytes), (2, PAYLOAD));
+                    if fault_rail == 0 {
+                        assert_eq!((stats.active_grants, stats.direct_bytes), (2, PAYLOAD));
+                    } else {
+                        assert!((1..=2).contains(&stats.active_grants));
+                        assert!((PAYLOAD / 2..=PAYLOAD).contains(&stats.direct_bytes));
+                    }
                     assert!(stats.work_requests > 0);
                     engine.unregister_memory(&memory).unwrap();
                     retired = true;
-                    assert_eq!(engine.stats().unwrap().rdma.unwrap().persistent_mrs, 2);
+                    assert!(
+                        (1..=2).contains(&engine.stats().unwrap().rdma.unwrap().persistent_mrs)
+                    );
                     assert!(matches!(
-                        memory.write(offset, &[0xff]),
+                        memory.write(offset + fault_rail * (PAYLOAD / 2), &[0xff]),
                         Err(Error::Unavailable(_))
                     ));
                     memory.write(0, &[0xa5]).unwrap();
@@ -351,8 +370,8 @@ fn multirail_peer() {
                     let stats = engine.stats().unwrap().rdma.unwrap();
                     assert_eq!(stats.partial_posts, u64::from(mode == "partial-post"));
                     assert_eq!(
-                        stats.completed_sends, 0,
-                        "failed parent cannot send successful slice receipts"
+                        stats.completed_sends, fault_rail as u64,
+                        "only earlier completed slices may have sent receipts"
                     );
                 } else {
                     assert!(report.is_complete(), "{report:?}");
@@ -372,9 +391,11 @@ fn multirail_peer() {
                     };
                     engine.unregister_memory(&memory).unwrap();
                     retired = true;
-                    assert_eq!(engine.stats().unwrap().rdma.unwrap().persistent_mrs, 2);
+                    assert!(
+                        (1..=2).contains(&engine.stats().unwrap().rdma.unwrap().persistent_mrs)
+                    );
                     assert!(matches!(
-                        memory.write(source_offset, &[0xff]),
+                        memory.write(source_offset + fault_rail * (PAYLOAD / 2), &[0xff]),
                         Err(Error::Unavailable(_))
                     ));
                     memory.write(0, &[0xa5]).unwrap();
@@ -392,7 +413,14 @@ fn multirail_peer() {
             super::connected::barrier(&mut stream, 0x32);
             let affected = source == (operation == TransferOp::Write);
             if matches!(mode.as_str(), "cq-error" | "partial-post") {
-                failed_bytes(&memory, &own, &incoming, affected, mode == "partial-post");
+                failed_bytes(
+                    &memory,
+                    &own,
+                    &incoming,
+                    affected,
+                    mode == "partial-post",
+                    fault_rail,
+                );
             } else {
                 let mut expected = own;
                 if affected {
@@ -436,7 +464,7 @@ fn multirail_peer() {
     drop(backing);
     assert!(weak.upgrade().is_none());
     println!(
-        "ORBITTE_MULTI_RAIL_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"mask\":{mask},\"payload\":{PAYLOAD},\"actual_rnics\":2,\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}"
+        "ORBITTE_MULTI_RAIL_RESULT {{\"mode\":\"{mode}\",\"source\":{source},\"mask\":{mask},\"fault_rail\":{fault_rail},\"payload\":{PAYLOAD},\"actual_rnics\":2,\"all_resources_drained\":true,\"allocation_released\":true,\"performance_measurement\":false}}"
     );
 }
 

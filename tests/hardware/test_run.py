@@ -160,12 +160,13 @@ class ResourceSelection(unittest.TestCase):
             nodes = {name: {'bind': '127.0.0.1:0', 'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}} for name in ['a', 'b']}
             profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'gid_index': 3, 'nodes': nodes}
             case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
-                    'transport': 'rdma', 'rdma_events': True, 'mode': 'healthy', 'operation': 'read', 'mask': 1}
+                    'transport': 'rdma', 'rdma_events': True, 'mode': 'healthy', 'operation': 'read', 'mask': 1, 'fault_rail': 1}
             controller = runner.Controller(profile, binary, root)
 
             def start(*args):
                 self.assertEqual(args[-1]['ORBITTE_SHARED_RAILS'], 'mlx5_1,mlx5_2')
                 self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '1')
+                self.assertEqual(args[-1]['ORBITTE_RAIL_FAULT'], '1')
                 self.assertEqual(args[-1]['ORBITTE_RDMA_EVENTS'], '1')
                 raise CapturedStart()
 
@@ -173,7 +174,7 @@ class ResourceSelection(unittest.TestCase):
             with self.assertRaises(CapturedStart):
                 controller.case(0, case)
             for invalid in [{'mode': 'link-down'}, {'mode': 'cq-error'}, {'mask': True},
-                            {'mask': 0}, {'mask': 4}, {'rdma_events': 1}, {'operation': 'delete'},
+                            {'mask': 0}, {'mask': 4}, {'fault_rail': True}, {'fault_rail': 2}, {'rdma_events': 1}, {'operation': 'delete'},
                             {'transport': 'tcp'}, {'source_kind': 'cuda:0'}]:
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     controller.case(0, {**case, **invalid})
