@@ -1738,7 +1738,68 @@ separate, using newly frozen binaries.
 External implementation evidence is under
 `/root/orbitte-artifacts/rdma-cq-events-20261024`; burst-hardening evidence is
 under `/root/orbitte-artifacts/rdma-event-burst-20261024`, including the failing
-pre-fix regression. Native runs have not been executed for this substage. A fresh authorized two-host profile is required for
-the outstanding P4.8 independent repeat and P4.9 both-mode native qualification.
-Physical partial-post/CQ/device/destroy faults, multirail, GDR, performance,
-full P4 and OrbitKV linkage remain open.
+pre-fix regression. The initial P4.9 handoff executed zero native cases. The
+later [P4.10 host-native gate](#fragmented-cq-error-and-native-drain) now records
+polling/event regressions on replacement resources. P4.8's complete independent
+repeat, independent P4.9 review and the remaining native profiles stay open.
+Physical partial-post/device/destroy faults, multirail, GDR, performance, full
+P4 and OrbitKV linkage remain open.
+
+
+## Fragmented CQ error and native drain
+
+P4.10 extends the existing `orbitte-window` native gate with `fragment-read` and
+`fragment-write`. These are deliberately hostile test peers: the source binds
+an exact 4096-byte MW, while the requester posts three signaled 4096-byte WRs
+in one provider call against that capability. The first WR is valid; later
+addresses exceed the MW. Normal public requests still carry their exact range
+through the existing grant protocol.
+
+The RNIC must complete the first 4096 bytes, then report a real
+`IBV_WC_REM_ACCESS_ERR`. The third WR remains unresolved when the worker stops
+polling the failed lane. A test-only observer calls the real CQ destroy and
+checks both boundaries: the actual QP is already destroyed, the native MR is
+still present, application access still conflicts with the retained DMA loan,
+and the outstanding WR remains charged. Only after both SQ/RQ CQ destroy calls
+succeed may the remaining charge and loan end. Full buffers and guards check
+the successful prefix and unchanged suffix; one payload post proves no replay.
+All native data movement and completions use the real provider. The observer
+does not fabricate WR/CQE results.
+
+This follows frozen TENT's `RdmaSlice`/`Workers`, `RdmaEndPoint` and
+`RdmaContext` ownership boundaries. OrbitTE deliberately uses actual native
+QP/CQ retirement as the proof for whole-lane failure. A logical error, a zero
+successful-byte report or a returned cancellation request cannot substitute for
+that proof. This gate does not establish TENT wire interoperability.
+
+The physical runner requires `payload=12288`, `rdma_max_send_wr=3`,
+`rdma_max_cqes=3`, host memory, and a named `fragment-read` or `fragment-write`
+probe. Run each probe in both directions with `rdma_events=false` and `true`.
+The test records `ORBITTE_FRAGMENT_DRAIN` alongside existing byte, key, owner,
+async-event, channel, process-wait and resource-lock evidence. It remains
+ignored by default and needs an identity-pinned physical two-host profile.
+
+Fault retirement can close the completion channel before the idle snapshot.
+The fault gate explicitly joins lane retirement before taking its idle
+snapshot: request drain alone can precede the worker's final exit charge. The
+event-mode gate requires one created channel but zero idle event
+workers/channels after that join; a healthy profile still requires its live
+channel and consumer. Both paths require zero retained resources after
+close. The initial event-mode fault run and its failed healthy-idle assertion
+remain archived with the corrected gate's runs.
+
+Evidence is external to the checkout under
+`/root/orbitte-artifacts/rdma-native-stage-20261024`. Code revision `0339643`
+passes 13 local source/build gates and 60 host-native IPv6 RoCEv2 cases across
+stable and Rust 1.85 release binaries: 16 fragmented-fault cases, 32 existing MW
+fault cases and 12 shared-CQ/connected/duplex healthy regressions. All 120 peers
+are reaped with resource locks released. Four native negative controls reject
+early WR-debt repayment and early DMA-loan release in both progress modes,
+without timeouts; those failed runs remain archived. The raw audit checks actual
+`libibverbs`/`libmlx5` maps and each frozen binary identity. This is a CPU DRAM
+correctness and ownership profile.
+
+Two separately compiled toolchains are not an independent review. P4.8/P4.9 independent acceptance,
+physical partial-post admission, device loss, lost CQEs, arbitrary destroy
+failures, multirail, GDR, performance and complete P4 remain open. OrbitKV
+integration remains deferred.

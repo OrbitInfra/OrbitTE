@@ -87,8 +87,12 @@ CQs and data worker. One native completion-channel consumer acknowledges events
 without progress/budget locks between event receipts and stays alive through
 actual CQ destruction. The
 default remains TENT-style polling. Source controls cover wakeups, public
-READ/WRITE and connected reuse, construction failures and retained cleanup;
-independent review and physical event-mode qualification remain open.
+READ/WRITE and connected reuse, construction failures and retained cleanup.
+Scoped host-native polling/event gates now pass; independent review and full
+native qualification remain open.
+The native fragment-error gate also checks a successful prefix followed by a
+real RNIC access error, with outstanding WR/MR/loan ownership through native
+QP/CQ drain. Full fault qualification and P4 acceptance remain open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

@@ -64,5 +64,36 @@ class ResourceSelection(unittest.TestCase):
                 runner.Controller({**base, 'runner': 'orbitkv-peer-host'}, binary, root).case(0, {**case, 'rdma_events': True})
 
 
+    def test_fragment_fault_geometry_is_exact_before_start(self):
+        class CapturedStart(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            profile = {'runner': 'orbitte-window', 'rnic': 'fixture', 'gid_index': 3,
+                       'nodes': {'a': {'bind': '127.0.0.1:0'}, 'b': {'bind': '127.0.0.1:0'}}}
+            base = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
+                    'transport': 'rdma', 'payload': 12288, 'seed': 1,
+                    'rdma_max_cqes': 3, 'rdma_max_send_wr': 3}
+            for probe in ['fragment-read', 'fragment-write']:
+                for events in [False, True]:
+                    controller = runner.Controller(profile, binary, root)
+
+                    def start(*args):
+                        self.assertEqual(args[-1]['ORBITTE_WINDOW_PROBE'], probe)
+                        self.assertEqual(args[-1]['ORBITTE_RDMA_EVENTS'], str(int(events)))
+                        raise CapturedStart()
+
+                    controller.start = start
+                    with self.subTest(probe=probe, events=events), self.assertRaises(CapturedStart):
+                        controller.case(0, {**base, 'window_probe': probe, 'rdma_events': events})
+            for invalid in [{'payload': 4096}, {'payload': 12288.0}, {'rdma_max_cqes': 2},
+                            {'rdma_max_send_wr': 2}, {'window_probe': 'range'}, {'window_probe': 'unknown'}]:
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    runner.Controller(profile, binary, root).case(0, {**base, 'window_probe': 'fragment-read', **invalid})
+
+
 if __name__ == '__main__':
     unittest.main()
