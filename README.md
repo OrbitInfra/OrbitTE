@@ -31,9 +31,9 @@ Applications retain cache identity, recovery policy and replica ownership.
 implemented with scoped validation. Two physical RNICs per host pass a declared
 CPU DRAM/RoCEv2 profile for cross-rail READ/WRITE, concurrent parents, aggregate
 quotas, whole-parent source RQ admission, connected reuse, registration rollback
-and native fault/drain ownership. The concurrency profile includes four parents
-with three slices each. Broader physical faults, independent
-P4 acceptance, full TENT parity, GPUDirect RDMA and optional SSD transports
+and native fault/drain ownership. The extended profile includes eight parents,
+up to 5 MiB each, folded tails and 32/40-QP reuse. Broader physical faults,
+independent P4 acceptance, full TENT parity, GPUDirect RDMA and optional SSD transports
 remain open.
 The published `orbit-te` alpha reserves the package identity; use the source
 checkout for the implementation described here.

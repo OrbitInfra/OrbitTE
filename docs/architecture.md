@@ -119,11 +119,26 @@ remain the architectural reference. This additional RQ credit owner belongs to
 OrbitTE's exact source receive/invalidation protocol, rather than a native TENT
 wire contract or its cross-process bandwidth arbitration.
 
-The declared native profile now exercises four parents with three slices each,
-twelve-QP reuse, a fifth-plan rejection with one residual RQ credit, paused close
-and either-rail CQ errors. Source observers reconcile each actual RQ WR with its
-CQ/QPN and credit before native CQ destruction. See the
-[RQ evidence](rdma-cuda.md#whole-parent-source-rq-admission) for scope and controls.
+The extended native fixture exercises eight concurrent parents: 5 MiB,
+MiB-plus-one folded and exact-quarter-tail requests over 32/40 QPs. TENT's
+`planRdmaSlices` rounds to the base quantum and folds tails strictly below a
+quarter block; an exact-quarter tail remains separate. Both outer routing and
+inner WR queues use that rule. A native fixture checks each submitted WR offset
+and length, including the folded final byte. `DeviceSelector` charges bytes,
+so unequal tails need not create equal QP counts on the two RNICs.
+
+Five shared SQ credits bound actual outstanding requester WRs, with at most two
+WRs per post. The 5 MiB profile submits eighty payload WRs per parent, 640 per
+eight-parent round, while retaining that five-slot aggregate bound. One source
+RQ credit is reserved per outer slice's completion receive, independently of
+the number of payload WRs. A ninth whole plan is
+rejected before new QPs despite one residual RQ credit. Native observers bind
+the injected fault to its exact CQ/QPN/WR and reconcile unresolved siblings,
+DMA loans, MRs and receive credits through shared CQ teardown. Four native
+mutation runs reject premature debt/credit return. This extends qualification
+of existing owners without adding a production layer or changing wire v12.
+See the [geometry evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission)
+and [source RQ contract](rdma-cuda.md#whole-parent-source-rq-admission).
 
 ## Completion and failure
 

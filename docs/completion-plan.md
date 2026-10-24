@@ -28,7 +28,9 @@ paths. P4.12c adds eager multi-context publication and cross-rail slice ownershi
 P4.12d validates the declared two-RNIC host Direct profile and native fault/drain owners.
 P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent validation.
 P4.12f adds atomic whole-parent source RQ admission on wire v12 and scoped
-four-parent/three-slice native qualification.
+four-parent/three-slice native qualification. P4.12g extends the native fixture
+to eight parents, MiB requests, folded tails and two-WR fault windows, with an
+isolated frozen TENT geometry comparison. Production and wire v12 are unchanged.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -796,12 +798,29 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   two native controls reject early receive-credit return. These are same-agent
   scoped gates; full P4 and independent acceptance remain open. See
   [the RQ contract and evidence](rdma-cuda.md#whole-parent-source-rq-admission).
-- [ ] Qualify larger/folded multirail geometry, contention beyond the declared
-  four-parent/three-slice RQ profile, topology ranks, timeout/retry and endpoint
-  incarnations. Add physical link/device loss, lost completion, native cleanup failure and process
+- [ ] **P4.12g — larger/folded geometry and eight-parent pressure
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Production source, dependencies and wire v12 are unchanged from PR #36.
+  Frozen fixture `aebb3e8` passes 19 stable/MSRV gates, 190 all-feature units
+  per toolchain and ten runner controls. Sixteen valid plans match the unchanged
+  isolated frozen TENT function; two geometry mutations are rejected by each
+  toolchain. Both binaries pass 288 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 cases:
+  144 new geometry cases and 144 affected two-/four-parent regressions. Eight
+  parents own 32/40 QPs and share five requester SQ credits; a ninth parent is
+  rejected before new QPs with one source RQ credit remaining. The 5 MiB,
+  MiB-plus-one folded and exact-quarter-tail plans preserve exact native WR
+  lengths and QP reuse. Sixty-four two-WR fault windows retain one unresolved
+  sibling through both CQ destruction receipts. All 576 peers are reaped with
+  both locks released. Four native mutation runs reject early WR-debt or source
+  RQ-credit return in polling/event modes. These are same-agent scoped gates;
+  full P4 and independent acceptance remain open. See
+  [the geometry contract and evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+- [ ] Qualify geometry and admission contention beyond the declared eight-parent,
+  5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
+  endpoint incarnations. Add physical link/device loss, lost completion, native cleanup failure and process
   restart/death profiles; provider-owned WR faults do not qualify them.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
-  owners under physical-rail pressure. The declared two-/four-parent quota/reuse and
+  owners under physical-rail pressure. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs
@@ -1120,9 +1139,11 @@ faults and paused shutdown validation with both original NIC locks. P4.12e adds
 cross-context SQ/RQ quota wakeups and scoped two-parent concurrency, rejection,
 reuse and native faults. P4.12f adds whole-parent source RQ admission and scoped
 four-parent/three-slice pressure, twelve-QP reuse and source-credit drain.
-Next deliver larger/folded geometry, broader admission contention/topology and
-physical-fault profiles, including lost completion, native cleanup failure,
-restart and independent acceptance. The
+P4.12g adds the declared eight-parent MiB/folded/exact-quarter-tail profiles,
+32/40-QP reuse, actual two-WR fault debt and an isolated TENT function comparison.
+Next deliver broader admission contention/topology and physical-fault profiles,
+including lost completion, native cleanup failure, restart and independent
+acceptance. The
 earlier P4.8 independent native repeat remains open. Keep the frozen TENT
 context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.

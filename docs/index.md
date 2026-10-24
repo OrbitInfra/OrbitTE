@@ -44,6 +44,14 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
+- **October 25, 2026 — larger requests and folded tails:** Eight concurrent
+  parents exercise 5 MiB, MiB-plus-one and exact-quarter-tail plans, 32/40-QP
+  reuse and whole-plan RQ rejection. Stable/Rust 1.85 pass 288 two-RNIC native
+  cases, including 144 new geometry cases. Two-WR fault windows preserve the
+  unresolved sibling until CQ drain; four native mutation runs reject early
+  debt/credit return. Sixteen valid plans also match the isolated frozen TENT
+  function. Production and wire v12 are unchanged. Full P4 and independent
+  acceptance remain open.
 - **October 25, 2026 — source RQ admission:** Wire v12 reserves each complete
   slice plan before constructing QPs. The declared two-RNIC profile passes 296
   native cases across stable/Rust 1.85, including 64 new four-parent/three-slice

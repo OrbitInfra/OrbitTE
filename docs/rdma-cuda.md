@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12f/P5.1 add opt-in source implementations and qualification gates.
+P4.1-P4.12g/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
@@ -9,7 +9,10 @@ publication and cross-rail slices with aggregate parent completion. P4.12d
 validates the declared two-RNIC host Direct profile, including native faults
 and drain. P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent
 validation. P4.12f adds whole-parent source RQ admission and scoped
-four-parent/three-slice native validation. Broader physical faults and independent P4 acceptance remain open;
+four-parent/three-slice native validation. P4.12g extends the declared fixture to
+eight concurrent parents with MiB/folded geometry and two-WR fault windows,
+without changing production.
+Broader physical faults and independent P4 acceptance remain open;
 these substages do not establish full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
@@ -2676,3 +2679,117 @@ physical IB/link/device loss, lost completions, native cleanup failure and
 process restart/death remain unqualified. Independent acceptance, full P4,
 GPUDirect, performance and installed-consumer qualification remain open.
 OrbitKV integration stays deferred until the P4 stage boundary is accepted.
+
+
+## Larger requests, folded tails and eight-parent admission
+
+P4.12g extends qualification of the existing runtime. Production source,
+dependencies and wire v12 are unchanged from PR #36. The reference remains
+TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
+[`planRdmaSlices`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/slice.h#L69)
+rounds the block to the base quantum, computes the resulting count, then folds
+a tail strictly smaller than one quarter of that block. An exact-quarter tail
+remains separate. OrbitTE uses this geometry for parent routing and WR queues.
+
+The extended native fixture declares eight parents over two actual RNICs:
+
+| Parent bytes | Base | Outer slice lengths | QPs per peer | Source RQ capacity |
+| --- | --- | --- | --- | --- |
+| 5 MiB | 64 KiB | Five 1 MiB slices | 40 | 41 |
+| 1 MiB + 1 byte | 64 KiB | Three 256 KiB slices, then 256 KiB + 1 byte | 32 | 33 |
+| 1 MiB + 64 KiB | 64 KiB | Four 256 KiB slices, then 64 KiB | 40 | 41 |
+
+All share five requester SQ credits and at most two WRs per post. The folded
+outer tail also folds inside its WR plan: the last 64 KiB WR absorbs the extra
+byte. A ninth parent must be rejected atomically despite one residual source
+RQ credit. The 5 MiB/folded profiles also exercise paused unregister/close and
+actual CQ errors on either rail. Native ledgers bind the injected fault to its
+exact CQ/QPN/WR, preserve any other unresolved WRs until native CQ teardown,
+and check each actual MR and DMA loan. TENT's selector charges bytes; unequal
+slices need not have equal QP counts per NIC. Both actual devices must be used.
+
+`tests/reference/rdma_geometry.py` compiles the exact isolated plan structure
+and inline function from the frozen Git blob without modifying their bodies.
+Sixteen valid plans are compared with the Rust unit trace; inclusive-quarter
+and missing-fold native mutations must disagree. The full frozen TENT CPU
+transport trace remains a separate gate. This isolated function comparison is
+not native RDMA transport differential execution or performance evidence.
+CI preserves both evidence sets, using Ubuntu 24.04 and Clang 18 for bindings.
+
+### Declared P4.12g gates
+
+Frozen operational source `aebb3e8d25d39ffc1397f6fe6836960a27923c37` passes 19 sequential stable/Rust 1.85
+gates: format, default/RDMA/RDMA+CUDA Clippy and tests, both release libtest
+builds, both geometry comparisons and ten hardware-runner controls. Each
+all-feature unit suite passes 190 tests with four hardware tests ignored by
+default. Sixteen valid plans match the frozen native function, and each compiler
+rejects the two geometry mutations. RDMA/CUDA compilation adds no GPU or
+GPUDirect qualification.
+
+Both frozen binaries pass 288 two-host CPU DRAM/Host Direct/IPv4 RoCEv2 cases:
+144 new geometry cases and 144 affected concurrent regressions. The latter
+retain the previous two-/four-parent admission, endpoint, reuse, close and fault
+modes. Each binary covers both directions, READ/WRITE and polling/event progress.
+The original masked-routing, publication-rollback and partial-post fixtures are
+unchanged and retain their earlier evidence; they were not rerun in this matrix.
+
+Raw audits bind actual posted WR offsets/lengths, accepted byte prefixes and
+parent results to CQ/QPN/WR receipts. All 128 injected faults, including retained
+profiles, receive their own `IBV_WC_REM_ACCESS_ERR` CQE. Sibling errors are
+separately attributed. In 64 new two-WR fault windows, one unresolved sibling
+remains charged at each of the two native CQ destruction receipts. Across the
+matrix, 272 atomic source RQ rejections occur before new QPs, and 12,032 source
+RQ owner checks preserve actual credits, including
+4,336 checks of still-pending receive owners.
+The healthy large profiles admit 41,216 payload
+WRs, including 384 WRs that absorb the extra
+folded byte. These are correctness counts, not performance measurements.
+
+All 576 peers and supervisors are reaped with both original RNIC locks released.
+Receipts balance 1,152 context opens/closes and 16,948 MR
+registrations/deregistrations, including message MRs. Final counters are zero,
+application allocation owners expire, and postflight preserves node/boot,
+PCI/GUID/GID and provider-library identities. No GPU computation is performed.
+
+Four native negative runs use two deliberate mutations, each in polling/event
+mode: return payload WR debt after QP destruction but before CQ drain, or return
+source RQ credits at the same premature boundary. Each aborts at its intended
+owner assertion. Both peers and starter connections are reaped with locks
+released; no supervisor timeout counts as rejection. These controls are distinct
+from the isolated native function's two geometry mutations.
+
+The stable binary SHA-256 is `e6212e729b7e9b8e7bf2b80049061d39f1f6ff97e1b7ea2edc6b66352aaa286a`.
+The Rust 1.85 binary SHA-256 is `20f1fa32ede0ca7ada0341b281a590b478290e02dc016bfa84a06de045d93849`.
+External evidence remains at `/root/orbitte-artifacts/rdma-large-geometry-20261025`:
+
+- `gates-aebb3e8/manifest.json`, `source.tar` and frozen binaries preserve source,
+  compiler identity, commands and hashes. `geometry-{stable,msrv}/` separately
+  preserves frozen header/function bytes, C++ wrappers, inputs and mutations.
+- `geometry-profile.json`, `combined-profile.json`, `native-regression-manifest.json`
+  and `native-raw-audit.json` bind all 288 cases to real provider maps and locks.
+- `controls-aebb3e8/build-manifest.json` and `manifest.json` preserve both native
+  mutations, their four executions and exact expected assertion failures.
+- `node-{a,b}-preflight.json`, `node-{a,b}-postflight.json` and selected-stage/
+  History snapshots pin authorized nodes, boot IDs, PCI/GUID/GID and libraries.
+- `development-native/` retains the successful eighteen-case pilot. Preliminary
+  gates, geometry probes and control builds remain alongside the frozen run.
+  `evidence-index.json` and `final-delivery-*.json` seal hashes, exact PR checks
+  and the PR #36 main CI/Pages deployment.
+
+Reproduce with the frozen source and two identity-pinned authorized hosts,
+preserving both original selected resource locks:
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-large-geometry-20261025/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-large-geometry-20261025/gates-aebb3e8/libtest-stable \
+  --output /path/outside/checkout/geometry-repeat-stable
+```
+
+These are same-agent scoped libtest-profile gates. Geometry or admission
+contention beyond the declared eight-parent profiles, strict fairness, broader
+topology, timeout/retry, physical IB/link/device loss, lost completions, native
+cleanup failure and process restart/death remain unqualified. Independent
+acceptance (including the earlier P4.8 repeat), installed-consumer qualification,
+full P4, GPUDirect and performance remain open. OrbitKV integration stays
+deferred until the P4 stage boundary is accepted.

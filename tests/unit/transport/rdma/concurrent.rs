@@ -9,22 +9,59 @@ struct Shape {
     parents: usize,
     slices: usize,
     payload: usize,
+    block: usize,
+    base: usize,
     bank: usize,
     length: usize,
     destination: usize,
 }
 
 impl Shape {
-    fn new(wide: bool) -> Self {
-        let (parents, slices, payload) = if wide { (4, 3, 24576) } else { (2, 2, 16384) };
+    fn new(mode: &str) -> Self {
+        let (parents, slices, payload, block, base) = if mode.starts_with("large-") {
+            (8, 5, 5 << 20, 1 << 20, 64 << 10)
+        } else if mode.starts_with("folded-") {
+            (8, 4, (1 << 20) + 1, 256 << 10, 64 << 10)
+        } else if mode.starts_with("quarter-") {
+            (8, 5, (1 << 20) + (64 << 10), 256 << 10, 64 << 10)
+        } else if mode.starts_with("rq-") {
+            (4, 3, 24576, 8192, 2048)
+        } else {
+            (2, 2, 16384, 8192, 2048)
+        };
         let bank = 2 * payload + 3 * GUARD;
         Self {
             parents,
             slices,
             payload,
+            block,
+            base,
             bank,
             length: (parents + 1) * bank,
             destination: payload + 2 * GUARD,
+        }
+    }
+
+    fn wr_lengths(self, slice: usize) -> Vec<usize> {
+        let length = self.range(slice).len();
+        let mut result = vec![self.base; length / self.base];
+        if length % self.base != 0 {
+            assert_eq!(
+                length % self.base,
+                1,
+                "the declared folded fixture has one extra byte"
+            );
+            *result.last_mut().unwrap() += 1;
+        }
+        result
+    }
+
+    fn range(self, slice: usize) -> std::ops::Range<usize> {
+        assert!(slice < self.slices);
+        slice * self.block..if slice + 1 == self.slices {
+            self.payload
+        } else {
+            (slice + 1) * self.block
         }
     }
 }
@@ -143,8 +180,8 @@ fn verify_bytes(
             let incoming = incoming[parent * shape.bank + GUARD + relative];
             if success[parent] {
                 assert_eq!(actual[index], incoming, "parent {parent} byte {relative}");
-            } else if relative % (shape.payload / shape.slices)
-                < accepted[parent][relative / (shape.payload / shape.slices)]
+            } else if relative - (relative / shape.block).min(shape.slices - 1) * shape.block
+                < accepted[parent][(relative / shape.block).min(shape.slices - 1)]
             {
                 assert!(actual[index] == original[index] || actual[index] == incoming);
             } else {
@@ -161,13 +198,20 @@ fn verify_bytes(
 
 pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     assert_eq!(env::var("ORBITTE_RAIL_MASK").unwrap(), "3");
-    let wide = mode.starts_with("rq-");
-    let shape = Shape::new(wide);
+    let shape = Shape::new(mode);
+    let large = shape.parents == 8;
+    let wide = large || mode.starts_with("rq-");
     let count = shape.parents * shape.slices;
-    let sq_limit = if wide { 3 } else { 2 };
-    let rq_limit = if wide { 13 } else { 4 };
-    let fault = matches!(mode, "concurrent-cq-error" | "rq-cq-error");
-    let paused = matches!(mode, "concurrent-close" | "rq-close");
+    let sq_limit = if large {
+        5
+    } else if wide {
+        3
+    } else {
+        2
+    };
+    let rq_limit = if wide { count + 1 } else { 4 };
+    let fault = mode.ends_with("cq-error");
+    let paused = mode.ends_with("close");
     let endpoint_limit = mode == "concurrent-endpoints";
     let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
     let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
@@ -176,6 +220,22 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     } else {
         TransferOp::Write
     };
+    assert_eq!(
+        slice::plan_rdma_slices(shape.payload, shape.base, sq_limit).unwrap(),
+        (shape.block, shape.slices)
+    );
+    println!(
+        "ORBITTE_SLICE_GEOMETRY {{\"parents\":{},\"payload\":{},\"base\":{},\"block\":{},\"slices\":{},\"lengths\":{:?},\"sq_limit\":{sq_limit},\"rq_limit\":{rq_limit},\"max_send_wr\":{}}}",
+        shape.parents,
+        shape.payload,
+        shape.base,
+        shape.block,
+        shape.slices,
+        (0..shape.slices)
+            .map(|index| shape.range(index).len())
+            .collect::<Vec<_>>(),
+        if large { 2 } else { 1 }
+    );
     native::initialize(mode, !source, fault_rail, shape);
     let config = super::super::super::super::RdmaConfig {
         rdma_whitelist: rails.to_vec(),
@@ -189,7 +249,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             RdmaProgressMode::Polling
         },
         max_endpoints: if wide {
-            24
+            2 * count
         } else if !source && endpoint_limit {
             4
         } else {
@@ -203,10 +263,10 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             2 * shape.payload
         },
         max_cqes: if source { rq_limit } else { sq_limit },
-        max_send_wr: 1,
+        max_send_wr: if large { 2 } else { 1 },
         max_cached_mrs: 8,
         max_cached_mr_bytes: 8 * shape.length,
-        block_size: 2048,
+        block_size: shape.base,
         hop_limit: 64,
         ..Default::default()
     };
@@ -226,7 +286,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             handler_threads: shape.parents + 1,
             handler_timeout: TIMEOUT,
             max_registered_regions: 8,
-            max_registered_bytes: 1 << 20,
+            max_registered_bytes: (2 * shape.length).max(1 << 20),
             ..Default::default()
         },
     ));
@@ -356,7 +416,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                                     } else {
                                         GUARD
                                     }
-                                    + slice * shape.payload / shape.slices,
+                                    + shape.range(slice).start,
                                 &[0xff]
                             ),
                             Err(Error::Unavailable(_))
@@ -486,7 +546,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                                     } else {
                                         shape.destination
                                     }
-                                    + slice * shape.payload / shape.slices,
+                                    + shape.range(slice).start,
                                 &[0xff]
                             ),
                             Err(Error::Unavailable(_))

@@ -16,10 +16,37 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
         (129, 64, 64, vec![64, 65]),
         (1025, 64, 4, vec![320, 320, 385]),
         (1025, 64, 2, vec![576, 449]),
+        (5 << 20, 64 << 10, 5, vec![1 << 20; 5]),
+        (
+            (1 << 20) + 1,
+            64 << 10,
+            5,
+            vec![256 << 10, 256 << 10, 256 << 10, (256 << 10) + 1],
+        ),
+        (
+            (1 << 20) + (64 << 10) - 1,
+            64 << 10,
+            5,
+            vec![256 << 10, 256 << 10, 256 << 10, (320 << 10) - 1],
+        ),
+        (
+            (1 << 20) + (64 << 10),
+            64 << 10,
+            5,
+            vec![256 << 10, 256 << 10, 256 << 10, 256 << 10, 64 << 10],
+        ),
+        (
+            (256 << 10) + 1,
+            64 << 10,
+            64,
+            vec![64 << 10, 64 << 10, 64 << 10, (64 << 10) + 1],
+        ),
         (32 << 20, 64 << 10, 64, vec![512 << 10; 64]),
         (32 << 20, 64 << 10, 32, vec![1 << 20; 32]),
     ] {
         let queue = SendQueue::new(length, base, cap, usage(), 1).unwrap();
+        let (block, count) = plan_rdma_slices(length, base, cap).unwrap();
+        println!("ORBITTE_RDMA_GEOMETRY {length} {base} {cap} {block} {count}");
         assert_eq!(
             queue
                 .requests
