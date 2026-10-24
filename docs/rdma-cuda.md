@@ -1738,10 +1738,12 @@ separate, using newly frozen binaries.
 External implementation evidence is under
 `/root/orbitte-artifacts/rdma-cq-events-20261024`; burst-hardening evidence is
 under `/root/orbitte-artifacts/rdma-event-burst-20261024`, including the failing
-pre-fix regression. Native runs have not been executed for this substage. A fresh authorized two-host profile is required for
-the outstanding P4.8 independent repeat and P4.9 both-mode native qualification.
-Physical partial-post/CQ/device/destroy faults, multirail, GDR, performance,
-full P4 and OrbitKV linkage remain open.
+pre-fix regression. The initial P4.9 handoff executed zero native cases. The
+later [P4.10 host-native gate](#fragmented-cq-error-and-native-drain) now records
+polling/event regressions on replacement resources. P4.8's complete independent
+repeat, independent P4.9 review and the remaining native profiles stay open.
+Physical partial-post/device/destroy faults, multirail, GDR, performance, full
+P4 and OrbitKV linkage remain open.
 
 
 ## Fragmented CQ error and native drain
@@ -1787,8 +1789,17 @@ close. The initial event-mode fault run and its failed healthy-idle assertion
 remain archived with the corrected gate's runs.
 
 Evidence is external to the checkout under
-`/root/orbitte-artifacts/rdma-native-stage-20261024`. Two separately compiled
-toolchains are not an independent review. P4.8/P4.9 independent acceptance,
+`/root/orbitte-artifacts/rdma-native-stage-20261024`. Code revision `0339643`
+passes 13 local source/build gates and 60 host-native IPv6 RoCEv2 cases across
+stable and Rust 1.85 release binaries: 16 fragmented-fault cases, 32 existing MW
+fault cases and 12 shared-CQ/connected/duplex healthy regressions. All 120 peers
+are reaped with resource locks released. Four native negative controls reject
+early WR-debt repayment and early DMA-loan release in both progress modes,
+without timeouts; those failed runs remain archived. The raw audit checks actual
+`libibverbs`/`libmlx5` maps and each frozen binary identity. This is a CPU DRAM
+correctness and ownership profile.
+
+Two separately compiled toolchains are not an independent review. P4.8/P4.9 independent acceptance,
 physical partial-post admission, device loss, lost CQEs, arbitrary destroy
 failures, multirail, GDR, performance and complete P4 remain open. OrbitKV
 integration remains deferred.

@@ -617,12 +617,13 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   release pressure runs. The implementation's 39-case IPv6 RoCEv2 profile passes
   and its raw owners/DSO/process/lock evidence is independently audited. The
   separately built MSRV repeat executes zero cases: fresh selected-stage History
-  finds A RELEASED/B KILLED, no RUNNING replacement. A newly authorized two-host
-  profile is needed before accepting this row. Physical IB, multiple RNIC/NUMA
+  finds A RELEASED/B KILLED, no RUNNING replacement. Replacement resources now
+  support P4.10's scoped host-native runs; the complete independent P4.8 repeat
+  remains required before accepting this row. Physical IB, multiple RNIC/NUMA
   rank comparisons, route/device faults and complete P4 remain open. See
   [the scope and TENT correspondence](rdma-cuda.md#device-port-gid-and-host-topology-discovery).
-- [ ] **P4.9 — optional CQ event progress (Implemented; independent and native
-  qualification open).** Default polling remains the frozen TENT behavior.
+- [ ] **P4.9 — optional CQ event progress (Implemented; scoped host-native
+  gates pass, independent and full qualification open).** Default polling remains the frozen TENT behavior.
   Event mode shares one native completion channel between the existing SQ/RQ
   CQs. A separate channel consumer ACKs each actual returned event without
   acquiring progress or budget locks between receipts. Atomic ACK counters and
@@ -636,12 +637,14 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   wakeups, deadline retirement, partial construction and eight-event ACK bursts
   during native destruction with progress, budget or both locks held. Context
   asynchronous events obey the same burst contract. The physical runner accepts
-  an explicit `rdma_events` flag without changing RNIC/GPU locks. New binaries still need both-mode native
-  regressions and independent review; P4.8's independent native repeat remains
-  a prerequisite for accepting dependent hardware work. See
+  an explicit `rdma_events` flag without changing RNIC/GPU locks. P4.10 now
+  covers the declared host-native polling/event regressions. Independent review,
+  the remaining native profiles and P4.8's complete independent repeat remain
+  required before accepting the dependent hardware scope. See
   [the event-progress contract](rdma-cuda.md#optional-cq-event-progress).
 - [ ] **P4.10 — fragmented CQ-error and native lane drain (Implemented;
-  independent acceptance and complete fault qualification open).** The native
+  scoped native gates pass, independent acceptance and full fault qualification
+  open).** The native
   MW gate adds three signaled WRs in one post, a valid 4 KiB prefix and a real
   remote-access error beyond the exact MW. READ/WRITE, both peer directions and
   both progress modes assert actual QP destruction, an outstanding WR charge,
