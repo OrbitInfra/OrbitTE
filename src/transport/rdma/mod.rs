@@ -78,7 +78,7 @@ pub struct RdmaConfig {
     pub block_size: usize,
     /// Maximum signaled work requests in one request QP window (1..=64).
     pub max_send_wr: usize,
-    /// Capacity of each shared send/receive CQ (1..=4096), charged separately.
+    /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
     pub max_cqes: usize,
     /// Aggregate physical MR copies, including every enabled context/capability.
     /// Published host Direct registrations are pinned until unregister or close.
@@ -262,6 +262,7 @@ pub(crate) struct RdmaTransport {
     config: RdmaConfig,
     usage: Arc<Mutex<RdmaStats>>,
     counters: Arc<events::Counters>,
+    cq_quota: Arc<quota::CqQuota>,
     verbs: &'static sys::Verbs,
     context_set: Mutex<ContextSet>,
     drained: Arc<Condvar>,

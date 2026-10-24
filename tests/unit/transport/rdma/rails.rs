@@ -917,3 +917,98 @@ fn capability_fanout_rolls_back_as_one_publication_and_failed_cleanup_keeps_unpu
         Err(Error::Unquiesced { .. })
     ));
 }
+
+#[test]
+fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
+    static PAUSED: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open_paused,
+        ..super::super::super::cq::tests::VERBS
+    };
+    for operation in [TransferOp::Read, TransferOp::Write] {
+        let mut runtime = sliced_runtime(u64::MAX, 8, 1, RdmaHostMemory::Direct, true);
+        runtime.verbs = &PAUSED;
+        runtime.registrations =
+            buffers::LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), &PAUSED);
+        let engine = single_handler(runtime);
+        let memory = engine
+            .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let runtime = source_runtime(&engine);
+        let mut endpoints = [0, 2].map(|id| {
+            let selection = runtime.allocate(4, 1 << id).unwrap();
+            let mut endpoint = runtime
+                .endpoint_on(
+                    selection,
+                    &memory,
+                    id * 4..id * 4 + 4,
+                    0,
+                    Instant::now() + TIMEOUT,
+                    None,
+                )
+                .unwrap();
+            endpoint.connect(&endpoint.descriptor()).unwrap();
+            endpoint
+        });
+        let first =
+            super::super::super::context::tests::pause_device(&runtime.device_at(0).unwrap());
+        let second =
+            super::super::super::context::tests::pause_device(&runtime.device_at(2).unwrap());
+        second.0.lock().unwrap().1 = true;
+        second.1.notify_all();
+        let end = Instant::now() + Duration::from_secs(2);
+        let [a, b] = &mut endpoints;
+        let b_record = Arc::clone(&b.record);
+        let (a_result, b_result) = thread::scope(|scope| {
+            let a_task = scope.spawn(|| a.transfer(&a.descriptor(), operation, end));
+            let (state, timed) = first
+                .1
+                .wait_timeout_while(first.0.lock().unwrap(), Duration::from_secs(1), |state| {
+                    !state.0
+                })
+                .unwrap();
+            assert!(!timed.timed_out() && state.0);
+            drop(state);
+            let waits = runtime.stats().unwrap().cq_event_waits;
+            let b_task = scope.spawn(|| b.transfer(&b.descriptor(), operation, end));
+            let wait_deadline = Instant::now() + Duration::from_secs(1);
+            while b_record
+                .send_namespace
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 0
+                || runtime.stats().unwrap().cq_event_waits == waits
+            {
+                assert!(Instant::now() < wait_deadline);
+                thread::yield_now();
+            }
+            first.0.lock().unwrap().1 = true;
+            first.1.notify_all();
+            (a_task.join().unwrap(), b_task.join().unwrap())
+        });
+        let closes = endpoints
+            .iter_mut()
+            .map(|endpoint| {
+                endpoint.deadline = Instant::now() + TIMEOUT;
+                endpoint.close()
+            })
+            .collect::<Vec<_>>();
+        drop(endpoints);
+        engine.unregister_memory(&memory).unwrap();
+        engine.close(TIMEOUT).unwrap();
+        a_result.unwrap();
+        assert!(
+            b_result.is_ok(),
+            "a context with no local CQE missed the aggregate quota wake: {b_result:?}"
+        );
+        assert!(closes.iter().all(Result::is_ok), "{closes:?}");
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.peak_work_requests,
+                stats.work_requests,
+                stats.progress_failures
+            ),
+            (1, 0, 0)
+        );
+    }
+}

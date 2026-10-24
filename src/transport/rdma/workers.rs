@@ -151,6 +151,8 @@ pub(super) struct Workers {
 pub(super) struct Shared {
     asynchronous: Arc<events::State>,
     next_work_namespace: AtomicU64,
+    quota: Arc<super::quota::CqQuota>,
+    quota_waiting: AtomicBool,
     completion_events: Option<Arc<CompletionEvents>>,
     control: Mutex<Control>,
     changed: Condvar,
@@ -198,6 +200,7 @@ impl Workers {
         config: &RdmaConfig,
         device: Arc<RdmaContext>,
         usage: Arc<Mutex<RdmaStats>>,
+        quota: Arc<super::quota::CqQuota>,
         verbs: &'static sys::Verbs,
     ) -> Result<Arc<Self>> {
         let endpoints = EndpointStore::new(config.max_endpoints)?;
@@ -252,6 +255,8 @@ impl Workers {
         let shared = Arc::new(Shared {
             asynchronous: Arc::clone(&device.asynchronous),
             next_work_namespace: AtomicU64::new(1),
+            quota,
+            quota_waiting: AtomicBool::new(false),
             completion_events,
             control: Mutex::new(Control {
                 cq: Some(cq),
@@ -271,6 +276,7 @@ impl Workers {
             verbs,
             config: config.clone(),
         });
+        shared.quota.attach(&shared);
         device.asynchronous.attach(Arc::downgrade(&shared));
         let owner = Arc::new(Self {
             shared: Arc::clone(&shared),
@@ -1172,6 +1178,27 @@ impl Drop for Workers {
 }
 
 impl Shared {
+    pub(super) fn wake_quota(&self) {
+        if self.quota_waiting.swap(false, Ordering::AcqRel) {
+            self.wake();
+        }
+    }
+
+    fn wait_quota(&self, receive: bool) {
+        self.quota_waiting.store(true, Ordering::Release);
+        // Enrollment precedes the budget recheck: a concurrent release either
+        // sees the waiter or leaves available capacity and a retained unpark token.
+        let usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
+        let debt = if receive {
+            usage.receive_work_requests
+        } else {
+            usage.work_requests
+        };
+        if debt < self.config.max_cqes {
+            self.wake_quota();
+        }
+    }
+
     pub(super) fn wake(&self) {
         if let Some(worker) = self.progress_thread.get() {
             worker.unpark();
@@ -1484,6 +1511,7 @@ impl Shared {
             if let Some(receive) = &mut request.receive {
                 receive.quiesce();
             }
+            self.quota.released();
             if let Some(resources) = &mut request.resources {
                 if let Some(grant) = &mut resources.grant {
                     if let Err((operation, code)) = grant.close(&resources.connection, self.verbs) {
@@ -1559,7 +1587,10 @@ impl Shared {
             .reserve(self.config.max_send_wr, self.config.max_cqes)
         {
             Ok(requests) => requests,
-            Err(Error::ResourceExhausted) => return false,
+            Err(Error::ResourceExhausted) => {
+                self.wait_quota(false);
+                return false;
+            }
             Err(error) => {
                 request.failure = Some(Fault::from_error(error));
                 record.changed.notify_all();
@@ -1618,6 +1649,7 @@ impl Shared {
             let pending = work.queue.pending();
             request.failure = Some(fault);
             drop(request);
+            self.quota.released();
             if pending {
                 self.fail(fault);
             } else {
@@ -1689,6 +1721,7 @@ impl Shared {
             }
             drop(request);
         }
+        self.quota.released();
         // The handler owns a strong record until all of its accesses have ended.
         record.changed.notify_all();
     }
@@ -1737,7 +1770,10 @@ impl Shared {
             return false;
         }
         match receive.reserve(self.config.max_cqes) {
-            Err(Error::ResourceExhausted) => return false,
+            Err(Error::ResourceExhausted) => {
+                self.wait_quota(true);
+                return false;
+            }
             Err(error) => {
                 request.failure = Some(Fault::from_error(error));
                 record.changed.notify_all();
@@ -1761,6 +1797,7 @@ impl Shared {
             let pending = receive.pending();
             request.failure = Some(fault);
             drop(request);
+            self.quota.released();
             if pending {
                 self.fail(fault);
             }
@@ -1889,6 +1926,7 @@ impl Shared {
                     }
                 }
             }
+            self.quota_waiting.store(false, Ordering::Release);
             for index in 0..records.len() {
                 if self
                     .control

@@ -7,6 +7,9 @@ use crate::{EngineConfig, RemoteEffect, TransferEngine, TransferOp, TransferRequ
 #[path = "multirail_verbs.rs"]
 mod native;
 
+#[path = "concurrent.rs"]
+mod concurrent;
+
 const PAYLOAD: usize = 12288;
 const LENGTH: usize = 2 * PAYLOAD + 3 * GUARD;
 const DESTINATION: usize = PAYLOAD + 2 * GUARD;
@@ -171,6 +174,13 @@ fn multirail_peer() {
     assert_eq!(rails.len(), 2);
     assert_ne!(rails[0], rails[1]);
     let mode = env::var("ORBITTE_RAIL_MODE").unwrap();
+    if matches!(
+        mode.as_str(),
+        "concurrent-quota" | "concurrent-endpoints" | "concurrent-close" | "concurrent-cq-error"
+    ) {
+        concurrent::run(&mode, source, &rails);
+        return;
+    }
     assert!(matches!(
         mode.as_str(),
         "healthy" | "cq-error" | "partial-post" | "paused-close" | "mr-rollback"

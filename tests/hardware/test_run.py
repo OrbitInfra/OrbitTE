@@ -173,6 +173,18 @@ class ResourceSelection(unittest.TestCase):
             controller.start = start
             with self.assertRaises(CapturedStart):
                 controller.case(0, case)
+            for mode in ['concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
+                         'concurrent-cq-error']:
+                def concurrent_start(*args):
+                    self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
+                    self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')
+                    raise CapturedStart()
+
+                controller.start = concurrent_start
+                with self.subTest(mode=mode), self.assertRaises(CapturedStart):
+                    controller.case(0, {**case, 'mode': mode, 'mask': 3})
+                with self.subTest(mode=mode, mask=1), self.assertRaises(ValueError):
+                    controller.case(0, {**case, 'mode': mode})
             for invalid in [{'mode': 'link-down'}, {'mode': 'cq-error'}, {'mask': True},
                             {'mask': 0}, {'mask': 4}, {'fault_rail': True}, {'fault_rail': 2}, {'rdma_events': 1}, {'operation': 'delete'},
                             {'transport': 'tcp'}, {'source_kind': 'cuda:0'}]:
