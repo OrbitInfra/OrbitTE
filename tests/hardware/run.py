@@ -142,6 +142,10 @@ class Controller:
         if type(discovery) is not bool or (discovery and case['transport'] != 'rdma'):
             raise ValueError('rdma_auto requires a boolean RDMA profile')
 
+        cq_events = case.get('rdma_events', False)
+        if type(cq_events) is not bool or (cq_events and (case['transport'] != 'rdma' or consumer)):
+            raise ValueError('rdma_events requires a boolean native RDMA profile')
+
         def command(node, role, kind, root, readiness=None):
             if shared:
                 if case['transport'] != 'rdma' or kind != 'cpu':
@@ -161,6 +165,7 @@ class Controller:
                     'ORBITTE_SHARED_WINDOW': str(window),
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
+                environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
                 if discovery:
                     environment['ORBITTE_RDMA_DISCOVERY'] = '1'
                 if case.get('duplex'):
@@ -213,6 +218,7 @@ class Controller:
                     if type(value) is not int or not 1 <= value <= limit:
                         raise ValueError('invalid ' + key)
                     environment[variable] = str(value)
+            environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
             if discovery:
                 environment['ORBITTE_RDMA_DISCOVERY'] = '1'
             return arguments + (readiness[:3] if readiness else []), environment

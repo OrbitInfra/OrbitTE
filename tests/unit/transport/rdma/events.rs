@@ -202,3 +202,27 @@ fn route_fault_is_permanent_but_lost_consumer_keeps_unquiesced_precedence() {
         })
     ));
 }
+
+#[test]
+fn lost_cq_consumer_dominates_route_and_device_errors_and_cannot_be_healed() {
+    let state = State::default();
+    state.fence_route();
+    state.event(3);
+    state.lost_completion(libc::EBADF);
+    state.event(IBV_EVENT_COMM_EST);
+    assert!(matches!(
+        state.check(),
+        Err(Error::Unquiesced {
+            operation: "RDMA completion event consumer",
+            code: libc::EBADF
+        })
+    ));
+    state.lost(libc::ENODEV);
+    assert!(matches!(
+        state.check(),
+        Err(Error::Unquiesced {
+            operation: "RDMA asynchronous event consumer",
+            code: libc::ENODEV
+        })
+    ));
+}

@@ -50,6 +50,39 @@ impl Default for ConnectionHandles {
 }
 
 #[repr(C)]
+#[derive(Default)]
+pub(super) struct CqHandles {
+    pub cq: *mut c_void,
+}
+
+#[repr(C)]
+pub(super) struct ChannelHandles {
+    pub channel: *mut c_void,
+    pub fd: c_int,
+}
+
+impl Default for ChannelHandles {
+    fn default() -> Self {
+        Self {
+            channel: std::ptr::null_mut(),
+            fd: -1,
+        }
+    }
+}
+
+// Access is serialized by the completion-channel owner; its consumer is joined first.
+unsafe impl Send for ChannelHandles {}
+
+#[derive(Clone, Copy)]
+pub(super) struct CqEventVerbs {
+    pub create: unsafe extern "C" fn(*mut ChannelHandles, *const DeviceHandles) -> c_int,
+    pub get: unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> c_int,
+    pub ack: unsafe extern "C" fn(*mut c_void),
+    pub arm: unsafe extern "C" fn(*mut c_void) -> c_int,
+    pub close: unsafe extern "C" fn(*mut ChannelHandles) -> c_int,
+}
+
+#[repr(C)]
 pub(super) struct MemoryHandles {
     pub mr: *mut c_void,
     pub mw: *mut c_void,
@@ -121,10 +154,12 @@ type CloseConnection = unsafe extern "C" fn(*mut ConnectionHandles) -> c_int;
 type CloseMemory = unsafe extern "C" fn(*mut MemoryHandles) -> c_int;
 pub(super) struct Verbs {
     pub asynchronous: Option<AsyncVerbs>,
+    pub completion: Option<CqEventVerbs>,
     pub discover: Discover,
     pub query_address: unsafe fn(*const DeviceHandles, &RdmaAddress) -> Result<RdmaAddress>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
-    pub create_cq: unsafe extern "C" fn(*mut ConnectionHandles, *const DeviceHandles, u32) -> c_int,
+    pub create_cq:
+        unsafe extern "C" fn(*mut CqHandles, *const DeviceHandles, u32, *mut c_void) -> c_int,
     pub register_memory: unsafe extern "C" fn(
         *mut MemoryHandles,
         *const DeviceHandles,
@@ -206,7 +241,7 @@ pub(super) struct Verbs {
     pub poll: unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
     pub destroy_qp: CloseConnection,
     pub deregister: CloseMemory,
-    pub destroy_cq: CloseConnection,
+    pub destroy_cq: unsafe extern "C" fn(*mut CqHandles) -> c_int,
     pub dealloc_pd: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
     pub close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
 }
@@ -440,9 +475,10 @@ unsafe extern "C" fn open_device(handles: *mut DeviceHandles, name: *const c_cha
 }
 
 unsafe extern "C" fn create_cq(
-    handles: *mut ConnectionHandles,
+    handles: *mut CqHandles,
     device: *const DeviceHandles,
     capacity: u32,
+    channel: *mut c_void,
 ) -> c_int {
     // SAFETY: the progress owner retains this CQ and its actual RdmaContext/PD.
     unsafe {
@@ -450,7 +486,7 @@ unsafe extern "C" fn create_cq(
             (*device).context.cast(),
             capacity as c_int,
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            channel.cast(),
             0,
         )
         .cast();
@@ -1035,7 +1071,13 @@ macro_rules! destroy {
 }
 destroy!(destroy_qp, ConnectionHandles, qp, ibv_destroy_qp);
 destroy!(deregister, MemoryHandles, mr, ibv_dereg_mr);
-destroy!(destroy_cq, ConnectionHandles, cq, ibv_destroy_cq);
+destroy!(destroy_cq, CqHandles, cq, ibv_destroy_cq);
+destroy!(
+    close_completion_channel,
+    ChannelHandles,
+    channel,
+    ibv_destroy_comp_channel
+);
 destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
@@ -1057,9 +1099,65 @@ unsafe extern "C" fn ack_async_event(_: *mut c_void, event: *mut AsyncEvent) {
     unsafe { ffi::ibv_ack_async_event((*event).native.as_mut_ptr()) };
 }
 
+unsafe extern "C" fn create_completion_channel(
+    handles: *mut ChannelHandles,
+    device: *const DeviceHandles,
+) -> c_int {
+    unsafe {
+        (*handles).channel = ffi::ibv_create_comp_channel((*device).context.cast()).cast();
+        if (*handles).channel.is_null() {
+            return failure();
+        }
+        let fd = (*(*handles).channel.cast::<ffi::ibv_comp_channel>()).fd;
+        (*handles).fd = fd;
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags == -1 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
+            return failure();
+        }
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) == -1 {
+            return failure();
+        }
+        0
+    }
+}
+
+unsafe extern "C" fn get_completion_event(channel: *mut c_void, cq: *mut *mut c_void) -> c_int {
+    unsafe {
+        let mut native_cq = std::ptr::null_mut();
+        let mut context = std::ptr::null_mut();
+        if ffi::ibv_get_cq_event(channel.cast(), &mut native_cq, &mut context) != 0 {
+            return failure();
+        }
+        *cq = native_cq.cast();
+        0
+    }
+}
+
+unsafe extern "C" fn ack_completion_event(cq: *mut c_void) {
+    unsafe { ffi::ibv_ack_cq_events(cq.cast(), 1) };
+}
+
+unsafe extern "C" fn arm_completion(cq: *mut c_void) -> c_int {
+    unsafe {
+        let cq = cq.cast::<ffi::ibv_cq>();
+        let Some(arm) = (*(*cq).context).ops.req_notify_cq else {
+            return libc::EOPNOTSUPP;
+        };
+        arm(cq, 0)
+    }
+}
+
 pub(super) static REAL: Verbs = Verbs {
     discover: discovery::discover,
     query_address,
+    completion: Some(CqEventVerbs {
+        create: create_completion_channel,
+        get: get_completion_event,
+        ack: ack_completion_event,
+        arm: arm_completion,
+        close: close_completion_channel,
+    }),
     asynchronous: Some(AsyncVerbs {
         get: get_async_event,
         ack: ack_async_event,

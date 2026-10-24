@@ -114,7 +114,11 @@ pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         epoch,
-        rdma: Some(Arc::new(crate::transport::rdma::tests::runtime(mode))),
+        rdma: Some(Arc::new(if let Some(mode) = mode.strip_prefix("events:") {
+            crate::transport::rdma::tests::event_runtime(mode)
+        } else {
+            crate::transport::rdma::tests::runtime(mode)
+        })),
         registry: MemoryRegistry::new(epoch, 8, 4096),
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {

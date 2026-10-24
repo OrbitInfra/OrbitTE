@@ -23,7 +23,7 @@ tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
 [the CPU TCP contract](cpu-tcp.md), plus P4.3 direct host RDMA, P4.4 slice
 progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
 authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
-identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery and P4.1/P5.1 RDMA/CUDA staging
+identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery, P4.9 optional CQ event progress and P4.1/P5.1 RDMA/CUDA staging
 paths. P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -621,11 +621,27 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   profile is needed before accepting this row. Physical IB, multiple RNIC/NUMA
   rank comparisons, route/device faults and complete P4 remain open. See
   [the scope and TENT correspondence](rdma-cuda.md#device-port-gid-and-host-topology-discovery).
-- [ ] Complete event-driven progress and backend cancellation qualification for
-  fragmented transfers. P4.6 implements shared polling, aggregate CQ admission
-  and whole-lane cancellation ownership on top of P4.4's adaptive slices.
-  Event progress and real partial-post/CQ/endpoint fault qualification remain
-  open; CPU fault controls do not establish physical abort/drain support.
+- [ ] **P4.9 — optional CQ event progress (Implemented; independent and native
+  qualification open).** Default polling remains the frozen TENT behavior.
+  Event mode shares one native completion channel between the existing SQ/RQ
+  CQs. A separate channel consumer ACKs each actual returned event before
+  progress locks; the data worker arms before polling and waits on its existing
+  condition variable with the earliest unresolved SQ/RQ deadline. Event receipts
+  never complete a WR or grant. Actual QP/CQ destruction precedes consumer
+  stop/join and channel destruction. Lost consumption or failed cleanup retains
+  real owners and charges without retry. Source controls exercise public
+  READ/WRITE/connected reuse in both modes, real native-notify ABI dispatch,
+  wakeups, deadline retirement, partial construction and ACK during blocked
+  native destruction. The physical runner accepts an explicit `rdma_events`
+  flag without changing RNIC/GPU locks. New binaries still need both-mode native
+  regressions and independent review; P4.8's independent native repeat remains
+  a prerequisite for accepting dependent hardware work. See
+  [the event-progress contract](rdma-cuda.md#optional-cq-event-progress).
+- [ ] Complete backend cancellation qualification for fragmented transfers.
+  P4.6/P4.9 implement shared progress, aggregate CQ admission and whole-lane
+  cancellation ownership on P4.4's adaptive slices. Real partial-post/CQ/endpoint
+  fault qualification remains open; CPU controls do not establish physical
+  abort/drain support.
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.
@@ -936,8 +952,10 @@ and native profiles. P4.8 host/RNIC discovery is implemented with independent
 source/CPU acceptance and a qualified 39-case implementation native run. Its
 independently built native repeat awaits a new authorized two-host profile,
 because the original selected stage's attempts terminated before that repeat.
-Complete that gate before accepting P4.8, then proceed to event progress,
-native fault qualification and multirail work. Follow the frozen
+Complete that gate before accepting P4.8. P4.9's opt-in CQ event mode is now
+implemented with source controls, while its independent review and native
+profiles remain unqualified. Qualify both progress modes on the new source,
+then advance physical fault qualification and multirail work. Follow the frozen
 TENT context/buffer/endpoint/worker architecture while preserving actual-owner
 retention and generation fences. Build NVIDIA P5 capabilities against those
 owners, then qualify direct GPU registration and topology profiles separately.

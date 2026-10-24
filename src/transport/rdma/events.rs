@@ -18,12 +18,21 @@ pub(super) struct State {
     fault: AtomicI32,
     stopping: AtomicBool,
     route_fault: AtomicBool,
+    completion_fault: AtomicI32,
     progress: Mutex<Weak<workers::Shared>>,
 }
 
 impl State {
     pub(super) fn check(&self) -> Result<()> {
-        match self.fault.load(Ordering::Acquire) {
+        let asynchronous = self.fault.load(Ordering::Acquire);
+        let completion = self.completion_fault.load(Ordering::Acquire);
+        if asynchronous >= 0 && completion != 0 {
+            return Err(Error::Unquiesced {
+                operation: "RDMA completion event consumer",
+                code: completion,
+            });
+        }
+        match asynchronous {
             0 if self.route_fault.load(Ordering::Acquire) => Err(Error::Backend {
                 operation: "RDMA route changed",
                 code: libc::ESTALE,
@@ -58,6 +67,16 @@ impl State {
         if let Some(progress) = progress {
             progress.signal();
         }
+    }
+
+    pub(super) fn lost_completion(&self, code: i32) {
+        let _ = self.completion_fault.compare_exchange(
+            0,
+            code.max(1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        self.notify();
     }
 
     fn lost(&self, code: i32) {

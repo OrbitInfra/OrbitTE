@@ -82,6 +82,12 @@ and a frozen context route. Independent source/CPU gates and the implementation'
 39-case IPv6 RoCEv2 native profile pass. Its independently built native repeat
 awaits new authorized nodes after the original stage terminated; P4.8 acceptance
 and the complete P4 exit remain open.
+P4.9 adds an explicit `RdmaProgressMode::EventDriven` mode over the same shared
+CQs and data worker. One native completion-channel consumer acknowledges events
+before notifying progress and stays alive through actual CQ destruction. The
+default remains TENT-style polling. Source controls cover wakeups, public
+READ/WRITE and connected reuse, construction failures and retained cleanup;
+independent review and physical event-mode qualification remain open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

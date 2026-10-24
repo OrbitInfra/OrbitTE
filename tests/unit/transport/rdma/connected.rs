@@ -332,6 +332,7 @@ fn connected_endpoint_peer() {
     drop(memory);
     drop(backing);
     let closed = engine.stats().unwrap().rdma.unwrap();
+    super::record_completion_events(&idle, &closed);
     assert_eq!(
         [
             closed.active_endpoints,

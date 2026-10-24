@@ -42,6 +42,15 @@ pub enum RdmaHostMemory {
     Staged,
 }
 
+/// Shared CQ progress policy. The frozen TENT polling path remains the default.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RdmaProgressMode {
+    #[default]
+    Polling,
+    /// Arm both CQs before polling; native events wake the existing data worker.
+    EventDriven,
+}
+
 /// Automatic or pinned single-rail selection. Direct host peers can retain RC QPs.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
@@ -56,6 +65,7 @@ pub struct RdmaConfig {
     pub rdma_blacklist: Vec<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
+    pub progress_mode: RdmaProgressMode,
     pub traffic_class: u8,
     pub hop_limit: u8,
     pub max_endpoints: usize,
@@ -83,6 +93,7 @@ impl Default for RdmaConfig {
             rdma_whitelist: Vec::new(),
             rdma_blacklist: Vec::new(),
             preferred_numa_node: None,
+            progress_mode: RdmaProgressMode::Polling,
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
@@ -176,6 +187,14 @@ pub struct RdmaStats {
     pub retained_message_mrs: usize,
     pub message_bytes: usize,
     pub retained_message_bytes: usize,
+    pub active_completion_channels: usize,
+    pub opened_completion_channels: u64,
+    pub retained_completion_channels: usize,
+    pub completion_event_workers: usize,
+    /// Successful native gets, each acknowledged before notifying progress.
+    pub completion_events: u64,
+    pub cq_notification_arms: u64,
+    pub cq_event_waits: u64,
     pub active_cqs: usize,
     pub retained_cqs: usize,
     pub opened_cqs: u64,
@@ -433,6 +452,7 @@ impl RdmaTransport {
                 || usage.retained_grants != 0
                 || usage.retained_devices != 0
                 || usage.retained_cqs != 0
+                || usage.retained_completion_channels != 0
                 || usage.retained_persistent_mrs != 0
                 || usage.progress_failures != 0
             {

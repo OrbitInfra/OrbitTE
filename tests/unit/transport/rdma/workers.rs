@@ -1332,3 +1332,34 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
     requester.close(Duration::from_secs(3)).unwrap();
     source.close(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn completion_event_ack_precedes_progress_lock_and_cq_destruction_wait() {
+    let runtime = super::super::cq::tests::event_runtime("completion_destroy_event");
+    let device = runtime.device().unwrap();
+    let progress = runtime.progress(Arc::clone(&device)).unwrap();
+    let mut extra = RdmaCq::new(
+        device,
+        Arc::clone(&runtime.usage),
+        1,
+        progress.shared.completion_events.clone(),
+        runtime.verbs,
+    )
+    .unwrap();
+    let locked = progress.shared.control.lock().unwrap();
+    extra.close(runtime.verbs).unwrap();
+    drop(extra);
+    drop(locked);
+    runtime.close(deadline()).unwrap();
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_cqs,
+            stats.active_completion_channels,
+            stats.completion_event_workers,
+            stats.active_devices
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(stats.completion_events, 3);
+}

@@ -261,10 +261,29 @@ impl RdmaContext {
         })
     }
 
+    pub(super) fn create_completion_channel(
+        &self,
+        handles: &mut sys::ChannelHandles,
+        verbs: sys::CqEventVerbs,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        self.asynchronous.check()?;
+        check("ibv_create_comp_channel", unsafe {
+            (verbs.create)(handles, &resources.handles)
+        })
+    }
+
     pub(super) fn create_cq(
         &self,
-        handles: &mut sys::ConnectionHandles,
+        handles: &mut sys::CqHandles,
         capacity: u32,
+        channel: *mut std::ffi::c_void,
     ) -> Result<()> {
         let state = self
             .state
@@ -276,7 +295,7 @@ impl RdmaContext {
         self.asynchronous.check()?;
         // SAFETY: the progress owner retains the real RdmaContext through CQ close.
         check("ibv_create_cq", unsafe {
-            (self.verbs.create_cq)(handles, &resources.handles, capacity)
+            (self.verbs.create_cq)(handles, &resources.handles, capacity, channel)
         })
     }
 

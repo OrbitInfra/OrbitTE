@@ -810,3 +810,35 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
         });
     }
 }
+
+unsafe extern "C" fn capture_notify(cq: *mut ffi::ibv_cq, solicited_only: c_int) -> c_int {
+    assert_eq!(
+        solicited_only, 0,
+        "ordinary data completions must wake the worker"
+    );
+    let calls = unsafe { &mut *(*cq).cq_context.cast::<usize>() };
+    *calls += 1;
+    libc::ENOMEM
+}
+
+#[test]
+fn notification_dispatch_uses_generated_context_ops_and_all_completion_types() {
+    let mut context = Box::new(ffi::ibv_context::default());
+    let mut calls = 0usize;
+    let mut cq = ffi::ibv_cq {
+        context: &mut *context,
+        cq_context: (&mut calls as *mut usize).cast(),
+        ..ffi::ibv_cq::default()
+    };
+    let native = REAL.completion.unwrap();
+    assert_eq!(
+        unsafe { (native.arm)((&mut cq as *mut ffi::ibv_cq).cast()) },
+        libc::EOPNOTSUPP
+    );
+    context.ops.req_notify_cq = Some(capture_notify);
+    assert_eq!(
+        unsafe { (native.arm)((&mut cq as *mut ffi::ibv_cq).cast()) },
+        libc::ENOMEM
+    );
+    assert_eq!(calls, 1);
+}
