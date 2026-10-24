@@ -95,5 +95,36 @@ class ResourceSelection(unittest.TestCase):
                     runner.Controller(profile, binary, root).case(0, {**base, 'window_probe': 'fragment-read', **invalid})
 
 
+    def test_multi_context_profile_is_exact_before_start(self):
+        class CapturedStart(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            profile = {'runner': 'orbitte-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
+                       'nodes': {'a': {'bind': '127.0.0.1:0'}, 'b': {'bind': '127.0.0.1:0'}}}
+            case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
+                    'transport': 'rdma', 'payload': 4096, 'seed': 1,
+                    'rdma_max_cqes': 2, 'rdma_max_send_wr': 2, 'rdma_multi_context': True}
+            controller = runner.Controller(profile, binary, root)
+
+            def start(*args):
+                self.assertEqual(args[-1]['ORBITTE_RDMA_MULTI_CONTEXT'], '1')
+                raise CapturedStart()
+
+            controller.start = start
+            with self.assertRaises(CapturedStart):
+                controller.case(0, case)
+            for invalid in [{'rdma_multi_context': 1}, {'rdma_multi_context': 'true'},
+                            {'duplex': True}, {'transport': 'tcp'}, {'requester_kind': 'cuda:0'}]:
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    runner.Controller(profile, binary, root).case(0, {**case, **invalid})
+            for selection in [None, 'orbitte-connected', 'orbitte-window', 'orbitkv-peer-host']:
+                with self.subTest(selection=selection), self.assertRaises(ValueError):
+                    runner.Controller({**profile, 'runner': selection}, binary, root).case(0, case)
+
+
 if __name__ == '__main__':
     unittest.main()

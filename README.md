@@ -97,6 +97,11 @@ receipt to distinguish an admitted prefix from an unposted suffix; it preserves
 the prefix's MR, DMA loan and WR debt until native drain and never replays the
 failed operation. Scoped stable/MSRV host-native gates pass; independent
 acceptance, full fault qualification and P4 acceptance remain open.
+P4.12a makes persistent MR reuse specific to the actual `RdmaContext`/PD,
+registered memory identity and local/source capability. Each physical copy
+shares the bounded MR budget; final unregister retires every context's copy.
+The data transport still selects one active rail per engine. Multiple RNIC
+dispatch and striping remain open.
 See the [RDMA/CUDA contract and physical runner](docs/rdma-cuda.md).
 An opt-in [OrbitKV allocation bridge](https://github.com/OrbitInfra/OrbitKV/pull/303)
 retains real CUDA-pinned allocator slots. The TCP and RDMA consumer candidates

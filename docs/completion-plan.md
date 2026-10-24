@@ -675,6 +675,21 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   process, lock and byte evidence is archived outside the checkout. These are
   same-agent gates; independent review and full P4 remain open. See
   [the admission contract and TENT correspondence](rdma-cuda.md#native-partial-post-admission).
+- [ ] **P4.12a — per-context persistent MR ownership (Implemented;
+  source/native qualification and independent acceptance open).** The
+  `LocalBufferManager` cache keys actual `RdmaContext` identity, registered view
+  and local/MW-bind capability. Distinct contexts cannot reuse, coalesce or wait
+  on each other's MR. Count and full-view byte limits remain aggregate across
+  every context and capability. Final unregister marks all copies retiring
+  before native cleanup; existing borrows stay owned until release. A second
+  context's failed registration leaves previous owners intact; failed cleanup
+  retains actual resources and globally fences new cache admission without
+  retry. The native gate opens two actual PDs on the one locked RNIC and checks
+  provider MR/PD identity, same-key reuse, duplicate unregister, idle/borrowed
+  retirement and actual deregistration/close receipts, followed by shared-CQ
+  traffic. This is registration groundwork; transport context fan-out, device
+  masks, multirail scheduling and the complete P4 exit remain open. See
+  [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
 - [ ] Implement multirail slicing, masks, initial routing, retry/timeout budgets,
   endpoint incarnation handling and failed-MR/QP cleanup ownership. Preserve a
   registration even if another rail fails before publication.

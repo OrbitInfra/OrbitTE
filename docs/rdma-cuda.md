@@ -131,7 +131,9 @@ including quota reservation and retaining a completion owner through the end
 of its handler. P4.7f adds the [scoped connected reuse](#connected-qp-reuse)
 described below. Resource reuse alone is no performance result.
 
-The persistent cache uses actual `RegisteredMemory` identity within one PD,
+The persistent cache uses the actual `RdmaContext`/PD owner together with
+`RegisteredMemory` identity and capability. The engine currently selects one
+active context; the cache itself isolates entries in distinct contexts. It
 registers the entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
 or `LOCAL_WRITE|MW_BIND` for a source, and retains its real allocation and device.
 Capability is part of the cache key: one view used in both roles needs two actual
@@ -1888,3 +1890,67 @@ P4.8's complete independent repeat, device loss, missing CQEs, failed native
 destruction, arbitrary cancellation, multiple rails, GDR, TENT wire
 interoperability, performance and complete P4 remain open. OrbitKV integration
 remains deferred.
+
+
+## Per-context persistent MR ownership
+
+P4.12a prepares the registration owner for multiple rails. The previous lookup
+matched only registered-memory identity and local/source capability. Passing
+the same view and capability from a second context could incorrectly return
+the first context's MR, or wait on its in-progress registration, without charging
+a second physical copy. Such an MR belongs to the original PD and cannot
+authorize a different PD's QP.
+
+`LocalBufferManager` now also matches the stable `RdmaContext` object identity.
+A weak context key preserves identity without becoming a second native resource
+owner or relying on a reusable numeric PD address. The existing MR resources
+still strongly retain the actual context, registration and backing allocation
+until successful native deregistration. Each context/capability pair registers
+the complete view and pays one MR plus its full length against the shared
+`max_cached_mrs` / `max_cached_mr_bytes` limits. Same-key callers coalesce;
+different context keys can register independently while staying within those
+aggregate limits. Busy entries are never evicted to make another copy fit.
+
+Final unregister matches the registration identity across all contexts and
+capabilities, marking every copy retiring before native cleanup. Idle copies
+deregister immediately; creating or borrowed copies keep their actual resources
+and retire on completion/release. Duplicate unregister references continue to
+keep all copies active until the last reference ends. A new registration at the
+same address has a new memory identity. A failed later-context registration
+cleans up only its own partial construction and preserves prior owners. If
+cleanup fails, the existing cache failure fence blocks new admission while
+retaining the actual MR, allocation, context and budget; admitted healthy borrows
+can still release. Native cleanup is never retried.
+
+Frozen TENT `e2d6e8e0` uses `LocalBufferManager::addBufferInternal`,
+`context_list_` and `BufferEntryForRdma::mem_reg_map` in
+`tent/src/transport/rdma/buffers.cpp`: each context registers its own MR, and
+the corresponding local/remote keys stay indexed by context/NIC. TENT's
+`removeBuffer` walks those per-context registrations. OrbitTE keeps the same
+resource boundary with lazy, bounded cache entries and independent per-grant
+MWs. TENT eagerly constructs a vector of registrations before publishing a
+buffer descriptor; this substage does not add that multirail publication or
+change OrbitTE's one-active-context transport selection.
+
+CPU controls cover the context/capability key, full-view aggregate quotas,
+independent creation, cross-context final unregister and clean/retained failures
+after another context has already registered. The opt-in native runner accepts
+`rdma_multi_context=true` only for host `orbitte-shared-cq` cases without duplex.
+It runs a registration gate in each peer under that node's existing RNIC lock,
+then runs the normal shared-CQ transfer and guard checks. The helper opens two
+actual contexts/PDs on the same whitelisted RNIC; one host view has separate
+local-only and MW-bind MRs in each PD. A test-only observer invokes the real
+register/deregister functions and checks each returned MR's native PD/context.
+The gate requires four distinct live MRs, exact same-key reuse, aggregate count
+and bytes, duplicate-reference behavior, two idle and two borrowed retirements,
+four successful native deregistration receipts, both actual PD/context closes
+and release of the backing allocation. `ORBITTE_MULTI_CONTEXT_MR` records that
+scope separately from the later transfer's normal counters. No WR or completion
+is fabricated by this observer.
+
+Evidence belongs outside the checkout under
+`/root/orbitte-artifacts/rdma-context-registrations-20261024`. Source/build,
+hardware and independent acceptance remain separate gates. One RNIC with two
+PDs does not qualify two physical RNICs, transport fan-out, cross-rail routing,
+striping, a multi-descriptor grant, hot device recovery, GDR, performance or full
+P4. OrbitKV integration remains deferred.
