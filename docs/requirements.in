@@ -1,0 +1,8 @@
+# Match the documentation stack used by Mooncake's public Book Theme site.
+sphinx==7.4.7
+sphinx-book-theme==1.1.4
+myst-parser==3.0.1
+sphinx-copybutton==0.5.2
+sphinx-design==0.6.1
+sphinxcontrib-mermaid==2.0.1
+snowballstemmer<3

@@ -1,0 +1,22 @@
+/* Keep the Book Theme's layout, typography, navigation and color palette. */
+.orbit-hero {
+  margin: 1.75rem auto 1.25rem;
+  max-width: 32rem;
+  text-align: center;
+}
+.orbit-hero img { width: 100%; height: auto; }
+.orbit-logo-dark { display: none; }
+html[data-theme="dark"] .orbit-logo-light { display: none; }
+html[data-theme="dark"] .orbit-logo-dark { display: inline; }
+.orbit-tagline { text-align: center; font-size: 1.125rem; }
+.orbit-links { text-align: center; margin-bottom: 2rem; }
+.orbit-links a { margin: 0 .4rem; white-space: nowrap; }
+.bd-sidebar-primary .navbar-brand { padding: 1rem .5rem; }
+.bd-sidebar-primary .navbar-brand img { width: 100%; max-height: none; }
+
+.bd-article { overflow-wrap: anywhere; }
+.bd-article code.literal,
+.bd-article code.literal .pre {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

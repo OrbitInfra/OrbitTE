@@ -1,0 +1,36 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install pinned documentation dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/orbitte-docs-venv"
+          "$RUNNER_TEMP/orbitte-docs-venv/bin/pip" install --disable-pip-version-check -r docs/requirements.txt
+      - name: Build the website with warnings treated as errors
+        env:
+          ORBITTE_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          "$RUNNER_TEMP/orbitte-docs-venv/bin/sphinx-build"
+          -n -W --keep-going docs "$RUNNER_TEMP/orbitte-docs/html"
+      - name: Check local links, fragments and assets
+        run: python3 scripts/check-docs.py "$RUNNER_TEMP/orbitte-docs/html"
+      - name: Save the generated website for preview
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: orbitte-docs
+          path: ${{ runner.temp }}/orbitte-docs/html/
+          include-hidden-files: true
+          if-no-files-found: error
