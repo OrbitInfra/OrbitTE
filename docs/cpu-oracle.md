@@ -111,6 +111,33 @@ Native CI runs for core/trace changes and uploads its evidence, including failed
 runs. Source commit provenance and a clean reference do not turn an untested
 hardware or API surface into an accepted profile.
 
+## Isolated RDMA geometry function
+
+P4.12g adds a separate valid-input comparison for frozen TENT's
+`RdmaSlicePlan` and `planRdmaSlices`. The probe reads the exact Git blob at the
+contract's pinned revision and compiles the unchanged structure/function bodies
+inside a small C++ wrapper. It compares sixteen Rust plans, including short-tail,
+exact-quarter, MiB and capped-count cases. Inclusive-quarter and missing-fold
+native mutations must disagree. Frozen header/function bytes, commands, compiler,
+inputs, outputs and binary hashes stay in a new external evidence directory.
+
+```sh
+python3 tests/reference/rdma_geometry.py \
+  --tent-source /var/tmp/tent-reference \
+  --output /var/tmp/orbitte-rdma-geometry-001
+```
+
+An optional `--binary /path/to/frozen-libtest` executes the same exact unit test
+from a recorded release binary. Otherwise the probe uses Cargo with the RDMA
+feature and requires the CI binding dependencies. Native CI runs this after the
+full CPU transport trace and uploads a separate geometry artifact.
+
+This probe executes only the isolated native function. It does not execute
+native TENT RDMA transport, establish invalid-input parity, qualify hardware or
+measure throughput. The separate two-RNIC libtest profile and its ownership
+controls are recorded in the
+[geometry evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+
 ## Qualification limits
 
 This first comparison has valid-input CPU behavior coverage. It leaves the full

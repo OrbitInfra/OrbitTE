@@ -13,6 +13,40 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12g extends the native fixture without changing production source,
+dependencies or wire v12 from PR #36. Frozen operational source `aebb3e8`
+passes 19 sequential stable/Rust 1.85 gates, 190 all-feature units per toolchain
+and ten hardware-runner controls. Sixteen valid Rust plans match the isolated,
+unchanged frozen TENT `planRdmaSlices` function; inclusive-quarter and
+missing-fold mutations are rejected on both toolchains. This function probe is
+separate from the full frozen native TENT CPU transport comparison and does not
+execute native TENT RDMA transport.
+
+Both frozen libtest binaries pass 288 CPU DRAM/IPv4 RoCEv2 cases over two actual
+RNICs per host: 144 new geometry cases and 144 affected two-/four-parent
+regressions. Each compiler covers both directions, READ/WRITE and polling/event
+progress. Eight parents exercise 5 MiB, MiB-plus-one folded and exact-quarter
+tails, 32/40-QP reuse, five shared requester SQ credits and atomic ninth-parent
+rejection with one residual source RQ credit. Large/folded paused-close and
+either-rail native faults retain actual MR, DMA, WR and receive-credit owners.
+
+All 576 peers and supervisors are reaped with both original RNIC locks released.
+Raw receipts account for 1,152 context opens/closes, 16,948 MR
+registrations/deregistrations, 272 source RQ rejections and 12,032 per-owner RQ
+checks before CQ destruction. In 64 injected two-WR windows, the exact failing
+WR receives its native remote-access CQE while one sibling remains charged
+through both CQ teardown receipts. Four native mutation runs reject early WR
+debt or receive-credit return in polling/event modes without supervisor timeout.
+
+See the [geometry contract and evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission)
+for hashes, profiles and reproduction. The unchanged original masked-routing,
+publication-rollback and partial-post profiles retain their previous evidence;
+this delivery reruns the affected concurrent fixture. These are same-agent
+scoped libtest gates. Installed-consumer, independent acceptance and the complete
+P4 exit remain open.
+
+## Previous source RQ admission evidence
+
 P4.12f adds atomic whole-parent source RQ admission on wire v12. Frozen source
 `7606c1a` passes 17 stable/Rust 1.85 source/build gates, 190 all-feature units
 per toolchain, four hardware tests ignored by default and ten runner controls.
@@ -148,7 +182,7 @@ The [completion plan](completion-plan.md) owns the delivery sequence. Complete
 P4 before renewing OrbitKV integration. Outstanding work includes broader
 multirail workload/topology coverage, physical link/device loss, lost completions,
 native cleanup failure, restart/shutdown profiles and independent acceptance.
-The declared two-RNIC routing/slicing, four-parent RQ admission/reuse,
+The declared two-RNIC routing/slicing, eight-parent geometry/RQ admission/reuse,
 provider-fault and paused-shutdown gates pass; they do not close those broader
 profiles. The source paths are implemented; a missing hardware gate is not missing code.
 GDR and optional storage transports have their own stages.

@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/**'
       - 'tests/reference/**'
+      - 'tests/unit/transport/rdma/slice.rs'
       - 'tests/fixtures/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
