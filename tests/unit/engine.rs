@@ -134,7 +134,11 @@ pub(crate) fn rdma_fixture_with_config(
     let source = Arc::new(Source {
         epoch,
         rdma: Some(Arc::new(runtime)),
-        registry: MemoryRegistry::new(epoch, 8, 4096),
+        registry: MemoryRegistry::new(
+            epoch,
+            config.max_registered_regions,
+            config.max_registered_bytes,
+        ),
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {
             open: true,

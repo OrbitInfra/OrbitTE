@@ -10,13 +10,13 @@ contracts.
 | CPU DRAM over TCP | Implemented | Loopback, independent-process, byte, restart and lifetime controls |
 | Owned/external host registration | Implemented | Duplicate references, aliases, batch admission and retained allocation owners |
 | Async batches and notifications | Implemented | CPU ownership, cancellation, detached handle and receipt controls |
-| Host DRAM over RDMA | Implemented | Scoped two-host IPv6 RoCEv2 native profiles |
-| Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback, context/capability isolation and retirement controls; native profiles are declared separately |
+| Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
+| Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
 | Device/port/GID discovery | Implemented | CPU and scoped native evidence; complete independent native repeat remains open |
-| Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and single-RNIC native regression; two-physical-RNIC dispatch remains unqualified |
+| Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
 | NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |
-| Single-request cross-rail slicing | Implemented | CPU READ/WRITE, concurrent workers, one source handler and failed-drain controls; physical multi-RNIC striping remains unqualified |
+| Single-request cross-rail slicing | Implemented | CPU controls and scoped two-RNIC host Direct READ/WRITE, reuse, either-rail CQ/partial-post faults and drain; broader physical faults remain open |
 | Direct GPU registration / GPUDirect RDMA | Planned | Requires actual GPU/RNIC path and drain qualification |
 | CUDA IPC / NVLink transfer | Planned | Separate from NVIDIA allocation support |
 | Local SSD through io_uring / cuFile GDS | Planned, optional | Independent storage transports and native direct-path gates |

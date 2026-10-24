@@ -62,7 +62,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
     rows
 }
 
-fn exchange(
+pub(super) fn exchange(
     stream: &mut TcpStream,
     engine: &TransferEngine,
     memory: &crate::RegisteredMemory,
@@ -95,7 +95,7 @@ fn exchange(
     )
 }
 
-fn barrier(stream: &mut TcpStream, phase: u8) {
+pub(super) fn barrier(stream: &mut TcpStream, phase: u8) {
     stream.write_all(&[phase]).unwrap();
     token(stream, phase);
 }

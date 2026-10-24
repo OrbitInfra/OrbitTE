@@ -126,5 +126,59 @@ class ResourceSelection(unittest.TestCase):
                     runner.Controller({**profile, 'runner': selection}, binary, root).case(0, case)
 
 
+    def test_multirail_locks_cover_every_published_context_even_with_a_dispatch_mask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'ssh_config': 'fixture-ssh',
+                       'nodes': {'a': {'alias': 'fixture', 'hostname': 'fixture', 'boot_id': 'fixture',
+                                       'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}}}}
+            controller = runner.Controller(profile, binary, root)
+            controller.ssh = lambda *args: None
+            controller.copy = lambda *args: None
+            with patch.object(runner.subprocess, 'Popen'):
+                controller.start('a', '/fixture/case', 'cpu', ['one::exact::test'], 'rdma', {'ORBITTE_RAIL_MASK': '1'})
+            config = json.loads((root / 'case.json').read_text())
+            self.assertEqual(config['locks'], ['/fixture/nic1', '/fixture/nic2'])
+            for rails, locks in [(['mlx5_1', 'mlx5_1'], profile['nodes']['a']['nic_locks']),
+                                 (['mlx5_1', {}], profile['nodes']['a']['nic_locks']),
+                                 (['mlx5_1', 'mlx5_2'], {'mlx5_1': '/same', 'mlx5_2': '/same'}),
+                                 (['mlx5_1', 'mlx5_2'], {'mlx5_1': '/fixture/nic1'}),
+                                 (['mlx5_1', 'mlx5_2'], {'mlx5_1': 'relative', 'mlx5_2': '/fixture/nic2'})]:
+                with self.subTest(rails=rails, locks=locks), self.assertRaises(ValueError):
+                    runner.Controller({**profile, 'rails': rails, 'nodes': {'a': {'nic_locks': locks}}}, binary, root).rail_locks('a')
+
+    def test_multirail_case_validation_and_environment_precede_native_start(self):
+        class CapturedStart(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            nodes = {name: {'bind': '127.0.0.1:0', 'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}} for name in ['a', 'b']}
+            profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'gid_index': 3, 'nodes': nodes}
+            case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
+                    'transport': 'rdma', 'rdma_events': True, 'mode': 'healthy', 'operation': 'read', 'mask': 1, 'fault_rail': 1}
+            controller = runner.Controller(profile, binary, root)
+
+            def start(*args):
+                self.assertEqual(args[-1]['ORBITTE_SHARED_RAILS'], 'mlx5_1,mlx5_2')
+                self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '1')
+                self.assertEqual(args[-1]['ORBITTE_RAIL_FAULT'], '1')
+                self.assertEqual(args[-1]['ORBITTE_RDMA_EVENTS'], '1')
+                raise CapturedStart()
+
+            controller.start = start
+            with self.assertRaises(CapturedStart):
+                controller.case(0, case)
+            for invalid in [{'mode': 'link-down'}, {'mode': 'cq-error'}, {'mask': True},
+                            {'mask': 0}, {'mask': 4}, {'fault_rail': True}, {'fault_rail': 2}, {'rdma_events': 1}, {'operation': 'delete'},
+                            {'transport': 'tcp'}, {'source_kind': 'cuda:0'}]:
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    controller.case(0, {**case, **invalid})
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -44,12 +44,13 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
-- **October 24, 2026:** Cross-rail slices share one parent control handler and
-  aggregate completion across existing context workers. Host Direct registration
-  prepares every context before publication and rolls back newly created MRs
-  on failure. Source/CPU controls pass; physical multi-RNIC qualification and
-  independent acceptance remain open. The documentation now publishes
-  automatically to GitHub Pages on updates to `main`.
+- **October 24, 2026:** The declared two-host, two-RNIC CPU DRAM/RoCEv2 profile
+  passes 152 native cases across stable/Rust 1.85, both progress modes and both
+  peer directions. Cross-rail READ/WRITE, masks, connected reuse, registration
+  rollback and either-rail CQ/partial-post faults retain their physical owners
+  through drain. Four native negative controls reject broken routing or early
+  WR-debt release. Broader physical faults and independent P4 acceptance remain
+  open. Documentation publishes automatically to GitHub Pages from `main`.
 - **Current focus:** Complete OrbitTE's native RDMA stage using the frozen TENT
   architecture. OrbitKV integration resumes after that stage is accepted.
 
