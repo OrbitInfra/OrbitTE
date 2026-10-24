@@ -39,6 +39,7 @@ struct Trace {
     active_mrs: BTreeSet<usize>,
     memory: Option<crate::RegisteredMemory>,
     accepted: Vec<Vec<usize>>,
+    wr_counts: Vec<Vec<usize>>,
     posts: usize,
     delivered_held: usize,
     failed_cq_receipts: usize,
@@ -80,6 +81,7 @@ pub(super) fn hold() {
     trace.released = false;
     trace.armed = false;
     trace.accepted = vec![vec![0; trace.shape.slices]; trace.shape.parents];
+    trace.wr_counts = vec![vec![0; trace.shape.slices]; trace.shape.parents];
     trace.owners.clear();
 }
 
@@ -307,6 +309,12 @@ unsafe extern "C" fn post(
             request.offset as usize, trace.accepted[parent][slice],
             "payload WR replay or gap"
         );
+        assert_eq!(
+            request.length as usize,
+            trace.shape.wr_lengths(slice)[trace.wr_counts[parent][slice]],
+            "native WR geometry differs from the declared folded plan"
+        );
+        trace.wr_counts[parent][slice] += 1;
         trace.accepted[parent][slice] += request.length as usize;
         assert!(
             trace
@@ -683,9 +691,13 @@ pub(super) fn finish() {
             assert_eq!(trace.fault_debt.len(), 2);
             assert_eq!(trace.injected_error_receipts, 1);
         } else {
-            for row in &trace.accepted {
+            for (parent, row) in trace.accepted.iter().enumerate() {
                 for (index, accepted) in row.iter().enumerate() {
                     assert_eq!(*accepted, shape.range(index).len());
+                    assert_eq!(
+                        trace.wr_counts[parent][index],
+                        shape.wr_lengths(index).len()
+                    );
                 }
             }
         }
@@ -733,6 +745,13 @@ pub(super) fn finish() {
     println!(
         "ORBITTE_INJECTED_WINDOW {{\"accepted_wr_count\":{},\"debt_before_cq\":{:?}}}",
         trace.injected_window, trace.fault_debt
+    );
+    println!(
+        "ORBITTE_NATIVE_WR_GEOMETRY {{\"accepted_per_slice\":{:?},\"expected_per_slice\":{:?}}}",
+        trace.wr_counts,
+        (0..shape.slices)
+            .map(|index| shape.wr_lengths(index))
+            .collect::<Vec<_>>()
     );
     trace.memory = None;
     trace.owners.clear();

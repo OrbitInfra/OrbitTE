@@ -42,6 +42,20 @@ impl Shape {
         }
     }
 
+    fn wr_lengths(self, slice: usize) -> Vec<usize> {
+        let length = self.range(slice).len();
+        let mut result = vec![self.base; length / self.base];
+        if length % self.base != 0 {
+            assert_eq!(
+                length % self.base,
+                1,
+                "the declared folded fixture has one extra byte"
+            );
+            *result.last_mut().unwrap() += 1;
+        }
+        result
+    }
+
     fn range(self, slice: usize) -> std::ops::Range<usize> {
         assert!(slice < self.slices);
         slice * self.block..if slice + 1 == self.slices {
