@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::time::Duration;
 
 pub(crate) use super::context::tests::{events, pause};
+pub(crate) use super::cq::tests::event_runtime;
 use super::*;
 
 pub(crate) struct FakeDevice {
@@ -26,9 +27,9 @@ pub(crate) struct FakeDevice {
     pub(crate) pause: Arc<(Mutex<(bool, bool)>, Condvar)>,
 }
 
-struct FakeCq {
+pub(super) struct FakeCq {
     device: *const FakeDevice,
-    completions: Mutex<std::collections::VecDeque<sys::Completion>>,
+    pub(super) completions: Mutex<std::collections::VecDeque<sys::Completion>>,
     qps: AtomicUsize,
     retiring: AtomicBool,
     ordinal: usize,
@@ -142,9 +143,10 @@ pub(super) unsafe extern "C" fn open_device(
 }
 
 unsafe extern "C" fn create_cq(
-    h: *mut sys::ConnectionHandles,
+    h: *mut sys::CqHandles,
     handles: *const sys::DeviceHandles,
     _: u32,
+    _: *mut c_void,
 ) -> c_int {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push("create_cq");
@@ -849,7 +851,7 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
     0
 }
 
-unsafe extern "C" fn cq(h: *mut sys::ConnectionHandles) -> c_int {
+unsafe extern "C" fn cq(h: *mut sys::CqHandles) -> c_int {
     let handles = unsafe { &mut *h };
     if handles.cq.is_null() {
         return 0;
@@ -976,6 +978,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     discover,
     query_address,
     asynchronous: None,
+    completion: None,
     open_device,
     create_cq,
     register_memory,
@@ -1069,6 +1072,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
     RdmaTransport {
         config,
         usage,
+        counters: Arc::default(),
         drained: Arc::default(),
         verbs,
         device: Mutex::default(),

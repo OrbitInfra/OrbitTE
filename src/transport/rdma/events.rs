@@ -3,7 +3,7 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
@@ -13,17 +13,32 @@ use super::{RdmaStats, sys, workers};
 use crate::{Error, Result};
 
 #[derive(Default)]
+pub(super) struct Counters {
+    pub(super) acknowledged_async_events: AtomicU64,
+    pub(super) completion_events: AtomicU64,
+}
+
+#[derive(Default)]
 pub(super) struct State {
     // Positive: event type + 1; negative: the consumer can no longer ACK.
     fault: AtomicI32,
     stopping: AtomicBool,
     route_fault: AtomicBool,
+    completion_fault: AtomicI32,
     progress: Mutex<Weak<workers::Shared>>,
 }
 
 impl State {
     pub(super) fn check(&self) -> Result<()> {
-        match self.fault.load(Ordering::Acquire) {
+        let asynchronous = self.fault.load(Ordering::Acquire);
+        let completion = self.completion_fault.load(Ordering::Acquire);
+        if asynchronous >= 0 && completion != 0 {
+            return Err(Error::Unquiesced {
+                operation: "RDMA completion event consumer",
+                code: completion,
+            });
+        }
+        match asynchronous {
             0 if self.route_fault.load(Ordering::Acquire) => Err(Error::Backend {
                 operation: "RDMA route changed",
                 code: libc::ESTALE,
@@ -56,8 +71,18 @@ impl State {
             .unwrap_or_else(|p| p.into_inner())
             .upgrade();
         if let Some(progress) = progress {
-            progress.signal();
+            progress.wake();
         }
+    }
+
+    pub(super) fn lost_completion(&self, code: i32) {
+        let _ = self.completion_fault.compare_exchange(
+            0,
+            code.max(1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        self.notify();
     }
 
     fn lost(&self, code: i32) {
@@ -86,7 +111,7 @@ struct Source {
 unsafe impl Send for Source {}
 
 impl Source {
-    fn run(self, wake: UnixStream, state: &State, usage: &Mutex<RdmaStats>) {
+    fn run(self, wake: UnixStream, state: &State, counters: &Counters) {
         let mut fds = [
             libc::pollfd {
                 fd: self.fd,
@@ -141,10 +166,9 @@ impl Source {
             // destroy may be holding those locks while awaiting this receipt.
             state.event(kind);
             unsafe { (self.verbs.ack)(self.context.as_ptr(), &mut event) };
-            usage
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .acknowledged_async_events += 1;
+            counters
+                .acknowledged_async_events
+                .fetch_add(1, Ordering::Relaxed);
             state.notify();
         }
     }
@@ -180,6 +204,7 @@ impl Events {
         verbs: sys::AsyncVerbs,
         state: Arc<State>,
         usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<Counters>,
     ) -> Result<Self> {
         let context =
             NonNull::new(handles.context).ok_or(Error::Internal("missing RDMA context"))?;
@@ -205,7 +230,7 @@ impl Events {
             .name("orbitte-rdma-events".into())
             .spawn(move || {
                 let _exit = exit;
-                source.run(receiver, &_exit.state, &_exit.usage);
+                source.run(receiver, &_exit.state, &counters);
             });
         // A failed spawn drops the closure/Exit and repays the worker charge.
         Ok(Self {

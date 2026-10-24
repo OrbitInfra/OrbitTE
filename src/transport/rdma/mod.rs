@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code)]
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -42,6 +43,15 @@ pub enum RdmaHostMemory {
     Staged,
 }
 
+/// Shared CQ progress policy. The frozen TENT polling path remains the default.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RdmaProgressMode {
+    #[default]
+    Polling,
+    /// Arm both CQs before polling; native events wake the existing data worker.
+    EventDriven,
+}
+
 /// Automatic or pinned single-rail selection. Direct host peers can retain RC QPs.
 #[derive(Clone, Debug)]
 pub struct RdmaConfig {
@@ -56,6 +66,7 @@ pub struct RdmaConfig {
     pub rdma_blacklist: Vec<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
+    pub progress_mode: RdmaProgressMode,
     pub traffic_class: u8,
     pub hop_limit: u8,
     pub max_endpoints: usize,
@@ -83,6 +94,7 @@ impl Default for RdmaConfig {
             rdma_whitelist: Vec::new(),
             rdma_blacklist: Vec::new(),
             preferred_numa_node: None,
+            progress_mode: RdmaProgressMode::Polling,
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
@@ -176,6 +188,14 @@ pub struct RdmaStats {
     pub retained_message_mrs: usize,
     pub message_bytes: usize,
     pub retained_message_bytes: usize,
+    pub active_completion_channels: usize,
+    pub opened_completion_channels: u64,
+    pub retained_completion_channels: usize,
+    pub completion_event_workers: usize,
+    /// Successful native gets, each acknowledged before notifying progress.
+    pub completion_events: u64,
+    pub cq_notification_arms: u64,
+    pub cq_event_waits: u64,
     pub active_cqs: usize,
     pub retained_cqs: usize,
     pub opened_cqs: u64,
@@ -234,6 +254,7 @@ pub struct RdmaStats {
 pub(crate) struct RdmaTransport {
     config: RdmaConfig,
     usage: Arc<Mutex<RdmaStats>>,
+    counters: Arc<events::Counters>,
     verbs: &'static sys::Verbs,
     device: Mutex<ContextCache>,
     drained: Arc<Condvar>,
@@ -257,6 +278,7 @@ impl RdmaTransport {
         Ok(Arc::new(Self {
             config,
             usage,
+            counters: Arc::default(),
             verbs: &sys::REAL,
             device: Mutex::default(),
             drained: Arc::default(),
@@ -265,10 +287,16 @@ impl RdmaTransport {
     }
 
     pub(crate) fn stats(&self) -> Result<RdmaStats> {
-        self.usage
+        let mut stats = *self
+            .usage
             .lock()
-            .map(|usage| *usage)
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+        stats.acknowledged_async_events = self
+            .counters
+            .acknowledged_async_events
+            .load(Ordering::Relaxed);
+        stats.completion_events = self.counters.completion_events.load(Ordering::Relaxed);
+        Ok(stats)
     }
 
     pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
@@ -297,7 +325,12 @@ impl RdmaTransport {
         if let Some(owner) = &cache.owner {
             return Ok(Arc::clone(owner));
         }
-        match RdmaContext::open(&self.config, self.verbs, Arc::clone(&self.usage)) {
+        match RdmaContext::open(
+            &self.config,
+            self.verbs,
+            Arc::clone(&self.usage),
+            Arc::clone(&self.counters),
+        ) {
             Ok(owner) => {
                 cache.owner = Some(Arc::clone(&owner));
                 Ok(owner)
@@ -433,6 +466,7 @@ impl RdmaTransport {
                 || usage.retained_grants != 0
                 || usage.retained_devices != 0
                 || usage.retained_cqs != 0
+                || usage.retained_completion_channels != 0
                 || usage.retained_persistent_mrs != 0
                 || usage.progress_failures != 0
             {

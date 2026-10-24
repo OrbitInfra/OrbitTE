@@ -1640,3 +1640,105 @@ Evidence root: `/root/orbitte-artifacts/rdma-topology-discovery-20261023`.
 Physical IB, comparisons across multiple RNIC/NUMA ranks, real route/device
 faults, GDR, multirail and performance remain unqualified. OrbitKV integration
 continues to wait for the full P4 native-stage boundary.
+
+
+## Optional CQ event progress
+
+P4.9 implements `RdmaProgressMode::EventDriven` as an explicit opt-in over the
+existing single-rail context, endpoint store and shared SQ/RQ CQs. Polling
+remains the default. This substage has source/CPU controls; independent review,
+installed/native event-mode qualification and complete P4 remain open. Earlier
+native evidence describes its recorded revisions and is not a hardware pass
+for the new source. P4.8's independently built native repeat remains open too.
+
+The frozen TENT reference is still
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`. `RdmaCQ` owns CQs;
+`Workers::workerThread` and `asyncPollCq` handle data progress and suspension,
+while `monitorThread` handles context events. That reference does not implement
+this CQ-notification mode. OrbitTE preserves those resource boundaries and the
+default polling behavior, and adds the completion-channel owner in `rdma/cq.rs`.
+It is a deliberate progress extension in the completion plan, not a claim that
+TENT's polling loop calls `ibv_get_cq_event`.
+
+```rust,ignore
+use orbit_te::transport::rdma::{RdmaConfig, RdmaProgressMode};
+
+let rdma = RdmaConfig {
+    progress_mode: RdmaProgressMode::EventDriven,
+    rdma_whitelist: vec!["mlx5_0".into()],
+    ..RdmaConfig::default()
+};
+```
+
+The mode requires native completion-channel support. It never silently falls
+back to polling. One channel belongs to the actual context and is shared by
+both existing CQs. Its fd is nonblocking and close-on-exec. One consumer thread
+reads native events, ACKs each actual returned CQ exactly once, then notifies
+the existing data worker. Context asynchronous events keep their separate
+consumer and failure priority. A CQ event is a wakeup only: actual CQEs, WR/QP
+identities, queue debt and the bound DONE/ACK/READY protocol still prove data
+and source-grant completion.
+
+The data worker arms both CQs with `solicited_only=0` **before** polling. A
+completion already present when arming is consumed by that poll; a later
+completion produces a native event. Progressed CQEs cause another full pass
+instead of sleeping with unposted slices or an undrained poll budget. The
+control mutex and dirty flag serialize local submissions, cancellation and
+shutdown. A thread wake token (`unpark`/`park`) wakes the one data worker without
+acquiring that mutex; a wake received before parking remains pending. The worker
+registers its thread before its first scan, so work or faults published during
+startup are observed by that scan. Pending work waits at most until its earliest
+unresolved SQ/RQ deadline; completed requests do not keep an expired timer in
+that minimum. Idle workers still wake for local work or context faults. The
+condition variable only reports worker termination to close waiters. No extra
+data-posting worker is introduced.
+
+Teardown first destroys every affiliated QP and both CQs **while the completion
+consumer remains alive**. Native `ibv_destroy_cq` can wait for event ACKs, so the
+consumer never acquires budget, endpoint or progress locks between receipts.
+Merely ACKing the first event before those locks is insufficient: a later event
+in the same burst can still block native destruction. Both native event
+consumers use atomic ACK counters and the lock-independent thread wake token;
+resource charges remain under their existing budget owner. Only after all
+actual CQ owners close and release their channel references does the
+owner stop/join the consumer and destroy the channel. Context/PD destruction
+comes afterward. A failed native destroy is never retried. Failure retains the
+remaining actual channel/context/CQ/QP/MR/backing owners and their charges.
+Losing the event consumer is `Unquiesced`, fences admission and prevents later
+destroy calls that could wait forever for an unavailable ACK owner.
+
+`RdmaStats` reports active/opened/retained completion channels, completion-event
+workers, acknowledged completion events, successful notification arms and event
+waits. ACK counters are cumulative transport-owned atomics and remain readable
+after native context/channel closure. They are observations, never admission or
+completion authority; their snapshot need not be simultaneous with resource
+charges. These counters describe ownership and the exercised path; they are not
+a throughput or CPU-efficiency claim.
+
+Source tests cover both modes of the public READ/WRITE and connected-QP reuse
+contract, a withheld completion that must wake the existing data worker,
+earliest-deadline retirement, partial channel/first-CQ/second-CQ construction,
+native `req_notify_cq` ABI dispatch, arm failure, lost consumption, retained
+channel close and native-destroy controls that wait for eight event ACKs while
+the progress lock, budget lock or both are held. Context asynchronous event
+bursts exercise the same three cases. The previous source fails the CQ burst
+regression with `ibv_destroy_cq`/`EBUSY`; the single-event control alone did not
+expose this inter-event blocking. Test implementations stay in `tests/unit/`.
+
+The existing physical runner accepts `"rdma_events": true` for native RDMA
+cases, including connected/duplex peers. The flag is a strict boolean and does
+not select another RNIC, skip the original locks or activate an OrbitKV
+consumer profile. Both peers receive the explicit mode; their
+`ORBITTE_CQ_EVENT_STATS` markers check that the requested channel/consumer path
+was created and that channel/worker/retained counts return to zero. Existing
+bytes, guards, source grants, QP continuity, process waits, maps and resource
+cleanup controls remain required. Keep polling and event-mode regressions
+separate, using newly frozen binaries.
+
+External implementation evidence is under
+`/root/orbitte-artifacts/rdma-cq-events-20261024`; burst-hardening evidence is
+under `/root/orbitte-artifacts/rdma-event-burst-20261024`, including the failing
+pre-fix regression. Native runs have not been executed for this substage. A fresh authorized two-host profile is required for
+the outstanding P4.8 independent repeat and P4.9 both-mode native qualification.
+Physical partial-post/CQ/device/destroy faults, multirail, GDR, performance,
+full P4 and OrbitKV linkage remain open.

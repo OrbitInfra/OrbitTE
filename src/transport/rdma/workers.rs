@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::COMPLETION_MESSAGE_SIZE;
-use super::cq::RdmaCq;
+use super::cq::{CompletionEvents, RdmaCq};
 use super::endpoint_store::{EndpointStore, Peer};
 use super::rdma_transport::BoundDone;
 use super::receive::{MessageBuffer, ReceiveQueue};
 use super::{
-    Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaEndpoint, RdmaStats,
-    Resources, events, slice, sys,
+    Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaEndpoint,
+    RdmaProgressMode, RdmaStats, Resources, events, slice, sys,
 };
 use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
@@ -151,8 +151,10 @@ pub(super) struct Workers {
 pub(super) struct Shared {
     asynchronous: Arc<events::State>,
     next_work_namespace: AtomicU64,
+    completion_events: Option<Arc<CompletionEvents>>,
     control: Mutex<Control>,
-    wake: Condvar,
+    changed: Condvar,
+    progress_thread: OnceLock<thread::Thread>,
     usage: Arc<Mutex<RdmaStats>>,
     verbs: &'static sys::Verbs,
     config: RdmaConfig,
@@ -199,24 +201,50 @@ impl Workers {
         verbs: &'static sys::Verbs,
     ) -> Result<Arc<Self>> {
         let endpoints = EndpointStore::new(config.max_endpoints)?;
-        let mut cq = RdmaCq::new(
+        let completion_events = if config.progress_mode == RdmaProgressMode::EventDriven {
+            Some(CompletionEvents::new(
+                Arc::clone(&device),
+                Arc::clone(&usage),
+                verbs,
+            )?)
+        } else {
+            None
+        };
+        let mut cq = match RdmaCq::new(
             Arc::clone(&device),
             Arc::clone(&usage),
             config.max_cqes,
+            completion_events.clone(),
             verbs,
-        )?;
+        ) {
+            Ok(cq) => cq,
+            Err(error) => {
+                if let Some(events) = &completion_events {
+                    events
+                        .close()
+                        .map_err(|(operation, code)| Error::Unquiesced { operation, code })?;
+                }
+                return Err(error);
+            }
+        };
         let receive_cq = match RdmaCq::new(
             Arc::clone(&device),
             Arc::clone(&usage),
             config.max_cqes,
+            completion_events.clone(),
             verbs,
         ) {
             Ok(receive_cq) => receive_cq,
             Err(error) => {
                 if let Err((operation, code)) = cq.close(verbs) {
-                    usage.lock().unwrap_or_else(|p| p.into_inner()).retained_cqs += 1;
-                    std::mem::forget(cq);
+                    cq.retain();
                     return Err(Error::Unquiesced { operation, code });
+                }
+                drop(cq);
+                if let Some(events) = &completion_events {
+                    events
+                        .close()
+                        .map_err(|(operation, code)| Error::Unquiesced { operation, code })?;
                 }
                 return Err(error);
             }
@@ -224,6 +252,7 @@ impl Workers {
         let shared = Arc::new(Shared {
             asynchronous: Arc::clone(&device.asynchronous),
             next_work_namespace: AtomicU64::new(1),
+            completion_events,
             control: Mutex::new(Control {
                 cq: Some(cq),
                 receive_cq: Some(receive_cq),
@@ -236,7 +265,8 @@ impl Workers {
                 fault: None,
                 retained: None,
             }),
-            wake: Condvar::new(),
+            changed: Condvar::new(),
+            progress_thread: OnceLock::new(),
             usage,
             verbs,
             config: config.clone(),
@@ -353,7 +383,7 @@ impl Workers {
         });
         control.endpoints.publish(Arc::clone(&record))?;
         control.dirty = true;
-        self.shared.wake.notify_one();
+        self.shared.wake();
         Ok(record)
     }
 
@@ -1102,11 +1132,11 @@ impl Workers {
             .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
         control.stopping = true;
         control.dirty = true;
-        self.shared.wake.notify_one();
+        self.shared.wake();
         while !control.finished {
             control = self
                 .shared
-                .wake
+                .changed
                 .wait_timeout(control, remaining(deadline)?)
                 .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?
                 .0;
@@ -1140,10 +1170,16 @@ impl Drop for Workers {
 }
 
 impl Shared {
+    pub(super) fn wake(&self) {
+        if let Some(worker) = self.progress_thread.get() {
+            worker.unpark();
+        }
+    }
+
     pub(super) fn signal(&self) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         control.dirty = true;
-        self.wake.notify_one();
+        self.wake();
     }
 
     fn fail(&self, fault: Fault) {
@@ -1162,7 +1198,7 @@ impl Shared {
                 .progress_failures += 1;
         }
         control.dirty = true;
-        self.wake.notify_all();
+        self.wake();
     }
 
     fn close_cq(&self) -> std::result::Result<(), (&'static str, i32)> {
@@ -1180,6 +1216,9 @@ impl Shared {
                 }
             }
             queues[index] = None;
+        }
+        if let Some(events) = &self.completion_events {
+            events.close()?;
         }
         Ok(())
     }
@@ -1291,8 +1330,11 @@ impl Shared {
         };
         // Fence every constructor before publishing completion or losing owners.
         // Actual CQ/PD, QPs/MRs, backing, DMA loans and unresolved debt survive.
+        if let Some(events) = &self.completion_events {
+            events.retain();
+        }
         std::mem::forget((cq, records));
-        self.wake.notify_all();
+        self.changed.notify_all();
     }
 
     fn unlock(request: &mut Request) -> std::result::Result<(), (&'static str, i32)> {
@@ -1463,7 +1505,7 @@ impl Shared {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         control.endpoints.clear_after_drain();
         control.finished = true;
-        self.wake.notify_all();
+        self.changed.notify_all();
     }
 
     fn post(&self, record: &Arc<Record>) -> bool {
@@ -1758,6 +1800,10 @@ impl Shared {
     }
 
     fn run(&self) {
+        if self.progress_thread.set(thread::current()).is_err() {
+            self.retain("RDMA progress worker already started", libc::EIO);
+            return;
+        }
         let mut records = Vec::with_capacity(self.config.max_endpoints);
         let mut cursor = 0usize;
         loop {
@@ -1801,8 +1847,26 @@ impl Shared {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .finished = true;
-                self.wake.notify_all();
+                self.changed.notify_all();
                 return;
+            }
+            if self.completion_events.is_some() {
+                let control = self.control.lock().unwrap_or_else(|p| p.into_inner());
+                let armed = [control.cq.as_ref(), control.receive_cq.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(|cq| cq.arm(self.verbs));
+                drop(control);
+                if let Err(error) = armed {
+                    match error {
+                        Error::Unquiesced { operation, code } => {
+                            self.retain(operation, code);
+                            return;
+                        }
+                        error => self.fail(Fault::from_error(error)),
+                    }
+                    continue;
+                }
             }
             for record in &records {
                 if let Err((operation, code)) = self.finish_request(record) {
@@ -1855,7 +1919,8 @@ impl Shared {
             usage.peak_pending_qps = usage.peak_pending_qps.max(pending_qps);
             let pending = usage.work_requests != 0 || usage.receive_work_requests != 0;
             drop(usage);
-            if pending
+            let mut progressed = false;
+            if (pending || self.completion_events.is_some())
                 && self
                     .control
                     .lock()
@@ -1873,7 +1938,10 @@ impl Shared {
                         let count = unsafe { (self.verbs.poll)(&mut handles, &mut completion) };
                         match count {
                             0 => break,
-                            1 => self.complete(completion, receive_cq),
+                            1 => {
+                                progressed = true;
+                                self.complete(completion, receive_cq);
+                            }
                             code if code < 0 => {
                                 self.fail(Fault::Backend("ibv_poll_cq", code));
                                 break;
@@ -1895,21 +1963,54 @@ impl Shared {
                     }
                 }
             }
+            let wait = if self.completion_events.is_some() {
+                if progressed {
+                    continue;
+                }
+                let deadline = records
+                    .iter()
+                    .filter_map(|record| {
+                        let request = record.state.lock().unwrap_or_else(|p| p.into_inner());
+                        request
+                            .work
+                            .as_ref()
+                            .filter(|work| !work.queue.finished())
+                            .map(|work| work.deadline)
+                            .into_iter()
+                            .chain(
+                                request
+                                    .receive
+                                    .as_ref()
+                                    .filter(|receive| receive.pending())
+                                    .map(|receive| receive.deadline),
+                            )
+                            .min()
+                    })
+                    .min();
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            } else {
+                Some(Duration::from_micros(50))
+            };
             records.clear();
-            let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
+            let control = self.control.lock().unwrap_or_else(|p| p.into_inner());
             if control.dirty || control.fault.is_some() || control.stopping {
                 continue;
             }
+            drop(control);
             if pending {
-                drop(
-                    self.wake
-                        .wait_timeout(control, Duration::from_micros(50))
-                        .unwrap_or_else(|p| p.into_inner()),
-                );
-            } else {
-                while !control.dirty && control.fault.is_none() && !control.stopping {
-                    control = self.wake.wait(control).unwrap_or_else(|p| p.into_inner());
+                if self.completion_events.is_some() {
+                    self.usage
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .cq_event_waits += 1;
                 }
+                if let Some(duration) = wait {
+                    thread::park_timeout(duration);
+                } else {
+                    thread::park();
+                }
+            } else {
+                thread::park();
             }
         }
     }

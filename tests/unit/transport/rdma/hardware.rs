@@ -53,6 +53,7 @@ unsafe extern "C" fn gated_post(
 
 static VERBS: sys::Verbs = sys::Verbs {
     asynchronous: sys::REAL.asynchronous,
+    completion: sys::REAL.completion,
     discover: sys::REAL.discover,
     query_address: sys::REAL.query_address,
     open_device: sys::REAL.open_device,
@@ -87,7 +88,41 @@ fn rdma_config() -> RdmaConfig {
         config
     };
     config.hop_limit = 64;
+    if env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1") {
+        config.progress_mode = super::super::super::RdmaProgressMode::EventDriven;
+    }
     config
+}
+
+fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats) {
+    let enabled = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
+    assert_eq!(
+        (
+            idle.active_completion_channels,
+            idle.completion_event_workers
+        ),
+        (usize::from(enabled), usize::from(enabled))
+    );
+    assert_eq!(closed.opened_completion_channels, u64::from(enabled));
+    assert_eq!(
+        (
+            closed.active_completion_channels,
+            closed.retained_completion_channels,
+            closed.completion_event_workers
+        ),
+        (0, 0, 0)
+    );
+    if enabled {
+        assert!(closed.completion_events > 0 && closed.cq_notification_arms >= 2);
+    }
+    println!(
+        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_workers\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"workers\":0}}",
+        closed.opened_completion_channels,
+        idle.completion_event_workers,
+        closed.completion_events,
+        closed.cq_notification_arms,
+        closed.cq_event_waits
+    );
 }
 
 fn record_topology(engine: &crate::TransferEngine) {
@@ -179,6 +214,7 @@ fn shared_cq_peer() {
         registrations: buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &VERBS),
         config,
         usage,
+        counters: Arc::default(),
         verbs: &VERBS,
         device: Mutex::default(),
         drained: Arc::default(),
@@ -448,6 +484,7 @@ fn shared_cq_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    record_completion_events(&idle, &closed);
     assert_eq!(
         (
             idle.active_grants,
@@ -721,6 +758,7 @@ fn source_window_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    record_completion_events(&idle, &closed);
     assert_eq!(
         (
             idle.active_grants,
@@ -1094,6 +1132,7 @@ fn duplex_completion_peer() {
     drop(backing);
     runtime.close(Instant::now() + TIMEOUT).unwrap();
     let closed = runtime.stats().unwrap();
+    record_completion_events(&idle, &closed);
     source_mr_stats(&idle, &closed);
     receive_stats(&closed);
     assert_eq!(

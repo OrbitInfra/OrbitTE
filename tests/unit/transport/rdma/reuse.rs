@@ -38,155 +38,171 @@ fn bytes(memory: &crate::RegisteredMemory) -> Vec<u8> {
 
 #[test]
 fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration() {
-    for operation in [TransferOp::Read, TransferOp::Write] {
-        let source = rdma_fixture("direct:copy");
-        let requester = rdma_fixture("direct:copy");
-        let mut local = requester
-            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
-            .unwrap();
-        let mut remote = source
-            .register_memory(
-                vec![0x29; 8].into_boxed_slice(),
-                Permission::RemoteReadWrite,
-            )
-            .unwrap();
-        let observations = Arc::new(Mutex::new(Vec::new()));
-        for round in 0..4 {
-            let observed = Arc::clone(&observations);
-            on_requester_close(move |endpoint, result| {
-                result.as_ref().unwrap();
-                assert!(endpoint.released);
-                let state = endpoint.record.lock().unwrap();
-                let resources = state.resources.as_ref().unwrap();
-                assert!(resources.grant.is_none());
-                assert!(state.phase == super::super::super::Phase::Ready);
-                assert!(!resources.connection.handles.qp.is_null());
-                observed.lock().unwrap().push((
-                    resources.connection.handles.qp as usize,
-                    endpoint.incarnation().unwrap(),
-                    endpoint.local.connection_bytes(),
-                    endpoint.cached_peer.unwrap(),
-                    endpoint.claim,
-                ));
-                drop(state);
-                if round != 0 {
-                    endpoint
-                        .progress
-                        .retire_idle(&endpoint.record, endpoint.claim - 1, endpoint.deadline)
-                        .unwrap();
-                    assert!(
-                        !endpoint
-                            .record
-                            .terminal
-                            .load(std::sync::atomic::Ordering::Acquire)
+    for mode in ["direct:copy", "events:direct:copy"] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            let source = rdma_fixture(mode);
+            let requester = rdma_fixture(mode);
+            let mut local = requester
+                .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap();
+            let mut remote = source
+                .register_memory(
+                    vec![0x29; 8].into_boxed_slice(),
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap();
+            let observations = Arc::new(Mutex::new(Vec::new()));
+            for round in 0..4 {
+                let observed = Arc::clone(&observations);
+                on_requester_close(move |endpoint, result| {
+                    result.as_ref().unwrap();
+                    assert!(endpoint.released);
+                    let state = endpoint.record.lock().unwrap();
+                    let resources = state.resources.as_ref().unwrap();
+                    assert!(resources.grant.is_none());
+                    assert!(state.phase == super::super::super::Phase::Ready);
+                    assert!(!resources.connection.handles.qp.is_null());
+                    observed.lock().unwrap().push((
+                        resources.connection.handles.qp as usize,
+                        endpoint.incarnation().unwrap(),
+                        endpoint.local.connection_bytes(),
+                        endpoint.cached_peer.unwrap(),
+                        endpoint.claim,
+                    ));
+                    drop(state);
+                    if round != 0 {
+                        endpoint
+                            .progress
+                            .retire_idle(&endpoint.record, endpoint.claim - 1, endpoint.deadline)
+                            .unwrap();
+                        assert!(
+                            !endpoint
+                                .record
+                                .terminal
+                                .load(std::sync::atomic::Ordering::Acquire)
+                        );
+                        assert!(
+                            endpoint.record.lock().unwrap().phase
+                                == super::super::super::Phase::Ready
+                        );
+                    }
+                });
+                let (offset, length) = if round % 2 == 0 { (0, 8) } else { (2, 4) };
+                local.write(0, &[0x63 + round; 8]).unwrap();
+                remote.write(0, &[0x29 + round; 8]).unwrap();
+                transfer(
+                    &requester, &source, &local, &remote, operation, offset, length,
+                );
+                let expected = if operation == TransferOp::Read {
+                    0x29 + round
+                } else {
+                    0x63 + round
+                };
+                let target = if operation == TransferOp::Read {
+                    &local
+                } else {
+                    &remote
+                };
+                let actual = bytes(target);
+                assert!(
+                    actual[offset..offset + length]
+                        .iter()
+                        .all(|v| *v == expected)
+                );
+                for engine in [&requester, &source] {
+                    let stats = engine.stats().unwrap().rdma.unwrap();
+                    assert_eq!(
+                        (
+                            stats.active_endpoints,
+                            stats.idle_endpoints,
+                            stats.opened_connections,
+                            stats.closed_connections
+                        ),
+                        (1, 1, 1, 0)
+                    );
+                    assert_eq!(stats.reused_connections, round as u64);
+                    assert_eq!(stats.completed_reusable_grants, round as u64 + 1);
+                    assert_eq!(
+                        (
+                            stats.active_grants,
+                            stats.active_windows,
+                            stats.direct_bytes,
+                            stats.message_bytes,
+                            stats.active_message_mrs,
+                            stats.work_requests,
+                            stats.receive_work_requests
+                        ),
+                        (0, 0, 0, 0, 0, 0, 0)
+                    );
+                    assert_eq!(
+                        events(source_runtime(engine))
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|e| **e == "open_endpoint")
+                            .count(),
+                        1
                     );
                     assert!(
-                        endpoint.record.lock().unwrap().phase == super::super::super::Phase::Ready
+                        !events(source_runtime(engine))
+                            .lock()
+                            .unwrap()
+                            .contains(&"destroy_qp")
                     );
                 }
-            });
-            let (offset, length) = if round % 2 == 0 { (0, 8) } else { (2, 4) };
-            local.write(0, &[0x63 + round; 8]).unwrap();
-            remote.write(0, &[0x29 + round; 8]).unwrap();
-            transfer(
-                &requester, &source, &local, &remote, operation, offset, length,
-            );
-            let expected = if operation == TransferOp::Read {
-                0x29 + round
-            } else {
-                0x63 + round
-            };
-            let target = if operation == TransferOp::Read {
-                &local
-            } else {
-                &remote
-            };
-            let actual = bytes(target);
-            assert!(
-                actual[offset..offset + length]
-                    .iter()
-                    .all(|v| *v == expected)
-            );
+                if round == 1 {
+                    // Actual parent deregistration while the native QP remains alive.
+                    requester.unregister_memory(&local).unwrap();
+                    source.unregister_memory(&remote).unwrap();
+                    assert_eq!(requester.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
+                    assert_eq!(source.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
+                    local = requester
+                        .register_memory(vec![0; 8].into_boxed_slice(), Permission::LocalOnly)
+                        .unwrap();
+                    remote = source
+                        .register_memory(vec![0; 8].into_boxed_slice(), Permission::RemoteReadWrite)
+                        .unwrap();
+                }
+            }
+            let observed = observations.lock().unwrap();
+            for pair in observed.windows(2) {
+                assert_eq!(pair[0].0, pair[1].0);
+                assert_eq!(pair[0].1, pair[1].1);
+                assert_eq!(pair[0].2, pair[1].2);
+                assert!(pair[0].3.same_pair(&pair[1].3));
+                assert!(pair[0].3.generation < pair[1].3.generation);
+                assert_eq!(pair[0].4 + 1, pair[1].4);
+            }
             for engine in [&requester, &source] {
+                engine.close(TIMEOUT).unwrap();
                 let stats = engine.stats().unwrap().rdma.unwrap();
+                assert_eq!((stats.opened_connections, stats.closed_connections), (1, 1));
+                assert_eq!(
+                    (
+                        stats.active_completion_channels,
+                        stats.completion_event_workers
+                    ),
+                    (0, 0)
+                );
+                if mode.starts_with("events:") {
+                    assert_eq!(stats.opened_completion_channels, 1);
+                    assert!(stats.completion_events > 0 && stats.cq_notification_arms >= 2);
+                } else {
+                    assert_eq!(stats.opened_completion_channels, 0);
+                }
                 assert_eq!(
                     (
                         stats.active_endpoints,
                         stats.idle_endpoints,
-                        stats.opened_connections,
-                        stats.closed_connections
-                    ),
-                    (1, 1, 1, 0)
-                );
-                assert_eq!(stats.reused_connections, round as u64);
-                assert_eq!(stats.completed_reusable_grants, round as u64 + 1);
-                assert_eq!(
-                    (
                         stats.active_grants,
-                        stats.active_windows,
-                        stats.direct_bytes,
-                        stats.message_bytes,
-                        stats.active_message_mrs,
-                        stats.work_requests,
-                        stats.receive_work_requests
+                        stats.active_cqs,
+                        stats.persistent_mrs,
+                        stats.active_devices,
+                        stats.progress_workers
                     ),
                     (0, 0, 0, 0, 0, 0, 0)
                 );
-                assert_eq!(
-                    events(source_runtime(engine))
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .filter(|e| **e == "open_endpoint")
-                        .count(),
-                    1
-                );
-                assert!(
-                    !events(source_runtime(engine))
-                        .lock()
-                        .unwrap()
-                        .contains(&"destroy_qp")
-                );
             }
-            if round == 1 {
-                // Actual parent deregistration while the native QP remains alive.
-                requester.unregister_memory(&local).unwrap();
-                source.unregister_memory(&remote).unwrap();
-                assert_eq!(requester.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
-                assert_eq!(source.stats().unwrap().rdma.unwrap().persistent_mrs, 0);
-                local = requester
-                    .register_memory(vec![0; 8].into_boxed_slice(), Permission::LocalOnly)
-                    .unwrap();
-                remote = source
-                    .register_memory(vec![0; 8].into_boxed_slice(), Permission::RemoteReadWrite)
-                    .unwrap();
-            }
-        }
-        let observed = observations.lock().unwrap();
-        for pair in observed.windows(2) {
-            assert_eq!(pair[0].0, pair[1].0);
-            assert_eq!(pair[0].1, pair[1].1);
-            assert_eq!(pair[0].2, pair[1].2);
-            assert!(pair[0].3.same_pair(&pair[1].3));
-            assert!(pair[0].3.generation < pair[1].3.generation);
-            assert_eq!(pair[0].4 + 1, pair[1].4);
-        }
-        for engine in [&requester, &source] {
-            engine.close(TIMEOUT).unwrap();
-            let stats = engine.stats().unwrap().rdma.unwrap();
-            assert_eq!((stats.opened_connections, stats.closed_connections), (1, 1));
-            assert_eq!(
-                (
-                    stats.active_endpoints,
-                    stats.idle_endpoints,
-                    stats.active_grants,
-                    stats.active_cqs,
-                    stats.persistent_mrs,
-                    stats.active_devices,
-                    stats.progress_workers
-                ),
-                (0, 0, 0, 0, 0, 0, 0)
-            );
         }
     }
 }

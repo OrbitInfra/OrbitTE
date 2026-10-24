@@ -1332,3 +1332,120 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
     requester.close(Duration::from_secs(3)).unwrap();
     source.close(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn completion_event_ack_precedes_progress_lock_and_cq_destruction_wait() {
+    let runtime = super::super::cq::tests::event_runtime("completion_destroy_event");
+    let device = runtime.device().unwrap();
+    let progress = runtime.progress(Arc::clone(&device)).unwrap();
+    let mut extra = RdmaCq::new(
+        device,
+        Arc::clone(&runtime.usage),
+        1,
+        progress.shared.completion_events.clone(),
+        runtime.verbs,
+    )
+    .unwrap();
+    let locked = progress.shared.control.lock().unwrap();
+    extra.close(runtime.verbs).unwrap();
+    drop(extra);
+    drop(locked);
+    runtime.close(deadline()).unwrap();
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_cqs,
+            stats.active_completion_channels,
+            stats.completion_event_workers,
+            stats.active_devices
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(stats.completion_events, 3);
+}
+
+#[test]
+fn completion_event_burst_is_acked_while_progress_or_budget_is_locked() {
+    for (control, usage) in [(true, false), (false, true), (true, true)] {
+        let runtime = super::super::cq::tests::event_runtime("completion_destroy_burst");
+        let device = runtime.device().unwrap();
+        let progress = runtime.progress(Arc::clone(&device)).unwrap();
+        let mut extra = RdmaCq::new(
+            device,
+            Arc::clone(&runtime.usage),
+            1,
+            progress.shared.completion_events.clone(),
+            runtime.verbs,
+        )
+        .unwrap();
+        let locked = control.then(|| progress.shared.control.lock().unwrap());
+        let budget = usage.then(|| runtime.usage.lock().unwrap());
+        let result = extra.close(runtime.verbs);
+        drop(budget);
+        drop(locked);
+        if result.is_err() {
+            extra.retain();
+        } else {
+            drop(extra);
+        }
+        result.unwrap_or_else(|error| {
+            panic!("CQ event burst blocked: control={control}, usage={usage}, error={error:?}")
+        });
+        runtime.close(deadline()).unwrap();
+        let stats = runtime.stats().unwrap();
+        assert_eq!(stats.completion_events, 24);
+        assert_eq!(
+            (
+                stats.active_cqs,
+                stats.active_completion_channels,
+                stats.completion_event_workers
+            ),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[test]
+fn asynchronous_event_burst_is_acked_while_progress_or_budget_is_locked() {
+    for (control, usage) in [(true, false), (false, true), (true, true)] {
+        let runtime = runtime("async_ok");
+        let device = runtime.device().unwrap();
+        let progress = runtime.progress(device).unwrap();
+        let native = events(&runtime);
+        let locked = control.then(|| progress.shared.control.lock().unwrap());
+        let budget = usage.then(|| runtime.usage.lock().unwrap());
+        for _ in 0..8 {
+            super::super::context::tests::emit_async(
+                &runtime,
+                ibverbs_sys::IBV_EVENT_COMM_EST as u8,
+            );
+        }
+        let until = deadline();
+        let acknowledged = loop {
+            let count = native
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "async_ack")
+                .count();
+            if count == 8 || Instant::now() >= until {
+                break count;
+            }
+            thread::yield_now();
+        };
+        drop(budget);
+        drop(locked);
+        runtime.close(deadline()).unwrap();
+        assert_eq!(acknowledged, 8, "control={control}, usage={usage}");
+        let stats = runtime.stats().unwrap();
+        assert_eq!(stats.acknowledged_async_events, 8);
+        assert_eq!(
+            (
+                stats.active_cqs,
+                stats.active_devices,
+                stats.async_event_workers
+            ),
+            (0, 0, 0)
+        );
+    }
+}

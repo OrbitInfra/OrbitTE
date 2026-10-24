@@ -13,6 +13,7 @@ pub(super) struct RdmaContext {
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
     pub(super) asynchronous: Arc<events::State>,
+    pub(super) counters: Arc<events::Counters>,
 }
 
 enum State {
@@ -49,12 +50,19 @@ impl RdmaContext {
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<events::Counters>,
     ) -> Result<Arc<Self>> {
         let (topology, candidates) = (verbs.discover)(config)?;
         let mut last_error = Error::Unavailable("no RDMA discovery candidate");
         for address in candidates {
-            match Self::open_selected(config, verbs, Arc::clone(&usage), address, topology.clone())
-            {
+            match Self::open_selected(
+                config,
+                verbs,
+                Arc::clone(&usage),
+                Arc::clone(&counters),
+                address,
+                topology.clone(),
+            ) {
                 Ok(owner) => return Ok(owner),
                 Err(error @ Error::Unquiesced { .. }) => return Err(error),
                 Err(error) => last_error = error,
@@ -67,6 +75,7 @@ impl RdmaContext {
         config: &RdmaConfig,
         verbs: &'static sys::Verbs,
         usage: Arc<Mutex<RdmaStats>>,
+        counters: Arc<events::Counters>,
         address: RdmaAddress,
         topology: crate::Topology,
     ) -> Result<Arc<Self>> {
@@ -91,6 +100,7 @@ impl RdmaContext {
             }))),
             verbs,
             asynchronous: Arc::default(),
+            counters,
         });
         let initialized = {
             let mut state = owner
@@ -121,6 +131,7 @@ impl RdmaContext {
                         asynchronous,
                         Arc::clone(&owner.asynchronous),
                         Arc::clone(&resources.usage),
+                        Arc::clone(&owner.counters),
                     )?);
                 }
                 resources
@@ -261,10 +272,29 @@ impl RdmaContext {
         })
     }
 
+    pub(super) fn create_completion_channel(
+        &self,
+        handles: &mut sys::ChannelHandles,
+        verbs: sys::CqEventVerbs,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("RDMA device lock poisoned"))?;
+        let State::Open(resources) = &*state else {
+            return Err(Error::Unavailable("RDMA device is closed or retained"));
+        };
+        self.asynchronous.check()?;
+        check("ibv_create_comp_channel", unsafe {
+            (verbs.create)(handles, &resources.handles)
+        })
+    }
+
     pub(super) fn create_cq(
         &self,
-        handles: &mut sys::ConnectionHandles,
+        handles: &mut sys::CqHandles,
         capacity: u32,
+        channel: *mut std::ffi::c_void,
     ) -> Result<()> {
         let state = self
             .state
@@ -276,7 +306,7 @@ impl RdmaContext {
         self.asynchronous.check()?;
         // SAFETY: the progress owner retains the real RdmaContext through CQ close.
         check("ibv_create_cq", unsafe {
-            (self.verbs.create_cq)(handles, &resources.handles, capacity)
+            (self.verbs.create_cq)(handles, &resources.handles, capacity, channel)
         })
     }
 

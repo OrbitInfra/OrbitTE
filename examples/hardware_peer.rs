@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::cuda::{self, CudaMemory};
-use orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory};
+use orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaProgressMode};
 use orbit_te::{
     BatchState, EngineConfig, Error, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, Result, SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
@@ -234,6 +234,9 @@ fn finish(
         || stats.active_source_operations != 0
         || rdma.active_windows != 0
         || rdma.retained_windows != 0
+        || rdma.active_completion_channels != 0
+        || rdma.retained_completion_channels != 0
+        || rdma.completion_event_workers != 0
         || rdma.active_cqs != 0
         || rdma.retained_cqs != 0
         || rdma.progress_workers != 0
@@ -335,6 +338,25 @@ fn finish(
         "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
         rdma.opened_windows, rdma.completed_window_binds, rdma.completed_window_invalidations
     );
+    let event_mode =
+        transport == Transport::Rdma && env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
+    if idle.active_completion_channels != usize::from(event_mode)
+        || idle.completion_event_workers != usize::from(event_mode)
+        || rdma.opened_completion_channels != u64::from(event_mode)
+        || (event_mode && (rdma.completion_events == 0 || rdma.cq_notification_arms < 2))
+    {
+        return Err(Error::Internal(
+            "completion event mode/owner proof mismatch",
+        ));
+    }
+    println!(
+        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_workers\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"workers\":0}}",
+        rdma.opened_completion_channels,
+        idle.completion_event_workers,
+        rdma.completion_events,
+        rdma.cq_notification_arms,
+        rdma.cq_event_waits
+    );
     println!(
         "ORBITTE_SHARED_STATS {{\"opened_cqs\":{},\"idle_progress_workers\":{},\"peak_pending_qps\":{},\"active_cqs\":0,\"progress_workers\":0,\"retained_cqs\":0,\"progress_failures\":0}}",
         rdma.opened_cqs, idle.progress_workers, rdma.peak_pending_qps
@@ -376,6 +398,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         config
     };
     rdma.hop_limit = 64;
+    rdma.progress_mode = match env::var("ORBITTE_RDMA_EVENTS").as_deref() {
+        Ok("1") => RdmaProgressMode::EventDriven,
+        Ok("0") | Err(env::VarError::NotPresent) => RdmaProgressMode::Polling,
+        _ => return Err("ORBITTE_RDMA_EVENTS must be 0 or 1".into()),
+    };
     rdma.host_memory = match env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() {
         Ok("staged") => RdmaHostMemory::Staged,
         Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
