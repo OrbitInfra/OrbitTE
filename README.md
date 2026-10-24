@@ -4,9 +4,9 @@
     <img src="docs/_static/orbitte-logo.svg" width="60%" alt="OrbitTE">
   </picture>
   <h2>A Rust-native transfer engine for AI infrastructure</h2>
-  <a href="docs/index.md"><strong>Documentation</strong></a>
-  | <a href="docs/getting-started.md"><strong>Quick Start</strong></a>
-  | <a href="docs/architecture.md"><strong>Architecture</strong></a>
+  <a href="https://orbitinfra.github.io/OrbitTE/"><strong>Documentation</strong></a>
+  | <a href="https://orbitinfra.github.io/OrbitTE/getting-started.html"><strong>Quick Start</strong></a>
+  | <a href="https://orbitinfra.github.io/OrbitTE/architecture.html"><strong>Architecture</strong></a>
   | <a href="docs/tent-parity.md"><strong>TENT Reference</strong></a>
   <br><br>
 
