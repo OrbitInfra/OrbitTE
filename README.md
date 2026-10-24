@@ -30,7 +30,9 @@ Applications retain cache identity, recovery policy and replica ownership.
 **Under development.** TCP, host RDMA and synchronized NVIDIA host staging are
 implemented with scoped validation. Two physical RNICs per host pass a declared
 CPU DRAM/RoCEv2 profile for cross-rail READ/WRITE, concurrent parents, aggregate
-quotas, connected reuse, registration rollback and native fault/drain ownership. Broader physical faults, independent
+quotas, whole-parent source RQ admission, connected reuse, registration rollback
+and native fault/drain ownership. The concurrency profile includes four parents
+with three slices each. Broader physical faults, independent
 P4 acceptance, full TENT parity, GPUDirect RDMA and optional SSD transports
 remain open.
 The published `orbit-te` alpha reserves the package identity; use the source

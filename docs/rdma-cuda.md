@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12e/P5.1 add opt-in source implementations and qualification gates.
+P4.1-P4.12f/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
@@ -8,7 +8,8 @@ budgets and per-NIC context owners. P4.12c adds eager all-context host MR
 publication and cross-rail slices with aggregate parent completion. P4.12d
 validates the declared two-RNIC host Direct profile, including native faults
 and drain. P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent
-validation. Broader physical faults and independent P4 acceptance remain open;
+validation. P4.12f adds whole-parent source RQ admission and scoped
+four-parent/three-slice native validation. Broader physical faults and independent P4 acceptance remain open;
 these substages do not establish full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
@@ -2602,4 +2603,76 @@ source credit; neither peer may create a QP for it. All twelve accepted QPs must
 reuse across rounds. Paused unregister/close and either-rail native CQ errors
 exercise the same geometry. Source observers reconcile actual posted receive
 IDs and delivered CQEs against each owner's pending debt and credit before CQ
-destruction. Native execution and independent qualification are pending.
+destruction.
+
+### Declared P4.12f gates
+
+Frozen operational source `7606c1aba8136929c36dcab7dc721a9bc51063a7` passes 17 sequential stable/Rust 1.85
+gates: format, Clippy and tests for default/RDMA/RDMA+CUDA, both release libtest
+builds, and ten hardware-runner controls. Each all-feature unit suite passes
+190 tests with four hardware tests ignored by default. Feature compilation does
+not qualify new GPU or GPUDirect behavior.
+
+Both frozen binaries pass 296 two-host CPU DRAM/Host Direct/IPv4 RoCEv2 cases:
+64 new RQ cases (pressure, paused close, CQ fault on either rail) and 232 retained
+regressions. Both peer directions, READ/WRITE and polling/event progress are
+covered. Each peer holds both original selected RNIC locks through child reap.
+All 592 peers and supervisors are reaped; all final resource counters are zero
+and weak application-allocation owners expire. Source RQ evidence includes
+80 atomic full-plan rejections and 1,536 per-owner checks before CQ destruction,
+including 478 checks with native receive debt
+still outstanding. Accepted WR IDs and delivered CQEs are bound to actual
+CQ/QPN/WR triples. Payload and completion SEND debt remain separately owned.
+
+Across the full run, receipts account for 1,184 context opens/closes,
+5,411 MR registrations/deregistrations including message MRs,
+256 failed-CQ destruction receipts and 32 retained-regression native partial
+admissions. All 64 injected payload faults have their own actual
+`IBV_WC_REM_ACCESS_ERR` CQE. Siblings may receive further errors after the source
+closes affected QPs; these are recorded against their own WRs rather than
+assumed to be the injected fault. Independently completed parents preserve
+their success; unfinished parents retain their actual unresolved debt and loans.
+
+One CPU mutation removes the whole-parent budget check and is rejected by the
+atomic-residual-capacity test. Two native mutation runs, in polling/event mode,
+return source receive credits after QP destruction but before shared CQ drain;
+both are rejected by the pending owner's credit assertion. All negative peers
+are reaped with both locks released; no supervisor timeout counts as rejection
+or drain evidence.
+
+The stable binary SHA-256 is `95eab0859a58e54b823196fae5c7ebc7bdd06a623e0b4c233c7a176aa99ed43b`.
+The Rust 1.85 binary SHA-256 is `efc3df8a9a4887d1210b00945adb37583af615e107de4a3a66e9cde27d4d1ba1`.
+External evidence remains at `/root/orbitte-artifacts/rdma-rq-admission-20261024`:
+
+- `gates-7606c1a/manifest.json`, `source.tar` and frozen binaries preserve source,
+  compiler identity, exact commands and hashes.
+- `rq-profile.json`, `combined-profile.json`, `native-regression-manifest.json`
+  and `native-raw-audit.json` link all 296 cases to configs, locks and actual
+  provider maps.
+- `controls-7606c1a/manifest.json` and `build-manifest.json` preserve mutations,
+  controls, process receipts and hashes.
+- `node-{a,b}-preflight.json`, `node-{a,b}-postflight.json` and selected-stage/
+  History snapshots pin actual nodes, boot IDs, PCI/GUID/GID and native libraries.
+- `development-native/` preserves the earlier failed pilot. Seven cases passed;
+  the last exposed a fixture assumption that every error CQE had the injected
+  status. Operational source binds that assertion to the exact injected WR
+  and separately records sibling errors. Both failed peers were reaped and
+  their original locks released. Preliminary gates/control builds remain too.
+
+Reproduce with the frozen source and two identity-pinned hosts using the
+external profile (including the original selected resource locks):
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-rq-admission-20261024/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-rq-admission-20261024/gates-7606c1a/libtest-stable \
+  --output /path/outside/checkout/rq-repeat-stable
+```
+
+The final manifest records exact PR checks, evidence hashes and main's PR #35
+merge/deployment. These are same-agent scoped gates. Larger/folded geometry,
+broader admission contention/topology, strict fairness, timeout/retry,
+physical IB/link/device loss, lost completions, native cleanup failure and
+process restart/death remain unqualified. Independent acceptance, full P4,
+GPUDirect, performance and installed-consumer qualification remain open.
+OrbitKV integration stays deferred until the P4 stage boundary is accepted.

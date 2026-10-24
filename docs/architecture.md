@@ -119,6 +119,12 @@ remain the architectural reference. This additional RQ credit owner belongs to
 OrbitTE's exact source receive/invalidation protocol, rather than a native TENT
 wire contract or its cross-process bandwidth arbitration.
 
+The declared native profile now exercises four parents with three slices each,
+twelve-QP reuse, a fifth-plan rejection with one residual RQ credit, paused close
+and either-rail CQ errors. Source observers reconcile each actual RQ WR with its
+CQ/QPN and credit before native CQ destruction. See the
+[RQ evidence](rdma-cuda.md#whole-parent-source-rq-admission) for scope and controls.
+
 ## Completion and failure
 
 Frozen TENT publishes context-specific region rkeys from its registered
