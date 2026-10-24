@@ -1073,6 +1073,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         config,
         usage,
         counters: Arc::default(),
+        cq_quota: Arc::default(),
         drained: Arc::default(),
         verbs,
         context_set: Mutex::default(),

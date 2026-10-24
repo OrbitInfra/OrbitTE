@@ -238,6 +238,7 @@ fn shared_cq_peer() {
         config,
         usage,
         counters: Arc::default(),
+        cq_quota: Arc::default(),
         verbs: &VERBS,
         context_set: Mutex::default(),
         drained: Arc::default(),

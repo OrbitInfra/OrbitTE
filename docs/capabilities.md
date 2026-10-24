@@ -13,6 +13,7 @@ contracts.
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
 | Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
+| Concurrent multirail parents and aggregate quotas | Implemented | Scoped two-parent/two-slice host Direct native profile; shared SQ/RQ pressure, byte/connection rejection, reuse and fault/drain. Wider concurrency/QoS remains open |
 | Device/port/GID discovery | Implemented | CPU and scoped native evidence; complete independent native repeat remains open |
 | Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
 | NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |

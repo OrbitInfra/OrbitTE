@@ -33,6 +33,7 @@ completion contracts.
 | `DeviceSelector` | Intersect masks, topology tiers and in-flight byte charges | `DeviceSelector` in `quota.h` |
 | `RdmaContext` | Own actual context/PD, frozen route and persistent key history | `RdmaContext` |
 | `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
+| `CqQuota` | Wake blocked context workers after actual aggregate SQ/RQ capacity returns | Rust notification adaptation for TENT's worker iteration across context CQs; separate from native cross-process QoS |
 | Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
 | Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
 | `Workers`, CQ and queue owners | Post bounded WR windows, validate real completions and retire resources | `Workers`, RDMA CQ and slice owners |
@@ -77,6 +78,23 @@ callback API, worker or hot-path layer. See the
 [native profile](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
 Physical link/device loss, broader concurrency/topology, cross-rail recovery
 and independent acceptance remain in the [completion plan](completion-plan.md).
+
+## Aggregate quota progress
+
+All contexts share the existing SQ/RQ debt, byte and connection limits. Each
+native CQ retains its configured capacity. In event mode, a context with no
+posted WR has no local CQE to wake it when another context returns shared
+capacity. `CqQuota` registers weak worker subscribers and wakes only workers
+that reported quota pressure. Enrollment precedes a budget recheck, so a
+concurrent release leaves either a notification or an available-capacity wake.
+
+Native TENT's `Workers::asyncPollCq` visits the entire context set while its
+worker has active slices. OrbitTE retains its existing per-context progress
+owners and explicitly notifies across them. This adds no per-slice thread,
+transport facade, bandwidth policy or cross-process quota implementation.
+Capacity returns through validated data/control completions, proven unposted
+suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains
+its charges. See the [concurrent native profile](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
 
 ## Completion and failure
 

@@ -44,13 +44,14 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
-- **October 24, 2026:** The declared two-host, two-RNIC CPU DRAM/RoCEv2 profile
-  passes 152 native cases across stable/Rust 1.85, both progress modes and both
-  peer directions. Cross-rail READ/WRITE, masks, connected reuse, registration
-  rollback and either-rail CQ/partial-post faults retain their physical owners
-  through drain. Four native negative controls reject broken routing or early
-  WR-debt release. Broader physical faults and independent P4 acceptance remain
-  open. Documentation publishes automatically to GitHub Pages from `main`.
+- **October 24, 2026:** Cross-context quota returns now wake waiting event
+  workers. The declared two-RNIC CPU DRAM/RoCEv2 profile passes 232 native
+  cases across stable/Rust 1.85, including 80 new concurrent-parent cases.
+  Shared SQ/RQ pressure, byte/connection rejection, four-QP reuse, faults and
+  concurrent unregister/close are validated. One CPU and four native negative
+  controls reject missing wakeups, quota overruns or early WR-debt repayment.
+  Broader physical faults and independent P4 acceptance remain open.
+  Documentation publishes automatically to GitHub Pages from `main`.
 - **Current focus:** Complete OrbitTE's native RDMA stage using the frozen TENT
   architecture. OrbitKV integration resumes after that stage is accepted.
 

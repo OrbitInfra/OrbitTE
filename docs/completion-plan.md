@@ -26,6 +26,7 @@ authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
 identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery, P4.9 optional CQ event progress and P4.1/P5.1 RDMA/CUDA staging
 paths. P4.12c adds eager multi-context publication and cross-rail slice ownership.
 P4.12d validates the declared two-RNIC host Direct profile and native fault/drain owners.
+P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent validation.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -761,14 +762,30 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   timeouts. Production source/dependencies are unchanged from PR #33. These
   are same-agent libtest-profile gates; full P4 and independent acceptance stay
   open. See [the scoped contract and evidence](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
-- [ ] Qualify broader multirail slice geometry, concurrent parent requests,
-  topology ranks, timeout/retry and endpoint-incarnation handling. Add physical
-  link/device loss, lost completion, native cleanup failure and process
+- [ ] **P4.12e — cross-context quota wakeups and concurrent parents
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Preserve per-context progress and actual resource owners; `CqQuota` wakes
+  blocked workers after aggregate SQ/RQ capacity returns, with enrollment before
+  the budget recheck. Two public parents share two requester SQ credits and four
+  source RQ credits. Real CQE delay validates byte/connection rejection before
+  new QPs, four-QP reuse and concurrent unregister/close. Either-rail native CQ
+  faults reconcile payload and completion SEND debt per actual CQ/QPN/WR owner;
+  already completed siblings retire independently. Source `c76b9b5` passes 17
+  stable/MSRV gates, 188 all-feature units per toolchain and ten runner controls.
+  Both binaries pass 232 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 cases: 80 new
+  concurrent and 152 retained regressions. All 464 peers are reaped with both
+  locks released. One CPU control rejects missing notifications; four native
+  controls reject aggregate SQ overruns or early debt repayment. These are
+  same-agent scoped gates; complete P4 and independent acceptance remain open.
+  See [the concurrency contract and evidence](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
+- [ ] Qualify wider multirail slice geometry and more than two parents/slices,
+  source RQ admission pressure, topology ranks, timeout/retry and endpoint
+  incarnations. Add physical link/device loss, lost completion, native cleanup failure and process
   restart/death profiles; provider-owned WR faults do not qualify them.
-- [ ] Qualify aggregate multi-context CQ/SQ quota fairness and persistent MR
-  owners under concurrent physical-rail pressure. The declared bounded two-RNIC
-  publication/rollback profile passes; optional adaptive/deadline policies remain
-  disabled until P6 passes.
+- [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
+  owners under physical-rail pressure. The declared two-parent quota/reuse and
+  two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
+  receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs
   operation. Prevent stale rkeys, endpoints or remote accesses from reaching a
   reused allocation; local reference counts alone cannot establish this.
@@ -1081,9 +1098,11 @@ single-request cross-rail slice ownership/completion and eager multi-context
 registration publication. Its real registration rollback and public v11 native
 regressions pass in the declared single-RNIC profile. P4.12d adds scoped native
 two-RNIC masks/slicing, connected reuse, publication rollback, either-rail provider
-faults and paused shutdown validation with both original NIC locks. Next deliver
-broader workload/concurrency and physical-fault profiles, including lost
-completion, native cleanup failure, restart and independent acceptance. The
+faults and paused shutdown validation with both original NIC locks. P4.12e adds
+cross-context SQ/RQ quota wakeups and scoped two-parent concurrency, rejection,
+reuse and native faults. Next deliver larger parent/slice counts, source RQ
+admission pressure and physical-fault profiles, including lost completion,
+native cleanup failure, restart and independent acceptance. The
 earlier P4.8 independent native repeat remains open. Keep the frozen TENT
 context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.

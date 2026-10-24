@@ -1,13 +1,14 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12d/P5.1 add opt-in source implementations and qualification gates.
+P4.1-P4.12e/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
 budgets and per-NIC context owners. P4.12c adds eager all-context host MR
 publication and cross-rail slices with aggregate parent completion. P4.12d
 validates the declared two-RNIC host Direct profile, including native faults
-and drain. Broader physical faults and independent P4 acceptance remain open;
+and drain. P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent
+validation. Broader physical faults and independent P4 acceptance remain open;
 these substages do not establish full B04/B01 or native TENT compatibility.
 
 ## Build and select a path
@@ -2420,8 +2421,148 @@ and corrected audit remain outside Git at
 setup failures and the 104-case precursor remain archived separately. The final
 delivery manifest binds documentation-only commits to these tested sources.
 
-This profile does not qualify larger/folded requests, concurrent parents and
-quota fairness across rails, broader NUMA/topology ranks, physical IB, link or
-device loss, lost completions, native cleanup failure or process restart/death.
-Those profiles and independent acceptance remain in the completion plan.
+That P4.12d profile did not qualify concurrent parents; the following P4.12e
+profile adds a bounded two-parent case. Larger/folded requests, broader quota
+fairness/NUMA/topology, physical IB, link/device loss, lost completions, native
+cleanup failure and process restart/death remain open. Independent acceptance,
 GPU direct registration, performance and OrbitKV integration remain deferred.
+
+## Cross-context quota wakeups and concurrent parents
+
+P4.12e fixes event progress when one context returns global completion capacity
+while another has queued work and no local CQE. The old worker could sleep
+until its deadline. Runtime-local `CqQuota` keeps weak subscribers to the
+existing context workers and wakes only those waiting for quota. A waiter
+enrolls before rechecking the aggregate debt, preserving a wake when release
+races with parking. Limits, defaults, native resource ownership and wire v11
+are unchanged. The public `max_cqes` comment now states both its physical CQ
+capacity and aggregate SQ/RQ debt limits.
+
+### Native TENT correspondence
+
+The reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`, in
+`mooncake-transfer-engine/tent/src/transport/rdma/`:
+
+| Frozen native TENT owner | OrbitTE correspondence |
+| --- | --- |
+| `Workers::workerThread`, `asyncPostSend`, `asyncPollCq` | Existing context workers rotate queued records; `CqQuota` notifies them when shared SQ/RQ capacity returns. Native TENT polls across its context set while slices are active; this notification is a Rust adaptation to the per-context event owners |
+| `DeviceSelector`, `RdmaSlice`, `releaseSliceQuota` | Each admitted slice retains its actual NIC byte charge and exact owner; concurrent parents do not obtain independent copies of aggregate limits |
+| Context/buffer/endpoint ownership | Eager context-specific MRs, four persistent QPs and exact per-parent grants retain their existing native drain contracts |
+
+`CqQuota` is separate from TENT's cross-process `SharedQuota` bandwidth/priority
+policy. This substage does not implement the remaining F15/P6 policy, receiver
+pacing or adaptive failover contracts. It adds no per-slice thread and does not
+route RDMA payloads through TCP. The shared TCP control service still carries
+descriptors, authority and receipts; native verbs move the payload.
+
+Actual completion or a proven unposted suffix returns the corresponding debt.
+On failure, actual QP and shared SQ/RQ CQ destruction must precede repayment
+of unresolved work. Failed native cleanup retains its debt and actual owners;
+a wake notification itself grants no capacity or drain receipt.
+
+### Concurrent native profile
+
+The authorized job/stage, host/boot identities, two distinct PCI/GUID RNICs,
+port 1/GID 3 IPv4-mapped RoCEv2 profile and both original NIC locks are unchanged
+from P4.12d. Hardware inventory and native provider identities are rechecked.
+No GPU, physical port or driver state is modified.
+
+One shared engine on each host runs two public parent requests over disjoint
+host ranges. Each parent transfers 16 KiB as two 8 KiB slices, using 2 KiB WRs
+with a one-WR per-QP window. Requester aggregate SQ capacity is two; source RQ
+capacity is four. Three source handlers leave one available for a deliberately
+rejected third parent. Four grants remain admitted while real CQEs are held
+by the test-only observer, with two posted WR credits and other work queued.
+Releasing those unchanged native CQEs must let every healthy parent finish
+without the test's diagnostic rescue wake.
+
+The byte-limit case allows eight connections but only 32 KiB of direct grants.
+The connection-limit case allows 48 KiB but only four connections. In each,
+the third public parent fails with `ResourceExhausted`, no remote effect and
+no new native QP. Its untouched range and all guards are verified. Healthy
+cases run two rounds with different bytes, preserving all four actual QP
+pointers, QPNs, PSNs and bilateral connection incarnations.
+
+The paused-close case unregisters on both peers while four exact slice loans
+remain live. Unborrowed MR copies retire; the two borrowed copies per peer,
+direct byte charges and conflicting-access exclusions remain. Source/requester
+close must time out until real completions are released, then fully drain.
+This is controlled scheduling delay, not a physical fabric hang.
+
+Either rail can receive a process-owned bad-rkey post and produce a real native
+remote-access CQ error. The observer's WR ledger keys actual CQ, QPN and WR ID,
+including payload and completion-message SENDs. Before each failing context's
+actual CQ destruction, every admitted QP on that context must have a native
+destruction receipt. Each still-live grant retains its actual registered MR
+and exact application loan; its queue debt must equal accepted native WRs minus
+delivered CQEs. An independently drained owner can retire with zero debt and its
+consumed completion proof. The injected parent cannot take that shortcut.
+
+The error CQE resolves its one-WR window, so the injected payload debt is zero;
+a sibling may still owe a SEND. Neither case permits inventing or discarding
+debt. Parent reports are independent: a fully completed sibling retains its
+success, while the injected parent fails. Failed WRITE effects remain unknown,
+with no automatic replay. Full successful ranges must match; failed ranges may
+change only inside actually admitted prefixes. Source data, unposted bytes,
+guards and the rejected parent's range remain checked.
+
+### Frozen gates, controls and evidence
+
+Source `c76b9b5bddab2d4926aa013dc78099c42bf612f7` passes 17 sequential stable/Rust 1.85 source/build gates,
+including 188 all-feature units per toolchain, four hardware tests ignored by
+default, both release libtest binaries and ten runner controls. The missing-wake
+CPU control removes only quota-return notifications and is rejected by the
+cross-context regression. Initial exploratory test/ledger failures remain in
+external artifacts; the final native ledger includes completion SEND debt.
+
+Both frozen binaries pass 232 native cases, 116 per toolchain:
+
+| Native group | Cases across both toolchains |
+| --- | ---: |
+| Concurrent direct-byte budget, two rounds | 16 |
+| Concurrent connection budget, two rounds | 16 |
+| Concurrent unregister/close | 16 |
+| Concurrent either-rail CQ errors | 32 |
+| Previous healthy/masked, rollback, CQ-error, partial-post and paused-close regressions | 152 |
+| Total | 232 |
+
+All groups cover both peer directions and polling/event progress; payload
+groups cover READ/WRITE. The 80 concurrent cases prove 112 public budget
+rejections before a new QP, 160 healthy parent completions and
+57 failed/7 independently successful parent reports under CQ faults.
+All 464 positive peers and supervisors are reaped with both original locks
+released. Raw receipts account for 928 context opens/closes,
+3,239 MR registrations/deregistrations (including completion messages),
+192 failed-CQ destroys, 32 native partial admissions and 128 concurrent owner
+checks. Of those owner checks, 96 retain live grants and
+32 verify already drained owners. These observations are scoped correctness
+evidence, not performance or strict scheduling-fairness measurements.
+
+Four native controls widen aggregate SQ capacity or quiesce WR debt before
+native CQ destruction, each in both progress modes. All are rejected at the
+quota/debt assertions; expected process failures are not positive drain receipts.
+Their peers and supervisors are reaped without watchdog timeouts. Actual maps
+resolve system `libibverbs.so.1.14.47.0` and `libmlx5.so.1.24.47.0`; node-side
+hashes are recorded separately from the generated binding version.
+
+The stable libtest SHA-256 is `674e9a5ba118e09dfc212e7f249418e083ec064a9012e4543aae55c58cbde6d5`;
+the Rust 1.85 SHA-256 is `35ed6848c2ed8963eaa5c7cb02103e4e803280d2c1e69297c117d68dd11acc62`.
+Reproduce with the source/build commands above and `tests/hardware/run.py`,
+using an explicitly authorized external `combined-profile.json`, the frozen
+binary and a fresh output directory. The existing `orbitte-multirail` runner
+uses the same exact ignored native selector; new modes are `concurrent-quota`,
+`concurrent-endpoints`, `concurrent-close` and `concurrent-cq-error`, all with
+mask 3. The supervisor retains both NIC locks until actual child reaping.
+
+Raw profiles, archives, binaries, provider maps, source gates, failed exploratory
+runs, final native cases and effective controls stay outside Git at
+`/root/orbitte-artifacts/rdma-multirail-concurrency-20261024/`.
+`native-regression-manifest.json`, `native-raw-audit.json` and
+`controls-c76b9b5/manifest.json` index the final run. The final delivery manifest
+binds documentation-only commits to these tested operational sources/binaries.
+
+This profile does not qualify more parents/slices, broad RQ admission pressure,
+folded/larger workloads, strict fairness, bandwidth/priority policy, physical IB,
+link/device loss, lost completions, native cleanup failure or process restart.
+Independent acceptance and full P4 remain open. OrbitKV integration stays
+deferred until that native-stage boundary.

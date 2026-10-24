@@ -34,6 +34,7 @@ impl RdmaTransport {
             config,
             usage,
             counters: Arc::default(),
+            cq_quota: Arc::default(),
             verbs: &sys::REAL,
             context_set: Mutex::default(),
             drained: Arc::default(),
@@ -237,7 +238,13 @@ impl RdmaTransport {
         if let Some(progress) = &slot.progress {
             return Ok(Arc::clone(progress));
         }
-        match workers::Workers::new(&self.config, device, Arc::clone(&self.usage), self.verbs) {
+        match workers::Workers::new(
+            &self.config,
+            device,
+            Arc::clone(&self.usage),
+            Arc::clone(&self.cq_quota),
+            self.verbs,
+        ) {
             Ok(progress) => {
                 slot.progress = Some(Arc::clone(&progress));
                 Ok(progress)
