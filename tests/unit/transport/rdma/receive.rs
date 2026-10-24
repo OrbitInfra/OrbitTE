@@ -7,7 +7,7 @@ fn queue(usage: Arc<Mutex<RdmaStats>>) -> ReceiveQueue {
         [0x42; COMPLETION_MESSAGE_SIZE],
         0x0102_0304,
         Instant::now() + Duration::from_secs(1),
-        usage,
+        ReceiveCredits::acquire(usage, 2, 1).unwrap(),
     )
 }
 
@@ -113,4 +113,65 @@ fn control_bytes_have_their_own_checked_budget_before_any_native_registration() 
         Err(Error::ResourceExhausted)
     ));
     assert_eq!(usage.lock().unwrap().message_bytes, 0);
+}
+
+#[test]
+fn whole_parent_receive_admission_is_atomic_and_unused_credits_roll_back() {
+    let usage = Arc::new(Mutex::new(RdmaStats::default()));
+    let mut first = ReceiveCredits::acquire(Arc::clone(&usage), 7, 3).unwrap();
+    let second = ReceiveCredits::acquire(Arc::clone(&usage), 7, 3).unwrap();
+    assert!(matches!(
+        ReceiveCredits::acquire(Arc::clone(&usage), 7, 3),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(usage.lock().unwrap().receive_credits, 6);
+    let single = ReceiveCredits::acquire(Arc::clone(&usage), 7, 1).unwrap();
+    assert!(matches!(
+        ReceiveCredits::acquire(Arc::clone(&usage), 7, 0),
+        Err(Error::InvalidRange)
+    ));
+    let mut queue = ReceiveQueue::new(
+        129,
+        [0x42; COMPLETION_MESSAGE_SIZE],
+        0x0102_0304,
+        Instant::now() + Duration::from_secs(1),
+        first.take().unwrap(),
+    );
+    queue.reserve(7).unwrap();
+    assert!(
+        queue
+            .posted(
+                libc::EIO,
+                sys::PostResult {
+                    accepted: 0,
+                    uncertain: true
+                }
+            )
+            .is_err()
+    );
+    drop(first);
+    drop(second);
+    drop(single);
+    let stats = *usage.lock().unwrap();
+    assert_eq!(
+        (
+            stats.receive_credits,
+            stats.receive_work_requests,
+            stats.peak_receive_credits,
+            stats.receive_admission_rejections
+        ),
+        (1, 1, 7, 1)
+    );
+    assert!(
+        queue.credits.is_some(),
+        "possibly posted receives retain their own admission credit"
+    );
+    queue.quiesce();
+    let stats = *usage.lock().unwrap();
+    assert_eq!((stats.receive_credits, stats.receive_work_requests), (0, 0));
+    let mut all = ReceiveCredits::acquire(usage, 7, 7).unwrap();
+    for _ in 0..7 {
+        drop(all.take().unwrap());
+    }
+    assert!(all.take().is_err());
 }

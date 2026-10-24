@@ -99,6 +99,7 @@ fn clean(stats: &RdmaStats) {
             stats.retained_windows,
             stats.work_requests,
             stats.retained_work_requests,
+            stats.receive_credits,
             stats.receive_work_requests,
             stats.retained_receive_work_requests,
             stats.direct_bytes,
@@ -176,7 +177,13 @@ fn multirail_peer() {
     let mode = env::var("ORBITTE_RAIL_MODE").unwrap();
     if matches!(
         mode.as_str(),
-        "concurrent-quota" | "concurrent-endpoints" | "concurrent-close" | "concurrent-cq-error"
+        "concurrent-quota"
+            | "concurrent-endpoints"
+            | "concurrent-close"
+            | "concurrent-cq-error"
+            | "rq-pressure"
+            | "rq-close"
+            | "rq-cq-error"
     ) {
         concurrent::run(&mode, source, &rails);
         return;

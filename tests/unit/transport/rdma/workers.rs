@@ -796,7 +796,7 @@ fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output
     source.connect(&source.descriptor()).unwrap();
     source.bind_window().unwrap();
     let bind_namespace = source.record.send_namespace.load(Ordering::Acquire);
-    source.post_receive(&binding).unwrap();
+    post_receive(&mut source, &binding).unwrap();
     let receive_namespace = source.record.receive_namespace.load(Ordering::Acquire);
     assert!(receive_namespace > bind_namespace);
     let posted = runtime.stats().unwrap();
@@ -923,7 +923,7 @@ fn received_binding_wrong_cq_qp_and_old_wr_cannot_confirm_a_source_grant() {
         let mut endpoint = runtime.staging_endpoint(8, 2).unwrap();
         endpoint.connect(&endpoint.descriptor()).unwrap();
         endpoint.bind_window().unwrap();
-        endpoint.post_receive(&binding).unwrap();
+        post_receive(&mut endpoint, &binding).unwrap();
         let mut bytes = binding;
         if case == "binding" {
             bytes[COMPLETION_MESSAGE_SIZE - 1] ^= 1;
@@ -986,7 +986,7 @@ fn receive_and_message_failures_retain_exact_native_owners_without_drop_retries(
             endpoint.send_completion(&binding, endpoint.descriptor().rkey)
         } else {
             endpoint.bind_window().unwrap();
-            endpoint.post_receive(&binding)
+            post_receive(&mut endpoint, &binding)
         };
         if mode == "message_close" {
             posted.unwrap();
@@ -1449,4 +1449,16 @@ fn asynchronous_event_burst_is_acked_while_progress_or_budget_is_locked() {
             (0, 0, 0)
         );
     }
+}
+
+fn post_receive(
+    endpoint: &mut super::super::RdmaEndpoint,
+    binding: &[u8; COMPLETION_MESSAGE_SIZE],
+) -> crate::Result<()> {
+    let credits = super::super::receive::ReceiveCredits::acquire(
+        Arc::clone(&endpoint.progress.shared.usage),
+        endpoint.progress.shared.config.max_cqes,
+        1,
+    )?;
+    endpoint.post_receive(binding, credits)
 }

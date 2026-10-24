@@ -1192,6 +1192,10 @@ impl RdmaTransport {
         for (range, _, _, _) in &plan {
             range.write(&mut channel)?;
         }
+        let admitted = Reply::read(&mut channel, peer.epoch)?;
+        if admitted.status != 9 || admitted.length != 0 {
+            return Err(Error::Protocol("RDMA parent receive admission"));
+        }
         let mut slices = Vec::new();
         slices
             .try_reserve_exact(count)
@@ -1266,12 +1270,13 @@ impl RdmaTransport {
     fn source_slice(
         &self,
         channel: &mut ControlChannel<'_>,
-        epoch: SourceEpoch,
         request: &Request,
         memory: &RegisteredMemory,
         paths: &[NicPath],
         expected: Option<[u8; 16]>,
+        credits: &mut super::receive::ReceiveCredits,
     ) -> Result<Option<RdmaSlice>> {
+        let epoch = request.epoch;
         let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
         let length = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
         let writing = request.operation == Operation::RdmaWrite;
@@ -1357,7 +1362,7 @@ impl RdmaTransport {
             let remote = Descriptor::decode_connection(&bytes)?;
             endpoint.connect(&remote)?;
             endpoint.bind_window()?;
-            endpoint.post_receive(&binding.0)?;
+            endpoint.post_receive(&binding.0, credits.take()?)?;
             channel.reply(epoch, 9, 0)?;
             binding.write(channel, GRANT)?;
             channel.write_all(&endpoint.grant()?.encode())?;
@@ -1437,17 +1442,31 @@ impl RdmaTransport {
         let length = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
         crate::memory::checked_range(offset, length, memory.len())?;
         let paths = self.paths()?;
-        rail_monitor::write_paths(channel, epoch, &paths)?;
         let multi = matches!(
             request.operation,
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
+        let plan = if multi {
+            rail_monitor::write_paths(channel, epoch, &paths)?;
+            let limit = self.config.max_endpoints.min(self.config.max_cqes).min(64) as u8;
+            channel.write_all(&[limit])?;
+            SliceRequest::read_plan(channel, length, limit, &paths)?
+        } else {
+            Vec::new()
+        };
+        let mut credits = super::receive::ReceiveCredits::acquire(
+            Arc::clone(&self.usage),
+            self.config.max_cqes,
+            if multi { plan.len() } else { 1 },
+        )?;
+        if multi {
+            channel.reply(epoch, 9, 0)?;
+        } else {
+            rail_monitor::write_paths(channel, epoch, &paths)?;
+        }
         let mut slices = Vec::new();
         let result = (|| {
             if multi {
-                let limit = self.config.max_endpoints.min(self.config.max_cqes).min(64) as u8;
-                channel.write_all(&[limit])?;
-                let plan = SliceRequest::read_plan(channel, length, limit, &paths)?;
                 slices
                     .try_reserve_exact(plan.len())
                     .map_err(|_| Error::ResourceExhausted)?;
@@ -1467,11 +1486,11 @@ impl RdmaTransport {
                     for _ in 0..2 {
                         if let Some(slice) = self.source_slice(
                             channel,
-                            epoch,
                             &child,
                             memory,
                             &paths,
                             Some(range.domain),
+                            &mut credits,
                         )? {
                             prepared = Some(slice);
                             break;
@@ -1480,7 +1499,7 @@ impl RdmaTransport {
                     slices.push(prepared.ok_or(Error::Protocol("RDMA repeated slice cache miss"))?);
                 }
             } else if let Some(slice) =
-                self.source_slice(channel, epoch, request, memory, &paths, None)?
+                self.source_slice(channel, request, memory, &paths, None, &mut credits)?
             {
                 slices.push(slice);
             } else {

@@ -44,6 +44,13 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
+- **October 25, 2026 — source RQ admission:** Wire v12 reserves each complete
+  slice plan before constructing QPs. The declared two-RNIC profile passes 296
+  native cases across stable/Rust 1.85, including 64 new four-parent/three-slice
+  cases. Residual RQ capacity, twelve-QP reuse, paused close and either-rail CQ
+  errors retain actual receive credits through completion/drain. One CPU and
+  two native mutation controls reject broken admission or early credit return.
+  Full P4 and independent acceptance remain open.
 - **October 24, 2026:** Cross-context quota returns now wake waiting event
   workers. The declared two-RNIC CPU DRAM/RoCEv2 profile passes 232 native
   cases across stable/Rust 1.85, including 80 new concurrent-parent cases.

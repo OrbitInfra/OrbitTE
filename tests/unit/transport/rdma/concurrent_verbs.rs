@@ -9,12 +9,14 @@ struct Owner {
     qp: usize,
     qpn: u32,
     cq: usize,
+    receive_cq: usize,
     record: Arc<Record>,
 }
 
 #[derive(Default)]
 struct Trace {
     mode: String,
+    shape: Shape,
     requester: bool,
     fault_rail: usize,
     held: bool,
@@ -34,7 +36,7 @@ struct Trace {
     deregistered: usize,
     active_mrs: BTreeSet<usize>,
     memory: Option<crate::RegisteredMemory>,
-    accepted: [[usize; 2]; 2],
+    accepted: Vec<Vec<usize>>,
     posts: usize,
     delivered_held: usize,
     failed_cq_receipts: usize,
@@ -45,12 +47,19 @@ struct Trace {
     accepted_wr: BTreeSet<(usize, u32, u64)>,
     delivered_wr: BTreeSet<(usize, u32, u64)>,
     native_error_receipts: usize,
+    injected_error_receipts: usize,
+    error_statuses: BTreeMap<u32, usize>,
+    accepted_receive: BTreeSet<(usize, u32, u64)>,
+    delivered_receive: BTreeSet<(usize, u32, u64)>,
+    source_rq_checks: usize,
+    source_pending_rq_checks: usize,
 }
 static TRACE: OnceLock<Mutex<Trace>> = OnceLock::new();
 
-pub(super) fn initialize(mode: &str, requester: bool, fault_rail: usize) {
+pub(super) fn initialize(mode: &str, requester: bool, fault_rail: usize, shape: Shape) {
     *TRACE.get_or_init(Default::default).lock().unwrap() = Trace {
         mode: mode.into(),
+        shape,
         requester,
         fault_rail,
         ..Default::default()
@@ -68,7 +77,7 @@ pub(super) fn hold() {
     trace.held = true;
     trace.released = false;
     trace.armed = false;
-    trace.accepted = [[0; 2]; 2];
+    trace.accepted = vec![vec![0; trace.shape.slices]; trace.shape.parents];
     trace.owners.clear();
 }
 
@@ -87,7 +96,7 @@ pub(super) fn initial_posted() -> bool {
 
 pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), trace.shape.parents * trace.shape.slices);
     trace.owners = records
         .into_iter()
         .map(|(nic, record)| {
@@ -110,11 +119,21 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .connection
                 .handles
                 .cq as usize;
+            let receive_cq = record
+                .lock()
+                .unwrap()
+                .resources
+                .as_ref()
+                .unwrap()
+                .connection
+                .handles
+                .receive_cq as usize;
             Owner {
                 nic,
                 qp,
                 qpn,
                 cq,
+                receive_cq,
                 record,
             }
         })
@@ -126,12 +145,12 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
             .map(|owner| owner.qp)
             .collect::<BTreeSet<_>>()
             .len(),
-        4
+        trace.shape.parents * trace.shape.slices
     );
     for nic in 0..2 {
         assert_eq!(
             trace.owners.iter().filter(|owner| owner.nic == nic).count(),
-            2
+            trace.shape.parents * trace.shape.slices / 2
         );
     }
 }
@@ -142,8 +161,8 @@ pub(super) fn release() {
     trace.released = true;
 }
 
-pub(super) fn accepted() -> [[usize; 2]; 2] {
-    TRACE.get().unwrap().lock().unwrap().accepted
+pub(super) fn accepted() -> Vec<Vec<usize>> {
+    TRACE.get().unwrap().lock().unwrap().accepted.clone()
 }
 
 pub(super) fn injected_parent() -> usize {
@@ -203,21 +222,30 @@ unsafe extern "C" fn post(
     let nic = rails.split(',').position(|rail| rail == name).unwrap();
     let (parent, slice, inject) = {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
+        let shape = trace.shape;
         let offset = (local - trace.memory.as_ref().unwrap().base_address()) as usize;
-        let parent = offset / BANK;
-        assert!(parent < 2, "rejected parent reached native payload");
-        let start = if write == 0 { DESTINATION } else { GUARD };
-        let slice = (offset % BANK - start) / (PAYLOAD / 2);
-        assert_eq!(length, PAYLOAD / 2);
-        assert!(slice < 2);
-        assert_eq!(
-            nic, slice,
-            "payload route changed after exact slice admission"
+        let parent = offset / shape.bank;
+        assert!(
+            parent < shape.parents,
+            "rejected parent reached native payload"
         );
+        let start = if write == 0 { shape.destination } else { GUARD };
+        let slice = (offset % shape.bank - start) / (shape.payload / shape.slices);
+        assert_eq!(length, shape.payload / shape.slices);
+        assert!(slice < shape.slices);
+        assert!(nic < 2, "payload route left the selected device set");
+        if trace.armed {
+            let owner = trace
+                .owners
+                .iter()
+                .find(|owner| owner.qp == qp as *const _ as usize)
+                .unwrap();
+            assert_eq!(owner.nic, nic, "payload left its admitted context");
+        }
         let inject = trace.armed
             && trace.injected == 0
             && nic == trace.fault_rail
-            && matches!(trace.mode.as_str(), "concurrent-cq-error");
+            && matches!(trace.mode.as_str(), "concurrent-cq-error" | "rq-cq-error");
         if inject {
             trace.injected = 1;
             trace.injected_qp = qp as *const _ as usize;
@@ -264,6 +292,31 @@ unsafe extern "C" fn post(
                 .accepted_wr
                 .insert((unsafe { (*h).cq } as usize, qp.qp_num, request.id)),
             "native payload WR replay"
+        );
+    }
+    code
+}
+
+unsafe extern "C" fn post_receive(
+    h: *mut sys::ConnectionHandles,
+    memory: *const sys::MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    result: *mut sys::PostResult,
+) -> c_int {
+    let code = unsafe { (sys::REAL.post_receive)(h, memory, id, address, length, result) };
+    if unsafe { (*result).accepted } != 0 {
+        assert_eq!(unsafe { (*result).accepted }, 1);
+        let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
+        assert!(
+            TRACE
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .accepted_receive
+                .insert((unsafe { (*h).receive_cq } as usize, qp.qp_num, id))
         );
     }
     code
@@ -325,6 +378,17 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
 
 fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
     if trace
+        .accepted_receive
+        .contains(&(cq, completion.qpn, completion.id))
+    {
+        assert!(
+            trace
+                .delivered_receive
+                .insert((cq, completion.qpn, completion.id)),
+            "native receive CQE redelivery"
+        );
+    }
+    if trace
         .accepted_wr
         .contains(&(cq, completion.qpn, completion.id))
     {
@@ -335,7 +399,17 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
             "native CQE redelivery"
         );
         if completion.status != 0 {
-            assert_eq!(completion.status, ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR);
+            if trace.owners.iter().any(|owner| {
+                owner.qp == trace.injected_qp && owner.cq == cq && owner.qpn == completion.qpn
+            }) {
+                assert_eq!(
+                    completion.status,
+                    ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
+                    "the injected WR must have an actual remote-access-error CQE"
+                );
+                trace.injected_error_receipts += 1;
+            }
+            *trace.error_statuses.entry(completion.status).or_default() += 1;
             trace.native_error_receipts += 1;
         }
     }
@@ -360,6 +434,62 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     let cq = unsafe { (*h).cq } as usize;
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     let observed = trace.failed_cqs.contains(&cq);
+    if !trace.requester && trace.mode.starts_with("rq-") {
+        let mut checked = 0;
+        let mut pending = 0;
+        for owner in trace
+            .owners
+            .iter()
+            .filter(|owner| owner.cq == cq || owner.receive_cq == cq)
+        {
+            assert!(
+                trace.destroyed_qps.contains(&owner.qp),
+                "source QP must be destroyed before its CQ"
+            );
+            let state = owner.record.lock().unwrap();
+            let accepted = trace
+                .accepted_receive
+                .iter()
+                .filter(|(rq, qpn, _)| *rq == owner.receive_cq && *qpn == owner.qpn)
+                .count();
+            let delivered = trace
+                .delivered_receive
+                .iter()
+                .filter(|(rq, qpn, _)| *rq == owner.receive_cq && *qpn == owner.qpn)
+                .count();
+            let debt = state
+                .receive
+                .as_ref()
+                .is_some_and(|receive| receive.pending());
+            assert_eq!(
+                usize::from(debt),
+                accepted - delivered,
+                "source RQ debt escaped before native CQ drain"
+            );
+            if debt {
+                assert!(
+                    state.receive.as_ref().unwrap().credits.is_some(),
+                    "source RQ admission credit escaped before native CQ drain"
+                );
+                let grant = state.resources.as_ref().unwrap().grant().unwrap();
+                assert!(trace.active_mrs.contains(&(grant.handles.mr as usize)));
+                let offset = (grant.buffer.address().as_ptr() as u64
+                    - trace.memory.as_ref().unwrap().base_address())
+                    as usize;
+                assert!(
+                    matches!(
+                        trace.memory.as_ref().unwrap().write(offset, &[0xff]),
+                        Err(Error::Unavailable(_))
+                    ),
+                    "source RQ DMA loan escaped before native CQ drain"
+                );
+                pending += 1;
+            }
+            checked += 1;
+        }
+        trace.source_rq_checks += checked;
+        trace.source_pending_rq_checks += pending;
+    }
     if observed {
         let mut checked = 0;
         let mut live = 0;
@@ -439,7 +569,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 bad_debt = Some(debt);
             }
         }
-        assert_eq!(checked, 2);
+        assert_eq!(checked, trace.shape.parents * trace.shape.slices / 2);
         let debt = bad_debt.unwrap();
         assert_eq!(
             debt, 0,
@@ -485,6 +615,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     register_memory: register,
     post,
     send_completion,
+    post_receive,
     poll,
     destroy_qp,
     destroy_cq,
@@ -495,26 +626,27 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
 
 pub(super) fn finish() {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
+    let shape = trace.shape;
     assert_eq!((trace.opened, trace.closed), (2, 2));
     assert_eq!(trace.registered, trace.deregistered);
     assert!(trace.active_mrs.is_empty());
     assert!(trace.held_cqes.values().all(VecDeque::is_empty));
     if trace.requester {
         assert!(trace.delivered_held > 0);
-        if matches!(trace.mode.as_str(), "concurrent-cq-error") {
+        if matches!(trace.mode.as_str(), "concurrent-cq-error" | "rq-cq-error") {
             assert_eq!(
                 (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
-                (1, 2, 4)
+                (1, 2, shape.parents * shape.slices)
             );
             assert_eq!(trace.fault_debt.len(), 2);
-            assert_eq!(trace.native_error_receipts, 1);
+            assert_eq!(trace.injected_error_receipts, 1);
         } else {
             assert!(
                 trace
                     .accepted
                     .iter()
                     .flatten()
-                    .all(|value| *value == PAYLOAD / 2)
+                    .all(|value| *value == shape.payload / shape.slices)
             );
         }
     }
@@ -535,6 +667,28 @@ pub(super) fn finish() {
         trace.fault_debt,
         trace.native_error_receipts,
         trace.accepted
+    );
+    if !trace.requester && trace.mode.starts_with("rq-") {
+        assert_eq!(
+            trace.source_rq_checks,
+            2 * trace.shape.parents * trace.shape.slices
+        );
+        println!(
+            "ORBITTE_RQ_NATIVE {{\"owner_checks\":{},\"pending_owner_checks\":{},\"posted\":{},\"delivered\":{},\"credits_drained\":true}}",
+            trace.source_rq_checks,
+            trace.source_pending_rq_checks,
+            trace.accepted_receive.len(),
+            trace.delivered_receive.len()
+        );
+    }
+    let statuses = trace
+        .error_statuses
+        .iter()
+        .map(|(status, count)| [*status, *count as u32])
+        .collect::<Vec<_>>();
+    println!(
+        "ORBITTE_NATIVE_ERRORS {{\"injected_wr_error_receipts\":{},\"all_error_receipts\":{},\"statuses\":{:?}}}",
+        trace.injected_error_receipts, trace.native_error_receipts, statuses
     );
     trace.memory = None;
     trace.owners.clear();

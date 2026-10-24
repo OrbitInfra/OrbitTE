@@ -268,7 +268,7 @@ class Controller:
                 or type(case.get('rdma_events')) is not bool
                 or case.get('mode') not in ['healthy', 'cq-error', 'partial-post', 'paused-close', 'mr-rollback',
                                            'concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
-                                           'concurrent-cq-error']
+                                           'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error']
                 or case.get('operation') not in ['read', 'write']
                 or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):

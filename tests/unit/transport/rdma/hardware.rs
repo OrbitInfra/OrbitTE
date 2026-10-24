@@ -703,7 +703,7 @@ fn source_window_peer() {
         }
         let binding = [0x42; COMPLETION_MESSAGE_SIZE];
         if probe == "remote" {
-            endpoint.post_receive(&binding).unwrap();
+            post_receive(&mut endpoint, &binding).unwrap();
         }
         stream.write_all(&grant.encode()).unwrap();
         if probe == "remote" {
@@ -1101,9 +1101,11 @@ fn duplex_completion_peer() {
                     let mut handlers = Vec::new();
                     for (slot, mut endpoint) in sources.into_iter().enumerate() {
                         endpoint.bind_window().unwrap();
-                        endpoint
-                            .post_receive(&duplex_binding(seed, source, slot, operation))
-                            .unwrap();
+                        post_receive(
+                            &mut endpoint,
+                            &duplex_binding(seed, source, slot, operation),
+                        )
+                        .unwrap();
                         grants
                             .write_all(&endpoint.grant().unwrap().encode())
                             .unwrap();

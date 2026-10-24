@@ -13,6 +13,32 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12f adds atomic whole-parent source RQ admission on wire v12. Frozen source
+`7606c1a` passes 17 stable/Rust 1.85 source/build gates, 190 all-feature units
+per toolchain, four hardware tests ignored by default and ten runner controls.
+
+Both frozen libtest binaries pass 296 CPU DRAM/IPv4 RoCEv2 cases over two
+physical RNICs per host: 64 new four-parent/three-slice cases and all 232 previous
+regressions. Twelve 8 KiB slices share three requester SQ credits and thirteen
+source RQ credits. A fifth three-slice parent is rejected atomically despite
+one residual credit. Both peers avoid new QPs for rejected plans. All twelve
+QPs reuse across rounds; paused unregister/close and either-rail CQ faults
+retain exact MR, DMA, WR and receive-credit owners until actual drain.
+
+All 592 peers are reaped with both original NIC locks released. Raw evidence
+accounts for 1,184 context opens/closes, 5,411 MR registration/
+deregistration receipts, 80 atomic source RQ rejections and 1,536 source RQ
+owner checks before CQ destruction, including 478
+checks of still-pending owners. One CPU mutation rejects omitted parent
+admission; two native mutation runs reject early credit return in polling/event
+mode. These are same-agent scoped libtest-profile gates.
+
+See the [RQ admission contract and evidence](rdma-cuda.md#whole-parent-source-rq-admission)
+for frozen binary hashes, reproduction and retained exploratory failures.
+Independent acceptance and the complete P4 exit remain open.
+
+## Previous concurrent-parent evidence
+
 P4.12e adds cross-context aggregate CQ quota wakeups and validates concurrent
 parents over two physical RNICs per host. Frozen source `c76b9b5` passes 17
 stable/Rust 1.85 source/build gates, with 188 all-feature units per toolchain,
@@ -122,7 +148,7 @@ The [completion plan](completion-plan.md) owns the delivery sequence. Complete
 P4 before renewing OrbitKV integration. Outstanding work includes broader
 multirail workload/topology coverage, physical link/device loss, lost completions,
 native cleanup failure, restart/shutdown profiles and independent acceptance.
-The declared two-RNIC routing/slicing, two-parent quota/reuse, provider-fault
-and paused-shutdown gates pass; they do not close those broader profiles. The
-source paths are implemented; a missing hardware gate is not missing code.
+The declared two-RNIC routing/slicing, four-parent RQ admission/reuse,
+provider-fault and paused-shutdown gates pass; they do not close those broader
+profiles. The source paths are implemented; a missing hardware gate is not missing code.
 GDR and optional storage transports have their own stages.

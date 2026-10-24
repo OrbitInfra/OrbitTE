@@ -82,6 +82,60 @@ impl Drop for MessageBuffer {
     }
 }
 
+/// Reserves a whole parent's completion RQ before any of its grants are exposed.
+pub(super) struct ReceiveCredits {
+    usage: Arc<Mutex<RdmaStats>>,
+    remaining: usize,
+}
+
+impl ReceiveCredits {
+    pub(super) fn acquire(
+        usage: Arc<Mutex<RdmaStats>>,
+        capacity: usize,
+        count: usize,
+    ) -> Result<Self> {
+        if count == 0 || count > capacity {
+            return Err(Error::InvalidRange);
+        }
+        {
+            let mut stats = usage
+                .lock()
+                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+            let next = stats.receive_credits.checked_add(count);
+            if next.is_none_or(|next| next > capacity) {
+                stats.receive_admission_rejections += 1;
+                return Err(Error::ResourceExhausted);
+            }
+            stats.receive_credits = next.ok_or(Error::ResourceExhausted)?;
+            stats.peak_receive_credits = stats.peak_receive_credits.max(stats.receive_credits);
+        }
+        Ok(Self {
+            usage,
+            remaining: count,
+        })
+    }
+
+    pub(super) fn take(&mut self) -> Result<Self> {
+        if self.remaining == 0 {
+            return Err(Error::Internal("RDMA parent exhausted receive credits"));
+        }
+        self.remaining -= 1;
+        Ok(Self {
+            usage: Arc::clone(&self.usage),
+            remaining: 1,
+        })
+    }
+}
+
+impl Drop for ReceiveCredits {
+    fn drop(&mut self) {
+        self.usage
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .receive_credits -= self.remaining;
+    }
+}
+
 pub(super) struct ReceiveQueue {
     pub(super) id: u64,
     pub(super) expected: [u8; COMPLETION_MESSAGE_SIZE],
@@ -90,6 +144,7 @@ pub(super) struct ReceiveQueue {
     pub(super) posted: bool,
     pub(super) completed: bool,
     pending: bool,
+    pub(super) credits: Option<ReceiveCredits>,
     usage: Arc<Mutex<RdmaStats>>,
 }
 
@@ -99,7 +154,7 @@ impl ReceiveQueue {
         expected: [u8; COMPLETION_MESSAGE_SIZE],
         rkey: u32,
         deadline: Instant,
-        usage: Arc<Mutex<RdmaStats>>,
+        credits: ReceiveCredits,
     ) -> Self {
         Self {
             id,
@@ -109,7 +164,8 @@ impl ReceiveQueue {
             posted: false,
             completed: false,
             pending: false,
-            usage,
+            usage: Arc::clone(&credits.usage),
+            credits: Some(credits),
         }
     }
 
@@ -118,7 +174,7 @@ impl ReceiveQueue {
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        if self.posted || self.pending || self.completed {
+        if self.posted || self.pending || self.completed || self.credits.is_none() {
             return Err(Error::Internal("RDMA receive state"));
         }
         if usage.receive_work_requests >= capacity {
@@ -197,6 +253,7 @@ impl ReceiveQueue {
                 .receive_work_requests -= 1;
             self.pending = false;
         }
+        drop(self.credits.take());
     }
 }
 

@@ -539,6 +539,7 @@ impl Workers {
         record: &Arc<Record>,
         claim: u64,
         expected: [u8; COMPLETION_MESSAGE_SIZE],
+        credits: super::receive::ReceiveCredits,
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
@@ -570,7 +571,7 @@ impl Workers {
                 expected,
                 rkey,
                 deadline,
-                Arc::clone(&self.shared.usage),
+                credits,
             ));
             record.receive_namespace.store(namespace, Ordering::Release);
         }
