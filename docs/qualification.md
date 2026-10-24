@@ -13,6 +13,33 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12e adds cross-context aggregate CQ quota wakeups and validates concurrent
+parents over two physical RNICs per host. Frozen source `c76b9b5` passes 17
+stable/Rust 1.85 source/build gates, with 188 all-feature units per toolchain,
+four hardware tests ignored by default, and ten hardware-runner controls.
+
+Both frozen libtest binaries pass 232 CPU DRAM/IPv4 RoCEv2 cases: 80 new
+concurrent-parent cases and all 152 previous regressions. Two parents each use
+two slices; the requester shares two SQ credits, the source four RQ credits.
+Tests cover aggregate byte/connection rejection before new native QPs,
+four-QP reuse, paused unregister/close and either-rail real CQ errors. Native
+debt accounting includes payload and same-QP completion SENDs. Already drained
+siblings may retire independently; the injected parent must fail and retain its
+remaining authority until actual cleanup.
+
+All 464 peers are reaped with both original NIC locks released. Raw evidence
+accounts for 928 context opens/closes, 3,239 MR registrations/
+deregistrations (including message MRs), 192 failed-CQ destruction receipts and
+32 actual partial admissions in the retained regression. One CPU control rejects
+missing quota wakeups; four native controls reject aggregate SQ overruns or
+premature WR-debt repayment. These are same-agent libtest-profile gates.
+
+See the [concurrency and TENT correspondence contract](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents)
+for binary hashes, native evidence, failed exploratory runs and reproduction.
+Full P4, broader workloads/physical faults and independent acceptance remain open.
+
+## Previous two-RNIC evidence
+
 P4.12d validates the existing cross-rail runtime with two actual RNICs per host
 in a declared CPU DRAM/IPv4 RoCEv2 profile. Frozen source `8fc28cb` passes 17
 stable/Rust 1.85 source/build gates, with 187 all-feature unit tests per
@@ -95,7 +122,7 @@ The [completion plan](completion-plan.md) owns the delivery sequence. Complete
 P4 before renewing OrbitKV integration. Outstanding work includes broader
 multirail workload/topology coverage, physical link/device loss, lost completions,
 native cleanup failure, restart/shutdown profiles and independent acceptance.
-The declared two-RNIC routing/slicing, provider-fault and paused-shutdown gates
-now pass; they do not close those broader profiles. The source paths are
-implemented; a missing hardware gate is not missing code.
+The declared two-RNIC routing/slicing, two-parent quota/reuse, provider-fault
+and paused-shutdown gates pass; they do not close those broader profiles. The
+source paths are implemented; a missing hardware gate is not missing code.
 GDR and optional storage transports have their own stages.
