@@ -1778,9 +1778,11 @@ async-event, channel, process-wait and resource-lock evidence. It remains
 ignored by default and needs an identity-pinned physical two-host profile.
 
 Fault retirement can close the completion channel before the idle snapshot.
-The event-mode gate therefore requires one created channel but zero idle event
-workers/channels on a proven aborted lane; a healthy lane still requires its
-live channel and consumer. Both paths require zero retained resources after
+The fault gate explicitly joins lane retirement before taking its idle
+snapshot: request drain alone can precede the worker's final exit charge. The
+event-mode gate requires one created channel but zero idle event
+workers/channels after that join; a healthy profile still requires its live
+channel and consumer. Both paths require zero retained resources after
 close. The initial event-mode fault run and its failed healthy-idle assertion
 remain archived with the corrected gate's runs.
 

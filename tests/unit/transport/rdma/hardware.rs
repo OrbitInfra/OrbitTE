@@ -101,15 +101,15 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         !aborted || fault_profile,
         "healthy profile unexpectedly aborted its lane"
     );
-    assert_eq!(idle.progress_workers, usize::from(!aborted));
+    assert_eq!(idle.progress_workers, usize::from(!fault_profile));
     assert_eq!(
         (
             idle.active_completion_channels,
             idle.completion_event_workers
         ),
         (
-            usize::from(enabled && !aborted),
-            usize::from(enabled && !aborted)
+            usize::from(enabled && !fault_profile),
+            usize::from(enabled && !fault_profile)
         )
     );
     assert_eq!(closed.opened_completion_channels, u64::from(enabled));
@@ -635,6 +635,7 @@ fn source_window_peer() {
             None,
         )
         .unwrap();
+    let progress = Arc::clone(&endpoint.progress);
     if source {
         stream.write_all(&endpoint.connection()).unwrap();
     }
@@ -747,6 +748,9 @@ fn source_window_peer() {
         stream.write_all(&[4]).unwrap();
         token(&mut stream, 5);
     }
+    // The request's drain receipt can precede the worker's final exit charge.
+    // Join the lane before observing its retired channels and consumers.
+    progress.close(Instant::now() + TIMEOUT).unwrap();
     std::fs::write(
         env::var("ORBITTE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),
