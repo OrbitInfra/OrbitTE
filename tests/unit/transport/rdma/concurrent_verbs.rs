@@ -269,6 +269,30 @@ unsafe extern "C" fn post(
     code
 }
 
+unsafe extern "C" fn send_completion(
+    h: *mut sys::ConnectionHandles,
+    memory: *const sys::MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    rkey: u32,
+    result: *mut sys::PostResult,
+) -> c_int {
+    let code = unsafe { (sys::REAL.send_completion)(h, memory, id, address, length, rkey, result) };
+    if unsafe { (*result).accepted } != 0 {
+        assert_eq!(unsafe { (*result).accepted }, 1);
+        let mut trace = TRACE.get().unwrap().lock().unwrap();
+        let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
+        assert!(
+            trace
+                .accepted_wr
+                .insert((unsafe { (*h).cq } as usize, qp.qp_num, id)),
+            "native SEND WR replay"
+        );
+    }
+    code
+}
+
 unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> c_int {
     let cq = unsafe { (*h).cq } as usize;
     {
@@ -460,6 +484,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     open_device,
     register_memory: register,
     post,
+    send_completion,
     poll,
     destroy_qp,
     destroy_cq,
