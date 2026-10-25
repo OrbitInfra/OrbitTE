@@ -870,17 +870,24 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   source/requester kills in prior CQ/PD/restart regressions. Eight native
   mutation runs reject early MR/MW release and missing public-entry recovery.
   Spontaneous provider failure, physical device recovery, in-place healing of
-  retained owners and the transport-level Workers pool remain open. See
+  retained owners remain open; P4.12k below adds the transport pool. See
   [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
 - [ ] **P4.12k — transport Workers pool and multi-context progress
-  (Implemented; qualification in progress, independent acceptance open).**
+  (Implemented; declared native gates pass, independent acceptance open).**
   `RdmaTransport` owns one configurable `Workers` pool. Stable NIC IDs assign
   context CQ pairs to data workers; polling/event passes rotate contexts and
   endpoints, share aggregate quota wakes and use the earliest event deadline.
   Context fault recovery detaches drained snapshots without restarting the pool.
   Endpoint owners retain the pool after transport-handle Drop. Configuration,
   statistics, pool scheduling, grant protocol and native progress passes have
-  separate modules. Native TENT's per-context multiple CQ lanes, least-loaded
+  separate modules. Frozen source `914761b` passes nineteen stable/Rust 1.85
+  gates, 195 all-feature units per toolchain and eleven runner controls. Both
+  binaries pass 168 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 configurations with
+  1/2/3 workers, actual CQ/thread identities, quota/unequal-tail admission,
+  fault/drain, live recovery, cleanup failures and repeated process generations.
+  All 384 children are reaped (360 completed libtests and 24 deliberate kills).
+  Two native wrong-owner controls and one CPU early-pool-stop control reject
+  the intended errors. Native TENT's per-context multiple CQ lanes, least-loaded
   slice enqueue, priority queues, worker affinity and monitor consolidation
   remain open. See [the pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,

@@ -3299,7 +3299,58 @@ remain unchanged afterward. SQ/RQ and byte limits, the ten-second admission
 guard, sentinels and actual native drain checks are unchanged.
 
 The external qualification directory is
-`/root/orbitte-artifacts/rdma-workers-pool-20261025/`. Source and native gates
-are in progress; no new hardware acceptance is claimed here yet. Complete P4,
-independent acceptance, physical link/device faults, wider fabrics/workloads,
-GPU direct paths and installed-artifact qualification remain open.
+`/root/orbitte-artifacts/rdma-workers-pool-20261025/`.
+
+### P4.12k frozen qualification
+
+Frozen source `914761b` passes nineteen sequential stable/Rust 1.85 gates,
+195 all-feature units per toolchain, eleven runner controls and both unchanged
+native TENT geometry comparisons. Both exact release libtests pass 84 native
+configurations each (168 total) on the two identity-pinned hosts and two RNICs
+per host. Actual CQ/worker/thread records verify stable context assignment,
+single-worker shared progress, distinct-worker dispatch and pool retention
+through live fault recovery. Configuring three workers also checks an idle
+data thread joins at shutdown.
+
+The matrix retains eight-parent quota/RQ and unequal-tail admission, actual QP
+and CQ errors, dropped successful SQ/RQ completions, MR/MW syscall failures,
+CQ/PD cleanup errors and two/three fresh process generations. Sixteen paired
+live-reconnect configurations complete two fault cycles each while preserving
+the engine, PDs, registrations and data threads. Retained old owners have no
+zero-resource claim. All 384 children are reaped: 360 completed libtests and
+24 deliberately killed source/requester children. Supervisor/SSH receipts
+and a fresh stage/identity/library/lock check establish final process cleanup.
+
+Two stable native mutation runs (polling/event) reject wrong CQ-worker
+assignment. One CPU mutation rejects premature pool shutdown while another
+endpoint still owns it. The full frozen native TENT CPU comparison remains a
+separate CI gate; it does not establish native RDMA wire compatibility.
+
+- `gates-914761b/manifest.json` pins source archive, exact commands, compilers
+  and both libtest hashes. Geometry and runner controls live beside the logs.
+- `native-regression-manifest.json`, `native-raw-audit.json` and the two
+  `native-914761b-*` directories retain every case, actual CQ identities,
+  loaded libraries, lease/exit receipts and supervisor configuration.
+- `controls-914761b/qualified-controls.json` records exact mutations, intended
+  guards and control process cleanup; `frozen-design-reference.json` pins the
+  native TENT workers/transport/parameter sources.
+- `fixture-root-cause.json`, `quarter-diagnostic-*`, `quarter-fixed-0` and
+  earlier failed matrices preserve the idle-QP counting diagnosis. The
+  earlier observer failures and corrected lost-CQE/closed-engine contracts
+  remain alongside their logs; none is counted as a passing final case.
+- `node-*-postflight.json`, `finishing-gates.json`, `native-cpu-reference.json`
+  and `final-delivery.json` record final identities, gates, CI and immutable
+  evidence hashes.
+
+Reproduce from the frozen source with the same authorized host profile:
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-workers-pool-20261025/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-workers-pool-20261025/gates-914761b/libtest-stable \
+  --output /path/outside/checkout/workers-pool-repeat
+```
+
+Complete P4, independent acceptance, remaining native worker/CQ-lane
+scheduling, physical link/device faults, wider fabrics/workloads, GPU direct
+paths, installed-artifact qualification and performance remain open.

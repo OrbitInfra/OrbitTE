@@ -12,7 +12,7 @@ contracts.
 | Async batches and notifications | Implemented | CPU ownership, cancellation, detached handle and receipt controls |
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
 | Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
-| Transport-level RDMA Workers pool | Implemented; qualification in progress | Configurable data threads, stable context assignment and cross-context progress; one CQ pair per context, with broader native TENT scheduling parity open |
+| Transport-level RDMA Workers pool | Implemented | Scoped 1/2/3-worker two-RNIC host Direct tests verify CQ/thread routing, retained pool lifetime and fault recovery without new threads; multiple CQ lanes and broader TENT scheduling parity remain open |
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
 | Concurrent multirail parents and aggregate quotas | Implemented | Scoped eight-parent MiB/folded/exact-quarter-tail profiles and retained two-/four-parent cases; shared SQ/RQ pressure, 32/40 active slice grants and connected reuse and two-WR fault/drain. Wider concurrency/QoS remains open |
 | Whole-parent source RQ admission | Implemented | Wire v12; residual-capacity rejection before QPs, caller retry, uncertain-post ownership and native receive-credit drain in declared four-/eight-parent profiles |
