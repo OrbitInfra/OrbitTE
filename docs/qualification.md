@@ -11,15 +11,45 @@ OrbitTE distinguishes three states:
 A successful build or CPU fixture does not qualify physical DMA, a new fabric,
 GPU direct transfer or performance.
 
-## Current implementation awaiting qualification
+## Current source delivery
 
-P4.12m adds context-owned peer QP arrays, verified worker NUMA CPU binding and
-one transport monitor for async/completion events. `RdmaGrant` is separate from
-the persistent peer endpoint. Fixed-width concurrent QP multiplexing remains
-open; demand-created QPs still obey the aggregate limit. Source and hardware
-gates for this exact delivery are not yet sealed. Evidence is kept outside the
-checkout at `/root/orbitte-artifacts/rdma-endpoint-monitor-20261025`.
-Independent acceptance and complete P4 remain open.
+P4.12m (`5ea3a35`) adds context-owned peer QP arrays, verified worker NUMA
+CPU binding and one transport monitor for async/completion events. Physical QP,
+CQ-lane progress and exclusive `RdmaGrant` resources have separate owners.
+Peer arrays drive bilateral connected reuse while preserving each QP's lane.
+
+Nineteen stable/Rust 1.85 gates pass, with 203 all-feature units per toolchain
+and eleven hardware-runner controls. Both frozen binaries pass 180 two-host/
+two-RNIC CPU DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, polling/event
+progress, eight-parent admission, quota/unequal-tail pressure, QP/CQ faults,
+lost completions, MR/MW command failures, CQ/PD cleanup retention, live recovery
+and process generations. All 408 native children are reaped: 384 completed
+libtests and 24 deliberate kills. This is the same declared hardware scope as
+P4.12l, executed again with the new owners.
+
+The raw audit reconciles 1,004 actual data-thread affinity observations with
+the nodes' allowed CPU/NUMA sets and 4,136 native CQ/thread observations. It
+checks 704 peer-QP-array observations and 870 native monitor-source observations;
+52 healthy/live event profiles establish a single actual monitor thread.
+Native guards reject skipped worker binding and skipped peer-array adoption.
+A separate CPU control rejects a lost native async ACK. The controls use the
+exact qualified source, preserve their patches/binaries and reap every child.
+
+Evidence root: `/root/orbitte-artifacts/rdma-endpoint-monitor-20261025`.
+`native-raw-audit.json`, `qualified-controls.json` and `finishing-gates.json`
+retain artifact hashes, case manifests, actual library mappings and supervision
+receipts. An initial CQ-cleanup/restart run exposed repeated monitor-close
+EPIPE; `5ea3a35` fixes joined-close idempotence and preserves join failure.
+The failed run is archived and excluded from all passed totals. Both RNIC
+leases are available after the final run, with unchanged hardware/provider
+identities and no GPU compute processes used.
+
+These are same-agent scoped gates. Arrays still grow on demand under the
+aggregate physical-QP limit; TENT's fixed-width concurrent QP multiplexing,
+periodic port recovery/bandwidth refresh, physical fabric/device loss, broader
+GPU/fabric/installed profiles, independent acceptance and complete P4 remain
+open. No performance claim is made. See
+[the owner contract](rdma-cuda.md#peer-qp-arrays-worker-affinity-and-unified-monitor).
 
 ## Previous qualified source: CQ lanes
 

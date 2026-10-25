@@ -3498,6 +3498,26 @@ transport close cannot report success with live event registrations.
 Data thread counts remain `progress_workers`. Completion channels still belong
 to their lanes and retain their own native cleanup failures.
 
+Frozen operational source `5ea3a35` passes nineteen stable/Rust 1.85 gates,
+203 all-feature CPU units per toolchain and eleven runner controls. Both
+frozen binaries pass 180 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 configurations
+with 1/2/3/6 lanes. Each observed native CQ caller matches its recorded NUMA
+worker mask. Admission snapshots verify that each physical QP belongs to one
+peer array and every admitted grant appears in an array. Event-mode observations
+establish one actual monitor across the selected context/channel sources.
+Quota, fault/drain, native cleanup retention, live recovery and process
+generation checks retain their exact resource and receipt assertions. All
+408 children are reaped (384 completed libtests and 24 deliberate kills).
+
+Two native mutations reject skipped NUMA binding and skipped peer-array
+adoption. A CPU mutation rejects missing native async ACK. They use the
+same qualified source, with independent external checkouts and binaries.
+An initial native CQ-cleanup/restart run found repeated-close EPIPE; the joined
+monitor now closes idempotently and retains a join-failure result. That failed
+run remains archived, outside the passed totals. Both NIC leases are available
+after cleanup. Raw evidence and same-agent audit are external:
+`/root/orbitte-artifacts/rdma-endpoint-monitor-20261025`.
+
 TENT's monitor also performs periodic endpoint/orphan reclaim and paused-port
 recovery. OrbitTE's data-lane owners already drive timed QP drain; this change
 keeps those responsibilities there. Physical port recovery and periodic

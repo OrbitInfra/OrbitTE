@@ -911,7 +911,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   their intended errors. Independent acceptance and full P4 remain open. See
   [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
 - [ ] **P4.12m — peer QP arrays, NUMA worker binding and unified event monitor
-  (Implemented; native qualification and independent acceptance open).**
+  (Implemented; declared native gates pass, independent acceptance open).**
   Context-owned peer endpoints retain cross-lane physical QP arrays; CQ-local
   stores own idle/retiring progress and exact WR lookup. `RdmaGrant` separates
   each memory authorization from its persistent peer. Reuse consults the array
@@ -920,7 +920,17 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   owns all device/CQ event consumption, with get/ACK serialized before native
   owner detachment and atomic fault/receipt bookkeeping. CPU gates cover
   cpuset intersection, actual binding, multiple event sources, concurrent ACK
-  detachment and preserved grant/drain ownership. See
+  detachment and preserved grant/drain ownership. Frozen source `5ea3a35`
+  passes nineteen stable/Rust 1.85 gates, 203 all-feature units per toolchain
+  and eleven runner controls. Both binaries pass 180 two-host/two-RNIC CPU
+  DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual NUMA masks,
+  CQ/thread and QP-array identities, unified event consumption, admission,
+  faults, native cleanup failures, live recovery and repeated generations.
+  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
+  Two native and one CPU mutation controls reject their intended errors.
+  An initial repeated-close EPIPE is repaired; failed evidence is archived.
+  Fixed-width concurrent QP multiplexing, periodic port recovery and full P4
+  acceptance remain open. See
   [the owner contract](rdma-cuda.md#peer-qp-arrays-worker-affinity-and-unified-monitor).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and

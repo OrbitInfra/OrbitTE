@@ -142,7 +142,7 @@ Capacity returns through validated data/control completions, proven unposted
 suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains
 its charges. A failed context's progress state can be replaced only after all
 native drain receipts and removal of the worker's request snapshot. The pool
-stays alive and other contexts keep their owners. Endpoints retain the pool if
+stays alive and other contexts keep their owners. Live grant handles retain the pool if
 the transport handle is dropped; explicit transport shutdown drains contexts
 before joining every data thread. See the
 [pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).

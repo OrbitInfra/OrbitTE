@@ -41,7 +41,7 @@ keep the old owners quarantined while fresh engines recover in live processes.
 Per-context CQ lanes and load-based slice admission pass scoped 1/2/3/6-lane
 checks; context PD/MR owners and aggregate limits remain shared.
 Peer QP arrays, verified NUMA worker binding and a unified event monitor are
-implemented with qualification tracked in the completion plan. Fixed-width QP
+validated in the declared two-host CPU DRAM/RoCEv2 profile. Fixed-width QP
 multiplexing, physical
 port/device loss, independent P4 acceptance, full TENT parity, GPUDirect RDMA
 and optional SSD transports remain open.

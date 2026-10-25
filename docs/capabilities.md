@@ -52,6 +52,6 @@ See [qualification](qualification.md) for the latest declared evidence and
 
 
 Peer QP arrays, verified NUMA data-worker binding and a unified device/CQ event
-monitor are implemented in P4.12m. Fixed-width concurrent QP multiplexing and
+monitor pass the declared P4.12m CPU DRAM/RoCEv2 native gates. Fixed-width concurrent QP multiplexing and
 physical port recovery remain open. See [qualification](qualification.md) for
 the exact source and hardware gate state.
