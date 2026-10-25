@@ -64,6 +64,40 @@ class ResourceSelection(unittest.TestCase):
                 runner.Controller({**base, 'runner': 'orbitkv-peer-host'}, binary, root).case(0, {**case, 'rdma_events': True})
 
 
+    def test_shared_qp_runs_without_multirail_mode_and_validates_grant_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            profile = {'runner': 'orbitte-shared-cq', 'rnic': 'fixture', 'gid_index': 3,
+                       'nodes': {name: {'bind': '127.0.0.1:0'} for name in ['a', 'b']}}
+            case = {'source': 'a', 'requester': 'b', 'source_kind': 'cpu', 'requester_kind': 'cpu',
+                    'transport': 'rdma', 'payload': 8192, 'seed': 1, 'rdma_max_cqes': 4,
+                    'rdma_max_send_wr': 4, 'operation': 'read', 'shared_qp': 'healthy'}
+            for mode in ['healthy', 'lost-receive']:
+                controller = runner.Controller(profile, binary, root)
+                started = []
+                controller.start = lambda *args: started.append(args)
+
+                def collect(*args):
+                    return {'stdout.log': 'ORBITTE_READY 127.0.0.1:1234\n',
+                            'result.json': json.dumps({'status': 'passed'}) if len(started) == 2 else None,
+                            'maps.txt': 'fixture'}
+
+                controller.collect = collect
+                controller.case(0, {**case, 'shared_qp': mode})
+                self.assertEqual(len(started), 2)
+                for args in started:
+                    self.assertEqual(args[-1]['ORBITTE_SHARED_QP'], mode)
+                    self.assertEqual(args[-1]['ORBITTE_SHARED_OPERATION'], 'read')
+            for invalid in [{'shared_qp': 'unknown'}, {'operation': 'unknown'},
+                            {'rdma_max_cqes': 1}, {'rdma_max_send_wr': 2}, {'duplex': True}]:
+                controller = runner.Controller(profile, binary, root)
+                controller.start = lambda *args: self.fail('invalid shared-QP profile started a child')
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    controller.case(0, {**case, **invalid})
+
+
     def test_fragment_fault_geometry_is_exact_before_start(self):
         class CapturedStart(Exception):
             pass

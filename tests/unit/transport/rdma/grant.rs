@@ -39,7 +39,7 @@ fn grant_release_requires_its_own_physical_connection_and_outputs_keep_only_gran
                 .grant
                 .as_mut()
                 .unwrap()
-                .close(&resources.connection, transport.verbs)
+                .close(&resources.connection.lock().unwrap(), transport.verbs)
                 .is_err()
         );
         assert!(
@@ -48,13 +48,18 @@ fn grant_release_requires_its_own_physical_connection_and_outputs_keep_only_gran
         );
         let mut second = other.record.lock().unwrap();
         let second = second.resources.as_mut().unwrap();
-        second.connection.close(transport.verbs).unwrap();
+        second
+            .connection
+            .lock()
+            .unwrap()
+            .close(transport.verbs)
+            .unwrap();
         assert!(
             resources
                 .grant
                 .as_mut()
                 .unwrap()
-                .close(&second.connection, transport.verbs)
+                .close(&second.connection.lock().unwrap(), transport.verbs)
                 .is_err(),
             "another connection cannot authorize grant release"
         );

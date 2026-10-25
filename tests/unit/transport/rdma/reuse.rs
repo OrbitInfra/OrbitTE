@@ -61,15 +61,17 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
                     let resources = state.resources.as_ref().unwrap();
                     assert!(resources.grant.is_none());
                     assert!(state.phase == super::super::super::Phase::Ready);
-                    assert!(!resources.connection.handles.qp.is_null());
+                    assert!(!resources.connection.lock().unwrap().handles.qp.is_null());
+                    let connection = resources.connection.lock().unwrap();
                     observed.lock().unwrap().push((
-                        resources.connection.handles.qp as usize,
+                        connection.handles.qp as usize,
                         endpoint.incarnation().unwrap(),
                         endpoint.local.connection_bytes(),
                         endpoint.cached_peer.unwrap(),
                         endpoint.claim,
-                        Arc::clone(&resources.connection.send_queue),
+                        Arc::clone(&connection.send_queue),
                     ));
+                    drop(connection);
                     drop(state);
                     if round != 0 {
                         endpoint
@@ -313,6 +315,8 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         .as_ref()
         .unwrap()
         .connection
+        .lock()
+        .unwrap()
         .remote
         .unwrap();
     let (record, peer, descriptor, old_claim) = captured.lock().unwrap().take().unwrap();

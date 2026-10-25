@@ -206,13 +206,24 @@ class Controller:
                 or case['source_kind'] != 'cpu' or case['requester_kind'] != 'cpu')):
             raise ValueError('rdma_multi_context requires a boolean host shared-CQ profile')
 
+        shared_qp = case.get("shared_qp")
+        if shared_qp is not None and (self.profile.get("runner") != "orbitte-shared-cq"
+                or shared_qp not in ("healthy", "lost-receive")
+                or case.get("operation") not in ("read", "write")
+                or case.get("transport") != "rdma"
+                or case.get("source_kind") != "cpu" or case.get("requester_kind") != "cpu"
+                or type(case.get("payload")) is not int or not 4096 <= case["payload"] <= 8 << 20
+                or case.get("duplex") or multi_context
+                or case.get("rdma_max_cqes") != 4 or case.get("rdma_max_send_wr") != 4):
+            raise ValueError("invalid shared QP grant profile")
+
         def command(node, role, kind, root, readiness=None):
             if shared:
                 if case['transport'] != 'rdma' or kind != 'cpu':
                     raise ValueError('shared CQ gate accepts host RDMA only')
                 capacity, window = case['rdma_max_cqes'], case['rdma_max_send_wr']
                 fragmented = window_probe and case.get('window_probe') in ['fragment-read', 'fragment-write', 'partial-read', 'partial-write']
-                if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= (3 if fragmented else 2):
+                if type(capacity) is not int or not 1 <= capacity <= 4 or type(window) is not int or not 1 <= window <= (4 if shared_qp else 3 if fragmented else 2):
                     raise ValueError('invalid shared CQ/SQ profile')
                 if fragmented and (capacity != 3 or window != 3 or type(case['payload']) is not int or case['payload'] != 12288):
                     raise ValueError('fragmented fault gate requires three 4096-byte WRs')
@@ -229,6 +240,9 @@ class Controller:
                     'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 }
                 environment['ORBITTE_RDMA_EVENTS'] = str(int(cq_events))
+                if shared_qp:
+                    environment["ORBITTE_SHARED_QP"] = shared_qp
+                    environment["ORBITTE_SHARED_OPERATION"] = case["operation"]
                 if multi_context:
                     environment['ORBITTE_RDMA_MULTI_CONTEXT'] = '1'
                 if discovery:
@@ -314,9 +328,20 @@ class Controller:
         workers = case.get('num_lanes', 1)
         if type(workers) is not int or not 1 <= workers <= 64:
             raise ValueError('num_lanes must be an integer in 1..64')
-        if case['mode'] in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
+        if case.get('mode') in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
             raise ValueError('native blocking sibling-post controls require at least two workers')
         restart = restart_plan(case)
+
+        shared_qp = case.get("shared_qp")
+        if shared_qp is not None and (self.profile.get("runner") != "orbitte-shared-cq"
+                or shared_qp not in ("healthy", "lost-receive")
+                or case.get("operation") not in ("read", "write")
+                or case.get("transport") != "rdma"
+                or case.get("source_kind") != "cpu" or case.get("requester_kind") != "cpu"
+                or type(case.get("payload")) is not int or not 4096 <= case["payload"] <= 8 << 20
+                or case.get("duplex") or multi_context
+                or case.get("rdma_max_cqes") != 4 or case.get("rdma_max_send_wr") != 4):
+            raise ValueError("invalid shared QP grant profile")
 
         def command(node, role, kind, root, readiness=None):
             arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
@@ -373,7 +398,7 @@ class Controller:
         workers = case.get('num_lanes', 1)
         if type(workers) is not int or not 1 <= workers <= 64:
             raise ValueError('num_lanes must be an integer in 1..64')
-        if case['mode'] in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
+        if case.get('mode') in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
             raise ValueError('native blocking sibling-post controls require at least two workers')
         restart = restart_plan(case)
         while time.monotonic() - started < 65:

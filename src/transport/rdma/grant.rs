@@ -96,7 +96,7 @@ impl Drop for Staging {
     }
 }
 
-// Grant native handles are serialized by the physical QP progress record.
+// Grant state is serialized by its record; connection calls also lock the shared QP.
 unsafe impl Send for GrantResources {}
 
 pub(super) struct GrantResources {
@@ -214,7 +214,7 @@ impl RdmaGrant {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
-        let device = Arc::clone(&resources.connection.device);
+        let device = Arc::clone(&resources.connection.lock()?.device);
         let mut local = Descriptor::default();
         let (incarnation, _) =
             match device.open_endpoint(resources, &self.config, permission, psn, &mut local) {
@@ -231,7 +231,6 @@ impl RdmaGrant {
             rkey: 0,
             ..local
         };
-        resources.connection.local = connection;
         resources.grant_mut()?.rkey = local.rkey;
         state.qpn = connection.qpn;
         drop(state);
@@ -288,7 +287,7 @@ impl RdmaGrant {
         Ok(Descriptor {
             address: resources.grant()?.buffer.address().as_ptr() as u64,
             rkey: resources.grant()?.rkey,
-            ..resources.connection.local
+            ..resources.connection.lock()?.local
         })
     }
 
@@ -382,6 +381,7 @@ impl RdmaGrant {
                     .as_ref()
                     .ok_or(Error::Internal("missing RDMA endpoint"))?
                     .connection
+                    .lock()?
                     .device,
             )
         };
@@ -396,25 +396,24 @@ impl RdmaGrant {
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA endpoint"))?;
-        if let Some(existing) = resources.connection.remote {
+        let owner = Arc::clone(&resources.connection);
+        let mut connection = owner.lock()?;
+        owner.require_live()?;
+        if let Some(existing) = connection.remote {
             if existing.connection_bytes() != remote.connection_bytes() {
                 return Err(Error::Protocol("cached RDMA peer descriptor changed"));
             }
             state.phase = Phase::Connected;
             return Ok(());
         }
-        let device = Arc::clone(&resources.connection.device);
-        if let Err(error) = device.connect(
-            &mut resources.connection.handles,
-            &resources.connection.local,
-            remote,
-            &self.config,
-        ) {
+        let device = Arc::clone(&connection.device);
+        let local = connection.local;
+        if let Err(error) = device.connect(&mut connection.handles, &local, remote, &self.config) {
             drop(state);
             device.asynchronous.notify();
             return Err(error);
         }
-        resources.connection.remote = Some(*remote);
+        connection.remote = Some(*remote);
         state.phase = Phase::Connected;
         Ok(())
     }

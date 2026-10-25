@@ -171,14 +171,15 @@ impl RdmaTransport {
                     .resources
                     .as_mut()
                     .ok_or(Error::Internal("missing cached connection"))?;
-                if resources.grant.is_some() || !Arc::ptr_eq(&resources.connection.device, &device)
-                {
+                let connection = resources.connection.lock()?;
+                if resources.grant.is_some() || !Arc::ptr_eq(&connection.device, &device) {
                     return Err(Error::Internal("RDMA reuse grant ownership"));
                 }
-                if resources.connection.permission != permission {
+                if connection.permission != permission {
                     return Err(Error::Protocol("RDMA reuse changed QP capability"));
                 }
-                grant.connection = resources.connection.incarnation;
+                grant.connection = connection.incarnation;
+                drop(connection);
                 resources.grant = Some(grant);
             }
             endpoint
@@ -191,7 +192,7 @@ impl RdmaTransport {
                 ..Default::default()
             };
             let record = progress.register(Box::new(Resources {
-                connection: ConnectionResources {
+                connection: super::super::qp::RdmaQp::new(ConnectionResources {
                     receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
                         self.config.max_send_wr,
                         Arc::clone(&self.usage),
@@ -208,7 +209,7 @@ impl RdmaTransport {
                     permission,
                     closed: false,
                     lease: Some(connection_lease),
-                },
+                }),
                 grant: Some(grant),
             }))?;
             RdmaGrant {

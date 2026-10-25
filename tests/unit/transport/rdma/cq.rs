@@ -382,6 +382,8 @@ fn event_wakes_the_existing_worker_and_both_cqs_close_before_the_channel() {
             .as_ref()
             .unwrap()
             .connection
+            .lock()
+            .unwrap()
             .handles
             .cq as usize;
         let entry = entries().lock().unwrap().get(&cq).cloned().unwrap();

@@ -13,6 +13,26 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The concurrent grant-record delivery gives several runtime records one shared
+`RdmaQp`. SQ completions select the record's namespace; RQ completions identify
+the physical receive slot and then the exact binding/key grant. Native retirement
+fences all affiliated records, while successful grants release their own loan/MW.
+Physical QP/queue retention is counted once, separately from every retained grant.
+
+The new explicit `shared_qp` hardware profile uses four grants on one real RC QP,
+checks concurrent payload WR namespaces, reverse SEND_WITH_INV receipts, immediate
+grant release and stale-record isolation. Its lost-receive control drops an actual
+successful CQE and checks all four loans and RQ credits at both native CQ teardown
+boundaries. It uses the production owners and native provider, with a fixture
+rendezvous; it does not claim concurrent public v12 handshakes.
+
+Qualification for this delivery is pending the frozen source gates. Evidence is
+kept under `/root/orbitte-artifacts/rdma-grant-records-20261026`, including failed
+development runs. Public multiplexing, fixed-width arrays, periodic recovery,
+physical port/device faults, GPU/performance and independent acceptance stay open.
+
+## Previous qualified native source: QP receive owner
+
 The QP receive-owner delivery moves receive buffers, message MRs and parent
 admission credits into `ConnectionResources::receive_queue`. `ReceiveWork`
 holds an independent full-binding/key receipt. Successful CQEs identify the
@@ -42,9 +62,9 @@ under `/root/orbitte-artifacts/rdma-receive-dispatch-20261025`;
 `final-delivery.json` identifies the qualified source and documentation-only
 delivery commit. The source CI matrix and strict documentation checks pass.
 
-The public v12 path still has one active grant per QP. Multiple receipt
-dispatch is a CPU contract until concurrent grant records, multi-namespace CQ
-lookup and fixed-width construction are connected and qualified. Full P4,
+For source `6b34ce7`, public v12 has one active grant per QP and multiple-receipt
+dispatch is qualified only as a CPU contract. Later delivery evidence above
+expands the internal native scope without changing that historical result. Full P4,
 physical port/device faults, GPUDirect, performance and independent acceptance
 remain open. The previous qualified source below remains historical evidence.
 

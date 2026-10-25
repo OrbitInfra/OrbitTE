@@ -252,7 +252,9 @@ native SQ and RQ depths; the physical receive owner also bounds its slots and
 receipt table to this width. SQ and RQ keep separate outstanding-WR accounts.
 Receive-buffer identity and grant receipt identity are separated as described
 in [QP receive ownership](architecture.md#qp-receive-ownership). Public wire
-grants remain exclusive while concurrent records are being connected.
+grants remain exclusive while handshake admission and fixed-width construction
++are being connected. Runtime records already share one `RdmaQp`;
++`cq_lane/completion.rs` resolves CQEs to their exact grant owners.
 `max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
@@ -3487,8 +3489,9 @@ The current Rust wire protocol prepares all exclusive slice grants before
 payload admission. Arrays therefore grow on demand under `max_endpoints`,
 which still counts physical QPs. They are **not yet TENT's fixed-width QP pool**:
 QP-owned SQ debt and RQ buffers/receipt dispatch are now implemented, but
-simultaneous grants still need separate runtime records and multi-namespace CQ
-lookup. Capping this array at `num_lanes` before completing concurrent admission
+runtime records and multi-namespace CQ lookup now share one physical `RdmaQp`.
+Public handshake multiplexing and whole-parent/RQ admission remain open.
+Capping this array at `num_lanes` before completing concurrent admission
 could deadlock an admitted parent. This remaining multiplexing
 contract stays explicit in the completion plan. Read/write capabilities stay
 per physical QP; a peer array may own both kinds.

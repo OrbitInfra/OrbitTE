@@ -131,7 +131,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
         usage.staging_bytes += 8;
     }
     let resources = Box::new(Resources {
-        connection: ConnectionResources {
+        connection: super::super::qp::RdmaQp::new(ConnectionResources {
             receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
                 runtime.config.max_send_wr,
                 Arc::clone(&runtime.usage),
@@ -157,7 +157,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),
             }),
-        },
+        }),
         grant: Some(GrantResources {
             _worker: runtime.workers.reserve(&progress).unwrap(),
             device,
@@ -312,6 +312,8 @@ fn close_deadline_returns_unquiesced_while_another_native_call_owns_the_worker()
     assert!(
         record.lock().unwrap().resources.as_ref().is_some_and(|r| !r
             .connection
+            .lock()
+            .unwrap()
             .handles
             .qp
             .is_null())
@@ -1577,3 +1579,6 @@ impl CqLane {
         records
     }
 }
+
+#[path = "grant_records.rs"]
+mod grant_records;

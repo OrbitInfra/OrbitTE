@@ -220,7 +220,6 @@ impl ReceiveQueue {
                 "RDMA received grant binding or key mismatch",
             ))?;
         Self::discharge(slot, &self.usage);
-        receipt.mark_completed();
         Ok(Arc::clone(receipt))
     }
 
@@ -233,6 +232,10 @@ impl ReceiveQueue {
             slot.pending = false;
         }
         drop(slot.credits.take());
+    }
+
+    pub(in crate::transport::rdma) fn owns(&self, id: u64) -> bool {
+        self.slots.iter().any(|slot| slot.id == id)
     }
 
     pub(in crate::transport::rdma) fn outstanding(&self) -> usize {

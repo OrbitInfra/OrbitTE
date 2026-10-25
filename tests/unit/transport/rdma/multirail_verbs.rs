@@ -292,13 +292,24 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         let debt = {
             let record = trace.record.as_ref().unwrap().lock().unwrap();
             let resources = record.resources.as_ref().unwrap();
-            assert!(resources.connection.closed && resources.connection.handles.qp.is_null());
+            assert!({
+                let c = resources.connection.lock().unwrap();
+                c.closed && c.handles.qp.is_null()
+            });
             assert_eq!(
                 resources.grant.as_ref().unwrap().handles.mr as usize,
                 trace.bad_mr
             );
             let debt = record.work.as_ref().unwrap().queue.outstanding();
-            assert_eq!(resources.connection.send_queue.outstanding(), debt);
+            assert_eq!(
+                resources
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .send_queue
+                    .outstanding(),
+                debt
+            );
             debt
         };
         assert!(

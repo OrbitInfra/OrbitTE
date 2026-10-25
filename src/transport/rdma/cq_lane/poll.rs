@@ -125,14 +125,18 @@ impl ProgressState {
         let mut receive_debt = 0;
         let mut message_mrs = 0;
         let mut message_bytes = 0;
-        for record in &records {
+        for (index, record) in records.iter().enumerate() {
+            let first_qp = !records[..index]
+                .iter()
+                .any(|other| Arc::ptr_eq(&other.connection, &record.connection));
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if request.phase != Phase::Retained {
                 count += usize::from(
-                    request
-                        .resources
-                        .as_ref()
-                        .is_some_and(|r| r.connection.lease.is_some()),
+                    first_qp
+                        && request
+                            .resources
+                            .as_ref()
+                            .is_some_and(|r| r.connection.retiring().lease.is_some()),
                 );
                 grants += usize::from(
                     request
@@ -145,12 +149,12 @@ impl ProgressState {
                     .as_ref()
                     .and_then(|r| r.grant.as_ref())
                     .map_or(0, |g| g.buffer.len());
-                debt += request
-                    .resources
-                    .as_ref()
-                    .map_or(0, |r| r.connection.send_queue.outstanding());
-                if let Some(resources) = &request.resources {
-                    let queue = &resources.connection.receive_queue;
+                if first_qp {
+                    debt += record.connection.retiring().send_queue.outstanding();
+                }
+                if let Some(resources) = request.resources.as_ref().filter(|_| first_qp) {
+                    let connection = resources.connection.retiring();
+                    let queue = &connection.receive_queue;
                     receive_debt += queue.outstanding();
                     let (mrs, bytes) = queue.memory_usage();
                     message_mrs += mrs;
@@ -204,17 +208,17 @@ impl ProgressState {
         if request
             .resources
             .as_ref()
-            .is_some_and(|r| r.connection.send_queue.outstanding() != 0)
+            .is_some_and(|r| r.connection.retiring().send_queue.outstanding() != 0)
             || request.work.as_ref().is_some_and(|w| w.queue.pending())
             || request
                 .resources
                 .as_ref()
-                .is_some_and(|r| r.connection.receive_queue.outstanding() != 0)
+                .is_some_and(|r| r.connection.retiring().receive_queue.outstanding() != 0)
         {
             return Err(("RDMA grant has unresolved completion debt", libc::EBUSY));
         }
         if let Some(resources) = &mut request.resources {
-            if !resources.connection.closed {
+            if !resources.connection.retiring().closed {
                 return Err(("RDMA connection lacks native drain receipt", libc::EBUSY));
             }
             if let Some(grant) = &mut resources.grant {
@@ -257,10 +261,11 @@ impl ProgressState {
             .grant
             .as_mut()
             .ok_or(("missing RDMA finish grant", libc::EIO))?;
-        grant.close_drained(&resources.connection, receipt, self.verbs)?;
+        grant.close_drained(&resources.connection.retiring(), receipt, self.verbs)?;
         if let Some(work) = receive {
             resources
                 .connection
+                .retiring()
                 .receive_queue
                 .release(work, self.verbs)?;
         }
@@ -297,7 +302,7 @@ impl ProgressState {
         if request
             .resources
             .as_ref()
-            .is_some_and(|r| r.connection.send_queue.outstanding() != 0)
+            .is_some_and(|r| r.connection.retiring().send_queue.outstanding() != 0)
             || request
                 .work
                 .as_ref()
@@ -305,7 +310,7 @@ impl ProgressState {
             || request
                 .resources
                 .as_ref()
-                .is_some_and(|r| r.connection.receive_queue.outstanding() != 0)
+                .is_some_and(|r| r.connection.retiring().receive_queue.outstanding() != 0)
         {
             drop(request);
             self.fail(Fault::Internal("RDMA close with unresolved work"));
@@ -318,11 +323,15 @@ impl ProgressState {
         if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
             return Err((operation, code));
         }
-        resources.connection.close(self.verbs)?;
+        resources.connection.retiring().close(self.verbs)?;
         if let Some(grant) = &mut resources.grant {
-            grant.close(&resources.connection, self.verbs)?;
+            grant.close(&resources.connection.retiring(), self.verbs)?;
         }
-        resources.connection.receive_queue.close(self.verbs)?;
+        resources
+            .connection
+            .retiring()
+            .receive_queue
+            .close(self.verbs)?;
         Self::unlock(&mut request)?;
         self.control
             .lock()
@@ -350,7 +359,8 @@ impl ProgressState {
             let Some(resources) = &mut request.resources else {
                 continue;
             };
-            if let Err((operation, code)) = resources.connection.close(self.verbs) {
+            let closed = resources.connection.retiring().close(self.verbs);
+            if let Err((operation, code)) = closed {
                 drop(request);
                 self.retain(operation, code);
                 return;
@@ -364,8 +374,8 @@ impl ProgressState {
         for record in records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(resources) = &mut request.resources {
-                resources.connection.send_queue.quiesce();
-                resources.connection.receive_queue.quiesce();
+                resources.connection.retiring().send_queue.quiesce();
+                resources.connection.retiring().receive_queue.quiesce();
             }
             if let Some(work) = &mut request.work {
                 if work.queue.quiesce().is_err() {
@@ -377,14 +387,19 @@ impl ProgressState {
             self.quota.released();
             if let Some(resources) = &mut request.resources {
                 if let Some(grant) = &mut resources.grant {
-                    if let Err((operation, code)) = grant.close(&resources.connection, self.verbs) {
+                    let closed = grant.close(&resources.connection.retiring(), self.verbs);
+                    if let Err((operation, code)) = closed {
                         drop(request);
                         self.retain(operation, code);
                         return;
                     }
                 }
-                if let Err((operation, code)) = resources.connection.receive_queue.close(self.verbs)
-                {
+                let closed = resources
+                    .connection
+                    .retiring()
+                    .receive_queue
+                    .close(self.verbs);
+                if let Err((operation, code)) = closed {
                     drop(request);
                     self.retain(operation, code);
                     return;
@@ -454,7 +469,9 @@ impl ProgressState {
         let requests = match work.queue.reserve(self.config.max_cqes) {
             Ok(requests) => requests,
             Err(Error::ResourceExhausted) => {
-                self.wait_quota(false);
+                if record.send_queue.outstanding() < self.config.max_send_wr {
+                    self.wait_quota(false);
+                }
                 return false;
             }
             Err(error) => {
@@ -470,10 +487,12 @@ impl ProgressState {
             return false;
         }
         *phase = Phase::Posted;
+        let owner = Arc::clone(&resources.connection);
+        let mut connection = owner.retiring();
         let code = unsafe {
             match work.operation {
                 slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
-                    &mut resources.connection.handles,
+                    &mut connection.handles,
                     &grant.handles,
                     requests.as_ptr(),
                     requests.len(),
@@ -489,7 +508,7 @@ impl ProgressState {
                         return false;
                     };
                     (self.verbs.send_completion)(
-                        &mut resources.connection.handles,
+                        &mut connection.handles,
                         &message.handles,
                         requests[0].id,
                         message.memory.address.as_ptr() as u64,
@@ -499,7 +518,7 @@ impl ProgressState {
                     )
                 }
                 _ => (self.verbs.window)(
-                    &mut resources.connection.handles,
+                    &mut connection.handles,
                     &mut grant.handles,
                     requests[0].id,
                     grant.buffer.address().as_ptr() as u64,
@@ -510,6 +529,7 @@ impl ProgressState {
                 ),
             }
         };
+        drop(connection);
         if let Err(error) = work.queue.posted(code, posted) {
             let fault = Fault::from_error(error);
             let pending = work.queue.pending();
@@ -524,72 +544,6 @@ impl ProgressState {
             record.changed.notify_all();
         }
         true
-    }
-
-    fn complete(&self, completion: sys::Completion, receive_cq: bool) {
-        let Some(tag) = completion
-            .id
-            .checked_sub(1)
-            .map(|id| id / super::super::WR_ID_STRIDE)
-        else {
-            self.fail(Fault::Protocol("RDMA completion identity"));
-            return;
-        };
-        let record = self
-            .control
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .qps
-            .work_owner(tag, receive_cq);
-        let Some(record) = record else {
-            self.fail(Fault::Protocol("RDMA unknown completion owner"));
-            return;
-        };
-        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-        let result = if completion.qpn != request.qpn {
-            Err(Error::Protocol("RDMA completion QP identity"))
-        } else if receive_cq {
-            Self::complete_receive(&mut request, completion)
-        } else if let Some(work) = &mut request.work {
-            work.queue.complete(completion, work.operation)
-        } else {
-            Err(Error::Protocol("RDMA completion before submission"))
-        };
-        if result.is_ok() && !receive_cq {
-            let operation = request.work.as_ref().map(|w| w.operation);
-            if request.work.as_ref().is_some_and(|w| w.queue.finished()) {
-                request.phase = Phase::Connected;
-            }
-            if operation == Some(slice::Operation::Bind) {
-                if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
-                    grant.window_bound = true;
-                }
-            }
-            #[cfg(test)]
-            if operation == Some(slice::Operation::Invalidate) {
-                if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
-                    grant.window_bound = false;
-                }
-            }
-        }
-        if let Err(error) = result {
-            let fault = Fault::from_error(error);
-            request.failure = Some(fault);
-            drop(request);
-            self.fail(fault);
-        } else {
-            if request
-                .work
-                .as_ref()
-                .is_some_and(|work| work.queue.finished())
-            {
-                record.actions.fetch_and(!WORK, Ordering::Release);
-            }
-            drop(request);
-        }
-        self.quota.released();
-        // The handler owns a strong record until all of its accesses have ended.
-        record.changed.notify_all();
     }
 
     fn post_receive(&self, record: &Arc<Record>) -> bool {
@@ -613,7 +567,7 @@ impl ProgressState {
             return false;
         }
         if Instant::now() >= receive.deadline {
-            let pending = resources.connection.receive_queue.outstanding() != 0;
+            let pending = resources.connection.retiring().receive_queue.outstanding() != 0;
             request.failure = Some(Fault::Timeout);
             drop(request);
             if pending {
@@ -630,13 +584,17 @@ impl ProgressState {
             self.fail(Fault::from_error(error));
             return false;
         }
-        let connection = &mut resources.connection;
+        let owner = Arc::clone(&resources.connection);
+        let mut state = owner.retiring();
+        let connection = &mut *state;
         let result = connection.receive_queue.post(
             receive.id,
             self.config.max_cqes,
             &mut connection.handles,
             self.verbs,
         );
+        let pending = connection.receive_queue.outstanding() != 0;
+        drop(state);
         match result {
             Err(Error::ResourceExhausted) => {
                 self.wait_quota(true);
@@ -644,7 +602,6 @@ impl ProgressState {
             }
             Err(error) => {
                 let fault = Fault::from_error(error);
-                let pending = connection.receive_queue.outstanding() != 0;
                 request.failure = Some(fault);
                 drop(request);
                 self.quota.released();
@@ -658,30 +615,6 @@ impl ProgressState {
         }
         record.changed.notify_all();
         true
-    }
-
-    fn complete_receive(request: &mut Request, completion: sys::Completion) -> Result<()> {
-        let resources = request
-            .resources
-            .as_mut()
-            .ok_or(Error::Internal("missing RDMA receive owner"))?;
-        let receipt = resources.connection.receive_queue.complete(completion)?;
-        let receive = request
-            .receive
-            .as_ref()
-            .ok_or(Error::Protocol("RDMA unexpected receive"))?;
-        if !Arc::ptr_eq(&receipt, receive) {
-            return Err(Error::Protocol("RDMA receive grant owner mismatch"));
-        }
-        let grant = resources.grant_mut()?;
-        if !grant.window_bound || grant.rkey != receipt.rkey {
-            return Err(Error::Protocol("RDMA receive changed grant authority"));
-        }
-        grant.window_bound = false;
-        let mut usage = grant._lease.usage.lock().unwrap_or_else(|p| p.into_inner());
-        usage.completed_receives += 1;
-        usage.completed_window_invalidations += 1;
-        Ok(())
     }
 
     pub(in crate::transport::rdma) fn tick(
@@ -787,15 +720,12 @@ impl ProgressState {
         *cursor = cursor.wrapping_add(1);
         let pending_qps = records
             .iter()
-            .filter(|record| {
-                record.actions.load(Ordering::Acquire) & WORK != 0
-                    && record
-                        .state
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .work
-                        .as_ref()
-                        .is_some_and(|work| work.queue.pending())
+            .enumerate()
+            .filter(|(index, record)| {
+                record.send_queue.outstanding() != 0
+                    && !records[..*index]
+                        .iter()
+                        .any(|other| Arc::ptr_eq(&other.connection, &record.connection))
             })
             .count();
         let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());

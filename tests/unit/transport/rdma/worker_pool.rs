@@ -155,13 +155,16 @@ fn endpoint_arrays(runtime: &RdmaTransport, expected: usize) {
                     assert!(state.phase == Phase::Closed);
                     continue;
                 };
-                if resources.connection.closed {
+                if resources.connection.lock().unwrap().closed {
                     continue;
                 }
-                assert_eq!(resources.connection.incarnation, Some(peer.local));
+                assert_eq!(
+                    resources.connection.lock().unwrap().incarnation,
+                    Some(peer.local)
+                );
                 assert_eq!(
                     crate::transport::rdma::tests::cq_lane_owner(
-                        resources.connection.handles.cq as usize
+                        resources.connection.lock().unwrap().handles.cq as usize
                     ),
                     lane
                 );

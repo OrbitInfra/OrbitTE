@@ -1192,10 +1192,11 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                             let state = record.lock().unwrap();
                             let resources = state.resources.as_ref().unwrap();
                             assert!(resources.grant.is_none());
+                            let connection = resources.connection.lock().unwrap();
                             pairs.push((
                                 lane_id,
-                                resources.connection.incarnation.unwrap().encode(),
-                                resources.connection.handles.qp as usize,
+                                connection.incarnation.unwrap().encode(),
+                                connection.handles.qp as usize,
                             ));
                         }
                     }

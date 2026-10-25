@@ -48,9 +48,9 @@ Complete OrbitTE's native host-RDMA stage before resuming OrbitKV integration.
 Persistent MR/QP resources, multirail dispatch, worker/CQ lanes, NUMA binding
 and unified event consumption have scoped native evidence. Fixed-width
 concurrent QP multiplexing, periodic monitor recovery and complete physical
-fault/independent acceptance remain open. QP-owned SQ/RQ accounting and exact
-receive-message dispatch are implemented as prerequisites; wire grants still
-use QPs exclusively.
+fault/independent acceptance remain open. QP-owned SQ/RQ accounting, independent
+runtime grant records and exact completion dispatch are implemented. The public
+handshake still uses QPs exclusively; fixed-width activation remains open.
 
 The [architecture](architecture.md#source-reading-order) provides a reading
 path through transport, context, peer, grant and progress owners. The

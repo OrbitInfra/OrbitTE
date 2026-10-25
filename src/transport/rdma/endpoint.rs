@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, Weak};
 
 use super::cq_lane::{CqLane, Record};
-use super::{ConnectionId, Phase, RdmaGrant};
+use super::{ConnectionId, RdmaGrant};
 use crate::{Error, Result, SourceEpoch, TransferOp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,12 +85,13 @@ impl RdmaEndpoint {
             .map_err(|_| Error::Internal("RDMA endpoint QP array poisoned"))?;
         if let Some(qp) = qps
             .iter_mut()
-            .find(|qp| Arc::ptr_eq(&qp.record, &grant.record))
+            .find(|qp| Arc::ptr_eq(&qp.record.connection, &grant.record.connection))
         {
             if !qp.peer.same_pair(&peer) || !qp.lane.ptr_eq(&Arc::downgrade(&grant.progress)) {
                 return Err(Error::Protocol("RDMA endpoint QP identity changed"));
             }
             qp.peer = peer;
+            qp.record = Arc::clone(&grant.record);
         } else {
             // QPs are demand-created because one wire grant exclusively owns a QP.
             // Every actual QP is charged by the transport's aggregate limit.
@@ -112,7 +113,7 @@ impl RdmaEndpoint {
         // A terminal bit only removes lookup permission; it never proves drain.
         let mut index = 0;
         while index < qps.len() {
-            let closed = qps[index].record.lock()?.phase == Phase::Closed;
+            let closed = qps[index].record.connection.lock()?.closed;
             if closed {
                 qps.swap_remove(index);
             } else {

@@ -209,7 +209,9 @@ pub(in super::super) fn retained(
             let request = trace.injected_record.as_ref().unwrap().lock().unwrap();
             assert!(request.phase == Phase::Retained);
             let resources = request.resources.as_ref().unwrap();
-            assert!(resources.connection.closed && resources.connection.lease.is_none());
+            let connection = resources.connection.lock().unwrap();
+            assert!(connection.closed && connection.lease.is_none());
+            drop(connection);
             let grant = resources.grant().unwrap();
             assert!(trace.active_mrs.contains(&(grant.handles.mr as usize)));
             offset =
@@ -218,6 +220,8 @@ pub(in super::super) fn retained(
                 request.work.as_ref().is_some_and(|w| w.queue.pending())
                     || request.resources.as_ref().is_some_and(|r| r
                         .connection
+                        .lock()
+                        .unwrap()
                         .receive_queue
                         .outstanding()
                         != 0)

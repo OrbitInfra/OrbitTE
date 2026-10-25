@@ -292,6 +292,9 @@ impl RdmaContext {
         psn: u32,
         local: &mut Descriptor,
     ) -> Result<(ConnectionId, u64)> {
+        let owner = Arc::clone(&resources.connection);
+        let mut connection = owner.lock()?;
+        owner.require_live()?;
         let mut state = self
             .state
             .lock()
@@ -300,14 +303,14 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.verify_address(device)?;
-        let reused = resources.connection.incarnation.is_some();
-        let incarnation = match resources.connection.incarnation {
+        let reused = connection.incarnation.is_some();
+        let incarnation = match connection.incarnation {
             Some(id) => id,
             None => ConnectionId::next(device.domain, &mut device.next_connection)?,
         };
         let generation = device.next_grant;
         device.next_grant = generation.checked_add(1).ok_or(Error::ResourceExhausted)?;
-        resources.connection.incarnation = Some(incarnation);
+        connection.incarnation = Some(incarnation);
         let grant = resources.grant_mut()?;
         grant.connection = Some(incarnation);
         grant.generation = generation;
@@ -315,9 +318,9 @@ impl RdmaContext {
         let length = grant.buffer.len();
         // The record lock excludes posting and retirement throughout construction.
         let code = if reused {
-            *local = resources.connection.local;
-            let EndpointResources { connection, grant } = resources;
-            let grant = grant
+            *local = connection.local;
+            let grant = resources
+                .grant
                 .as_mut()
                 .ok_or(Error::Internal("missing reused grant"))?;
             unsafe {
@@ -331,8 +334,10 @@ impl RdmaContext {
                 )
             }
         } else {
-            let EndpointResources { connection, grant } = resources;
-            let grant = grant.as_mut().ok_or(Error::Internal("missing new grant"))?;
+            let grant = resources
+                .grant
+                .as_mut()
+                .ok_or(Error::Internal("missing new grant"))?;
             unsafe {
                 (self.verbs.open)(
                     &mut connection.handles,
@@ -350,7 +355,7 @@ impl RdmaContext {
                 )
             }
         };
-        if !reused && !resources.connection.handles.qp.is_null() {
+        if !reused && !connection.handles.qp.is_null() {
             device
                 .usage
                 .lock()
@@ -387,6 +392,11 @@ impl RdmaContext {
             local.rkey = key;
         }
         local.address = buffer as u64;
+        connection.local = Descriptor {
+            address: 0,
+            rkey: 0,
+            ..*local
+        };
         Ok((incarnation, generation))
     }
 

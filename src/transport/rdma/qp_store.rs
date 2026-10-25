@@ -11,7 +11,7 @@ struct Idle {
     claim: u64,
 }
 
-/// Strong native owners remain charged after lookup detachment and through retirement.
+/// CQ-local grant lookup retains shared physical QPs through native retirement.
 pub(super) struct QpStore {
     live: Vec<Arc<Record>>,
     retiring: Vec<Arc<Record>>,
@@ -44,6 +44,7 @@ impl QpStore {
     }
 
     pub(super) fn publish(&mut self, endpoint: Arc<Record>) -> Result<()> {
+        endpoint.require_live()?;
         if self.len() >= self.capacity
             || endpoint.terminal.load(Ordering::Acquire)
             || self
@@ -63,6 +64,7 @@ impl QpStore {
         self.idle
             .retain(|entry| !Arc::ptr_eq(&entry.endpoint, endpoint));
         endpoint.terminal.store(true, Ordering::Release);
+        endpoint.connection.fence();
         if let Some(index) = self
             .live
             .iter()
@@ -73,11 +75,29 @@ impl QpStore {
         self.idle.len() != was_idle
     }
 
+    pub(super) fn affiliates(&self, record: &Arc<Record>) -> Vec<Arc<Record>> {
+        if !self
+            .live
+            .iter()
+            .chain(&self.retiring)
+            .any(|entry| Arc::ptr_eq(entry, record))
+        {
+            return Vec::new();
+        }
+        self.live
+            .iter()
+            .chain(&self.retiring)
+            .filter(|entry| Arc::ptr_eq(&entry.connection, &record.connection))
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn detach_all(&mut self) -> usize {
         let idle = self.idle.len();
         self.idle.clear();
         for endpoint in &self.live {
             endpoint.terminal.store(true, Ordering::Release);
+            endpoint.connection.fence();
         }
         self.retiring.append(&mut self.live);
         idle
@@ -87,7 +107,7 @@ impl QpStore {
         self.retiring.retain(|entry| !Arc::ptr_eq(entry, endpoint));
     }
 
-    pub(super) fn ready(&mut self, endpoint: &Arc<Record>, peer: Peer, claim: u64) -> Result<()> {
+    pub(super) fn ready(&mut self, endpoint: &Arc<Record>, peer: Peer, claim: u64) -> Result<bool> {
         endpoint.require_live()?;
         if !self.live.iter().any(|entry| Arc::ptr_eq(entry, endpoint))
             || self
@@ -97,12 +117,22 @@ impl QpStore {
         {
             return Err(Error::Internal("RDMA endpoint store READY ownership"));
         }
+        let previous = self
+            .idle
+            .iter()
+            .position(|entry| Arc::ptr_eq(&entry.endpoint.connection, &endpoint.connection));
+        let inserted = previous.is_none();
+        if let Some(index) = previous {
+            let old = self.idle.remove(index).endpoint;
+            old.terminal.store(true, Ordering::Release);
+            self.live.retain(|entry| !Arc::ptr_eq(entry, &old));
+        }
         self.idle.push(Idle {
             endpoint: Arc::clone(endpoint),
             peer,
             claim,
         });
-        Ok(())
+        Ok(inserted)
     }
 
     pub(super) fn claim(&mut self, matches: impl Fn(&Peer) -> bool) -> Option<(Arc<Record>, Peer)> {

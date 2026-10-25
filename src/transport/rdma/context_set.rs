@@ -258,7 +258,13 @@ impl RdmaTransport {
             .lock()?
             .resources
             .as_ref()
-            .map(|resources| Arc::clone(&resources.connection.device))
+            .map(|resources| {
+                resources
+                    .connection
+                    .lock()
+                    .map(|connection| Arc::clone(&connection.device))
+            })
+            .transpose()?
             .ok_or(Error::Internal("RDMA peer endpoint has no physical QP"))?;
         let mut contexts = self
             .context_set
