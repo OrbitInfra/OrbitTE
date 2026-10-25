@@ -3279,6 +3279,13 @@ mirror these owners. Native libtests moved from
 its exact selector matches one test before deployment. Historical frozen
 evidence uses the selector of its recorded commit.
 
+Lost-completion checks reconcile each QP's accepted and delivered WR identities
+with its outstanding debt at both native CQ barriers. Dropping one CQE does not
+require exactly one outstanding WR: another real CQE may still be unconsumed
+when the software deadline fences the context. The injected WR must remain in
+accepted work and absent from delivered work, with its MR and DMA loan retained;
+all unresolved debt remains charged until actual native drain.
+
 The concurrent native observer counts records with a current grant separately
 from idle cached connections. Byte-weighted placement of unequal tails can
 need a new QP on one rail while an old QP remains idle on the other. A recorded

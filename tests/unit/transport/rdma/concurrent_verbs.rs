@@ -742,9 +742,23 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         if trace.mode.ends_with("peer-exit") {
             assert!(trace.injected_record.is_none());
         } else if trace.mode.ends_with("lost-send-cqe") {
-            assert_eq!(
-                debt, 1,
-                "the dropped native CQE must remain charged until CQ drain"
+            let missing = trace.injected_wr.unwrap();
+            let accepted = trace
+                .accepted_wr
+                .iter()
+                .filter(|(cq, qpn, _)| *cq == missing.0 && *qpn == missing.1)
+                .count();
+            let delivered = trace
+                .delivered_wr
+                .iter()
+                .filter(|(cq, qpn, _)| *cq == missing.0 && *qpn == missing.1)
+                .count();
+            assert!(trace.accepted_wr.contains(&missing));
+            assert!(!trace.delivered_wr.contains(&missing));
+            assert!(debt >= 1, "the dropped native CQE escaped before CQ drain");
+            println!(
+                "ORBITTE_LOST_CQE_DEBT {{\"accepted\":{accepted},\"delivered\":{delivered},\"unresolved\":{debt},\"missing\":[{},{},{}]}}",
+                missing.0, missing.1, missing.2
             );
         } else if trace.shape.parents == 8 {
             assert_eq!(trace.injected_window, 2);
