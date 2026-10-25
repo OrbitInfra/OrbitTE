@@ -3279,6 +3279,18 @@ mirror these owners. Native libtests moved from
 its exact selector matches one test before deployment. Historical frozen
 evidence uses the selector of its recorded commit.
 
+The concurrent native observer counts records with a current grant separately
+from idle cached connections. Byte-weighted placement of unequal tails can
+need a new QP on one rail while an old QP remains idle on the other. A recorded
+quarter-tail case has forty live grants, forty-one cached/active QPs, thirty-nine
+reused connections and one new connection in its second round. That is valid
+path selection. The gate checks all earlier healthy QP identities remain,
+every current grant is either newly connected or reused, and equal-size plans
+retain the exact fixed-QP reuse assertions. A test-only bilateral checkpoint
+records each peer's QP count before the rejected parent and requires it to
+remain unchanged afterward. SQ/RQ and byte limits, the ten-second admission
+guard, sentinels and actual native drain checks are unchanged.
+
 The external qualification directory is
 `/root/orbitte-artifacts/rdma-workers-pool-20261025/`. Source and native gates
 are in progress; no new hardware acceptance is claimed here yet. Complete P4,

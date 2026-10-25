@@ -98,7 +98,19 @@ fn owners(engine: &TransferEngine) -> Vec<(usize, Arc<Record>)> {
                 .unwrap()
                 .endpoints
                 .snapshot(&mut records);
-            result.extend(records.into_iter().map(|record| (id, record)));
+            result.extend(
+                records
+                    .into_iter()
+                    .filter(|record| {
+                        record
+                            .lock()
+                            .unwrap()
+                            .resources
+                            .as_ref()
+                            .is_some_and(|resources| resources.grant.is_some())
+                    })
+                    .map(|record| (id, record)),
+            );
         }
     }
     result
@@ -388,7 +400,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     }
     native::retain_memory(&memory);
     let rounds = if fault || paused { 1 } else { 2 };
-    let mut first = None;
+    let mut first: Option<Vec<Observation>> = None;
+    let mut previous_opened = 0;
+    let mut previous_reused = 0;
     let mut retired = false;
     for round in 0..rounds {
         let seed = round + generation.map_or(0, |g| 10 * g);
@@ -449,10 +463,17 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     stats.active_grants,
                     stats.direct_bytes
                 ),
-                (count, count, shape.parents * shape.payload)
+                (
+                    count + stats.idle_endpoints,
+                    count,
+                    shape.parents * shape.payload
+                )
             );
+            assert!(stats.active_endpoints <= 2 * count);
             assert_eq!(stats.peak_work_requests, sq_limit);
             native::admitted(owners(&engine));
+            stream.write_all(&[0x3e]).unwrap();
+            token(&mut stream, 0x3f);
             let rejected = transfer(
                 shape,
                 &engine,
@@ -482,8 +503,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     after.active_grants,
                     after.direct_bytes
                 ),
-                (count, count, shape.parents * shape.payload)
+                (stats.active_endpoints, count, shape.parents * shape.payload)
             );
+            assert_eq!(after.idle_endpoints, stats.idle_endpoints);
             println!(
                 "ORBITTE_CONCURRENT_ADMISSION {{\"round\":{round},\"sq_debt\":{},\"grants\":{},\"direct_bytes\":{},\"endpoints\":{},\"rejected_before_new_qp\":true}}",
                 after.work_requests,
@@ -628,6 +650,10 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 }
             }
         } else {
+            token(&mut stream, 0x3e);
+            let connections_before_rejection =
+                engine.stats().unwrap().rdma.unwrap().opened_connections;
+            stream.write_all(&[0x3f]).unwrap();
             token(&mut stream, 0x40);
             let stats = engine.stats().unwrap().rdma.unwrap();
             assert_eq!(
@@ -642,14 +668,14 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 stats.peak_receive_work_requests <= rq_limit
                     && stats.peak_work_requests <= rq_limit
             );
+            assert_eq!(
+                stats.opened_connections, connections_before_rejection,
+                "source opened a QP for an atomically rejected parent"
+            );
             if wide {
                 assert_eq!(stats.receive_credits, count);
                 assert_eq!(stats.peak_receive_credits, count);
                 assert_eq!(stats.receive_admission_rejections, round as u64 + 1);
-                assert_eq!(
-                    stats.opened_connections, count as u64,
-                    "source opened a QP for an atomically rejected parent"
-                );
                 native::admitted(owners(&engine));
                 println!(
                     "ORBITTE_RQ_ADMISSION {{\"parents\":{},\"slices_per_parent\":{},\"capacity\":{rq_limit},\"credits\":{},\"posted_receives\":{},\"unused_capacity\":{},\"rejections\":{},\"rejected_before_source_qp\":true}}",
@@ -729,24 +755,48 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         );
         if !fault && !paused {
             let snapshot = connections(&engine);
-            assert_eq!(snapshot.len(), count);
+            assert!((count..=2 * count).contains(&snapshot.len()));
             if let Some(first) = &first {
-                assert_eq!(
-                    &snapshot, first,
-                    "every actual QP must survive concurrent grant reuse"
+                assert!(
+                    first.iter().all(|connection| snapshot.contains(connection)),
+                    "a healthy cached QP was replaced without eviction"
                 );
-            } else {
-                first = Some(snapshot);
             }
             let stats = engine.stats().unwrap().rdma.unwrap();
+            let opened = stats.opened_connections - previous_opened;
+            let reused = stats.reused_connections - previous_reused;
             assert_eq!(
-                (stats.completed_reusable_grants, stats.reused_connections),
-                (
-                    count as u64 * (round as u64 + 1),
-                    count as u64 * round as u64
-                )
+                stats.completed_reusable_grants,
+                count as u64 * (round as u64 + 1)
             );
+            assert_eq!(opened + reused, count as u64);
+            assert_eq!(
+                (stats.closed_connections, stats.evicted_connections),
+                (0, 0)
+            );
+            if round != 0 {
+                assert!(reused > 0);
+            }
+            if shape.range(0).len() == shape.range(shape.slices - 1).len() {
+                assert_eq!(snapshot.len(), count);
+                assert_eq!(
+                    (opened, reused),
+                    if round == 0 {
+                        (count as u64, 0)
+                    } else {
+                        (0, count as u64)
+                    }
+                );
+            }
+            println!(
+                "ORBITTE_CONNECTION_REUSE {{\"round\":{round},\"grants\":{count},\"cached_qps\":{},\"opened_delta\":{opened},\"reused_delta\":{reused},\"previous_qps_preserved\":true}}",
+                snapshot.len()
+            );
+            previous_opened = stats.opened_connections;
+            previous_reused = stats.reused_connections;
+            first = Some(snapshot);
         }
+
         println!(
             "ORBITTE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
             successful, accepted

@@ -32,7 +32,7 @@ implemented with scoped validation. Two physical RNICs per host pass a declared
 CPU DRAM/RoCEv2 profile for cross-rail READ/WRITE, concurrent parents, aggregate
 quotas, whole-parent source RQ admission, connected reuse, registration rollback
 and native fault/drain ownership. The extended profile includes eight parents,
-up to 5 MiB each, folded tails and 32/40-QP reuse. Native QP ERR, lost SQ/RQ
+up to 5 MiB each, folded tails, 32/40 active slice grants and connected QP reuse. Native QP ERR, lost SQ/RQ
 completions, source/requester death and repeated fresh-process restart pass
 scoped checks with separate endpoint destruction deadlines. Real CQ/PD cleanup
 errors preserve the affected native owners through caller Drop. Completely
