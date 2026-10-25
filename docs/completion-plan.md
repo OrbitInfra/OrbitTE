@@ -394,8 +394,9 @@ activate simultaneous wire grants. QP-owned receive buffers and binding/key
 dispatch now exist in `qp/receive_queue.rs`; `ReceiveWork` holds independent
 grant receipt state. Concurrent grant records, multi-namespace CQ lookup and
 fixed-width peer construction still have to be connected.
-Source `e7adce9` passes the existing 180-case two-host profile plus shared-SQ
-CPU contracts; [qualification](qualification.md) pins the evidence and limits.
+Source `6b34ce7` passes the existing 180-case two-host profile on the new
+SQ/RQ owners plus CPU receipt-dispatch contracts; [qualification](qualification.md)
+pins the evidence and distinguishes CPU multiplexing from exclusive native grants.
 No new P4 milestone is added for this prerequisite.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and

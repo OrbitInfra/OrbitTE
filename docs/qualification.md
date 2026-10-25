@@ -25,8 +25,22 @@ donated slot still pending, prepared-slot preservation, duplicate/stale/foreign
 messages, capacity, rejected/uncertain posts and drain. Existing source CQ,
 MR cleanup and connected-reuse fixtures exercise the new owner on the actual
 transport path. Native failure assertions inspect the QP's RQ debt and credits.
-This delivery's external evidence is recorded under
-`/root/orbitte-artifacts/rdma-receive-dispatch-20261025`.
+Source `6b34ce7` passes all 23 local gates on stable and Rust 1.85, including
+207 all-feature unit tests per compiler, frozen TENT geometry and eleven
+hardware-runner controls. Both binaries pass the existing 90-case two-host,
+two-RNIC CPU DRAM RoCEv2 profile: 180 configurations across polling/event
+progress and 1/2/3/6 lanes. All 408 children are reaped, including 24 deliberate
+kills. Native RQ assertions reconcile queue-owned debt and credits before CQ
+destruction; healthy reuse requires no retained message MR or RQ debt.
+Both RNIC locks are available after the run, with unchanged node/provider
+identities and no GPU compute used.
+
+The actual frozen TENT CPU comparison passes 25 observations and six negative
+controls. Its Rust/C++/TENT binary hashes and identical merge tree are checked.
+This delivery's gate manifests, raw native audit and CPU evidence are recorded
+under `/root/orbitte-artifacts/rdma-receive-dispatch-20261025`;
+`final-delivery.json` identifies the qualified source and documentation-only
+delivery commit. The source CI matrix and strict documentation checks pass.
 
 The public v12 path still has one active grant per QP. Multiple receipt
 dispatch is a CPU contract until concurrent grant records, multi-namespace CQ
