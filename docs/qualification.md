@@ -13,6 +13,29 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The QP receive-owner delivery moves receive buffers, message MRs and parent
+admission credits into `ConnectionResources::receive_queue`. `ReceiveWork`
+holds an independent full-binding/key receipt. Successful CQEs identify the
+consumed slot, then dispatch the message to its exact receipt; releasing that
+grant preserves other pending or prepared buffers. Native RQ depth is
+provisioned from `max_send_wr`, with the existing separate RQ CQ quota.
+
+CPU contracts cover reversed grant-message order, early grant release with a
+donated slot still pending, prepared-slot preservation, duplicate/stale/foreign
+messages, capacity, rejected/uncertain posts and drain. Existing source CQ,
+MR cleanup and connected-reuse fixtures exercise the new owner on the actual
+transport path. Native failure assertions inspect the QP's RQ debt and credits.
+This delivery's external evidence is recorded under
+`/root/orbitte-artifacts/rdma-receive-dispatch-20261025`.
+
+The public v12 path still has one active grant per QP. Multiple receipt
+dispatch is a CPU contract until concurrent grant records, multi-namespace CQ
+lookup and fixed-width construction are connected and qualified. Full P4,
+physical port/device faults, GPUDirect, performance and independent acceptance
+remain open. The previous qualified source below remains historical evidence.
+
+## Previous qualified native source: QP send owner
+
 The QP send-owner delivery moves physical send depth and unresolved WR IDs to
 `ConnectionResources::send_queue`. Each grant's `SendWork` borrows this owner
 for payload, MW bind and completion SEND. Duplicate/foreign completions cannot

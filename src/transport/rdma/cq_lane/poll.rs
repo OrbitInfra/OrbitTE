@@ -149,7 +149,13 @@ impl ProgressState {
                     .resources
                     .as_ref()
                     .map_or(0, |r| r.connection.send_queue.outstanding());
-                receive_debt += usize::from(request.receive.as_ref().is_some_and(|r| r.pending()));
+                if let Some(resources) = &request.resources {
+                    let queue = &resources.connection.receive_queue;
+                    receive_debt += queue.outstanding();
+                    let (mrs, bytes) = queue.memory_usage();
+                    message_mrs += mrs;
+                    message_bytes += bytes;
+                }
                 if let Some(message) = request
                     .resources
                     .as_ref()
@@ -200,7 +206,10 @@ impl ProgressState {
             .as_ref()
             .is_some_and(|r| r.connection.send_queue.outstanding() != 0)
             || request.work.as_ref().is_some_and(|w| w.queue.pending())
-            || request.receive.as_ref().is_some_and(|r| r.pending())
+            || request
+                .resources
+                .as_ref()
+                .is_some_and(|r| r.connection.receive_queue.outstanding() != 0)
         {
             return Err(("RDMA grant has unresolved completion debt", libc::EBUSY));
         }
@@ -233,7 +242,10 @@ impl ProgressState {
             return Err(("RDMA finish phase changed", libc::EIO));
         }
         let Request {
-            resources, finish, ..
+            resources,
+            finish,
+            receive,
+            ..
         } = &mut *request;
         let resources = resources
             .as_mut()
@@ -246,6 +258,12 @@ impl ProgressState {
             .as_mut()
             .ok_or(("missing RDMA finish grant", libc::EIO))?;
         grant.close_drained(&resources.connection, receipt, self.verbs)?;
+        if let Some(work) = receive {
+            resources
+                .connection
+                .receive_queue
+                .release(work, self.verbs)?;
+        }
         if let Buffer::Direct { loan, .. } = &mut grant.buffer {
             drop(loan.take());
         }
@@ -284,7 +302,10 @@ impl ProgressState {
                 .work
                 .as_ref()
                 .is_some_and(|work| work.queue.pending())
-            || request.receive.as_ref().is_some_and(|r| r.pending())
+            || request
+                .resources
+                .as_ref()
+                .is_some_and(|r| r.connection.receive_queue.outstanding() != 0)
         {
             drop(request);
             self.fail(Fault::Internal("RDMA close with unresolved work"));
@@ -301,6 +322,7 @@ impl ProgressState {
         if let Some(grant) = &mut resources.grant {
             grant.close(&resources.connection, self.verbs)?;
         }
+        resources.connection.receive_queue.close(self.verbs)?;
         Self::unlock(&mut request)?;
         self.control
             .lock()
@@ -341,8 +363,9 @@ impl ProgressState {
         // Shared CQ destruction, after all QPs, is the cancellation receipt.
         for record in records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(resources) = &request.resources {
+            if let Some(resources) = &mut request.resources {
                 resources.connection.send_queue.quiesce();
+                resources.connection.receive_queue.quiesce();
             }
             if let Some(work) = &mut request.work {
                 if work.queue.quiesce().is_err() {
@@ -350,9 +373,6 @@ impl ProgressState {
                     self.retain("RDMA grant work before native SQ drain", libc::EBUSY);
                     return;
                 }
-            }
-            if let Some(receive) = &mut request.receive {
-                receive.quiesce();
             }
             self.quota.released();
             if let Some(resources) = &mut request.resources {
@@ -362,6 +382,12 @@ impl ProgressState {
                         self.retain(operation, code);
                         return;
                     }
+                }
+                if let Err((operation, code)) = resources.connection.receive_queue.close(self.verbs)
+                {
+                    drop(request);
+                    self.retain(operation, code);
+                    return;
                 }
             }
         }
@@ -583,11 +609,11 @@ impl ProgressState {
         let (Some(resources), Some(receive)) = (resources, receive) else {
             return false;
         };
-        if receive.completed {
+        if receive.completed() {
             return false;
         }
         if Instant::now() >= receive.deadline {
-            let pending = receive.pending();
+            let pending = resources.connection.receive_queue.outstanding() != 0;
             request.failure = Some(Fault::Timeout);
             drop(request);
             if pending {
@@ -596,82 +622,62 @@ impl ProgressState {
             record.changed.notify_all();
             return false;
         }
-        if receive.posted {
+        if receive.posted() {
             return false;
         }
-        let Some(message) = resources.grant.as_ref().and_then(|g| g.message.as_ref()) else {
-            request.failure = Some(Fault::Internal("missing RDMA receive message"));
-            record.changed.notify_all();
-            return false;
-        };
         if let Err(error) = self.asynchronous.check() {
             drop(request);
             self.fail(Fault::from_error(error));
             return false;
         }
-        match receive.reserve(self.config.max_cqes) {
+        let connection = &mut resources.connection;
+        let result = connection.receive_queue.post(
+            receive.id,
+            self.config.max_cqes,
+            &mut connection.handles,
+            self.verbs,
+        );
+        match result {
             Err(Error::ResourceExhausted) => {
                 self.wait_quota(true);
                 return false;
             }
             Err(error) => {
-                request.failure = Some(Fault::from_error(error));
-                record.changed.notify_all();
-                return false;
+                let fault = Fault::from_error(error);
+                let pending = connection.receive_queue.outstanding() != 0;
+                request.failure = Some(fault);
+                drop(request);
+                self.quota.released();
+                if pending {
+                    self.fail(fault);
+                }
             }
-            Ok(()) => {}
-        }
-        let mut result = sys::PostResult::default();
-        let code = unsafe {
-            (self.verbs.post_receive)(
-                &mut resources.connection.handles,
-                &message.handles,
-                receive.id,
-                message.memory.address.as_ptr() as u64,
-                message.memory.length,
-                &mut result,
-            )
-        };
-        if let Err(error) = receive.posted(code, result) {
-            let fault = Fault::from_error(error);
-            let pending = receive.pending();
-            request.failure = Some(fault);
-            drop(request);
-            self.quota.released();
-            if pending {
-                self.fail(fault);
+            Ok(()) => {
+                drop(request);
             }
-        } else {
-            drop(request);
         }
         record.changed.notify_all();
         true
     }
 
     fn complete_receive(request: &mut Request, completion: sys::Completion) -> Result<()> {
-        let receive = request
-            .receive
-            .as_mut()
-            .ok_or(Error::Protocol("RDMA unexpected receive"))?;
-        receive.complete(completion)?;
         let resources = request
             .resources
             .as_mut()
             .ok_or(Error::Internal("missing RDMA receive owner"))?;
-        let grant = resources.grant_mut()?;
-        let message = grant
-            .message
+        let receipt = resources.connection.receive_queue.complete(completion)?;
+        let receive = request
+            .receive
             .as_ref()
-            .ok_or(Error::Internal("missing RDMA receive bytes"))?;
-        // The actual successful RQ CQE ended this receive's DMA; no new receive is posted.
-        if message.memory.bytes() != receive.expected {
-            return Err(Error::Protocol("RDMA received grant binding mismatch"));
+            .ok_or(Error::Protocol("RDMA unexpected receive"))?;
+        if !Arc::ptr_eq(&receipt, receive) {
+            return Err(Error::Protocol("RDMA receive grant owner mismatch"));
         }
-        if !grant.window_bound || grant.rkey != receive.rkey {
+        let grant = resources.grant_mut()?;
+        if !grant.window_bound || grant.rkey != receipt.rkey {
             return Err(Error::Protocol("RDMA receive changed grant authority"));
         }
         grant.window_bound = false;
-        receive.completed = true;
         let mut usage = grant._lease.usage.lock().unwrap_or_else(|p| p.into_inner());
         usage.completed_receives += 1;
         usage.completed_window_invalidations += 1;
@@ -858,7 +864,7 @@ impl ProgressState {
                             request
                                 .receive
                                 .as_ref()
-                                .filter(|receive| receive.pending())
+                                .filter(|receive| !receive.completed())
                                 .map(|receive| receive.deadline),
                         )
                         .min()

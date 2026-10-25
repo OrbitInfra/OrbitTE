@@ -247,7 +247,13 @@ into the preceding slice. The entire requested range remains leased even after
 a window's CQEs have arrived. Each request keeps an exclusive QP window within
 the shared CQ.
 
-`max_send_wr` defaults to 16 and accepts 1..64 per QP. `max_cqes` defaults to
+`max_send_wr` defaults to 16 and accepts 1..64 per QP. It provisions both
+native SQ and RQ depths; the physical receive owner also bounds its slots and
+receipt table to this width. SQ and RQ keep separate outstanding-WR accounts.
+Receive-buffer identity and grant receipt identity are separated as described
+in [QP receive ownership](architecture.md#qp-receive-ownership). Public wire
+grants remain exclusive while concurrent records are being connected.
+`max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
 1..4096. The provider must return the requested CQ and QP capacities. The worker

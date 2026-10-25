@@ -612,17 +612,27 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .filter(|(rq, qpn, _)| *rq == owner.receive_cq && *qpn == owner.qpn)
                 .count();
             let debt = state
-                .receive
+                .resources
                 .as_ref()
-                .is_some_and(|receive| receive.pending());
+                .unwrap()
+                .connection
+                .receive_queue
+                .outstanding();
             assert_eq!(
-                usize::from(debt),
+                debt,
                 accepted - delivered,
                 "source RQ debt escaped before native CQ drain"
             );
-            if debt {
+            if debt != 0 {
                 assert!(
-                    state.receive.as_ref().unwrap().credits.is_some(),
+                    state
+                        .resources
+                        .as_ref()
+                        .unwrap()
+                        .connection
+                        .receive_queue
+                        .credited()
+                        == debt,
                     "source RQ admission credit escaped before native CQ drain"
                 );
                 let grant = state.resources.as_ref().unwrap().grant().unwrap();
@@ -787,9 +797,9 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     }
     if observed && trace.lost_receive {
         let owner = trace.injected_record.as_ref().unwrap().lock().unwrap();
-        let receive = owner.receive.as_ref().unwrap();
+        let receive = &owner.resources.as_ref().unwrap().connection.receive_queue;
         assert!(
-            receive.pending() && receive.credits.is_some(),
+            receive.outstanding() == 1 && receive.credited() == 1,
             "a dropped receive CQE lost its credit before native CQ drain"
         );
         drop(owner);

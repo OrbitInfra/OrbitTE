@@ -100,7 +100,7 @@ impl CqLane {
                 && !request.message_sent
                 && work.operation == slice::Operation::Bind
                 && request.receive.as_ref().is_some_and(|r| {
-                    r.completed && !r.pending() && r.expected == *binding && r.rkey == grant.rkey
+                    r.completed() && r.expected == *binding && r.rkey == grant.rkey
                 })
         };
         if !valid {
@@ -241,6 +241,11 @@ impl CqLane {
             || request.close_requested
             || request.finish.is_some()
             || request.resources.as_ref().is_none_or(|r| r.grant.is_some())
+            || request.resources.as_ref().is_some_and(|r| {
+                r.connection.send_queue.outstanding() != 0
+                    || r.connection.receive_queue.outstanding() != 0
+                    || r.connection.receive_queue.memory_usage() != (0, 0)
+            })
             || request.work.is_some()
             || request.receive.is_some()
             || record.actions.load(Ordering::Acquire) != 0

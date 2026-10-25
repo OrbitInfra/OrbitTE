@@ -552,6 +552,8 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
                 assert_eq!(qp.state, ibverbs_sys::ibv_qp_state::IBV_QPS_RTS);
                 let connection = &resources.connection;
                 assert_eq!(connection.send_queue.outstanding(), 0);
+                assert_eq!(connection.receive_queue.outstanding(), 0);
+                assert_eq!(connection.receive_queue.memory_usage(), (0, 0));
                 assert!(!connection.send_queue.drained());
                 let remote = connection.remote.unwrap();
                 result.push((

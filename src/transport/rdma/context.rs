@@ -234,7 +234,7 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
-        // The grant record owns the stable control bytes through native teardown.
+        // The send grant or physical RQ owns these bytes through native teardown.
         check("ibv_reg_mr completion message", unsafe {
             (self.verbs.register_memory)(
                 handles,

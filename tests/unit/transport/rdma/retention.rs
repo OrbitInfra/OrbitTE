@@ -216,7 +216,11 @@ pub(in super::super) fn retained(
                 Some((grant.buffer.address().as_ptr() as u64 - memory.base_address()) as usize);
             assert!(
                 request.work.as_ref().is_some_and(|w| w.queue.pending())
-                    || request.receive.as_ref().is_some_and(|r| r.pending())
+                    || request.resources.as_ref().is_some_and(|r| r
+                        .connection
+                        .receive_queue
+                        .outstanding()
+                        != 0)
             );
         } else {
             assert_eq!(trace.registered, trace.deregistered);

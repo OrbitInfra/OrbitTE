@@ -47,7 +47,7 @@ pub struct RdmaConfig {
     pub max_direct_bytes: usize,
     /// TENT's base slice size. Large requests adapt to a bounded slice count.
     pub block_size: usize,
-    /// Maximum unresolved signaled WRs on a physical QP, shared by its grants (1..=64).
+    /// Maximum unresolved signaled sends per QP (1..=64); also provisions RQ depth.
     pub max_send_wr: usize,
     /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
     pub max_cqes: usize,

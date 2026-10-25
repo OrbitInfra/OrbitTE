@@ -10,7 +10,7 @@ use super::cq::{CompletionEvents, RdmaCq};
 use super::endpoint::Peer;
 use super::protocol::BoundDone;
 use super::qp_store::QpStore;
-use super::receive::{MessageBuffer, ReceiveQueue};
+use super::receive::{MessageBuffer, ReceiveWork};
 use super::{
     Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaGrant, RdmaProgressMode,
     RdmaStats, Resources, events, slice, sys,
@@ -77,7 +77,7 @@ pub(super) struct Request {
     pub(super) claim: u64,
     finish: Option<GrantDrain>,
     work: Option<Work>,
-    receive: Option<ReceiveQueue>,
+    receive: Option<Arc<ReceiveWork>>,
     message_sent: bool,
     payload_operation: Option<TransferOp>,
     mixed_operations: bool,

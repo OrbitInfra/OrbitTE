@@ -60,6 +60,8 @@ checkout for the implementation described here.
 - **Shared quotas.** Concurrent parents share SQ/RQ, byte and connection limits.
   Physical QPs own send depth and exact outstanding WRs across payload, bind
   and completion messages; grant work handles cannot release unresolved debt.
+  QP-owned receive buffers dispatch by exact binding/key, independently of
+  which grant supplied the buffer; concurrent wire grants remain in progress.
   Source admission reserves every slice's receive credit together before
   granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
