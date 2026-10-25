@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
 
-use super::{RdmaStats, progress, sys};
+use super::{RdmaStats, cq_lane, sys};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -25,7 +25,7 @@ pub(super) struct State {
     stopping: AtomicBool,
     route_fault: AtomicBool,
     completion_fault: AtomicI32,
-    progress: Mutex<Weak<progress::ProgressState>>,
+    progress: Mutex<Vec<Weak<cq_lane::ProgressState>>>,
 }
 
 impl State {
@@ -55,8 +55,12 @@ impl State {
         }
     }
 
-    pub(super) fn attach(&self, progress: Weak<progress::ProgressState>) {
-        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = progress;
+    pub(super) fn attach(&self, progress: Weak<cq_lane::ProgressState>) {
+        {
+            let mut lanes = self.progress.lock().unwrap_or_else(|p| p.into_inner());
+            lanes.retain(|lane| lane.strong_count() != 0);
+            lanes.push(progress);
+        }
         self.notify();
     }
 
@@ -65,14 +69,15 @@ impl State {
     }
 
     pub(super) fn notify(&self) {
-        let progress = self
-            .progress
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .upgrade();
-        if let Some(progress) = progress {
-            progress.wake();
-        }
+        let mut lanes = self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        lanes.retain(|lane| {
+            if let Some(lane) = lane.upgrade() {
+                lane.wake();
+                true
+            } else {
+                false
+            }
+        });
     }
 
     pub(super) fn lost_completion(&self, code: i32) {

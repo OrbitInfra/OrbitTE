@@ -5,11 +5,11 @@ use crate::{Error, Result, Topology};
 /// Wakes context progress when aggregate SQ/RQ completion debt returns capacity.
 #[derive(Default)]
 pub(super) struct CqQuota {
-    progress: Mutex<Vec<Weak<super::progress::ProgressState>>>,
+    progress: Mutex<Vec<Weak<super::cq_lane::ProgressState>>>,
 }
 
 impl CqQuota {
-    pub(super) fn attach(&self, state: &Arc<super::progress::ProgressState>) {
+    pub(super) fn attach(&self, state: &Arc<super::cq_lane::ProgressState>) {
         let mut progress = self.progress.lock().unwrap_or_else(|p| p.into_inner());
         progress.retain(|state| state.strong_count() != 0);
         progress.push(Arc::downgrade(state));

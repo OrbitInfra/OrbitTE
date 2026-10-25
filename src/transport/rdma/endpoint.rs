@@ -2,7 +2,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-use super::{DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, progress, slice, sys};
+use super::{DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, cq_lane, slice, sys};
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 pub(super) struct ConnectionLease {
@@ -153,6 +153,7 @@ impl ConnectionResources {
 }
 
 pub(super) struct GrantResources {
+    pub(super) _worker: super::workers::SliceLease,
     pub(super) device: Arc<RdmaContext>,
     pub(super) handles: sys::MemoryHandles,
     pub(super) cached_mr: Option<buffers::MrLease>,
@@ -186,7 +187,7 @@ impl GrantResources {
     pub(super) fn close_drained(
         &mut self,
         connection: &ConnectionResources,
-        receipt: &progress::GrantDrain,
+        receipt: &cq_lane::GrantDrain,
         verbs: &sys::Verbs,
     ) -> std::result::Result<(), (&'static str, i32)> {
         if !Arc::ptr_eq(&self.device, &connection.device) || !receipt.matches(connection, self) {
@@ -408,8 +409,8 @@ impl ConnectionId {
 }
 
 pub(crate) struct RdmaEndpoint {
-    pub(super) record: Arc<progress::Record>,
-    pub(super) progress: Arc<progress::ContextProgress>,
+    pub(super) record: Arc<cq_lane::Record>,
+    pub(super) progress: Arc<cq_lane::CqLane>,
     pub(super) local: Descriptor,
     pub(super) incarnation: Option<ConnectionId>,
     pub(super) config: RdmaConfig,
@@ -421,7 +422,7 @@ pub(crate) struct RdmaEndpoint {
 }
 
 impl RdmaEndpoint {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, progress::Request>> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, cq_lane::Request>> {
         if self.released {
             return Err(Error::Unavailable("RDMA grant handle has been consumed"));
         }

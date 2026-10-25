@@ -57,8 +57,14 @@ impl Retirement {
             self.error == 0 || cq != self.cq,
             "retained CQ cleanup was retried"
         );
+        if self.error != 0 {
+            return None;
+        }
+        let injected = trace.injected_record.as_ref()?;
         let owner = trace.owners.iter().find(|owner| {
-            owner.nic == trace.fault_rail && (owner.cq == cq || owner.receive_cq == cq)
+            owner.nic == trace.fault_rail
+                && Arc::ptr_eq(&owner.record, injected)
+                && (owner.cq == cq || owner.receive_cq == cq)
         })?;
         self.attempts += 1;
         assert_eq!(self.attempts, 1, "retained CQ cleanup was retried");

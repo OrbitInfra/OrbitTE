@@ -7,7 +7,7 @@ use crate::transport::rdma::{RdmaConfig, events};
 fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
     for count in [1, 2, 4] {
         let config = RdmaConfig {
-            num_workers: count,
+            num_lanes: count,
             ..RdmaConfig::new("copy")
         };
         let usage: Arc<Mutex<RdmaStats>> = Arc::default();
@@ -20,7 +20,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
             let context =
                 RdmaContext::open(&config, &VERBS, Arc::clone(&usage), Arc::clone(&counters))
                     .unwrap();
-            let state = ContextProgress::new(
+            let state = CqLane::new(
                 &config,
                 Arc::clone(&workers),
                 Arc::clone(&context),
@@ -29,7 +29,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
                 &VERBS,
             )
             .unwrap();
-            workers.attach(id, &state).unwrap();
+            workers.attach(id % count, &state).unwrap();
             contexts.push(context);
             progress.push(state);
         }
@@ -38,7 +38,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
             (
                 stats.progress_workers,
                 stats.opened_progress_workers,
-                stats.progress_contexts,
+                stats.progress_lanes,
                 stats.active_cqs
             ),
             (count, count as u64, 3, 6)
@@ -59,13 +59,13 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
         let stats = *usage.lock().unwrap();
         assert_eq!(
             (
-                stats.progress_contexts,
+                stats.progress_lanes,
                 stats.active_cqs,
                 stats.progress_workers
             ),
             (0, 0, count)
         );
-        let replacement = ContextProgress::new(
+        let replacement = CqLane::new(
             &config,
             Arc::clone(&workers),
             Arc::clone(&contexts[1]),
@@ -74,7 +74,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
             &VERBS,
         )
         .unwrap();
-        workers.attach(2, &replacement).unwrap();
+        workers.attach(2 % count, &replacement).unwrap();
         assert_eq!(
             workers
                 .pool
@@ -92,7 +92,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
             .close(Instant::now() + Duration::from_secs(3))
             .unwrap();
         assert!(replacement.handle(false).is_err());
-        assert!(workers.attach(2, &replacement).is_err());
+        assert!(workers.attach(2 % count, &replacement).is_err());
         replacement
             .close(Instant::now() + Duration::from_secs(3))
             .unwrap();
@@ -100,7 +100,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
         assert_eq!(
             (
                 stats.progress_workers,
-                stats.progress_contexts,
+                stats.progress_lanes,
                 stats.active_cqs
             ),
             (0, 0, 0)
@@ -115,7 +115,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
 fn invalid_worker_counts_fail_before_provider_discovery() {
     for count in [0, 65, usize::MAX] {
         let config = RdmaConfig {
-            num_workers: count,
+            num_lanes: count,
             ..RdmaConfig::default()
         };
         assert!(matches!(
@@ -145,7 +145,7 @@ pub(super) fn before_tick(state: &ProgressState) {
 #[test]
 fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignment() {
     let config = RdmaConfig {
-        num_workers: 2,
+        num_lanes: 2,
         ..RdmaConfig::new("panic_worker")
     };
     let usage: Arc<Mutex<RdmaStats>> = Arc::default();
@@ -156,7 +156,7 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
     for id in [0, 2] {
         let context =
             RdmaContext::open(&config, &VERBS, Arc::clone(&usage), Arc::clone(&counters)).unwrap();
-        let state = ContextProgress::new(
+        let state = CqLane::new(
             &config,
             Arc::clone(&workers),
             context,
@@ -165,7 +165,7 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
             &VERBS,
         )
         .unwrap();
-        workers.attach(id, &state).unwrap();
+        workers.attach(id % config.num_lanes, &state).unwrap();
         states.push(state);
         if id == 0 {
             let (lock, changed) = PANIC_GATE.get_or_init(Default::default);
@@ -186,11 +186,11 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
         assert!(!state.recoverable().unwrap());
     }
     let healthy = RdmaConfig {
-        num_workers: 2,
+        num_lanes: 2,
         ..RdmaConfig::new("copy")
     };
     let context = RdmaContext::open(&healthy, &VERBS, Arc::clone(&usage), counters).unwrap();
-    let state = ContextProgress::new(
+    let state = CqLane::new(
         &healthy,
         Arc::clone(&workers),
         Arc::clone(&context),
@@ -215,7 +215,7 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
     assert_eq!(
         (
             stats.progress_workers,
-            stats.progress_contexts,
+            stats.progress_lanes,
             stats.retained_cqs,
             stats.active_cqs,
             stats.progress_failures
@@ -223,4 +223,92 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
         (0, 0, 4, 4, 2)
     );
     context.close().unwrap();
+}
+
+impl Workers {
+    pub(crate) fn inflight_slices(&self) -> Vec<usize> {
+        self.pool
+            .lock()
+            .unwrap()
+            .workers
+            .iter()
+            .map(|(worker, _)| worker.inflight_slices.load(Ordering::Acquire))
+            .collect()
+    }
+}
+
+#[test]
+fn concurrent_dispatch_balances_admitted_slices_and_counts_completed_grant_owners() {
+    let mut runtime = crate::transport::rdma::tests::runtime("copy");
+    runtime.config.num_lanes = 3;
+    runtime.config.max_endpoints = 32;
+    runtime.config.max_staging_bytes = 256;
+    let mut endpoints = thread::scope(|scope| {
+        let tasks: Vec<_> = (0..14)
+            .map(|_| scope.spawn(|| runtime.staging_endpoint(8, 0).unwrap()))
+            .collect();
+        tasks
+            .into_iter()
+            .map(|task| task.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mut loads = runtime.workers.inflight_slices();
+    loads.sort_unstable();
+    assert_eq!(
+        loads,
+        [4, 5, 5],
+        "concurrent admission must include already admitted slices"
+    );
+    let busiest = endpoints
+        .iter()
+        .map(|endpoint| &endpoint.progress)
+        .max_by_key(|lane| runtime.workers.inflight_slices()[*lane.worker_id.get().unwrap()])
+        .unwrap();
+    let pinned: Vec<_> = (0..7)
+        .map(|_| runtime.workers.reserve(busiest).unwrap())
+        .collect();
+    let before = runtime.workers.inflight_slices();
+    let (selected, extra) = runtime
+        .workers
+        .select(&runtime.cq_list(runtime.device().unwrap()).unwrap())
+        .unwrap();
+    assert_eq!(
+        before[*selected.worker_id.get().unwrap()],
+        *before.iter().min().unwrap(),
+        "dispatch ignored load held by grants pinned to a cached QP lane"
+    );
+    drop(extra);
+    drop(pinned);
+    let stats = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            stats.active_devices,
+            stats.progress_lanes,
+            stats.active_cqs,
+            stats.progress_workers
+        ),
+        (1, 3, 6, 3)
+    );
+    for endpoint in &mut endpoints {
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        endpoint
+            .transfer(
+                &endpoint.descriptor(),
+                crate::TransferOp::Read,
+                Instant::now() + Duration::from_secs(3),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        runtime.workers.inflight_slices().iter().sum::<usize>(),
+        14,
+        "a data CQE does not release the enclosing grant owner"
+    );
+    for mut endpoint in endpoints {
+        endpoint.close().unwrap();
+    }
+    assert_eq!(runtime.workers.inflight_slices(), [0, 0, 0]);
+    runtime
+        .close(Instant::now() + Duration::from_secs(3))
+        .unwrap();
 }

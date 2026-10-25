@@ -229,7 +229,7 @@ fn multirail_peer() {
     native::initialize(&mode, &rails[fault_rail], !source);
     let config = super::super::super::RdmaConfig {
         rdma_whitelist: rails.clone(),
-        num_workers: worker_pool::count(),
+        num_lanes: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         device_mask: mask,
@@ -479,7 +479,11 @@ fn multirail_peer() {
             }
             if mode == "healthy" {
                 let stats = engine.stats().unwrap().rdma.unwrap();
-                let slices = if mask == 3 { 2 } else { 1 };
+                let slices = if mask == 3 || worker_pool::count() > 1 {
+                    2
+                } else {
+                    1
+                };
                 assert_eq!(stats.completed_reusable_grants, slices * (round + 1));
                 assert_eq!(stats.reused_connections, slices * round);
                 let snapshot = connections(&engine);
@@ -525,7 +529,7 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
     let contexts = runtime.context_set.lock().unwrap();
     let mut result = Vec::new();
     for (id, slot) in contexts.slots.iter().enumerate() {
-        if let Some(progress) = &slot.progress {
+        for progress in slot.cq_list.iter().flatten() {
             let mut records = Vec::new();
             progress
                 .shared

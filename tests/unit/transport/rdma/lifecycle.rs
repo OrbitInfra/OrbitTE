@@ -215,7 +215,7 @@ fn engine(rails: &[String], bind: SocketAddr) -> TransferEngine {
     worker_pool::reset();
     let config = crate::transport::rdma::RdmaConfig {
         rdma_whitelist: rails.to_vec(),
-        num_workers: worker_pool::count(),
+        num_lanes: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
@@ -266,10 +266,11 @@ fn snapshot(engine: &TransferEngine) -> Snapshot {
     let runtime = source_runtime(engine);
     let contexts = runtime.context_set.lock().unwrap();
     let mut rows = Vec::new();
-    for slot in &contexts.slots {
-        let Some(progress) = &slot.progress else {
-            continue;
-        };
+    for progress in contexts
+        .slots
+        .iter()
+        .flat_map(|slot| slot.cq_list.iter().flatten())
+    {
         let mut records = Vec::new();
         progress
             .shared
@@ -434,6 +435,16 @@ fn retain(
         );
     } else {
         assert!(before.retained_windows > 0 && before.retained_grants > 0);
+        let loads = runtime.workers.inflight_slices();
+        assert_eq!(
+            loads.iter().sum::<usize>(),
+            before.active_grants,
+            "quarantined MW grant returned its slice load"
+        );
+        println!(
+            "ORBITTE_RETAINED_WORKER_LOAD {{\"grants\":{},\"loads\":{loads:?}}}",
+            before.active_grants
+        );
         let mut blocked = 0;
         for offset in (GUARD..GUARD + PAYLOAD)
             .step_by(2048)
@@ -454,8 +465,8 @@ fn retain(
             .slots
             .iter()
             .enumerate()
-            .filter_map(|(id, slot)| {
-                slot.progress.as_ref().and_then(|progress| {
+            .flat_map(|(id, slot)| {
+                slot.cq_list.iter().flatten().filter_map(move |progress| {
                     progress
                         .shared
                         .control

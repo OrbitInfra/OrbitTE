@@ -89,7 +89,7 @@ fn owners(engine: &TransferEngine) -> Vec<(usize, Arc<Record>)> {
     let contexts = runtime.context_set.lock().unwrap();
     let mut result = Vec::new();
     for (id, slot) in contexts.slots.iter().enumerate() {
-        if let Some(progress) = &slot.progress {
+        for progress in slot.cq_list.iter().flatten() {
             let mut records = Vec::new();
             progress
                 .shared
@@ -120,7 +120,7 @@ fn wake(engine: &TransferEngine) {
     let runtime = source_runtime(engine);
     let contexts = runtime.context_set.lock().unwrap();
     for slot in &contexts.slots {
-        if let Some(progress) = &slot.progress {
+        for progress in slot.cq_list.iter().flatten() {
             progress.shared.signal();
         }
     }
@@ -313,7 +313,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     native::initialize(mode, !source, fault_rail, shape);
     let config = super::super::super::super::RdmaConfig {
         rdma_whitelist: rails.to_vec(),
-        num_workers: worker_pool::count(),
+        num_lanes: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
@@ -471,6 +471,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             );
             assert!(stats.active_endpoints <= 2 * count);
             assert_eq!(stats.peak_work_requests, sq_limit);
+            worker_pool::admitted(&engine, count);
             native::admitted(owners(&engine));
             stream.write_all(&[0x3e]).unwrap();
             token(&mut stream, 0x3f);
@@ -676,6 +677,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 assert_eq!(stats.receive_credits, count);
                 assert_eq!(stats.peak_receive_credits, count);
                 assert_eq!(stats.receive_admission_rejections, round as u64 + 1);
+                worker_pool::admitted(&engine, count);
                 native::admitted(owners(&engine));
                 println!(
                     "ORBITTE_RQ_ADMISSION {{\"parents\":{},\"slices_per_parent\":{},\"capacity\":{rq_limit},\"credits\":{},\"posted_receives\":{},\"unused_capacity\":{},\"rejections\":{},\"rejected_before_source_qp\":true}}",

@@ -887,19 +887,40 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   fault/drain, live recovery, cleanup failures and repeated process generations.
   All 384 children are reaped (360 completed libtests and 24 deliberate kills).
   Two native wrong-owner controls and one CPU early-pool-stop control reject
-  the intended errors. Native TENT's per-context multiple CQ lanes, least-loaded
-  slice enqueue, priority queues, worker affinity and monitor consolidation
+  the intended errors. P4.12l below adds multiple CQ lanes and load-based
+  slice dispatch. Priority queues, worker affinity and monitor consolidation
   remain open. See [the pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
+- [ ] **P4.12l — multiple CQ lanes and load-based slice dispatch
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Frozen TENT's `num_lanes` aligns transport workers and each context's CQ
+  pairs. Worker `i` polls lane `i` across contexts. New wire slices choose
+  the least-loaded worker with rotating ties; grant-owned `SliceLease` keeps
+  load charged through drain or quarantine. QP reuse stays in its original
+  lane, and source rendezvous searches all lanes by exact bilateral identity.
+  Single-RNIC large requests can use lane parallelism. Context PD/MR/key
+  owners and aggregate quotas remain shared. Device-event wakeups fan out;
+  drained fault recovery replaces one lane without restarting the pool.
+  Context-slot, lane and worker resources have separate modules. Frozen source
+  `2952f06` passes nineteen stable/Rust 1.85 gates, 198 all-feature units per
+  toolchain and eleven runner controls. Both binaries pass 180 two-host/two-RNIC
+  CPU DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual CQ/thread
+  identities, exact worker-load reconciliation, one-RNIC slicing, concurrent
+  admission, fault/drain, live recovery, MR/MW errors and repeated generations.
+  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
+  Two native wrong-owner controls and one CPU reversed-load control reject
+  their intended errors. Independent acceptance and full P4 remain open. See
+  [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
-  endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
-  completion-channel/device-close failures, broader process restart/death and
+  endpoint incarnations. Add physical link/device loss, native QP and
+  completion-channel/device-close failures, spontaneous MR/MW cleanup errors
+  beyond the declared syscall controls, broader process restart/death and
   poisoned-live-engine recovery profiles;
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
   owners under physical-rail pressure. Complete the remaining frozen TENT
-  worker/CQ-lane scheduling obligations beyond P4.12k's shared-context pool
-  before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
+  worker/CQ-lane scheduling obligations beyond P4.12l: endpoint QP arrays,
+  thread affinity and monitor consolidation, before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs

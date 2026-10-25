@@ -13,6 +13,36 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12l (`2952f06`) adds per-context CQ lanes and load-based slice admission
+using TENT's unified `num_lanes`. PD/MR/key owners and aggregate limits stay
+shared; cached QPs keep their original lane. The requester can slice a large
+single-RNIC request across lanes, while each peer keeps local lane indices.
+
+Nineteen stable/Rust 1.85 gates pass, with 198 all-feature units per toolchain
+and eleven hardware-runner controls. Both frozen binaries pass 180 two-host/
+two-RNIC CPU DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes. All 408 native
+children are reaped: 384 completed libtests and 24 deliberate source/requester
+kills. The matrix covers actual CQ/thread routing, load held through grant
+ownership, admission/quota and unequal tails, lost CQEs, QP faults, MR/MW
+command failures, CQ/PD EBUSY retention, live recovery and repeated generations.
+Two native wrong-worker controls and one CPU reversed-load control reject
+their intended errors. The control production source and target guard files
+match the qualified implementation.
+
+Evidence root: `/root/orbitte-artifacts/rdma-cq-lanes-20261025`.
+`native-raw-audit.json` reconciles raw cases, exact binaries, provider mappings,
+locks, native process exits, CQ lane/thread identities and admitted/retained
+worker loads. Earlier failed fixture probes remain alongside the final matrix;
+they are excluded from the passed totals. The retained native handles, MR/DMA
+loans and no-retry assertions remain explicit. See
+[the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
+
+These are same-agent scoped gates. Physical fabric/device loss, endpoint QP
+arrays, affinity/monitor parity, broader GPU/fabric/installed profiles,
+independent acceptance and complete P4 remain open. No performance claim is made.
+
+## Previous qualified source
+
 P4.12k (`914761b`) adds a configurable transport-level `Workers` pool.
 Multiple context CQ pairs share data threads; each CQ retains one polling
 owner. Drained context recovery preserves the pool, PDs and persistent MRs.

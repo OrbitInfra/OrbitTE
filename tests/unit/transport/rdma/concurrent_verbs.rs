@@ -859,24 +859,27 @@ pub(super) fn finish() {
     assert!(trace.active_mrs.is_empty());
     assert!(trace.held_cqes.values().all(VecDeque::is_empty));
     if trace.requester {
+        let fault_owner_checks: usize = trace
+            .failed_cqs
+            .iter()
+            .map(|cq| {
+                trace
+                    .owners
+                    .iter()
+                    .filter(|owner| owner.cq == *cq || owner.receive_cq == *cq)
+                    .count()
+            })
+            .sum();
         assert!(trace.delivered_held > 0);
         if trace.mode.ends_with("peer-exit") {
             assert_eq!(
                 (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
-                (0, 4, 2 * shape.parents * shape.slices)
+                (0, trace.failed_cqs.len(), fault_owner_checks)
             );
         } else if is_fault(&trace.mode) && !trace.mode.ends_with("lost-recv-cqe") {
             assert_eq!(
                 (trace.injected, trace.failed_cq_receipts, trace.owner_checks),
-                (
-                    1,
-                    2,
-                    2 * trace
-                        .owners
-                        .iter()
-                        .filter(|owner| owner.nic == trace.fault_rail)
-                        .count()
-                )
+                (1, 2, fault_owner_checks)
             );
             assert_eq!(trace.fault_debt.len(), 2);
             assert_eq!(

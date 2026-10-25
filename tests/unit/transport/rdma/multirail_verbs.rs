@@ -193,7 +193,8 @@ unsafe extern "C" fn post(
                     .as_ref()
                     .is_some_and(|owner| owner.address().unwrap().device == name)
             })
-            .filter_map(|slot| slot.progress.as_ref())
+            .flat_map(|slot| slot.cq_list.iter().flatten())
+            .filter(|lane| lane.handle(false).is_ok_and(|cq| cq == unsafe { (*h).cq }))
             .find_map(|progress| {
                 progress
                     .shared
