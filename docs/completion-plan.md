@@ -912,14 +912,15 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
-  endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
-  completion-channel/device-close failures, broader process restart/death and
+  endpoint incarnations. Add physical link/device loss, native QP and
+  completion-channel/device-close failures, spontaneous MR/MW cleanup errors
+  beyond the declared syscall controls, broader process restart/death and
   poisoned-live-engine recovery profiles;
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
   owners under physical-rail pressure. Complete the remaining frozen TENT
-  worker/CQ-lane scheduling obligations beyond P4.12k's shared-context pool
-  before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
+  worker/CQ-lane scheduling obligations beyond P4.12l: endpoint QP arrays,
+  thread affinity and monitor consolidation, before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs
