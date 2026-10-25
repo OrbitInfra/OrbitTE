@@ -15,6 +15,7 @@ contracts.
 | Transport-level RDMA Workers pool | Implemented | Scoped 1/2/3-worker two-RNIC host Direct tests verify CQ/thread routing, retained pool lifetime and fault recovery without new threads; 1/2/3/6 CQ lanes and load-based dispatch pass the 180-case native profile; broader TENT scheduling parity remains open |
 | Peer endpoint QP arrays | Implemented | Demand-grown physical QPs; one active grant per QP. Fixed-width concurrent multiplexing remains open |
 | Worker NUMA binding and unified event monitor | Implemented | Declared CPU DRAM/RoCEv2 profile verifies actual CPU masks and native get/ACK ownership; periodic port recovery remains open |
+| QP-owned send depth and WR debt | Implemented | Shared-owner CPU concurrency controls; actual wire grants remain exclusive pending receive demultiplexing and fixed-width construction |
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
 | Concurrent multirail parents and aggregate quotas | Implemented | Scoped eight-parent MiB/folded/exact-quarter-tail profiles and retained two-/four-parent cases; shared SQ/RQ pressure, 32/40 active slice grants and connected reuse and two-WR fault/drain. Wider concurrency/QoS remains open |
 | Whole-parent source RQ admission | Implemented | Wire v12; residual-capacity rejection before QPs, caller retry, uncertain-post ownership and native receive-credit drain in declared four-/eight-parent profiles |

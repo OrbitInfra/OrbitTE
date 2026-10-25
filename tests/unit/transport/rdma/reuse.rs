@@ -68,6 +68,7 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
                         endpoint.local.connection_bytes(),
                         endpoint.cached_peer.unwrap(),
                         endpoint.claim,
+                        Arc::clone(&resources.connection.send_queue),
                     ));
                     drop(state);
                     if round != 0 {
@@ -167,6 +168,9 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
             let observed = observations.lock().unwrap();
             for pair in observed.windows(2) {
                 assert_eq!(pair[0].0, pair[1].0);
+                assert!(Arc::ptr_eq(&pair[0].5, &pair[1].5));
+                assert_eq!(pair[0].5.outstanding(), 0);
+                assert!(!pair[0].5.drained());
                 assert_eq!(pair[0].1, pair[1].1);
                 assert_eq!(pair[0].2, pair[1].2);
                 assert!(pair[0].3.same_pair(&pair[1].3));

@@ -1,4 +1,6 @@
 use super::*;
+use crate::transport::rdma::RdmaStats;
+use std::sync::Mutex;
 
 fn usage() -> Arc<Mutex<RdmaStats>> {
     Arc::default()
@@ -44,7 +46,8 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
         (32 << 20, 64 << 10, 64, vec![512 << 10; 64]),
         (32 << 20, 64 << 10, 32, vec![1 << 20; 32]),
     ] {
-        let queue = SendQueue::new(length, base, cap, usage(), 1).unwrap();
+        let queue =
+            SendWork::new(length, base, cap, SendQueue::new(64, usage()).unwrap(), 1).unwrap();
         let (block, count) = plan_rdma_slices(length, base, cap).unwrap();
         println!("ORBITTE_RDMA_GEOMETRY {length} {base} {cap} {block} {count}");
         assert_eq!(
@@ -76,9 +79,10 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
 fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
     for limit in [1, 3, 64] {
         let usage = usage();
-        let mut queue = SendQueue::new(1024, 16, 64, usage.clone(), 1).unwrap();
+        let sq = SendQueue::new(limit, usage.clone()).unwrap();
+        let mut queue = SendWork::new(1024, 16, 64, sq.clone(), 1).unwrap();
         while !queue.finished() {
-            let requests = queue.reserve(limit, 64).unwrap().to_vec();
+            let requests = queue.reserve(64).unwrap().to_vec();
             assert!(queue.outstanding() <= limit);
             queue
                 .posted(
@@ -152,8 +156,9 @@ fn partial_unknown_and_inconsistent_posts_keep_only_proven_or_possible_debt_unti
         (libc::EIO, 9, false, 4),
     ] {
         let usage = usage();
-        let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
-        queue.reserve(4, 64).unwrap();
+        let sq = SendQueue::new(4, usage.clone()).unwrap();
+        let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
+        queue.reserve(64).unwrap();
         assert!(
             queue
                 .posted(
@@ -167,8 +172,10 @@ fn partial_unknown_and_inconsistent_posts_keep_only_proven_or_possible_debt_unti
         );
         assert_eq!(queue.outstanding(), owed);
         assert_eq!(usage.lock().unwrap().work_requests, owed);
-        queue.quiesce();
-        queue.quiesce();
+        sq.quiesce();
+        queue.quiesce().unwrap();
+        sq.quiesce();
+        queue.quiesce().unwrap();
         assert_eq!(usage.lock().unwrap().work_requests, 0);
     }
 }
@@ -183,8 +190,9 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         (1, 7, 0, 0, 3, 1),
     ] {
         let usage = usage();
-        let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
-        queue.reserve(4, 64).unwrap();
+        let sq = SendQueue::new(4, usage.clone()).unwrap();
+        let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
+        queue.reserve(64).unwrap();
         queue
             .posted(
                 0,
@@ -220,11 +228,13 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
             ),
             (0, 0, owed, errors)
         );
-        queue.quiesce();
+        sq.quiesce();
+        queue.quiesce().unwrap();
     }
     let usage = usage();
-    let mut queue = SendQueue::new(64, 16, 64, usage.clone(), 1).unwrap();
-    queue.reserve(4, 64).unwrap();
+    let sq = SendQueue::new(4, usage.clone()).unwrap();
+    let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
+    queue.reserve(64).unwrap();
     queue
         .posted(
             0,
@@ -243,15 +253,17 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
     queue.complete(completion(), TransferOp::Read).unwrap();
     assert!(queue.complete(completion(), TransferOp::Read).is_err());
     assert_eq!(usage.lock().unwrap().work_requests, 3);
-    queue.quiesce();
+    sq.quiesce();
+    queue.quiesce().unwrap();
 }
 
 #[test]
 fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
     for (operation, opcode) in [(Operation::Bind, 5), (Operation::Invalidate, 6)] {
         let usage = usage();
-        let mut queue = SendQueue::control(Arc::clone(&usage), 65).unwrap();
-        assert_eq!(queue.reserve(1, 1).unwrap().len(), 1);
+        let sq = SendQueue::new(1, usage.clone()).unwrap();
+        let mut queue = SendWork::control(sq, 65).unwrap();
+        assert_eq!(queue.reserve(1).unwrap().len(), 1);
         queue
             .posted(
                 0,
@@ -300,4 +312,273 @@ fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
             1
         );
     }
+}
+
+#[test]
+fn concurrent_grants_share_physical_qp_depth_and_cq_capacity() {
+    use std::sync::Barrier;
+
+    let usage = usage();
+    let queues = [
+        SendQueue::new(5, usage.clone()).unwrap(),
+        SendQueue::new(5, usage.clone()).unwrap(),
+    ];
+    let barrier = Barrier::new(13);
+    let admitted = Mutex::new([0usize; 2]);
+    std::thread::scope(|threads| {
+        let mut handles = Vec::new();
+        for index in 0..12 {
+            let sq = queues[index % 2].clone();
+            let (barrier, admitted) = (&barrier, &admitted);
+            handles.push(threads.spawn(move || {
+                let mut work = SendWork::new(64, 16, 4, sq, (index as u64 + 1) * 128 + 1).unwrap();
+                barrier.wait();
+                let submitted = (|| -> Result<Vec<sys::WorkRequest>> {
+                    let requests = match work.reserve(7) {
+                        Ok(requests) => requests.to_vec(),
+                        Err(Error::ResourceExhausted) => return Ok(Vec::new()),
+                        Err(error) => return Err(error),
+                    };
+                    work.posted(
+                        0,
+                        sys::PostResult {
+                            accepted: requests.len(),
+                            uncertain: false,
+                        },
+                    )?;
+                    admitted.lock().unwrap()[index % 2] += requests.len();
+                    Ok(requests)
+                })();
+                barrier.wait();
+                barrier.wait();
+                for request in submitted?.iter().rev() {
+                    work.complete(
+                        sys::Completion {
+                            id: request.id,
+                            opcode: 2,
+                            length: request.length,
+                            ..Default::default()
+                        },
+                        TransferOp::Read,
+                    )?;
+                }
+                Ok::<_, Error>(())
+            }));
+        }
+        barrier.wait();
+        barrier.wait();
+        let counts = *admitted.lock().unwrap();
+        let outstanding = usage.lock().unwrap().work_requests;
+        // Release the workers before asserting, so a broken limit fails instead of hanging.
+        barrier.wait();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        assert!(counts.iter().all(|count| *count <= 5), "{counts:?}");
+        assert_eq!(counts.iter().sum::<usize>(), 7);
+        assert_eq!(outstanding, 7);
+    });
+    assert_eq!(usage.lock().unwrap().work_requests, 0);
+    assert_eq!(usage.lock().unwrap().peak_work_requests, 7);
+}
+
+#[test]
+fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
+    let usage = usage();
+    let sq = SendQueue::new(3, usage.clone()).unwrap();
+    let mut payload = SendWork::new(32, 16, 2, sq.clone(), 129).unwrap();
+    let mut bind = SendWork::control(sq.clone(), 257).unwrap();
+    let mut notify = SendWork::control(sq, 385).unwrap();
+    assert_eq!(payload.reserve(64).unwrap().len(), 2);
+    assert_eq!(bind.reserve(64).unwrap().len(), 1);
+    assert!(matches!(notify.reserve(64), Err(Error::ResourceExhausted)));
+    // A CQE before the actual post receipt cannot discharge a reservation.
+    assert!(
+        bind.complete(
+            sys::Completion {
+                id: 257,
+                opcode: 5,
+                ..Default::default()
+            },
+            Operation::Bind
+        )
+        .is_err()
+    );
+    assert_eq!(usage.lock().unwrap().work_requests, 3);
+    payload
+        .posted(
+            0,
+            sys::PostResult {
+                accepted: 2,
+                uncertain: false,
+            },
+        )
+        .unwrap();
+    bind.posted(
+        0,
+        sys::PostResult {
+            accepted: 1,
+            uncertain: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        bind.posted(
+            0,
+            sys::PostResult {
+                accepted: 1,
+                uncertain: false
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        payload
+            .complete(
+                sys::Completion {
+                    id: 257,
+                    opcode: 5,
+                    ..Default::default()
+                },
+                Operation::Bind
+            )
+            .is_err()
+    );
+    assert_eq!(usage.lock().unwrap().work_requests, 3);
+    bind.complete(
+        sys::Completion {
+            id: 257,
+            opcode: 5,
+            ..Default::default()
+        },
+        Operation::Bind,
+    )
+    .unwrap();
+    assert_eq!(notify.reserve(64).unwrap().len(), 1);
+    notify
+        .posted(
+            0,
+            sys::PostResult {
+                accepted: 1,
+                uncertain: false,
+            },
+        )
+        .unwrap();
+    for id in [130, 129] {
+        payload
+            .complete(
+                sys::Completion {
+                    id,
+                    opcode: 2,
+                    length: 16,
+                    ..Default::default()
+                },
+                TransferOp::Read,
+            )
+            .unwrap();
+    }
+    assert_eq!(usage.lock().unwrap().work_requests, 1);
+    notify
+        .complete(
+            sys::Completion {
+                id: 385,
+                opcode: 0,
+                ..Default::default()
+            },
+            Operation::Send,
+        )
+        .unwrap();
+    assert!(bind.finished() && payload.finished() && notify.finished());
+    let stats = *usage.lock().unwrap();
+    assert_eq!(
+        (
+            stats.work_requests,
+            stats.completed_reads,
+            stats.completed_window_binds,
+            stats.completed_sends
+        ),
+        (0, 2, 1, 1)
+    );
+}
+
+#[test]
+fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_debt() {
+    let usage = usage();
+    let sq = SendQueue::new(6, usage.clone()).unwrap();
+    let mut first = SendWork::new(32, 16, 2, sq.clone(), 129).unwrap();
+    let mut partial = SendWork::new(32, 16, 2, sq.clone(), 257).unwrap();
+    let mut uncertain = SendWork::new(32, 16, 2, sq.clone(), 385).unwrap();
+    for work in [&mut first, &mut partial, &mut uncertain] {
+        assert_eq!(work.reserve(64).unwrap().len(), 2);
+    }
+    first
+        .posted(
+            0,
+            sys::PostResult {
+                accepted: 2,
+                uncertain: false,
+            },
+        )
+        .unwrap();
+    assert!(
+        partial
+            .posted(
+                libc::ENOMEM,
+                sys::PostResult {
+                    accepted: 1,
+                    uncertain: false
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        uncertain
+            .posted(
+                libc::EIO,
+                sys::PostResult {
+                    accepted: 0,
+                    uncertain: true
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(usage.lock().unwrap().work_requests, 5);
+    let mut rejected = SendWork::control(sq.clone(), 513).unwrap();
+    assert!(matches!(rejected.reserve(64), Err(Error::Unavailable(_))));
+    first
+        .complete(
+            sys::Completion {
+                id: 129,
+                opcode: 2,
+                length: 16,
+                ..Default::default()
+            },
+            TransferOp::Read,
+        )
+        .unwrap();
+    drop(first);
+    assert!(partial.quiesce().is_err());
+    assert_eq!(usage.lock().unwrap().work_requests, 4);
+    assert!(
+        partial
+            .complete(
+                sys::Completion {
+                    id: 258,
+                    opcode: 2,
+                    length: 16,
+                    ..Default::default()
+                },
+                TransferOp::Read
+            )
+            .is_err()
+    );
+    assert_eq!(usage.lock().unwrap().work_requests, 4);
+    sq.quiesce();
+    partial.quiesce().unwrap();
+    uncertain.quiesce().unwrap();
+    sq.quiesce();
+    partial.quiesce().unwrap();
+    assert_eq!(usage.lock().unwrap().work_requests, 0);
+    let mut next = SendWork::control(sq, 513).unwrap();
+    assert!(matches!(next.reserve(64), Err(Error::Unavailable(_))));
 }

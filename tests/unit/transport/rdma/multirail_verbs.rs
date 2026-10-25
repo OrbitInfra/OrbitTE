@@ -297,7 +297,9 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 resources.grant.as_ref().unwrap().handles.mr as usize,
                 trace.bad_mr
             );
-            record.work.as_ref().unwrap().queue.outstanding()
+            let debt = record.work.as_ref().unwrap().queue.outstanding();
+            assert_eq!(resources.connection.send_queue.outstanding(), debt);
+            debt
         };
         assert!(
             debt >= 1,

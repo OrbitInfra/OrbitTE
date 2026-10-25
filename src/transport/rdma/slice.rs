@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use super::{RdmaStats, sys};
+use super::{qp::send_queue::SendQueue, sys};
 use crate::{Error, Result, TransferOp};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -48,22 +48,22 @@ pub(super) fn plan_rdma_slices(length: usize, base: usize, cap: usize) -> Result
     Ok((block, count))
 }
 
-/// Owns the signaled-WR debt until validated CQ completion or native teardown.
-pub(super) struct SendQueue {
+/// One grant's WR geometry and completion state; the physical QP owns SQ debt.
+pub(super) struct SendWork {
     requests: Vec<sys::WorkRequest>,
     first_id: u64,
     cursor: usize,
     window_start: usize,
     pending: u64,
-    usage: Arc<Mutex<RdmaStats>>,
+    send_queue: Arc<SendQueue>,
 }
 
-impl SendQueue {
+impl SendWork {
     pub(super) fn new(
         length: usize,
         base: usize,
         cap: usize,
-        usage: Arc<Mutex<RdmaStats>>,
+        send_queue: Arc<SendQueue>,
         first_id: u64,
     ) -> Result<Self> {
         let (block, count) = plan_rdma_slices(length, base, cap)?;
@@ -92,11 +92,11 @@ impl SendQueue {
             cursor: 0,
             window_start: 0,
             pending: 0,
-            usage,
+            send_queue,
         })
     }
 
-    pub(super) fn control(usage: Arc<Mutex<RdmaStats>>, id: u64) -> Result<Self> {
+    pub(super) fn control(send_queue: Arc<SendQueue>, id: u64) -> Result<Self> {
         if id == 0 {
             return Err(Error::InvalidRange);
         }
@@ -115,67 +115,47 @@ impl SendQueue {
             cursor: 0,
             window_start: 0,
             pending: 0,
-            usage,
+            send_queue,
         })
     }
 
-    pub(super) fn reserve(&mut self, limit: usize, capacity: usize) -> Result<&[sys::WorkRequest]> {
-        if !(1..=64).contains(&limit) || self.pending() || self.cursor == self.requests.len() {
+    pub(super) fn reserve(&mut self, capacity: usize) -> Result<&[sys::WorkRequest]> {
+        if self.pending() || self.cursor == self.requests.len() {
             return Err(Error::Internal("RDMA window state"));
         }
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        let available = capacity.saturating_sub(usage.work_requests);
-        if available == 0 {
-            return Err(Error::ResourceExhausted);
-        }
-        let end = (self.cursor + limit.min(available)).min(self.requests.len());
-        let count = end - self.cursor;
-        usage.work_requests += count;
-        usage.peak_work_requests = usage.peak_work_requests.max(usage.work_requests);
+        let count = self
+            .send_queue
+            .reserve(&self.requests[self.cursor..], capacity)?;
         self.window_start = self.cursor;
-        self.cursor = end;
+        self.cursor += count;
         self.pending = if count == 64 {
             u64::MAX
         } else {
             (1u64 << count) - 1
         };
-        Ok(&self.requests[self.window_start..end])
+        Ok(&self.requests[self.window_start..self.cursor])
     }
 
     pub(super) fn posted(&mut self, code: i32, result: sys::PostResult) -> Result<()> {
         let count = self.cursor - self.window_start;
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        usage.post_calls += 1;
-        if result.uncertain || result.accepted > count || (code == 0 && result.accepted != count) {
-            usage.uncertain_posts += 1;
-            return if code == 0 {
-                Err(Error::Protocol("RDMA inconsistent post receipt"))
-            } else {
-                Err(Error::Backend {
-                    operation: "ibv_post_send",
-                    code,
-                })
-            };
-        }
-        usage.posted_work_requests += result.accepted as u64;
+        let uncertain =
+            result.uncertain || result.accepted > count || (code == 0 && result.accepted != count);
+        let owed =
+            self.send_queue
+                .posted(&self.requests[self.window_start..self.cursor], code, result)?;
+        self.pending = if owed == 64 {
+            u64::MAX
+        } else {
+            (1u64 << owed) - 1
+        };
         if code != 0 {
-            usage.partial_posts += u64::from(result.accepted != 0);
-            usage.work_requests -= count - result.accepted;
-            self.pending = if result.accepted == 64 {
-                u64::MAX
-            } else {
-                (1u64 << result.accepted) - 1
-            };
             return Err(Error::Backend {
                 operation: "ibv_post_send",
                 code,
             });
+        }
+        if uncertain {
+            return Err(Error::Protocol("RDMA inconsistent post receipt"));
         }
         Ok(())
     }
@@ -211,12 +191,14 @@ impl SendQueue {
         {
             return Err(Error::Protocol("RDMA completion opcode/length"));
         }
+        self.send_queue
+            .complete(completion.id, completion.status != 0)?;
         let mut usage = self
+            .send_queue
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
         self.pending &= !bit;
-        usage.work_requests -= 1;
         if completion.status != 0 {
             usage.completion_errors += 1;
             return Err(Error::Backend {
@@ -245,7 +227,7 @@ impl SendQueue {
     }
 
     pub(super) fn pending(&self) -> bool {
-        self.pending != 0
+        self.outstanding() != 0
     }
     pub(super) fn outstanding(&self) -> usize {
         self.pending.count_ones() as usize
@@ -254,13 +236,12 @@ impl SendQueue {
         self.cursor == self.requests.len() && !self.pending()
     }
 
-    pub(super) fn quiesce(&mut self) {
-        let mut usage = self
-            .usage
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        usage.work_requests -= self.outstanding();
+    pub(super) fn quiesce(&mut self) -> Result<()> {
+        if !self.send_queue.drained() {
+            return Err(Error::Internal("RDMA grant work before native SQ drain"));
+        }
         self.pending = 0;
+        Ok(())
     }
 }
 

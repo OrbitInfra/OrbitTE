@@ -145,7 +145,10 @@ impl ProgressState {
                     .as_ref()
                     .and_then(|r| r.grant.as_ref())
                     .map_or(0, |g| g.buffer.len());
-                debt += request.work.as_ref().map_or(0, |w| w.queue.outstanding());
+                debt += request
+                    .resources
+                    .as_ref()
+                    .map_or(0, |r| r.connection.send_queue.outstanding());
                 receive_debt += usize::from(request.receive.as_ref().is_some_and(|r| r.pending()));
                 if let Some(message) = request
                     .resources
@@ -192,7 +195,11 @@ impl ProgressState {
     }
 
     fn unlock(request: &mut Request) -> std::result::Result<(), (&'static str, i32)> {
-        if request.work.as_ref().is_some_and(|w| w.queue.pending())
+        if request
+            .resources
+            .as_ref()
+            .is_some_and(|r| r.connection.send_queue.outstanding() != 0)
+            || request.work.as_ref().is_some_and(|w| w.queue.pending())
             || request.receive.as_ref().is_some_and(|r| r.pending())
         {
             return Err(("RDMA grant has unresolved completion debt", libc::EBUSY));
@@ -270,9 +277,13 @@ impl ProgressState {
             return Ok(false);
         }
         if request
-            .work
+            .resources
             .as_ref()
-            .is_some_and(|work| work.queue.pending())
+            .is_some_and(|r| r.connection.send_queue.outstanding() != 0)
+            || request
+                .work
+                .as_ref()
+                .is_some_and(|work| work.queue.pending())
             || request.receive.as_ref().is_some_and(|r| r.pending())
         {
             drop(request);
@@ -330,8 +341,15 @@ impl ProgressState {
         // Shared CQ destruction, after all QPs, is the cancellation receipt.
         for record in records {
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(resources) = &request.resources {
+                resources.connection.send_queue.quiesce();
+            }
             if let Some(work) = &mut request.work {
-                work.queue.quiesce();
+                if work.queue.quiesce().is_err() {
+                    drop(request);
+                    self.retain("RDMA grant work before native SQ drain", libc::EBUSY);
+                    return;
+                }
             }
             if let Some(receive) = &mut request.receive {
                 receive.quiesce();
@@ -407,10 +425,7 @@ impl ProgressState {
             record.changed.notify_all();
             return false;
         }
-        let requests = match work
-            .queue
-            .reserve(self.config.max_send_wr, self.config.max_cqes)
-        {
+        let requests = match work.queue.reserve(self.config.max_cqes) {
             Ok(requests) => requests,
             Err(Error::ResourceExhausted) => {
                 self.wait_quota(false);

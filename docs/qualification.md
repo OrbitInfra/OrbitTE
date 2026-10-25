@@ -13,19 +13,22 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
-The ownership-layout cleanup after PR #43 separates transport dispatch,
-bilateral grant handshake and OrbitTE v12 wire messages. CQ-lane submission
-and drained reuse remain methods of the existing owner in separate files;
-the native verbs boundary groups device, QP, MR/MW and CQ calls. Static NIC/PD
-metadata now lives in `path.rs`, and the lane's `QpStore` field is named `qps`.
-No new resource owner, queue, lock, protocol version or public API is added.
+The QP send-owner delivery moves physical send depth and unresolved WR IDs to
+`ConnectionResources::send_queue`. Each grant's `SendWork` borrows this owner
+for payload, MW bind and completion SEND. Duplicate/foreign completions cannot
+release another work's credit; post failures fence admission, ambiguous posts
+retain possible debt, and cancellation needs QP/CQ destruction before release.
 
-The [architecture reading order](architecture.md#source-reading-order) describes
-the current paths. Source audit and validation artifacts are recorded under
-`/root/orbitte-artifacts/rdma-layout-20261025`. This delivery does not rerun
-hardware or qualify a new native artifact; the most recent native evidence is
-the exact P4.12m source and binaries below. Missing runtime features and the
-complete P4 acceptance remain in [one exit queue](completion-plan.md#p4-remaining-delivery).
+The artifact root is `/root/orbitte-artifacts/rdma-qp-send-20261025`.
+Validation is being collected for this source. Previous native results below
+apply only to their recorded revisions, not this change. The
+[send-owner contract](architecture.md#qp-send-ownership) and
+[P4 exit queue](completion-plan.md#p4-remaining-delivery) distinguish this
+implemented prerequisite from pending concurrent grant/RQ ownership,
+fixed-width peer QPs, periodic recovery and independent P4 acceptance.
+
+PR #44's earlier layout cleanup is merged. Its source audit and CPU validation
+remain at `/root/orbitte-artifacts/rdma-layout-20261025`.
 
 ## Latest qualified native source: peer arrays and monitor
 
