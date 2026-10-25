@@ -137,6 +137,7 @@ struct Counters {
 struct Running {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
+    failure: Option<(&'static str, i32)>,
 }
 
 struct Shared {
@@ -297,6 +298,7 @@ impl Monitor {
             *running = Some(Running {
                 shared,
                 worker: Some(worker),
+                failure: None,
             });
         }
         let live = running
@@ -359,6 +361,12 @@ impl Monitor {
         let Some(live) = running.as_mut() else {
             return Ok(());
         };
+        if let Some((operation, code)) = live.failure {
+            return Err(Error::Unquiesced { operation, code });
+        }
+        if live.worker.is_none() {
+            return Ok(());
+        }
         for watch in live.shared.snapshot() {
             if watch
                 .source
@@ -384,10 +392,14 @@ impl Monitor {
                 .0;
         }
         if let Some(worker) = live.worker.take() {
-            worker.join().map_err(|_| Error::Unquiesced {
-                operation: "RDMA monitor join",
-                code: libc::EIO,
-            })?;
+            if worker.join().is_err() {
+                let operation = "RDMA monitor join";
+                live.failure = Some((operation, libc::EIO));
+                return Err(Error::Unquiesced {
+                    operation,
+                    code: libc::EIO,
+                });
+            }
         }
         Ok(())
     }

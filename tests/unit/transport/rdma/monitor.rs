@@ -174,6 +174,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
         source.registration.stop().unwrap();
     }
     monitor.close(until).unwrap();
+    monitor.close(Instant::now()).unwrap();
     let stats = stats(&monitor);
     assert_eq!(
         (
