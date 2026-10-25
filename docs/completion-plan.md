@@ -1257,7 +1257,7 @@ and independent acceptance remain separate states.
 
 Implement fixed-width concurrent QP multiplexing, the first row of
 [P4 remaining delivery](#p4-remaining-delivery). Current peer arrays are real
-persistent lookup owners, but one active grant still occupies one physical QP.
+persistent lookup owners; public v12 still admits one active grant per physical QP.
 QP-owned SQ/RQ admission, receive buffers and binding/key dispatch now exist.
 Runtime grant records and multiple CQ namespaces are now connected to the same
 physical `RdmaQp`, with native internal multiplexing fixtures. Next activate

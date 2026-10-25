@@ -26,10 +26,36 @@ successful CQE and checks all four loans and RQ credits at both native CQ teardo
 boundaries. It uses the production owners and native provider, with a fixture
 rendezvous; it does not claim concurrent public v12 handshakes.
 
-Qualification for this delivery is pending the frozen source gates. Evidence is
-kept under `/root/orbitte-artifacts/rdma-grant-records-20261026`, including failed
-development runs. Public multiplexing, fixed-width arrays, periodic recovery,
-physical port/device faults, GPU/performance and independent acceptance stay open.
+Source `afa68ec` passes 23 local gates on stable and Rust 1.85, including
+208 all-feature unit tests per compiler, twelve hardware-runner controls and
+the frozen TENT geometry comparison. The two frozen binaries pass 212 two-host
+CPU DRAM/IPv4 RoCEv2 configurations: 180 existing two-RNIC regressions and
+32 new shared-QP cases across both RNICs, READ/WRITE, polling/event progress,
+healthy completion and lost receive completion.
+
+The new cases check four distinct payload WR namespaces on one actual QP,
+reverse receipt order, completed-record replacement while a donated RQ slot
+remains pending, and stale close isolation. Sixteen controls drop actual
+successful receive CQEs; 128 loan checks at native CQ destruction boundaries
+verify that all four grants remain protected until physical drain. These
+checks establish ownership and completion routing, not performance or
+simultaneous DMA execution. All 472 children are reaped: 448 completed libtests
+and 24 deliberate kills. Both RNIC locks are available afterward, with
+unchanged node/provider identities and no GPU compute used.
+
+The actual frozen TENT CPU comparison passes 25 observations and six negative
+controls. Its Rust/C++/TENT binary hashes and identical merge tree are checked.
+The source CI matrix and strict documentation checks pass. Evidence, including
+failed development runs, stays under
+`/root/orbitte-artifacts/rdma-grant-records-20261026`.
+`native-raw-audit.json` and `shared-native-audit.json` reconcile the raw native
+results; `final-delivery.json` identifies the qualified code and documentation-only
+delivery commit. See the [shared-QP reproduction contract](rdma-cuda.md#shared-qp-grant-record-profile).
+
+These are same-agent scoped gates. Public v12 still admits one active grant per
+QP. Public multiplexing, fixed-width arrays, periodic recovery, physical
+port/device faults, GPU/performance and independent acceptance stay open;
+this delivery does not complete P4.
 
 ## Previous qualified native source: QP receive owner
 
