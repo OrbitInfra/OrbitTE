@@ -19,7 +19,7 @@
 <text class="small" x="440" y="199" text-anchor="middle">Bounded READ / WRITE</text>
 <rect class="box" x="600" y="140" width="260" height="86"/>
 <text class="label" x="730" y="173" text-anchor="middle">RDMA transport</text>
-<text class="small" x="730" y="199" text-anchor="middle">DeviceSelector · RdmaSlice</text>
+<text class="small" x="730" y="199" text-anchor="middle">DeviceSelector · Workers</text>
 <path class="edge" d="M730 226V260" marker-end="url(#arrow)"/>
 <rect class="box" x="600" y="260" width="260" height="86"/>
 <text class="label" x="730" y="292" text-anchor="middle">Per-NIC contexts</text>

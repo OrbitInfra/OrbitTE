@@ -891,7 +891,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   slice dispatch. Priority queues, worker affinity and monitor consolidation
   remain open. See [the pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
 - [ ] **P4.12l — multiple CQ lanes and load-based slice dispatch
-  (Implemented; native qualification pending, independent acceptance open).**
+  (Implemented; declared native gates pass, independent acceptance open).**
   Frozen TENT's `num_lanes` aligns transport workers and each context's CQ
   pairs. Worker `i` polls lane `i` across contexts. New wire slices choose
   the least-loaded worker with rotating ties; grant-owned `SliceLease` keeps
@@ -900,8 +900,15 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Single-RNIC large requests can use lane parallelism. Context PD/MR/key
   owners and aggregate quotas remain shared. Device-event wakeups fan out;
   drained fault recovery replaces one lane without restarting the pool.
-  Context-slot, lane and worker resources have separate modules. CPU and
-  native gate results will be recorded for the frozen delivery commit. See
+  Context-slot, lane and worker resources have separate modules. Frozen source
+  `2952f06` passes nineteen stable/Rust 1.85 gates, 198 all-feature units per
+  toolchain and eleven runner controls. Both binaries pass 180 two-host/two-RNIC
+  CPU DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual CQ/thread
+  identities, exact worker-load reconciliation, one-RNIC slicing, concurrent
+  admission, fault/drain, live recovery, MR/MW errors and repeated generations.
+  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
+  Two native wrong-owner controls and one CPU reversed-load control reject
+  their intended errors. Independent acceptance and full P4 remain open. See
   [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and

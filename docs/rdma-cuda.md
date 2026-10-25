@@ -3404,11 +3404,38 @@ now live under `transport::rdma::cq_lane::tests::hardware`; the runner requires
 one exact match before deployment. Frozen historical evidence retains its
 recorded selector.
 
-CPU gates cover simultaneous slice admission, load held through completed-data
-grant ownership, cached-lane pressure, asymmetric 2/3-lane byte/sentinel and QP
-reuse, shared context MRs, parked-lane fault broadcast and individual-lane
-recovery without new PDs or threads. Native qualification is recorded after
-running frozen binaries on the declared two-host/two-RNIC profile.
+Frozen source `2952f06` passes nineteen stable/Rust 1.85 gates, 198
+all-feature units per toolchain and eleven runner controls. CPU gates cover
+simultaneous slice admission, load held through completed-data grant ownership,
+cached-lane pressure, asymmetric 2/3-lane byte/sentinel and QP reuse, shared
+context MRs, device-fault broadcast and individual-lane recovery without new
+PDs or threads.
+
+Both frozen binaries pass 180 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2
+configurations with 1/2/3/6 lanes. Native CQ pointers, contexts, lane indices,
+worker names and thread IDs establish actual polling ownership. Admission
+snapshots reconcile all current grants with per-worker slice load; fresh
+slice loads differ by at most one, while cached QP reuse keeps its lane.
+Retained MW grants keep their load. Both peers preserve bytes/sentinels and
+source receipts through masked one-RNIC slicing, concurrent parent/quota and
+folded/unequal-tail profiles, QP/CQ errors, lost successful SQ/RQ CQEs, MR/MW
+syscall faults, CQ/PD EBUSY retention, live recovery and process generations.
+All 408 children are reaped: 384 completed libtests and 24 deliberate kills.
+Two native wrong-worker controls and one CPU reversed-load control reject
+their intended errors. Both NIC leases are available after final cleanup.
+
+The native cleanup observer reconciles each CQ with its actual QP set; it
+does not treat every QP on an RNIC as a member of one lane. The EBUSY control
+targets the injected grant's exact CQ and still forbids retrying that failed
+handle. Other lanes may destroy distinct CQs normally. Earlier failed fixture
+probes remain in the external evidence root and do not count as passed.
+Raw manifests, hashes and same-agent audit:
+`/root/orbitte-artifacts/rdma-cq-lanes-20261025`.
+
+TENT's native data QPs share send/receive CQs. OrbitTE retains an SQ/RQ pair
+per lane for its separate source-completion and WR/RQ debt contracts; its
+exact-grant MW protocol remains wire v12 and is not mixed-wire compatible
+with native TENT.
 
 This is a CQ-lane and load-dispatch substage. Priority MPSC queues, endpoint QP
 arrays, monitor consolidation, affinity, physical device recovery and complete
