@@ -13,6 +13,36 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12i extends native failure acceptance without changing production source,
+dependencies or wire v12 from PR #38. Frozen operational source `02ef99d`
+passes nineteen stable/Rust 1.85 gates, 191 all-feature unit tests per toolchain
+and eleven runner controls. Both frozen binaries pass 280 two-host/two-RNIC CPU
+DRAM/IPv4 RoCEv2 cases: 176 new configurations and 104 targeted regressions.
+
+Actual dependent verbs objects produce 64 CQ and 64 PD EBUSY errors on either
+peer and rail. CQ failures retain WR/RQ debt, MR/DMA/grant owners and admission
+after repeated close/Drop, with observer references removed. PD-only failures
+retain PD/context and release already drained application backing. Native
+destruction is not retried after failure.
+
+Source/requester death, two/three fresh process generations, both RPC rebindings
+and repeated numeric registration IDs produce 244 all-prior-source-epoch
+rejections before QPs or remote effects. All 984 native children are reaped:
+772 completed libtests and 212 intentionally killed children. Completed
+processes balance 1,544 context opens/closes and
+44,608 MR registrations/deregistrations. Killed
+processes have kernel waitpid/lease receipts and no post-death zero-counter or
+sentinel claim. Eight native controls reject early WR/RQ return and post-Drop
+CQ/PD retries; one CPU control rejects early restart-lease release.
+
+The [cleanup/restart contract and evidence](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations)
+records exact scope, hashes and reproduction. These are same-agent scoped
+gates. Physical port/device loss, native QP/MR/MW and completion-channel/device-close cleanup
+errors, poisoned-live-engine recovery, installed consumers, GPU/GDR,
+independent acceptance and the full P4 exit remain open.
+
+## Previous endpoint-fault and source-restart evidence
+
 P4.12h fixes endpoint cleanup inheriting an exhausted data deadline. One shared
 thirty-second destruction window now bounds a parent's cleanup independently
 of data timeout. The transfer remains failed, while actual native teardown

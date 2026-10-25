@@ -2937,58 +2937,130 @@ python3 -B tests/hardware/run.py \
   --output /path/outside/checkout/fault-restart-repeat
 ```
 
-The declared native/CPU gates are same-agent evidence. Physical IB/link/device
-loss, native cleanup failure, requester death and broader process-restart
-topologies, poisoned-live-engine recovery, installed consumers, GPU/GDR,
-performance, independent acceptance and the full P4 exit remain unqualified.
-The earlier independent P4.8 repeat also remains open. OrbitKV integration stays
-deferred until the large native stage boundary is accepted.
+The declared P4.12h native/CPU gates are same-agent evidence. P4.12i below
+adds scoped CQ/PD cleanup failure, requester death and repeated fresh-process
+generations. Physical IB/link/device loss, broader restart topologies,
+poisoned-live-engine recovery, installed consumers, GPU/GDR, performance,
+independent acceptance and the full P4 exit remain open. The earlier P4.8
+independent native repeat also remains open. OrbitKV integration stays deferred
+until the large native stage boundary is accepted.
 
 ## Native cleanup failure and repeated process generations
 
-P4.12i extends the private native acceptance contract. Its source compiles and
-its runner controls pass; native qualification is in progress. Production
-source, public APIs and wire v12 are unchanged from PR #38.
+P4.12i qualifies the declared private native acceptance profile. Production
+source, dependencies, public APIs and wire v12 are unchanged from PR #38.
+
+### Resource boundaries and TENT correspondence
 
 The frozen TENT endpoint uses `beginDestroyNoLock` to fence submissions and
 transition ready QPs to ERR. `finishDestroy` waits for WR/notification debt in
-its own thirty-second window, then calls `deconstructUnlocked`. That method
-keeps failed native handles and marks EP_DESTROYED only after its children are
-gone; a later finish call can retry. OrbitTE follows the context/PD, endpoint,
-local-buffer and worker boundaries, with an explicit ownership difference:
-failed native teardown quarantines actual owners and their charges without a
-native Drop retry. A live poisoned engine is not automatically repaired.
+its own thirty-second window, then calls `deconstructUnlocked`. Failed children
+prevent EP_DESTROYED and can be retried. Its context `cleanupResources`, however,
+logs some native errors and clears handles; its CQ destructor ignores the
+destroy return. OrbitTE follows the same context/PD, endpoint, local-buffer and
+worker boundaries with an explicit safety difference: failed native cleanup
+quarantines actual owners and their charges without a native Drop retry.
 
-The new CQ profile creates a real RESET RC QP depending on the selected native
-CQ immediately before calling the real `ibv_destroy_cq`. The provider's EBUSY
-must leave the CQ handle intact. A deliberately hidden actual successful CQE
-leaves exact SQ or RQ debt outstanding. The worker must retain that debt,
-endpoint/grant, MR borrow, backing, DMA loan and admission. Test observers drop
-their extra references before a weak-allocation check. Repeated close and Drop
-must neither retry destruction nor report drain. The live blocker is queried
-again after caller handles are dropped.
+The CQ profile creates an actual RESET RC QP depending on the selected CQ before
+calling real `ibv_destroy_cq`; the provider returns EBUSY and preserves the CQ
+handle. An actual successful CQE is deliberately hidden to leave SQ or RQ debt.
+The worker retains that exact debt, endpoint record, grant/MR, backing, DMA loan
+and request/source admission. Successfully destroyed QPs can return connection
+slots while these CQ-level owners remain. Repeated close cannot report drain.
+Observers drop their extra owner references before caller memory and engine
+Drop; the application weak owner remains live and the blocker is still queried.
+No failed native destruction is retried, including after observer removal.
 
-The PD profile first completes and drains both payload rounds, MRs and CQs.
-It then allocates an actual unbound Type-2 memory window in the selected PD
-before real `ibv_dealloc_pd`. EBUSY must retain PD/context and prohibit device
-close; already drained application memory must be released. CQ-level backing
-retention and device-only retention protect different resource boundaries.
+The PD profile first verifies two payload rounds and drains MRs and CQs. It
+allocates an actual unbound Type-2 MW before real `ibv_dealloc_pd`; EBUSY retains
+PD/context and prohibits native device close. Already drained application
+backing expires after Drop. The device failure still makes engine close fail.
 
-Supervisors SIGKILL only their exact marked direct child, waitpid it, and retain
-both original RNIC leases through two or three fresh process generations.
-Source and requester each rebind their own RPC address; source registration IDs
-repeat while epochs change. Every earlier source epoch must fail descriptors
-and READ/WRITE admission before QPs or remote effects. Requester-death tests
-send the actual accepted WR prefixes to the surviving source before exit;
-only that survivor can claim its own native drain and guard verification.
-Retained or abruptly killed processes have waitpid/lease receipts, never a
-post-death in-process zero-counter or sentinel claim. Final healthy processes
-verify two payload generations and forty-QP reuse.
+The supervisor kills only its exact marked Popen child and waits for it under
+both original NIC leases. It supports either killed role and two or three
+generations. Both peers use fresh processes in each generation and rebind their
+own public RPC addresses. Numeric source registration IDs repeat; epochs change.
+Generation one rejects epoch zero; generation two rejects epochs zero and one.
+Descriptor lookup and READ/WRITE admission fail before QPs or remote effects,
+with replacement backing unchanged before normal transfers. Final healthy
+processes verify two payload rounds and forty-QP reuse.
 
-The external working evidence is under
-`/root/orbitte-artifacts/rdma-cleanup-restart-20261025`. Completed standalone
-provider probes on both locked RNICs of both hosts establish real CQ and PD
-EBUSY and release all probe resources. Those probes alone do not qualify the
-engine's failure path. Physical port/device loss, native MR deregistration
-failure, poisoned-live-engine recovery, GPU/GDR, independent acceptance and the
-full P4 exit remain open. OrbitKV integration stays deferred.
+Before requester death, the fixture communicates actual accepted WR prefixes
+to the source over private test coordination. The survivor verifies those
+prefixes, all unposted bytes and whole-backing guards after its own actual
+QP/CQ barrier. Retained or abruptly killed children have kernel waitpid/lease
+receipts; their dead allocations have no post-death sentinel or in-process
+zero-counter claim. This profile does not qualify live-peer reconnect,
+automatic replay or poisoned-live-engine recovery.
+
+### Declared P4.12i gates
+
+Frozen operational source `02ef99d1fd9bf95920b6ea47fa1f29ca75f5cef3` passes nineteen sequential stable/
+Rust 1.85 source/build gates, including sixteen-plan isolated frozen TENT slice
+geometry comparisons and their two negative controls on each toolchain. Each
+all-feature suite passes 191 unit tests; four hardware tests stay ignored in
+ordinary Cargo runs. Eleven runner tests include real-child two/three-generation
+lease checks for both roles and unexpected-exit rejection. The unchanged full
+native TENT CPU comparison retains PR #38's historical evidence; the new
+isolated geometry probes execute the frozen function, not TENT RDMA transport.
+
+Both frozen binaries pass 280 two-host/two-RNIC Host Direct/CPU DRAM/IPv4 RoCEv2
+configurations: 176 new configurations and 104 targeted regressions. CQ/PD cases
+cover both peers, directions, READ/WRITE, polling/event progress and fault rails.
+Death/restart cases cover both directions, READ/WRITE and progress modes. The
+sampled older mask, rollback, close, concurrency, QP ERR and CQE-loss profiles
+preserve their separate historical complete matrices.
+
+Receipts prove 64 native CQ and 64 native PD EBUSY errors. All 984 native children
+are reaped: 772 completed libtests and 212 intentional kills. Completed processes
+balance 1,544 context opens/closes and 44,608 MR
+registrations/deregistrations. There are 244 stale-source-epoch rejections and
+48 surviving-source accepted-prefix checks after requester death. Both original
+NIC leases remain held across every process generation and are available after
+supervised cleanup. Postflight preserves node/boot, PCI/GUID/GID and provider
+DSOs; no GPU compute is started.
+
+Eight native mutation runs reject early WR-debt/RQ-credit return or attempts to
+retry retained CQ/PD destruction after caller Drop, in both progress modes.
+The retry controls first observe real native EBUSY. The post-Drop CQ attempt is
+rejected by the earlier CQ debt observer; the PD attempt reaches the retained
+PD retry guard. Neither makes another native destroy call. All control children and starter connections
+are reaped without supervisor timeout. One real-child CPU mutation rejects
+releasing both leases between generations.
+
+The stable binary SHA-256 is `204c3c944b70d9a5fa95916ddcf46507b0ebfdcd952f72356f5b096a84df2ea4`.
+The Rust 1.85 binary SHA-256 is `133d9343ec7a68758f842861a9d24a781f0e081ddd9b29ea924fd559b326af37`.
+Evidence remains outside Git at
+`/root/orbitte-artifacts/rdma-cleanup-restart-20261025`:
+
+- `gates-02ef99d/manifest.json`, source archive and binaries pin the build.
+- `fault-profile.json`, `regression-profile.json`, `combined-profile.json`,
+  `native-regression-manifest.json` and `native-raw-audit.json` bind raw cases,
+  native errors, provider paths, epoch fencing and actual owned-child receipts.
+- `controls-02ef99d/` preserves exact mutations, logs and rejection evidence.
+- `development-native/` and `development-native-2/` retain exploratory assertion
+  failures with all peers reaped. They corrected the fixture's resource boundary:
+  QP slots can leave a retained CQ domain, and another context can still own live
+  endpoints. `development-native-3/` preserves seven successful pilots.
+- `provider-probe.json` proves standalone real CQ/PD EBUSY on both selected RNICs
+  of both hosts; those probes alone do not qualify engine lifetime behavior.
+- `controls-02ef99d/guard-correction.json` preserves the initial CQ
+  control expectation mismatch and the source-based earlier-guard correction.
+- Preflight/postflight, selected-stage/History, `frozen-design-reference.json`,
+  `evidence-index.json` and final delivery manifests preserve identities,
+  reference blobs, source equivalence, final CI and PR #38's Pages deployment.
+
+Reproduce from the frozen source with the same authorized hosts and locks:
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-cleanup-restart-20261025/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-cleanup-restart-20261025/gates-02ef99d/libtest-stable \
+  --output /path/outside/checkout/cleanup-restart-repeat
+```
+
+These are same-agent scoped gates. Physical IB/link/device loss, native
+QP/MR/MW/completion-channel/device-close failures, broader process/fabric/installed-consumer
+profiles, GPU/GDR, performance, independent acceptance and the complete P4 exit
+remain open. Both selected containers lack CAP_NET_ADMIN. The earlier P4.8
+independent native repeat also remains open. OrbitKV integration stays deferred.

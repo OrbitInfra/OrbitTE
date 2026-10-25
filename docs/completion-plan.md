@@ -32,7 +32,9 @@ four-parent/three-slice native qualification. P4.12g extends the native fixture
 to eight parents, MiB requests, folded tails and two-WR fault windows, with an
 isolated frozen TENT geometry comparison. P4.12h separates data and native
 destruction deadlines and validates scoped QP ERR, lost CQEs and fresh-process
-restart. Wire v12 remains unchanged; physical port/device loss stays open.
+restart. P4.12i adds real CQ/PD cleanup failure, requester death and
+three-generation fresh-process recovery gates. Wire v12 remains unchanged;
+physical port/device loss stays open.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -837,20 +839,28 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   containers lack CAP_NET_ADMIN; physical port/device-down is unqualified.
   See [the destruction and restart contract](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
 - [ ] **P4.12i — native cleanup failure and repeated process generations
-  (In progress; source fixture compiles, native qualification pending).**
-  Exercise real provider EBUSY from a dependent RESET QP at CQ destruction and
-  an unbound memory window at PD deallocation, on either peer and rail. Keep
-  unproven CQ debt, backing and admission owned after repeated close/Drop; allow
-  already drained backing to leave a retained PD/context. Expand direct-child
-  supervision to requester death and three process generations under both
-  original RNIC locks. Check every earlier source epoch against a re-bound RPC
-  address and registration ID before new QPs. These are fresh-process recovery
-  profiles; poisoned-live-engine recovery and physical link/device loss remain
-  unqualified. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Production source, dependencies and wire v12 are unchanged from PR #38.
+  Frozen fixture `02ef99d` passes nineteen stable/Rust 1.85 gates, 191 all-feature
+  units per toolchain and eleven runner controls. Both binaries pass 280 two-host/
+  two-RNIC CPU DRAM/IPv4 RoCEv2 cases: 176 new configurations and 104 targeted
+  regressions. Real dependent verbs objects cause 64 CQ and 64 PD EBUSY errors
+  on either peer/rail. CQ failures retain actual WR/RQ debt, grant/MR/DMA loans
+  and admission after repeated close/Drop and removal of observer references;
+  PD-only failures retain device owners while drained application backing leaves.
+  Source/requester death and three fresh process generations preserve both NIC
+  leases, RPC rebinding, numeric registration IDs and all-prior-epoch rejection
+  before QPs. All 984 native children are reaped: 772 completed libtests and
+  212 intentionally killed children. Eight native controls reject early debt/
+  credit return and post-Drop CQ/PD retries; one CPU control rejects releasing
+  leases between generations. Physical port/device loss, native QP/MR/MW and
+  completion-channel/device-close failures, poisoned-live-engine recovery and independent
+  acceptance remain open. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
-  endpoint incarnations. Add physical link/device loss, native cleanup failure,
-  broader process restart/death and poisoned-live-engine recovery profiles;
+  endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
+  completion-channel/device-close failures, broader process restart/death and
+  poisoned-live-engine recovery profiles;
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
   owners under physical-rail pressure. The declared two-/four-/eight-parent quota/reuse and
@@ -1176,9 +1186,12 @@ P4.12g adds the declared eight-parent MiB/folded/exact-quarter-tail profiles,
 32/40-QP reuse, actual two-WR fault debt and an isolated TENT function comparison.
 P4.12h separates endpoint destruction from expired data deadlines and adds
 declared QP ERR, lost SQ/RQ CQE and fresh-process source restart gates.
+P4.12i adds real CQ/PD EBUSY retention, requester death, both RPC rebindings
+and all-prior-epoch fencing across three fresh process generations.
 Next deliver physical port/device loss, broader admission/topology and
-requester/process-death profiles, native cleanup failure, poisoned-live-engine
-recovery and independent acceptance. The
+process-death/live-peer-reconnect profiles, native QP/MR/MW and
+completion-channel/device-close failures, poisoned-live-engine recovery and
+independent acceptance. The
 earlier P4.8 independent native repeat remains open. Keep the frozen TENT
 context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.
