@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::endpoint_store::Peer;
 use super::{
@@ -831,8 +831,12 @@ fn data_request(
     }
 }
 
+const ENDPOINT_DESTROY_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn close_slices(slices: &mut [RdmaSlice], mut result: Result<()>, requester: bool) -> Result<()> {
+    let retirement_deadline = Instant::now() + ENDPOINT_DESTROY_TIMEOUT;
     for slice in slices {
+        slice.endpoint.deadline = retirement_deadline;
         #[cfg(test)]
         if requester {
             super::tests::before_requester_close(&mut slice.endpoint, &result);

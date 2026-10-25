@@ -829,3 +829,79 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     );
     assert_eq!(fixture.drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[cfg(feature = "rdma")]
+#[test]
+fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
+    for asynchronous in [false, true] {
+        let source = rdma_fixture("normal");
+        let requester = Arc::new(rdma_fixture("timeout"));
+        let remote = source
+            .register_memory(vec![0x42; 8].into_boxed_slice(), Permission::RemoteRead)
+            .unwrap();
+        let local = requester
+            .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&captured);
+        // execute() runs in the submitting thread for the synchronous path.
+        // The async path is independently checked through its public free gate.
+        if !asynchronous {
+            crate::transport::rdma::tests::on_requester_close(move |_, transfer| {
+                assert!(matches!(transfer, Err(Error::Timeout)));
+                observed.store(true, std::sync::atomic::Ordering::Release);
+            });
+        }
+        let request = TransferRequest {
+            transport: Transport::Rdma,
+            local_address: local.base_address(),
+            remote_address: remote.base_address(),
+            length: 8,
+        };
+        if asynchronous {
+            let mut batch = requester.allocate_batch(1).unwrap();
+            batch
+                .submit(
+                    TransferOp::Read,
+                    &peer,
+                    &[request],
+                    None,
+                    Duration::from_millis(250),
+                )
+                .unwrap();
+            batch.seal().unwrap();
+            let status = batch.wait(Duration::from_secs(2)).unwrap();
+            assert!(status.locally_drained && status.state == crate::BatchState::Failed);
+            batch.free().unwrap();
+        } else {
+            let report = requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[request],
+                    Duration::from_millis(250),
+                )
+                .unwrap();
+            assert!(captured.load(std::sync::atomic::Ordering::Acquire));
+            assert!(
+                report.locally_drained && matches!(report.failure.unwrap().error, Error::Timeout)
+            );
+        }
+        assert_eq!(
+            requester.stats().unwrap().inflight_batches,
+            0,
+            "native destroy completed but requester admission escaped into quarantine"
+        );
+        requester.unregister_memory(&local).unwrap();
+        requester.close(Duration::from_secs(2)).unwrap();
+        source.unregister_memory(&remote).unwrap();
+        source.close(Duration::from_secs(2)).unwrap();
+    }
+}

@@ -44,6 +44,14 @@ registration, transfer and completion ownership.
 
 ## Project updates
 
+- **October 25, 2026 — destruction deadlines and process restart:** RDMA cleanup
+  gets a separate thirty-second endpoint destruction window after data timeout.
+  Stable/Rust 1.85 pass 284 two-RNIC CPU DRAM/RoCEv2 cases, including actual QP
+  ERR, lost SQ/RQ CQEs and sixteen source SIGKILL/restarts. All 600 children are
+  reaped under continuous leases; old epochs fail at the same replacement RPC
+  address before new QPs. Four native and one CPU mutation reject premature
+  resource return. Physical port/device loss and independent P4 acceptance
+  remain open.
 - **October 25, 2026 — larger requests and folded tails:** Eight concurrent
   parents exercise 5 MiB, MiB-plus-one and exact-quarter-tail plans, 32/40-QP
   reuse and whole-plan RQ rejection. Stable/Rust 1.85 pass 288 two-RNIC native

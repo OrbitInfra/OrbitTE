@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12g/P5.1 add opt-in source implementations and qualification gates.
+P4.1-P4.12h/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
@@ -11,7 +11,8 @@ and drain. P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent
 validation. P4.12f adds whole-parent source RQ admission and scoped
 four-parent/three-slice native validation. P4.12g extends the declared fixture to
 eight concurrent parents with MiB/folded geometry and two-WR fault windows,
-without changing production.
+without changing production. P4.12h separates data and endpoint destruction
+deadlines, with scoped QP ERR, lost-CQE and fresh-process restart gates.
 Broader physical faults and independent P4 acceptance remain open;
 these substages do not establish full B04/B01 or native TENT compatibility.
 
@@ -329,10 +330,12 @@ permanently closes device and claim admission, detaches and retires idle QPs,
 allows accepted constructors/grants to finish or retire, waits for actual
 connection/grant charges to reach zero, then drains cached host MRs, closes both shared CQs and joins its progress worker,
 then explicitly destroys PD -> context. Waiting for another MR creator or
-closer uses the same absolute deadline. A request's close wait also uses its
-original absolute deadline; expiry before a physical receipt returns
-`Unquiesced`, including when another native call holds the shared worker. The
-lane continues to own and clean the actual record. A retained receipt waits
+closer uses the same absolute whole-engine deadline. Parent request cleanup
+instead receives one fresh shared thirty-second destruction deadline in
+`close_slices` (P4.12h), independently of the data deadline. Expiry before a
+physical receipt returns `Unquiesced`, including when another native call
+holds the shared worker. The lane continues to own and clean the actual
+record. A retained receipt waits
 until all accepted constructors are fenced and actual remaining owners/charges
 are recorded, using that same
 deadline. Requester and source always consume the idempotent close receipt
@@ -802,8 +805,8 @@ The native `Descriptor` ABI remains 40 bytes. Integers are big endian:
 Both identities and the independent grant generation are echoed exactly. Even
 identical requests on identical connections cannot consume an older grant's
 DONE/ACK. Partial frames, changed identities/ranges/grants and reflected phases
-fail through the original deadline/physical close contract. An error reply is
-never accepted as a completion receipt. Direct memory effects retain the
+fail through the data/destruction deadline and physical close contract. An
+error reply is never accepted as a completion receipt. Direct memory effects retain the
 existing nontransactional semantics.
 
 This follows frozen TENT's separation of context, endpoint store and buffer
@@ -2793,3 +2796,150 @@ cleanup failure and process restart/death remain unqualified. Independent
 acceptance (including the earlier P4.8 repeat), installed-consumer qualification,
 full P4, GPUDirect and performance remain open. OrbitKV integration stays
 deferred until the P4 stage boundary is accepted.
+
+## Native endpoint faults, lost completions and restart
+
+P4.12h keeps the frozen TENT context/buffer/endpoint/worker boundaries and wire
+v12. TENT `RdmaEndPoint::beginDestroyNoLock` transitions owned QPs to ERR;
+`finishDestroy` waits for WR depth/notification debt using the separate
+`kFinishDestroyTimeoutSec = 30.0` window before deconstruction. The reference is
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; see the frozen
+[endpoint implementation](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp#L324)
+and [destroy timeout](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/endpoint.h#L323).
+
+OrbitTE's `close_slices` now gives all endpoints in one parent's cleanup one
+fresh thirty-second destruction deadline. Previously an exhausted data deadline
+could make successful native teardown return Unquiesced, permanently retaining
+the surrounding requester or source admission. The transfer still fails when
+its data deadline expires. Validated QP/CQ teardown must complete before its
+owners return; actual unproven teardown still quarantines them. This destruction
+window can extend a failed operation beyond its data deadline by up to thirty
+seconds. Native provider calls remain non-preemptible. There is no WRITE replay,
+fabricated CQE or implicit transport retry.
+
+The lost-receive fixture uses a five-second requester deadline and a separate
+ten-second source-handler deadline. Other source handlers retain the existing
+35-second test deadline; endpoint destruction still uses the production
+thirty-second window. These are bounded test timings, not latency guarantees.
+
+Private native fixtures extend the eight-parent 5 MiB/folded profiles:
+
+- `large-qp-error` / `folded-qp-error` query a real process-owned QP in ERR,
+  submit an actual two-WR window and require native flush CQEs. This is an
+  endpoint-state fault, separately scoped from physical port or device loss.
+- `large-lost-send-cqe` / `folded-lost-send-cqe` consume one actual successful
+  payload CQE without delivering it to the worker. Its exact CQ/QPN/WR debt,
+  direct loan and MR must survive through native CQ destruction.
+- `large-lost-recv-cqe` / `folded-lost-recv-cqe` drop an actual successful source
+  completion receive. The source RQ credit, receive debt and exact grant remain
+  owned until the corresponding native barrier.
+- `large-peer-exit` kills only the supervisor's own source child after eight
+  parents hold forty real grants. Both NIC leases remain held through waitpid
+  and replacement exit. A fresh source process rebinds the same RPC address;
+  a fresh requester process rejects the old descriptor and RDMA operation with
+  EpochMismatch before any new QP or remote effect. Both then run two healthy
+  READ/WRITE rounds with real forty-QP reuse and different payload generations.
+
+Operation timeouts and process death trigger cleanup; neither is a drain
+receipt. The killed source has no in-process zero-counter claim. Its supervisor
+records intentional SIGKILL, waitpid and continuous leases; surviving/fresh
+processes must prove their own actual native teardown and allocation lifetime.
+Restart uses fresh processes and explicit descriptors; transparent recovery of
+a poisoned live engine and automatic replay are outside this profile.
+
+Physical port/device-down is not executed: both selected containers report
+CAP_NET_ADMIN absent. That gate needs an isolated authorized RNIC operation path
+and remains open. GPU/GDR, independent acceptance and the full P4 exit remain
+open. OrbitKV integration stays deferred.
+
+### Declared P4.12h gates
+
+Frozen operational source `ec852d414d18ddfd98ae0987aa4aa93c60941725` passes nineteen sequential stable/
+Rust 1.85 gates, including default/RDMA/RDMA+CUDA format, Clippy and tests,
+both release libtest builds, the unchanged sixteen-plan isolated TENT geometry
+comparison and eleven hardware-runner controls. Each all-feature unit suite
+passes 191 tests, with four hardware tests ignored by default. Feature builds
+do not qualify GPU or GPUDirect behavior.
+
+The two frozen binaries pass 284 two-host/two-RNIC CPU DRAM/Host Direct/IPv4
+RoCEv2 cases: 208 new fault/restart cases and 76 targeted native regressions.
+Each toolchain covers both directions, READ/WRITE, polling/event progress and
+both fault rails for QP ERR and lost CQEs. The regressions sample each original
+mask, CQ error, partial-post, paused-close, MR rollback and concurrent-parent
+mode. They do not substitute for rerunning the complete older matrices.
+
+Actual native receipts include 64 queried QP ERR transitions with hardware
+flush CQEs, 64 dropped successful payload CQEs and 64 dropped successful source
+receive CQEs. Every dropped completion's exact CQ/QPN/WR debt remains owned at
+both target CQ destruction boundaries. Source observers check 16,272 receive
+owners, including 5,412 still-pending checks.
+Completed processes verify original errors, earlier completed parents, exact
+accepted byte prefixes and whole-backing guards. Native deadlines trigger
+teardown; physical QP/CQ receipts establish drain.
+
+Sixteen source children are intentionally SIGKILLed with forty grants/receives
+live. Their supervisors reap the exact Popen child while retaining both original
+NIC locks, then start replacement children under the same leases. Source RPC
+addresses and numeric registration IDs repeat; source epochs differ. Old
+descriptors and RDMA requests fail before QPs or remote effects, and fresh
+processes verify two payload generations and forty-QP reuse. This qualifies
+fresh-process recovery, not automatic retries in a poisoned live engine.
+
+All 600 native children are reaped: 584 completed libtests and sixteen
+intentionally killed sources. The completed processes balance 1,168 context
+opens/closes and 18,077 MR registrations/deregistrations,
+including message MRs. Their native counters reach zero and weak application
+allocation owners expire. Killed sources have kernel waitpid/lease receipts;
+they have no post-death byte/sentinel or in-process zero-counter claim.
+Postflight preserves node/boot, PCI/GUID/GID and provider libraries, with both
+original locks available.
+
+Four native mutation runs deliberately return payload debt or receive credits
+after QP destruction but before shared CQ drain. Polling/event executions abort
+at the expected owner assertion, with both peers and starter connections reaped
+and no supervisor timeout. One real-child CPU mutation releases both leases
+between generations and is rejected when the replacement can acquire them.
+
+The stable binary SHA-256 is `e0d3ff787f444d0d48910e08f0cbd8b26248a67f810565fa31f2e3b5f6a66319`.
+The Rust 1.85 binary SHA-256 is `7f282912ad178805a73bc526e1d162d3fe4b10873cf4a49340069896083e5750`.
+Evidence remains outside source at `/root/orbitte-artifacts/rdma-fault-restart-20261025`:
+
+- `gates-ec852d4/manifest.json`, `source.tar` and frozen binaries preserve exact
+  source, commands, toolchain identities and hashes.
+- `fault-profile.json`, `regression-profile.json`, `combined-profile.json`,
+  `native-regression-manifest.json` and `native-raw-audit.json` bind all cases
+  to actual providers, locks, exact WR ownership and restart-generation receipts.
+- `controls-ec852d4/build-manifest.json`, `manifest.json` and `cpu-manifest.json`
+  preserve mutations, logs, expected assertion failures and process reaping.
+- Preflight/postflight and explicit selected-stage/History snapshots pin the
+  authorized two nodes and record the absent CAP_NET_ADMIN capability.
+- `development-native/` and `development-native-2/` preserve failed CQE-loss
+  pilots with both peers reaped and locks released. The first exposed exhausted
+  close deadlines; the second confirmed that a later whole-engine close could
+  not recover already quarantined admission. The production destruction window
+  fixes that path. `development-native-3/` retains fourteen successful pilots.
+- `native-69961d6-stable/` retains eighty successful configurations from the
+  intentionally interrupted 35-second-handler run. Its controller completed
+  supervised cleanup before changing the private receive-loss fixture to a
+  five-second requester and ten-second source-handler deadline. This partial
+  run is preserved separately and is not counted in the full 284-case matrix.
+- `frozen-design-reference.json`, `evidence-index.json` and final delivery
+  manifests preserve the reference blobs, full evidence hashes, final PR checks
+  and PR #37 main CI/Pages deployment.
+
+Reproduce from the frozen source with the same authorized host identities and
+both original selected resource locks:
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-fault-restart-20261025/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-fault-restart-20261025/gates-ec852d4/libtest-stable \
+  --output /path/outside/checkout/fault-restart-repeat
+```
+
+The declared native/CPU gates are same-agent evidence. Physical IB/link/device
+loss, native cleanup failure, requester death and broader process-restart
+topologies, poisoned-live-engine recovery, installed consumers, GPU/GDR,
+performance, independent acceptance and the full P4 exit remain unqualified.
+The earlier independent P4.8 repeat also remains open. OrbitKV integration stays
+deferred until the large native stage boundary is accepted.

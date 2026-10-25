@@ -13,6 +13,40 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12h fixes endpoint cleanup inheriting an exhausted data deadline. One shared
+thirty-second destruction window now bounds a parent's cleanup independently
+of data timeout. The transfer remains failed, while actual native teardown
+permits backing/admission return. Unproven cleanup remains quarantined.
+
+Frozen operational source `ec852d4` passes 19 sequential stable/Rust 1.85
+gates, 191 all-feature units per toolchain, four hardware tests ignored by default
+and eleven runner controls. Both binaries pass 284 two-host/two-RNIC CPU DRAM/
+IPv4 RoCEv2 cases: 208 new configurations and 76 targeted regressions. The full
+older matrices were not rerun; their historical evidence remains separate.
+
+Receipts prove 64 actual QP ERR transitions, 128 deliberately dropped native
+successful SQ/RQ CQEs and sixteen source SIGKILL/restarts. All 600 native
+processes are reaped: 584 completed libtests and sixteen intentionally killed
+sources. The completed processes balance 1,168 context opens/closes and
+18,077 MR registrations/deregistrations. The killed sources
+have explicit waitpid/lease receipts rather than in-process zero-counter claims.
+
+Fresh processes rebind the same public RPC address and numeric registration ID;
+old source descriptors and RDMA operations fail with EpochMismatch before new
+QPs or remote effects. New generations verify actual payloads and forty-QP reuse.
+Four native mutation runs reject early payload-debt/RQ-credit return after QP
+destruction but before CQ drain. One CPU mutation rejects releasing both leases
+between the killed process and its replacement.
+
+The [destruction/restart evidence](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart)
+records hashes, failed exploratory runs, commands and exact CI checks. These are
+same-agent scoped libtest gates. Physical port/device-down remains unqualified
+because both selected containers lack CAP_NET_ADMIN. Poisoned-live-engine
+recovery, broader process-death profiles, installed consumers, GPU/GDR,
+independent acceptance and the complete P4 exit remain open.
+
+## Previous large-geometry evidence
+
 P4.12g extends the native fixture without changing production source,
 dependencies or wire v12 from PR #36. Frozen operational source `aebb3e8`
 passes 19 sequential stable/Rust 1.85 gates, 190 all-feature units per toolchain

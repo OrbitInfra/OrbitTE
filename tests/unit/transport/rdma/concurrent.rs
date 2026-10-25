@@ -4,6 +4,9 @@ use super::*;
 #[path = "concurrent_verbs.rs"]
 mod native;
 
+#[path = "restart.rs"]
+mod restart;
+
 #[derive(Clone, Copy, Default)]
 struct Shape {
     parents: usize,
@@ -122,6 +125,20 @@ fn until(mut condition: impl FnMut() -> bool) {
     }
 }
 
+fn is_fault(mode: &str) -> bool {
+    mode.ends_with("cq-error")
+        || mode.ends_with("qp-error")
+        || mode.ends_with("lost-send-cqe")
+        || mode.ends_with("lost-recv-cqe")
+        || mode.ends_with("peer-exit")
+}
+
+fn deadline_fault(mode: &str) -> bool {
+    mode.ends_with("lost-send-cqe")
+        || mode.ends_with("lost-recv-cqe")
+        || mode.ends_with("peer-exit")
+}
+
 fn transfer(
     shape: Shape,
     engine: &TransferEngine,
@@ -153,7 +170,11 @@ fn transfer(
                         }) as u64,
                 length: shape.payload,
             }],
-            TIMEOUT,
+            if deadline_fault(&env::var("ORBITTE_RAIL_MODE").unwrap()) {
+                Duration::from_secs(5)
+            } else {
+                TIMEOUT
+            },
         )
         .unwrap()
 }
@@ -198,6 +219,13 @@ fn verify_bytes(
 
 pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     assert_eq!(env::var("ORBITTE_RAIL_MASK").unwrap(), "3");
+    let generation = restart::generation(mode);
+    let interrupted = mode == "large-peer-exit" && generation == 0;
+    let mode = if mode == "large-peer-exit" && generation == 1 {
+        "large-quota"
+    } else {
+        mode
+    };
     let shape = Shape::new(mode);
     let large = shape.parents == 8;
     let wide = large || mode.starts_with("rq-");
@@ -210,7 +238,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         2
     };
     let rq_limit = if wide { count + 1 } else { 4 };
-    let fault = mode.ends_with("cq-error");
+    let fault = is_fault(mode);
     let paused = mode.ends_with("close");
     let endpoint_limit = mode == "concurrent-endpoints";
     let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
@@ -282,9 +310,13 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let engine = Arc::new(rdma_fixture_with_config(
         runtime,
         EngineConfig {
-            bind_addr: env::var("ORBITTE_SHARED_BIND").unwrap().parse().unwrap(),
+            bind_addr: restart::bind(source, generation),
             handler_threads: shape.parents + 1,
-            handler_timeout: TIMEOUT,
+            handler_timeout: if mode.ends_with("lost-recv-cqe") {
+                Duration::from_secs(10)
+            } else {
+                TIMEOUT
+            },
             max_registered_regions: 8,
             max_registered_bytes: (2 * shape.length).max(1 << 20),
             ..Default::default()
@@ -301,7 +333,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         )
         .unwrap();
     topology(&engine, rails);
-    let mut stream = control(source);
+    let mut stream = restart::control(source, generation);
     let (endpoint, epoch, remote) =
         super::super::connected::exchange(&mut stream, &engine, &memory);
     let peer = if source {
@@ -309,15 +341,30 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     } else {
         Some(engine.open_segment(endpoint, epoch, TIMEOUT).unwrap())
     };
+    if generation == 0 && !source && interrupted {
+        restart::remember(peer.as_ref().unwrap());
+    }
     native::retain_memory(&memory);
     let rounds = if fault || paused { 1 } else { 2 };
     let mut first = None;
     let mut retired = false;
     for round in 0..rounds {
-        let original = bytes(shape, source, round);
-        let incoming = bytes(shape, !source, round);
+        let seed = round + if generation == 1 { 10 } else { 0 };
+        let original = bytes(shape, source, seed);
+        let incoming = bytes(shape, !source, seed);
         memory.write(0, &original).unwrap();
         super::super::connected::barrier(&mut stream, 0x10 + round as u8);
+        if generation == 1 && round == 0 {
+            restart::stale(
+                &mut stream,
+                &engine,
+                &memory,
+                peer.as_ref(),
+                shape,
+                operation,
+                &original,
+            );
+        }
         let mut accepted = vec![vec![0usize; shape.slices]; shape.parents];
         let mut successful = vec![true; shape.parents];
         if !source {
@@ -431,6 +478,13 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             }
             stream.write_all(&[0x40]).unwrap();
             token(&mut stream, 0x41);
+            if interrupted {
+                let mut byte = [0];
+                assert!(
+                    matches!(stream.read(&mut byte), Ok(0) | Err(_)),
+                    "the killed peer's control connection stayed live"
+                );
+            }
             native::release();
             wake(&engine);
             let end = Instant::now() + Duration::from_secs(8);
@@ -461,8 +515,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     );
                     let failure = report.failure.as_ref().unwrap();
                     assert!(
-                        !matches!(failure.error, Error::Timeout | Error::Unquiesced { .. }),
-                        "timeout is not fault/drain qualification: {report:?}"
+                        deadline_fault(mode)
+                            || !matches!(failure.error, Error::Unquiesced { .. } | Error::Timeout),
+                        "an unproven cleanup is not fault/drain qualification: {report:?}"
                     );
                     assert_eq!(
                         failure.remote_effect,
@@ -474,7 +529,21 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     );
                 }
             }
-            if fault {
+            if deadline_fault(mode) {
+                let unquiesced = reports
+                    .iter()
+                    .filter(|report| !report.locally_drained)
+                    .count();
+                engine.unregister_memory(&memory).unwrap();
+                retired = true;
+                engine.close(TIMEOUT).unwrap();
+                println!(
+                    "ORBITTE_DEADLINE_DRAIN {{\"unquiesced_reports\":{unquiesced},\"fresh_close_deadline\":true,\"native_barrier_complete\":true}}"
+                );
+            }
+            if interrupted {
+                assert!(successful.iter().all(|value| !value));
+            } else if fault && !mode.ends_with("lost-recv-cqe") {
                 assert!(
                     !successful[native::injected_parent()],
                     "the injected parent was reported complete"
@@ -485,13 +554,15 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 "cross-context quota release did not resume every parent"
             );
             accepted = native::accepted();
-            stream.write_all(&[0x31]).unwrap();
-            stream
-                .write_all(&successful.iter().copied().map(u8::from).collect::<Vec<_>>())
-                .unwrap();
-            for row in &accepted {
-                for value in row {
-                    stream.write_all(&(*value as u32).to_be_bytes()).unwrap();
+            if !interrupted {
+                stream.write_all(&[0x31]).unwrap();
+                stream
+                    .write_all(&successful.iter().copied().map(u8::from).collect::<Vec<_>>())
+                    .unwrap();
+                for row in &accepted {
+                    for value in row {
+                        stream.write_all(&(*value as u32).to_be_bytes()).unwrap();
+                    }
                 }
             }
         } else {
@@ -559,7 +630,11 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     Err(Error::Timeout)
                 ));
             }
+            native::arm();
             stream.write_all(&[0x41]).unwrap();
+            if interrupted {
+                restart::terminate(&engine, &memory);
+            }
             token(&mut stream, 0x31);
             let mut statuses = vec![0; shape.parents];
             stream.read_exact(&mut statuses).unwrap();
@@ -576,7 +651,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 engine.close_source(TIMEOUT).unwrap();
             }
         }
-        super::super::connected::barrier(&mut stream, 0x32);
+        if !interrupted {
+            super::super::connected::barrier(&mut stream, 0x32);
+        }
         verify_bytes(
             shape,
             &memory,
@@ -610,7 +687,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             "ORBITTE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
             successful, accepted
         );
-        super::super::connected::barrier(&mut stream, 0x33);
+        if !interrupted {
+            super::super::connected::barrier(&mut stream, 0x33);
+        }
     }
     if !retired {
         engine.unregister_memory(&memory).unwrap();
@@ -626,6 +705,14 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     )
     .unwrap();
     native::finish();
+    if generation != 2 {
+        println!(
+            "ORBITTE_RESTART_RESULT {{\"source\":{source},\"generation\":{generation},\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"drained\":true}}",
+            std::process::id(),
+            engine.source_epoch(),
+            engine.endpoint()
+        );
+    }
     drop(memory);
     drop(backing);
     assert!(weak.upgrade().is_none());

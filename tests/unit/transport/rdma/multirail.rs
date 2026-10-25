@@ -191,6 +191,13 @@ fn multirail_peer() {
             | "folded-close"
             | "folded-cq-error"
             | "quarter-quota"
+            | "large-qp-error"
+            | "folded-qp-error"
+            | "large-lost-send-cqe"
+            | "folded-lost-send-cqe"
+            | "large-lost-recv-cqe"
+            | "folded-lost-recv-cqe"
+            | "large-peer-exit"
     ) {
         concurrent::run(&mode, source, &rails);
         return;

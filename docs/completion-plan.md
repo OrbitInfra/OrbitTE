@@ -30,7 +30,9 @@ P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent validation.
 P4.12f adds atomic whole-parent source RQ admission on wire v12 and scoped
 four-parent/three-slice native qualification. P4.12g extends the native fixture
 to eight parents, MiB requests, folded tails and two-WR fault windows, with an
-isolated frozen TENT geometry comparison. Production and wire v12 are unchanged.
+isolated frozen TENT geometry comparison. P4.12h separates data and native
+destruction deadlines and validates scoped QP ERR, lost CQEs and fresh-process
+restart. Wire v12 remains unchanged; physical port/device loss stays open.
 P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
 published to crates.io yet.
 
@@ -490,8 +492,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   dispatch. Fatal or ambiguous progress fences all attached constructors and
   posting, closes every QP and then the shared CQ before canceling unresolved
   debt. Failed native cleanup retains the actual remaining lane and charges,
-  without retry. Request close uses its original deadline and returns
-  Unquiesced before an unproven drain; both peers consume that close receipt.
+  without retry. P4.12h gives parent request cleanup one fresh shared
+  thirty-second destruction deadline. Expiry before proven drain returns
+  Unquiesced; both peers consume that close receipt.
   Closed resources move back to the caller before its receipt; metadata
   snapshots cannot delay quota release. Source ACK follows output commit and
   endpoint drop. Source `8e38447` passes independent stable/MSRV CPU review,
@@ -815,10 +818,29 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   RQ-credit return in polling/event modes. These are same-agent scoped gates;
   full P4 and independent acceptance remain open. See
   [the geometry contract and evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+- [ ] **P4.12h — native QP errors, lost CQEs and process restart
+  (Implemented; declared native gates pass; physical port/device and
+  independent acceptance open).**
+  Frozen operational source `ec852d4` gives one parent's endpoint teardown a
+  separate shared thirty-second deadline, matching frozen TENT's destroy
+  window. Transfer failure remains failure; unproven native teardown retains
+  owners. Nineteen stable/MSRV gates pass, including 191 all-feature units per
+  toolchain and eleven runner controls. Both binaries pass 284 two-host/two-RNIC
+  CPU DRAM/IPv4 RoCEv2 cases: 208 new fault/restart and 76 targeted regressions.
+  Sixty-four real QP ERR transitions, 128 dropped actual successful SQ/RQ CQEs
+  and sixteen source SIGKILL/restarts preserve exact owners through teardown.
+  All 600 native children are reaped: 584 completed libtests and sixteen
+  intentionally killed sources. Fresh sources rebind the same RPC address and
+  registration ID; old epochs fail before new QPs, then forty-QP reuse resumes
+  in fresh processes. Four native mutations reject early WR/RQ return; one CPU
+  mutation rejects releasing leases between restart generations. Both selected
+  containers lack CAP_NET_ADMIN; physical port/device-down is unqualified.
+  See [the destruction and restart contract](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
-  endpoint incarnations. Add physical link/device loss, lost completion, native cleanup failure and process
-  restart/death profiles; provider-owned WR faults do not qualify them.
+  endpoint incarnations. Add physical link/device loss, native cleanup failure,
+  broader process restart/death and poisoned-live-engine recovery profiles;
+  endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
   owners under physical-rail pressure. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
@@ -1141,9 +1163,11 @@ reuse and native faults. P4.12f adds whole-parent source RQ admission and scoped
 four-parent/three-slice pressure, twelve-QP reuse and source-credit drain.
 P4.12g adds the declared eight-parent MiB/folded/exact-quarter-tail profiles,
 32/40-QP reuse, actual two-WR fault debt and an isolated TENT function comparison.
-Next deliver broader admission contention/topology and physical-fault profiles,
-including lost completion, native cleanup failure, restart and independent
-acceptance. The
+P4.12h separates endpoint destruction from expired data deadlines and adds
+declared QP ERR, lost SQ/RQ CQE and fresh-process source restart gates.
+Next deliver physical port/device loss, broader admission/topology and
+requester/process-death profiles, native cleanup failure, poisoned-live-engine
+recovery and independent acceptance. The
 earlier P4.8 independent native repeat remains open. Keep the frozen TENT
 context/buffer/endpoint/worker boundaries and exact PD/grant fencing. Complete the P4 native stage
 before advancing OrbitKV integration or wider NVIDIA P5 qualification.

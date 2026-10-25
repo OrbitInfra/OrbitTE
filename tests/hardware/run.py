@@ -74,7 +74,7 @@ class Controller:
         self.ssh(node, ['ldd', self.remote + '/hardware_peer'])
 
     def collect(self, node, root):
-        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in ['running.json','stdout.log','stderr.log','result.json','supervisor.log','maps.txt']}))"
+        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in ['running.json','stdout.log','stderr.log','result.json','supervisor.log','maps.txt','maps-0.txt','maps-1.txt','restart.json','restart-request.txt','restart-peer-state.txt','restart-peer.txt']}))"
         return json.loads(self.ssh(node, ['python3', '-c', script]))
 
     def start(self, node, root, kind, arguments, transport, environment=None):
@@ -90,6 +90,8 @@ class Controller:
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
         config = {'hostname': target['hostname'], 'boot_id': target['boot_id'], 'binary_sha256': self.sha256, 'arguments': arguments, 'locks': locks, 'env': environment, 'timeout_seconds': 55}
+        if environment.get('ORBITTE_RAIL_MODE') == 'large-peer-exit':
+            config['restart_role'] = environment['ORBITTE_SHARED_ROLE']
         local = self.output / (Path(root).name + '.json')
         local.write_text(json.dumps(config, indent=2) + '\n')
         self.ssh(node, ['mkdir', '-m', '700', '-p', root])
@@ -270,7 +272,8 @@ class Controller:
                                            'concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                                            'large-quota', 'large-close', 'large-cq-error',
-                                           'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota']
+                                           'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit']
                 or case.get('operation') not in ['read', 'write']
                 or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
@@ -322,14 +325,24 @@ class Controller:
             raise RuntimeError('source readiness timeout; supervisor will collect and reap its own child')
         arguments, environment = command(requester, 'requester', case['requester_kind'], requester_root, readiness)
         self.start(requester, requester_root, case['requester_kind'], arguments, case['transport'], environment)
+        forwarded = False
         while time.monotonic() - started < 65:
             evidence = {role: self.collect(node, root) for role, node, root in [('source', source, source_root), ('requester', requester, requester_root)]}
+            if case.get('mode') == 'large-peer-exit' and not forwarded:
+                running = json.loads(evidence['source']['running.json'] or '{}')
+                ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
+                         if line.startswith('ORBITTE_READY ')]
+                if running.get('generation') == 1 and len(ready) == 2:
+                    destination = requester_root + '/restart-peer.txt'
+                    script = "from pathlib import Path;p=Path(" + repr(destination) + ");t=p.with_suffix('.tmp');t.write_text(" + repr(ready[-1]) + ");t.replace(p)"
+                    self.ssh(requester, ['python3', '-c', script])
+                    forwarded = True
             if all(record['result.json'] is not None for record in evidence.values()):
                 break
             time.sleep(0.3)
         passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
         # Preserve every successful/failed run verbatim, including supervisors.
-        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'evidence': evidence}, indent=2) + '\n')
+        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'restart_ready_forwarded': forwarded, 'evidence': evidence}, indent=2) + '\n')
         if not passed:
             raise RuntimeError(f'case {index} failed; retained evidence in {self.output}')
         print(json.dumps({'case': index, 'status': 'passed', **case}), flush=True)

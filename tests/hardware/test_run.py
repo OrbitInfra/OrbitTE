@@ -176,7 +176,8 @@ class ResourceSelection(unittest.TestCase):
             for mode in ['concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
                          'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                          'large-quota', 'large-close', 'large-cq-error',
-                         'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota']:
+                         'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit']:
                 def concurrent_start(*args):
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')
