@@ -24,7 +24,7 @@ impl From<TransferOp> for Operation {
 /// One exact-range grant and native endpoint owned by a parent RDMA request.
 pub(super) struct RdmaSlice {
     pub(super) grant: super::RdmaGrant,
-    pub(super) binding: super::rdma_transport::Binding,
+    pub(super) binding: super::protocol::Binding,
     pub(super) remote: super::Descriptor,
     pub(super) peer: super::endpoint::Peer,
     pub(super) offset: usize,

@@ -1,3 +1,5 @@
+//! Frozen NIC/PD path metadata and static pair compatibility.
+
 use std::net::Ipv6Addr;
 
 use super::{Descriptor, discovery::GidType};
@@ -141,8 +143,8 @@ pub(super) fn read_paths(
     Ok(paths)
 }
 
-/// The initial RailMonitor boundary filters wire-incompatible pairs. Matching
-/// NIC names wins within a profile; it does not prove physical reachability.
+/// Filter wire-incompatible paths. Matching NIC names wins within a profile;
+/// static metadata does not prove physical reachability.
 pub(super) fn compatible(local: &NicPath, remote: &NicPath) -> bool {
     local.gid_type == remote.gid_type
         && local.descriptor.link_layer == remote.descriptor.link_layer
@@ -178,5 +180,5 @@ pub(super) fn remote_path<'a>(local: &NicPath, remote: &'a [NicPath]) -> Result<
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/transport/rdma/rail_monitor.rs"]
+#[path = "../../../tests/unit/transport/rdma/path.rs"]
 mod tests;

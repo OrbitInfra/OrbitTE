@@ -96,7 +96,7 @@ fn owners(engine: &TransferEngine) -> Vec<(usize, Arc<Record>)> {
                 .control
                 .lock()
                 .unwrap()
-                .endpoints
+                .qps
                 .snapshot(&mut records);
             result.extend(
                 records

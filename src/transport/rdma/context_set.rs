@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::endpoint::Peer;
+use super::path::NicPath;
 use super::quota::{DeviceLease, DeviceSelector};
-use super::rail_monitor::NicPath;
 use super::rdma_transport::RdmaTransport;
 use super::{RdmaContext, RdmaGrant, cq_lane, quota};
 use crate::engine::remaining;

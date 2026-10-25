@@ -1725,7 +1725,7 @@ impl RdmaTransport {
         reuse: Option<RdmaGrant>,
     ) -> Result<RdmaGrant> {
         let selection = self.allocate(length, u64::MAX)?;
-        self.endpoint_on(
+        self.prepare_grant(
             selection,
             memory,
             offset..offset.checked_add(length).ok_or(Error::InvalidRange)?,

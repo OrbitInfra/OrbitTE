@@ -13,6 +13,8 @@ contracts.
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
 | Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
 | Transport-level RDMA Workers pool | Implemented | Scoped 1/2/3-worker two-RNIC host Direct tests verify CQ/thread routing, retained pool lifetime and fault recovery without new threads; 1/2/3/6 CQ lanes and load-based dispatch pass the 180-case native profile; broader TENT scheduling parity remains open |
+| Peer endpoint QP arrays | Implemented | Demand-grown physical QPs; one active grant per QP. Fixed-width concurrent multiplexing remains open |
+| Worker NUMA binding and unified event monitor | Implemented | Declared CPU DRAM/RoCEv2 profile verifies actual CPU masks and native get/ACK ownership; periodic port recovery remains open |
 | Connected QP reuse and shared progress | Implemented | Fixed role/operation, one active grant, exact completion proof |
 | Concurrent multirail parents and aggregate quotas | Implemented | Scoped eight-parent MiB/folded/exact-quarter-tail profiles and retained two-/four-parent cases; shared SQ/RQ pressure, 32/40 active slice grants and connected reuse and two-WR fault/drain. Wider concurrency/QoS remains open |
 | Whole-parent source RQ admission | Implemented | Wire v12; residual-capacity rejection before QPs, caller retry, uncertain-post ownership and native receive-credit drain in declared four-/eight-parent profiles |
@@ -51,7 +53,6 @@ See [qualification](qualification.md) for the latest declared evidence and
 [the completion plan](completion-plan.md) for outstanding acceptance gates.
 
 
-Peer QP arrays, verified NUMA data-worker binding and a unified device/CQ event
-monitor pass the declared P4.12m CPU DRAM/RoCEv2 native gates. Fixed-width concurrent QP multiplexing and
-physical port recovery remain open. See [qualification](qualification.md) for
-the exact source and hardware gate state.
+See [the P4 exit queue](completion-plan.md#p4-remaining-delivery) for the two
+remaining host-runtime gaps and final acceptance boundary. P4 acceptance alone
+does not complete the full TENT core.

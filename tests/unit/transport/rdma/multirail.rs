@@ -536,7 +536,7 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
                 .control
                 .lock()
                 .unwrap()
-                .endpoints
+                .qps
                 .snapshot(&mut records);
             for record in records {
                 let request = record.lock().unwrap();

@@ -438,10 +438,7 @@ impl RdmaGrant {
             .finish_sent(&self.record, self.claim, binding, self.deadline)
     }
 
-    pub(super) fn finish_received(
-        &mut self,
-        done: &super::rdma_transport::BoundDone,
-    ) -> Result<()> {
+    pub(super) fn finish_received(&mut self, done: &super::protocol::BoundDone) -> Result<()> {
         self.progress
             .finish_received(&self.record, self.claim, done, self.deadline)
     }

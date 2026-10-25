@@ -277,7 +277,7 @@ fn snapshot(engine: &TransferEngine) -> Snapshot {
             .control
             .lock()
             .unwrap()
-            .endpoints
+            .qps
             .snapshot(&mut records);
         for record in records {
             let state = record.lock().unwrap();

@@ -201,7 +201,7 @@ unsafe extern "C" fn post(
                     .control
                     .lock()
                     .unwrap()
-                    .endpoints
+                    .qps
                     .work_owner(namespace, false)
             });
         assert!(
