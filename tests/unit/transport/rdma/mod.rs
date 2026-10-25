@@ -1083,7 +1083,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
     }
 }
 
-impl RdmaEndpoint {
+impl RdmaGrant {
     pub(crate) fn has_resources(&self) -> bool {
         self.record
             .lock()
@@ -1092,15 +1092,15 @@ impl RdmaEndpoint {
     }
 }
 
-type CloseHook = Box<dyn FnOnce(&mut RdmaEndpoint, &Result<()>)>;
+type CloseHook = Box<dyn FnOnce(&mut RdmaGrant, &Result<()>)>;
 thread_local! { static BEFORE_REQUESTER_CLOSE: std::cell::RefCell<Option<CloseHook>> = const { std::cell::RefCell::new(None) }; }
 
-pub(crate) fn on_requester_close(hook: impl FnOnce(&mut RdmaEndpoint, &Result<()>) + 'static) {
+pub(crate) fn on_requester_close(hook: impl FnOnce(&mut RdmaGrant, &Result<()>) + 'static) {
     BEFORE_REQUESTER_CLOSE
         .with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
 }
 
-pub(crate) fn before_requester_close(endpoint: &mut RdmaEndpoint, result: &Result<()>) {
+pub(crate) fn before_requester_close(endpoint: &mut RdmaGrant, result: &Result<()>) {
     let hook = BEFORE_REQUESTER_CLOSE.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook(endpoint, result);
@@ -1126,7 +1126,7 @@ pub(crate) fn work_usage(runtime: &RdmaTransport) -> Arc<Mutex<RdmaStats>> {
 }
 
 impl RdmaTransport {
-    pub(crate) fn staging_endpoint(&self, length: usize, permission: u32) -> Result<RdmaEndpoint> {
+    pub(crate) fn staging_endpoint(&self, length: usize, permission: u32) -> Result<RdmaGrant> {
         let registry = crate::memory::MemoryRegistry::new(SourceEpoch([1; 16]), 1, length.max(1));
         let memory = registry.register(
             vec![0; length.max(1)].into_boxed_slice(),
@@ -1640,7 +1640,7 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
 
 mod windows;
 
-impl RdmaEndpoint {
+impl RdmaGrant {
     pub(crate) fn descriptor(&self) -> Descriptor {
         let state = self.record.lock().unwrap();
         let resources = state.resources.as_ref().unwrap();
@@ -1653,7 +1653,7 @@ impl RdmaEndpoint {
 }
 
 pub(super) fn deliver_completion(
-    endpoint: &RdmaEndpoint,
+    endpoint: &RdmaGrant,
     bytes: &[u8; COMPLETION_MESSAGE_SIZE],
     mutate: impl FnOnce(&mut sys::Completion),
     send_cq: bool,
@@ -1689,7 +1689,7 @@ pub(super) fn deliver_completion(
         .push_back(completion);
 }
 
-pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaEndpoint) {
+pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaGrant) {
     if endpoint.cached_peer.is_some()
         && runtime.config.device.as_deref() == Some("async_copy_reuse_open_pause")
     {
@@ -1722,8 +1722,8 @@ impl RdmaTransport {
         length: usize,
         permission: u32,
         deadline: Instant,
-        reuse: Option<RdmaEndpoint>,
-    ) -> Result<RdmaEndpoint> {
+        reuse: Option<RdmaGrant>,
+    ) -> Result<RdmaGrant> {
         let selection = self.allocate(length, u64::MAX)?;
         self.endpoint_on(
             selection,

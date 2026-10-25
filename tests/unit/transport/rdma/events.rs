@@ -1,10 +1,12 @@
+use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use ibverbs_sys as ffi;
 
 use super::*;
 use crate::transport::rdma::{
-    RdmaTransport,
+    RdmaStats, RdmaTransport,
     tests::{events as native_events, runtime},
 };
 
@@ -24,7 +26,7 @@ fn context_consumer_acks_while_native_destroy_holds_request_lock() {
     let runtime = runtime("direct:async_destroy");
     let mut endpoint = runtime.staging_endpoint(8, 2).unwrap();
     let events = native_events(&runtime);
-    assert_eq!(runtime.stats().unwrap().async_event_workers, 1);
+    assert_eq!(runtime.stats().unwrap().async_event_sources, 1);
     let closed = endpoint.close();
     assert!(
         !matches!(closed, Err(Error::Unquiesced { .. })),
@@ -42,7 +44,7 @@ fn context_consumer_acks_while_native_destroy_holds_request_lock() {
     assert_eq!(
         (
             stats.acknowledged_async_events,
-            stats.async_event_workers,
+            stats.async_event_sources,
             stats.active_endpoints,
             stats.active_windows,
             stats.active_cqs,
@@ -89,7 +91,7 @@ fn context_consumer_acks_information_then_fences_unknown_events() {
     runtime
         .close(Instant::now() + Duration::from_secs(2))
         .unwrap();
-    assert_eq!(runtime.stats().unwrap().async_event_workers, 0);
+    assert_eq!(runtime.stats().unwrap().async_event_sources, 0);
     for kind in [
         ffi::IBV_EVENT_CQ_ERR,
         ffi::IBV_EVENT_QP_FATAL,
@@ -144,7 +146,7 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
     let events = native_events(&runtime);
     crate::transport::rdma::context::tests::emit_async(&runtime, 255);
     wait(&runtime, |s| {
-        s.retained_endpoints == 1 && s.async_event_workers == 0
+        s.retained_endpoints == 1 && s.async_event_sources == 0
     });
     assert!(matches!(endpoint.close(), Err(Error::Unquiesced { .. })));
     registry.unregister(&memory).unwrap();

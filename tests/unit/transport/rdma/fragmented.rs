@@ -56,7 +56,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
 
 pub(super) fn arm(
     runtime: &RdmaTransport,
-    endpoint: &RdmaEndpoint,
+    endpoint: &RdmaGrant,
     memory: crate::RegisteredMemory,
     partial: bool,
 ) {

@@ -65,3 +65,10 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
     topology.rank();
     topology
 }
+
+#[cfg(feature = "rdma")]
+mod affinity;
+#[cfg(all(test, feature = "rdma"))]
+pub(crate) use affinity::allowed_cpus;
+#[cfg(feature = "rdma")]
+pub(crate) use affinity::{CpuAffinity, worker_affinities};

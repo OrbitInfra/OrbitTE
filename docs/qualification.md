@@ -11,7 +11,17 @@ OrbitTE distinguishes three states:
 A successful build or CPU fixture does not qualify physical DMA, a new fabric,
 GPU direct transfer or performance.
 
-## Current source delivery
+## Current implementation awaiting qualification
+
+P4.12m adds context-owned peer QP arrays, verified worker NUMA CPU binding and
+one transport monitor for async/completion events. `RdmaGrant` is separate from
+the persistent peer endpoint. Fixed-width concurrent QP multiplexing remains
+open; demand-created QPs still obey the aggregate limit. Source and hardware
+gates for this exact delivery are not yet sealed. Evidence is kept outside the
+checkout at `/root/orbitte-artifacts/rdma-endpoint-monitor-20261025`.
+Independent acceptance and complete P4 remain open.
+
+## Previous qualified source: CQ lanes
 
 P4.12l (`2952f06`) adds per-context CQ lanes and load-based slice admission
 using TENT's unified `num_lanes`. PD/MR/key owners and aggregate limits stay
@@ -37,8 +47,8 @@ they are excluded from the passed totals. The retained native handles, MR/DMA
 loans and no-retry assertions remain explicit. See
 [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
 
-These are same-agent scoped gates. Physical fabric/device loss, endpoint QP
-arrays, affinity/monitor parity, broader GPU/fabric/installed profiles,
+These are same-agent scoped gates. Physical fabric/device loss, fixed-width QP
+multiplexing, full monitor parity, broader GPU/fabric/installed profiles,
 independent acceptance and complete P4 remain open. No performance claim is made.
 
 ## Previous qualified source

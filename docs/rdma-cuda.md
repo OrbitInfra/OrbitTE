@@ -3441,3 +3441,67 @@ This is a CQ-lane and load-dispatch substage. Priority MPSC queues, endpoint QP
 arrays, monitor consolidation, affinity, physical device recovery and complete
 P4 acceptance remain open; no performance or full native wire-parity claim is
 made.
+
+
+## Peer QP arrays, worker affinity and unified monitor
+
+P4.12m continues the frozen TENT reference
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`. Wire v12, exact-range MW
+authority, whole-parent RQ admission and separate destruction deadlines remain
+unchanged. The source implements this substage; its current hardware result is
+recorded in [qualification](qualification.md).
+
+| Frozen TENT owner | OrbitTE owner | Current behavior and limits |
+| --- | --- | --- |
+| Context `EndpointStore`, `RdmaEndPoint::qp_list_` | Context-slot `EndpointStore`, `RdmaEndpoint::qp_list` | One peer endpoint owns physical QP references across lanes; peer identity includes remote epoch/PD, route, role and source NIC |
+| QP/CQ counters and retiring endpoints | `qp.rs`, CQ-local `QpStore`, `cq_lane` | Physical connection identity, exact WR/CQ routing, idle claim and retained native drain owners |
+| `workerThread` and `bindToSocket(worker_id % numa_nodes)` | `Workers`, `platform/cpu_probe/affinity.rs` | Bind each data thread to a round-robin allowed NUMA CPU set and verify the actual mask before it accepts work |
+| `Workers::monitorThread`, context async events | `Workers::monitor`, `monitor.rs`, device event state | One monitor polls every context async FD and lane completion channel, acknowledges native events before waking data workers |
+| Native registered-region authority | `RdmaGrant`, `GrantResources` | Separate exclusive exact-range memory loan, MW, RQ/control receipt and load lease |
+
+Peer arrays are real connection owners, rather than an alternate list of QP
+numbers. Entries retain the physical progress record and its lane identity.
+Healthy reuse consults the array before the CQ-local atomic idle claim, preserving
+both connection identities, operation and previous grant generation. A reused
+QP cannot move to another endpoint, PD or CQ lane. Lookup detachment does not
+erase an unfinished or retained QP; only Closed records leave the array.
+
+The current Rust wire protocol prepares all exclusive slice grants before
+payload admission. Arrays therefore grow on demand under `max_endpoints`,
+which still counts physical QPs. They are **not yet TENT's fixed-width QP pool**:
+sharing one QP among simultaneous grants requires separating receive/message
+ownership and WR debt from the connection. Capping this array at `num_lanes`
+without that work could deadlock an admitted parent. This remaining multiplexing
+contract stays explicit in the completion plan. Read/write capabilities stay
+per physical QP; a peer array may own both kinds.
+
+NUMA discovery intersects sysfs node cpulists with the creator's actual
+`sched_getaffinity` mask. Empty nodes are excluded and sparse node IDs preserved.
+If no usable NUMA topology is visible, workers retain the inherited allowed CPU
+set with no node claim. CPU masks grow dynamically beyond 1,024 CPUs. A failed
+bind or a changed kernel-reported mask fails pool startup and joins already
+started workers. Thread binding does not migrate host pages, pin application
+threads, or prove a GPU/RNIC memory path.
+
+The monitor registry holds weak event-source references. Device/channel owners
+retain registrations, each serializing get/ACK with detach. An outstanding poll
+snapshot refers to that registration rather than only an fd number, so fd reuse
+cannot redirect it to a new native owner. Removal waits for an active native
+get/ACK before the channel/device can close. Gets are bounded per source pass;
+event counters and source failure bookkeeping do not acquire the transport
+budget mutex. The monitor continues while retained native owners need it;
+transport close cannot report success with live event registrations.
+
+`monitor_workers` reports the single live transport monitor;
+`opened_monitor_workers` counts starts. `async_event_sources` and
+`completion_event_sources` replace the former per-consumer thread counters.
+Data thread counts remain `progress_workers`. Completion channels still belong
+to their lanes and retain their own native cleanup failures.
+
+TENT's monitor also performs periodic endpoint/orphan reclaim and paused-port
+recovery. OrbitTE's data-lane owners already drive timed QP drain; this change
+keeps those responsibilities there. Physical port recovery and periodic
+route-bandwidth refresh are not established by event-thread consolidation.
+Native provider calls remain non-preemptible. Independent P4 acceptance,
+fixed-width concurrent QP multiplexing and physical device recovery remain open;
+this substage makes no performance or native wire interoperability claim.

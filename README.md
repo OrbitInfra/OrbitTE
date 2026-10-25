@@ -40,7 +40,9 @@ drained progress owners recover for later requests; MR/MW syscall-failure tests
 keep the old owners quarantined while fresh engines recover in live processes.
 Per-context CQ lanes and load-based slice admission pass scoped 1/2/3/6-lane
 checks; context PD/MR owners and aggregate limits remain shared.
-Physical
+Peer QP arrays, verified NUMA worker binding and a unified event monitor are
+implemented with qualification tracked in the completion plan. Fixed-width QP
+multiplexing, physical
 port/device loss, independent P4 acceptance, full TENT parity, GPUDirect RDMA
 and optional SSD transports remain open.
 The published `orbit-te` alpha reserves the package identity; use the source
@@ -56,7 +58,9 @@ checkout for the implementation described here.
   per-context CQ lanes and a transport-level worker pool keep resources with
   their physical owners. `num_lanes` aligns workers and CQ parallelism; new
   slices use worker load while cached QPs retain their CQ lane. Host Direct registration prepares all enabled contexts
-  before exposing a range.
+  before exposing a range. Peer endpoint arrays, physical QPs and per-slice
+  grants have separate owners; data workers bind to allowed NUMA CPU sets and
+  one transport monitor consumes device/CQ events.
 - **Topology-aware device selection.** Stable NIC IDs, device masks, NUMA
   priorities and in-flight byte charges select compatible paths per RDMA slice.
   Parent completion requires every slice and its source receipt.

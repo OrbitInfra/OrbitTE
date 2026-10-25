@@ -91,7 +91,7 @@ fn clean(stats: &RdmaStats) {
             stats.active_cqs,
             stats.retained_cqs,
             stats.progress_workers,
-            stats.async_event_workers,
+            stats.async_event_sources,
             stats.active_endpoints,
             stats.retained_endpoints,
             stats.active_grants,
@@ -112,7 +112,7 @@ fn clean(stats: &RdmaStats) {
             stats.retained_message_bytes,
             stats.active_completion_channels,
             stats.retained_completion_channels,
-            stats.completion_event_workers
+            stats.completion_event_sources
         ]
         .iter()
         .all(|value| *value == 0),

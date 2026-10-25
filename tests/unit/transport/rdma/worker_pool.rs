@@ -57,6 +57,7 @@ pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
 
 pub(super) fn running(engine: &crate::TransferEngine) {
     let stats = engine.stats().unwrap().rdma.unwrap();
+    monitor_stats(&stats);
     let closed = crate::engine::tests::source_runtime(engine)
         .context_set
         .lock()
@@ -92,6 +93,7 @@ pub(super) fn running(engine: &crate::TransferEngine) {
 }
 
 pub(super) fn closed(stats: &RdmaStats) {
+    monitor_stats(stats);
     assert_eq!((stats.progress_workers, stats.progress_lanes), (0, 0));
     assert!(stats.opened_progress_workers == 0 || stats.opened_progress_workers == count() as u64);
     println!(
@@ -110,6 +112,7 @@ pub(super) fn admitted(engine: &crate::TransferEngine, expected: usize) {
         expected,
         "admitted grants lost worker load"
     );
+    endpoint_arrays(runtime, expected);
     let fresh = runtime.stats().unwrap().reused_connections == 0;
     if fresh {
         assert!(
@@ -118,4 +121,65 @@ pub(super) fn admitted(engine: &crate::TransferEngine, expected: usize) {
         );
     }
     println!("ORBITTE_WORKER_LOAD {{\"fresh\":{fresh},\"slices\":{expected},\"loads\":{loads:?}}}");
+}
+
+fn monitor_stats(stats: &RdmaStats) {
+    assert!(stats.monitor_workers <= 1 && stats.opened_monitor_workers <= 1);
+    if stats.active_devices == 0 {
+        assert_eq!(stats.monitor_workers, 0);
+    }
+    println!(
+        "ORBITTE_MONITOR_STATS {{\"workers\":{},\"opened\":{},\"async_sources\":{},\"completion_sources\":{}}}",
+        stats.monitor_workers,
+        stats.opened_monitor_workers,
+        stats.async_event_sources,
+        stats.completion_event_sources
+    );
+}
+
+fn endpoint_arrays(runtime: &RdmaTransport, expected: usize) {
+    let contexts = runtime.context_set.lock().unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut active = 0;
+    for (context, slot) in contexts.slots.iter().enumerate() {
+        for endpoint in slot.endpoints.native_endpoints() {
+            let mut counts = vec![0; count()];
+            let mut busy = 0;
+            for (record, lane, peer) in endpoint.native_qps() {
+                assert!(
+                    seen.insert(Arc::as_ptr(&record) as usize),
+                    "one physical QP belongs to two peer endpoints"
+                );
+                let state = record.lock().unwrap();
+                let Some(resources) = &state.resources else {
+                    assert!(state.phase == Phase::Closed);
+                    continue;
+                };
+                if resources.connection.closed {
+                    continue;
+                }
+                assert_eq!(resources.connection.incarnation, Some(peer.local));
+                assert_eq!(
+                    crate::transport::rdma::tests::cq_lane_owner(
+                        resources.connection.handles.cq as usize
+                    ),
+                    lane
+                );
+                counts[lane] += 1;
+                if resources.grant.is_some() {
+                    busy += 1;
+                }
+            }
+            active += busy;
+            println!(
+                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"lanes\":{counts:?}}}",
+                Arc::as_ptr(&endpoint) as usize,
+                counts.iter().sum::<usize>()
+            );
+        }
+    }
+    assert_eq!(
+        active, expected,
+        "admitted grants escaped persistent peer QP arrays"
+    );
 }

@@ -34,7 +34,11 @@ pub struct RdmaStats {
     pub active_completion_channels: usize,
     pub opened_completion_channels: u64,
     pub retained_completion_channels: usize,
-    pub completion_event_workers: usize,
+    /// Live completion-channel registrations in the transport monitor.
+    pub completion_event_sources: usize,
+    /// One transport-wide thread consumes all device and CQ-channel events.
+    pub monitor_workers: usize,
+    pub opened_monitor_workers: u64,
     /// Successful native gets, each acknowledged before notifying progress.
     pub completion_events: u64,
     pub cq_notification_arms: u64,
@@ -48,7 +52,7 @@ pub struct RdmaStats {
     pub opened_progress_workers: u64,
     /// CQ lanes still assigned to data workers, summed across all contexts.
     pub progress_lanes: usize,
-    pub async_event_workers: usize,
+    pub async_event_sources: usize,
     pub acknowledged_async_events: u64,
     /// Cumulative shared-progress faults, including permanently retained owners.
     pub progress_failures: u64,

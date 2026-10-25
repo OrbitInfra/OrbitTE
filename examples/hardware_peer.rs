@@ -186,7 +186,7 @@ fn finish(
     if idle.active_cqs != 2 * usize::from(transport == Transport::Rdma)
         || idle.opened_cqs != 2 * u64::from(transport == Transport::Rdma)
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
-        || idle.async_event_workers != usize::from(transport == Transport::Rdma)
+        || idle.async_event_sources != usize::from(transport == Transport::Rdma)
         || idle.progress_failures != 0
         || idle.persistent_mrs != 2 * usize::from(cached)
         || idle.persistent_mr_bytes != if cached { 2 * memory.len() } else { 0 }
@@ -241,11 +241,11 @@ fn finish(
         || rdma.retained_windows != 0
         || rdma.active_completion_channels != 0
         || rdma.retained_completion_channels != 0
-        || rdma.completion_event_workers != 0
+        || rdma.completion_event_sources != 0
         || rdma.active_cqs != 0
         || rdma.retained_cqs != 0
         || rdma.progress_workers != 0
-        || rdma.async_event_workers != 0
+        || rdma.async_event_sources != 0
         || rdma.progress_failures != 0
         || rdma.active_devices != 0
         || rdma.window_key_indices != 0
@@ -312,8 +312,8 @@ fn finish(
         rdma.retained_source_mrs
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
-        idle.async_event_workers, rdma.async_event_workers, rdma.acknowledged_async_events
+        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_sources, rdma.async_event_sources, rdma.acknowledged_async_events
     );
     println!(
         "ORBITTE_OWNER_STATS {{\"idle_connections\":{},\"idle_grants\":{},\"connections\":{},\"grants\":{},\"retained_connections\":{},\"retained_grants\":{}}}",
@@ -346,7 +346,7 @@ fn finish(
     let event_mode =
         transport == Transport::Rdma && env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
     if idle.active_completion_channels != usize::from(event_mode)
-        || idle.completion_event_workers != usize::from(event_mode)
+        || idle.completion_event_sources != usize::from(event_mode)
         || rdma.opened_completion_channels != u64::from(event_mode)
         || (event_mode && (rdma.completion_events == 0 || rdma.cq_notification_arms < 2))
     {
@@ -355,9 +355,9 @@ fn finish(
         ));
     }
     println!(
-        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_workers\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"workers\":0}}",
+        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
         rdma.opened_completion_channels,
-        idle.completion_event_workers,
+        idle.completion_event_sources,
         rdma.completion_events,
         rdma.cq_notification_arms,
         rdma.cq_event_waits

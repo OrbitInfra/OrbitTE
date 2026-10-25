@@ -37,8 +37,9 @@ completion contracts.
 | `Workers`, `WorkerContext` | Own a configurable transport-level thread pool; rotate assigned contexts and park until work, CQ events or deadlines | `RdmaTransport::workers_`, `Workers::start`, `workerThread`, `asyncPollCq` |
 | `CqLane`, CQ and queue owners | Own one lane's SQ/RQ pair, endpoint records, WR routing and fault/drain state | Per-context CQ/endpoint ownership consumed by TENT workers |
 | `CqQuota` | Wake the assigned worker when aggregate SQ/RQ capacity returns | Explicit wake for polling/event scheduling; separate from native cross-process QoS |
-| Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
-| Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
+| `EndpointStore`, `RdmaEndpoint` | Context-owned peer lookup and persistent QP arrays across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
+| `QpStore`, physical connection resources | CQ-local WR lookup, idle/retiring QPs and native connection drain | CQ routing, QP depth/retirement owners |
+| `RdmaGrant`, grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
 
 The `platform/cpu_probe.rs` filename comes directly from TENT's
 `platform/cpu_probe.cpp`. It discovers host NUMA/RNIC locality. Native verbs
@@ -51,7 +52,8 @@ Each permitted NIC retains its topology slot, even if native construction
 fails cleanly. An enabled slot owns one PD and a `cq_list` of independent `CqLane` owners.
 `RdmaConfig.num_lanes` sets both transport worker count and CQ-lane count per
 context. Lane `i` in every context belongs to worker `i`; each lane owns its
-SQ/RQ CQs, endpoint store and drain state. Thread count remains independent
+SQ/RQ CQs, QP progress store and drain state. The context slot owns the peer
+endpoint store and its QP arrays. Thread count remains independent
 of the number of contexts. Physical MR copies across contexts share aggregate
 registration budgets.
 
@@ -112,9 +114,27 @@ and the last grant. PDs, key history and persistent MRs remain context-owned.
 
 Device/route faults wake every attached lane; shared quota wakes only lanes
 waiting for capacity. Completion-event channels remain lane-owned, so a lane's
-native failure and recovery do not destroy a sibling channel. TENT's bounded
-priority MPSC slice queues, endpoint QP arrays, NUMA thread affinity and
-consolidated monitor remain further parity work. One synchronous provider call
+native failure and recovery do not destroy a sibling channel. One transport
+monitor consumes all context async FDs and CQ event channels. Registrations
+serialize get/ACK with detachment; native owners close only after detachment.
+Monitor counters are atomic, so event failure cannot wait for a native
+destructor's budget lock. One failed event source fences its device; loss of
+the monitor fences every remaining source.
+
+Data workers bind before admission to NUMA node CPU sets intersected with the
+creator's allowed affinity. Workers round-robin over available nodes, including
+sparse node IDs; a missing NUMA inventory preserves the allowed mask and records
+no node. Startup verifies the actual mask and propagates binding errors. This
+does not place application memory or establish RNIC-local page placement.
+
+Peer endpoints collect connected QPs across lanes by remote epoch, PD and role.
+Reuse selects candidates from these arrays, then atomically claims the exact
+idle bilateral connection in its CQ-local store. A terminal bit removes lookup
+permission; array removal still requires the physical QP's Closed state.
+`RdmaGrant` retains the peer endpoint while it owns an exclusive authorization.
+The array currently grows on demand within the aggregate physical-QP limit:
+one active wire grant still owns one QP. TENT's fixed `num_lanes` QP width,
+concurrent slices on each QP, and bounded priority MPSC queues remain open. One synchronous provider call
 can delay the other context lanes assigned to that worker; native calls remain
 non-preemptible. This change makes no throughput claim.
 
@@ -215,8 +235,12 @@ ambiguous WRITE is not replayed automatically. See the detailed
 | `transport/rdma/config.rs`, `stats.rs` | RDMA configuration/validation and resource observations |
 | `transport/rdma/rdma_transport.rs` | Context set, registration, parent/slice dispatch and transport shutdown |
 | `transport/rdma/workers.rs` | Transport data-thread pool, context assignment, wake/park and join |
-| `transport/rdma/progress.rs`, `progress/poll.rs` | Endpoint/grant protocol; bounded post/poll passes and native fault/drain state |
-| `transport/rdma/context.rs`, `buffers.rs`, `endpoint*.rs`, `cq.rs` | PD/key domains, MRs, QP/loan owners, endpoint stores and native CQ/event owners |
+| `transport/rdma/context_set.rs`, `cq_lane.rs`, `cq_lane/poll.rs` | Context/lane lifecycle; grant protocol and bounded native post/poll/drain |
+| `transport/rdma/context.rs`, `buffers.rs` | PD/key domains and persistent MRs |
+| `transport/rdma/endpoint.rs`, `endpoint_store.rs` | Peer endpoint identities and persistent cross-lane QP arrays |
+| `transport/rdma/qp.rs`, `qp_store.rs`, `grant.rs` | Physical QP handles/retirement and separate exact-range grant owners |
+| `transport/rdma/cq.rs`, `events.rs`, `monitor.rs` | CQ/channel owners, device event state and one transport event consumer |
+| `platform/cpu_probe/affinity.rs` | Allowed CPU/NUMA intersections and verified worker socket binding |
 | `cuda/` | NVIDIA allocation and synchronized host-staging foundations |
 
 The [parity contract](tent-parity.md) pins the reference revision and capability

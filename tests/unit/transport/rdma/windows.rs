@@ -6,7 +6,7 @@ fn source(
     RdmaTransport,
     crate::memory::MemoryRegistry,
     RegisteredMemory,
-    RdmaEndpoint,
+    RdmaGrant,
 ) {
     let runtime = runtime(mode);
     let registry = crate::memory::MemoryRegistry::new(SourceEpoch([1; 16]), 1, 8);
