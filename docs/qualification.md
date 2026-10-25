@@ -13,6 +13,52 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The concurrent grant-record delivery gives several runtime records one shared
+`RdmaQp`. SQ completions select the record's namespace; RQ completions identify
+the physical receive slot and then the exact binding/key grant. Native retirement
+fences all affiliated records, while successful grants release their own loan/MW.
+Physical QP/queue retention is counted once, separately from every retained grant.
+
+The new explicit `shared_qp` hardware profile uses four grants on one real RC QP,
+checks concurrent payload WR namespaces, reverse SEND_WITH_INV receipts, immediate
+grant release and stale-record isolation. Its lost-receive control drops an actual
+successful CQE and checks all four loans and RQ credits at both native CQ teardown
+boundaries. It uses the production owners and native provider, with a fixture
+rendezvous; it does not claim concurrent public v12 handshakes.
+
+Source `afa68ec` passes 23 local gates on stable and Rust 1.85, including
+208 all-feature unit tests per compiler, twelve hardware-runner controls and
+the frozen TENT geometry comparison. The two frozen binaries pass 212 two-host
+CPU DRAM/IPv4 RoCEv2 configurations: 180 existing two-RNIC regressions and
+32 new shared-QP cases across both RNICs, READ/WRITE, polling/event progress,
+healthy completion and lost receive completion.
+
+The new cases check four distinct payload WR namespaces on one actual QP,
+reverse receipt order, completed-record replacement while a donated RQ slot
+remains pending, and stale close isolation. Sixteen controls drop actual
+successful receive CQEs; 128 loan checks at native CQ destruction boundaries
+verify that all four grants remain protected until physical drain. These
+checks establish ownership and completion routing, not performance or
+simultaneous DMA execution. All 472 children are reaped: 448 completed libtests
+and 24 deliberate kills. Both RNIC locks are available afterward, with
+unchanged node/provider identities and no GPU compute used.
+
+The actual frozen TENT CPU comparison passes 25 observations and six negative
+controls. Its Rust/C++/TENT binary hashes and identical merge tree are checked.
+The source CI matrix and strict documentation checks pass. Evidence, including
+failed development runs, stays under
+`/root/orbitte-artifacts/rdma-grant-records-20261026`.
+`native-raw-audit.json` and `shared-native-audit.json` reconcile the raw native
+results; `final-delivery.json` identifies the qualified code and documentation-only
+delivery commit. See the [shared-QP reproduction contract](rdma-cuda.md#shared-qp-grant-record-profile).
+
+These are same-agent scoped gates. Public v12 still admits one active grant per
+QP. Public multiplexing, fixed-width arrays, periodic recovery, physical
+port/device faults, GPU/performance and independent acceptance stay open;
+this delivery does not complete P4.
+
+## Previous qualified native source: QP receive owner
+
 The QP receive-owner delivery moves receive buffers, message MRs and parent
 admission credits into `ConnectionResources::receive_queue`. `ReceiveWork`
 holds an independent full-binding/key receipt. Successful CQEs identify the
@@ -42,9 +88,9 @@ under `/root/orbitte-artifacts/rdma-receive-dispatch-20261025`;
 `final-delivery.json` identifies the qualified source and documentation-only
 delivery commit. The source CI matrix and strict documentation checks pass.
 
-The public v12 path still has one active grant per QP. Multiple receipt
-dispatch is a CPU contract until concurrent grant records, multi-namespace CQ
-lookup and fixed-width construction are connected and qualified. Full P4,
+For source `6b34ce7`, public v12 has one active grant per QP and multiple-receipt
+dispatch is qualified only as a CPU contract. Later delivery evidence above
+expands the internal native scope without changing that historical result. Full P4,
 physical port/device faults, GPUDirect, performance and independent acceptance
 remain open. The previous qualified source below remains historical evidence.
 

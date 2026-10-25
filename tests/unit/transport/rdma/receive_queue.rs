@@ -83,6 +83,13 @@ fn delivered(queue: &mut ReceiveQueue, slot: u64, target: &ReceiveWork) -> sys::
     }
 }
 
+// The CQ lane commits logical completion after revoking the named grant authority.
+fn acknowledge(queue: &mut ReceiveQueue, completion: sys::Completion) -> Result<Arc<ReceiveWork>> {
+    let receipt = queue.complete(completion)?;
+    receipt.mark_completed();
+    Ok(receipt)
+}
+
 fn close(runtime: RdmaTransport, device: Arc<RdmaContext>, mut queue: ReceiveQueue) {
     queue.quiesce();
     queue.close(runtime.verbs).unwrap();
@@ -112,7 +119,7 @@ fn reversed_grant_messages_release_only_the_consumed_slot_and_named_authority() 
         posted(&mut queue, work, runtime.verbs, 0, 2).unwrap();
     }
     let completion = delivered(&mut queue, first.id, &second);
-    let receipt = queue.complete(completion).unwrap();
+    let receipt = acknowledge(&mut queue, completion).unwrap();
     assert!(Arc::ptr_eq(&receipt, &second));
     assert!(second.completed() && !first.completed());
     queue.release(&second, runtime.verbs).unwrap();
@@ -127,7 +134,10 @@ fn reversed_grant_messages_release_only_the_consumed_slot_and_named_authority() 
     let third = work(3);
     prepare(&mut queue, &third, &device).unwrap();
     let completion = delivered(&mut queue, 257, &first);
-    assert!(Arc::ptr_eq(&queue.complete(completion).unwrap(), &first));
+    assert!(Arc::ptr_eq(
+        &acknowledge(&mut queue, completion).unwrap(),
+        &first
+    ));
     queue.release(&first, runtime.verbs).unwrap();
     assert_eq!(
         queue.memory_usage(),
@@ -137,7 +147,10 @@ fn reversed_grant_messages_release_only_the_consumed_slot_and_named_authority() 
     assert_eq!(queue.credited(), 1);
     posted(&mut queue, &third, runtime.verbs, 0, 2).unwrap();
     let completion = delivered(&mut queue, third.id, &third);
-    assert!(Arc::ptr_eq(&queue.complete(completion).unwrap(), &third));
+    assert!(Arc::ptr_eq(
+        &acknowledge(&mut queue, completion).unwrap(),
+        &third
+    ));
     queue.release(&third, runtime.verbs).unwrap();
     assert_eq!(queue.memory_usage(), (0, 0));
     close(runtime, device, queue);
@@ -179,7 +192,7 @@ fn receive_identity_flags_binding_and_key_never_pay_foreign_debt() {
             "wc_error" => completion.status = 5,
             _ => {}
         }
-        let result = queue.complete(completion);
+        let result = acknowledge(&mut queue, completion);
         let success = matches!(case, "valid" | "duplicate");
         assert_eq!(result.is_ok(), success, "{case}");
         assert_eq!(second.completed(), success, "{case}");

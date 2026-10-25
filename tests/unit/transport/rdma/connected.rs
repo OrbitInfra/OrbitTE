@@ -27,7 +27,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
         assert_eq!(record.actions.load(Ordering::Acquire), 0);
         let resources = request.resources.as_ref().unwrap();
         assert!(resources.grant.is_none());
-        let connection = &resources.connection;
+        let connection = resources.connection.lock().unwrap();
         assert!(!connection.closed && !connection.handles.qp.is_null());
         let native = unsafe { &*connection.handles.qp.cast::<ibverbs_sys::ibv_qp>() };
         assert_eq!(native.qp_num, connection.local.qpn);

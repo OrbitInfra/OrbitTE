@@ -1,4 +1,4 @@
-//! CQ pair lifetime, physical-QP records and the state shared with its data worker.
+//! CQ pair lifetime, grant records and the state shared with its data worker.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -60,7 +60,10 @@ const CLOSE: u8 = 2;
 const RECEIVE: u8 = 4;
 const FINISH: u8 = 8;
 
+/// A logical grant; its native connection may be shared with other records.
 pub(super) struct Record {
+    pub(super) connection: Arc<super::qp::RdmaQp>,
+    send_queue: Arc<super::qp::send_queue::SendQueue>,
     actions: AtomicU8,
     pub(super) tag: u64,
     pub(super) terminal: AtomicBool,
@@ -123,9 +126,11 @@ impl Request {
     pub(super) fn check(&self) -> Result<()> {
         match self.failure {
             Some(fault) => Err(fault.error()),
-            None => self.resources.as_ref().map_or(Ok(()), |resources| {
-                resources.connection.device.asynchronous.check()
-            }),
+            None => self
+                .resources
+                .as_ref()
+                .and_then(|r| r.grant.as_ref())
+                .map_or(Ok(()), |grant| grant.device.asynchronous.check()),
         }
     }
 }
@@ -135,7 +140,7 @@ impl Record {
         if self.terminal.load(Ordering::Acquire) {
             return Err(Error::Unavailable("RDMA endpoint is terminal"));
         }
-        Ok(())
+        self.connection.require_live()
     }
 
     pub(super) fn lock(&self) -> Result<MutexGuard<'_, Request>> {
@@ -314,7 +319,10 @@ impl CqLane {
             .filter(|next| next.checked_mul(super::WR_ID_STRIDE).is_some())
             .ok_or(Error::ResourceExhausted)?;
         control.next_tag = next;
+        let send_queue = Arc::clone(&resources.connection.lock()?.send_queue);
         let record = Arc::new(Record {
+            send_queue,
+            connection: Arc::clone(&resources.connection),
             actions: AtomicU8::new(0),
             tag,
             terminal: AtomicBool::new(false),
@@ -363,24 +371,49 @@ impl CqLane {
             return Ok(());
         }
         if !matches!(request.phase, Phase::Closed | Phase::Retained) {
+            let drained_record = request.phase == Phase::Ready
+                && request
+                    .resources
+                    .as_ref()
+                    .is_some_and(|r| r.grant.is_none());
             request.close_requested = true;
             drop(request);
-            {
+            let affiliated = {
                 let mut control = self.shared.control.lock().map_err(|_| Error::Unquiesced {
                     operation: "RDMA endpoint store poisoned",
                     code: libc::EIO,
                 })?;
-                if control.qps.detach(record) {
-                    #[cfg(test)]
-                    tests::before_idle_debit(&self.shared);
-                    self.shared
-                        .usage
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .idle_endpoints -= 1;
+                let affiliated = control.qps.affiliates(record);
+                if affiliated.is_empty() && drained_record && control.fault.is_none() {
+                    return Ok(());
+                }
+                for owner in &affiliated {
+                    if control.qps.detach(owner) {
+                        #[cfg(test)]
+                        tests::before_idle_debit(&self.shared);
+                        self.shared
+                            .usage
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .idle_endpoints -= 1;
+                    }
+                }
+                affiliated
+            };
+            for owner in affiliated {
+                let mut state = owner.lock()?;
+                if !matches!(state.phase, Phase::Closed | Phase::Retained) {
+                    state.close_requested = true;
+                    if !Arc::ptr_eq(&owner, record)
+                        && state.resources.as_ref().is_some_and(|r| r.grant.is_some())
+                    {
+                        state
+                            .failure
+                            .get_or_insert(Fault::Unavailable("RDMA shared QP retired"));
+                    }
+                    owner.actions.fetch_or(CLOSE, Ordering::Release);
                 }
             }
-            record.actions.fetch_or(CLOSE, Ordering::Release);
             self.shared.signal();
             request = record.lock()?;
             while !matches!(request.phase, Phase::Closed | Phase::Retained) {
@@ -520,6 +553,7 @@ impl ProgressState {
     }
 }
 
+mod completion;
 mod poll;
 mod reuse;
 mod submit;

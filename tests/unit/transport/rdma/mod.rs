@@ -1384,7 +1384,15 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
     {
         let state = first.record.lock().unwrap();
         let resources = state.resources.as_ref().unwrap();
-        let fake = unsafe { &*resources.connection.handles.qp.cast::<Fake>() };
+        let fake = unsafe {
+            &*resources
+                .connection
+                .lock()
+                .unwrap()
+                .handles
+                .qp
+                .cast::<Fake>()
+        };
         assert_eq!(
             (
                 fake.bytes.load(Ordering::Acquire),
@@ -1647,7 +1655,7 @@ impl RdmaGrant {
         Descriptor {
             address: resources.grant.as_ref().unwrap().buffer.address().as_ptr() as u64,
             rkey: resources.grant.as_ref().unwrap().rkey,
-            ..resources.connection.local
+            ..resources.connection.lock().unwrap().local
         }
     }
 }
@@ -1660,7 +1668,15 @@ pub(super) fn deliver_completion(
 ) {
     let request = endpoint.record.lock().unwrap();
     let resources = request.resources.as_ref().unwrap();
-    let qp = unsafe { &*resources.connection.handles.qp.cast::<Fake>() };
+    let qp = unsafe {
+        &*resources
+            .connection
+            .lock()
+            .unwrap()
+            .handles
+            .qp
+            .cast::<Fake>()
+    };
     assert_ne!(
         qp.cq, qp.receive_cq,
         "SQ and RQ controls must use different actual CQ handles"

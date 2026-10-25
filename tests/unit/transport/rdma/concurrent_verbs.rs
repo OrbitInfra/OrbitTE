@@ -121,6 +121,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .as_ref()
                 .unwrap()
                 .connection
+                .lock()
+                .unwrap()
                 .handles
                 .qp as usize;
             let qpn = unsafe { (*(qp as *const ffi::ibv_qp)).qp_num };
@@ -131,6 +133,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .as_ref()
                 .unwrap()
                 .connection
+                .lock()
+                .unwrap()
                 .handles
                 .cq as usize;
             let receive_cq = record
@@ -140,6 +144,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .as_ref()
                 .unwrap()
                 .connection
+                .lock()
+                .unwrap()
                 .handles
                 .receive_cq as usize;
             let pd = unsafe { (*(qp as *const ffi::ibv_qp)).pd } as usize;
@@ -616,6 +622,8 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .as_ref()
                 .unwrap()
                 .connection
+                .lock()
+                .unwrap()
                 .receive_queue
                 .outstanding();
             assert_eq!(
@@ -630,6 +638,8 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                         .as_ref()
                         .unwrap()
                         .connection
+                        .lock()
+                        .unwrap()
                         .receive_queue
                         .credited()
                         == debt,
@@ -682,10 +692,12 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .count();
             let expected = accepted - delivered;
             assert_eq!(
-                request
-                    .resources
-                    .as_ref()
-                    .map_or(0, |r| r.connection.send_queue.outstanding()),
+                request.resources.as_ref().map_or(0, |r| r
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .send_queue
+                    .outstanding()),
                 expected,
                 "physical QP lost accepted WR debt before CQ destruction"
             );
@@ -707,7 +719,10 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .and_then(|resources| resources.grant.as_ref())
             {
                 let resources = request.resources.as_ref().unwrap();
-                assert!(resources.connection.closed && resources.connection.handles.qp.is_null());
+                assert!({
+                    let c = resources.connection.lock().unwrap();
+                    c.closed && c.handles.qp.is_null()
+                });
                 assert!(trace.active_mrs.contains(&(grant.handles.mr as usize)));
                 let offset = (grant.buffer.address().as_ptr() as u64
                     - trace.memory.as_ref().unwrap().base_address())
@@ -797,11 +812,13 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     }
     if observed && trace.lost_receive {
         let owner = trace.injected_record.as_ref().unwrap().lock().unwrap();
-        let receive = &owner.resources.as_ref().unwrap().connection.receive_queue;
+        let connection = owner.resources.as_ref().unwrap().connection.lock().unwrap();
+        let receive = &connection.receive_queue;
         assert!(
             receive.outstanding() == 1 && receive.credited() == 1,
             "a dropped receive CQE lost its credit before native CQ drain"
         );
+        drop(connection);
         drop(owner);
         trace.fault_debt.push(1);
     }

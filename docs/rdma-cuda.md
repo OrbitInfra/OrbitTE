@@ -252,7 +252,9 @@ native SQ and RQ depths; the physical receive owner also bounds its slots and
 receipt table to this width. SQ and RQ keep separate outstanding-WR accounts.
 Receive-buffer identity and grant receipt identity are separated as described
 in [QP receive ownership](architecture.md#qp-receive-ownership). Public wire
-grants remain exclusive while concurrent records are being connected.
+grants remain exclusive while handshake admission and fixed-width construction
++are being connected. Runtime records already share one `RdmaQp`;
++`cq_lane/completion.rs` resolves CQEs to their exact grant owners.
 `max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
@@ -619,7 +621,7 @@ concurrent reruns exercise those boundaries. These are ownership controls, not
 physical fault receipts.
 
 The explicit ignored test
-`transport::rdma::workers::tests::hardware::shared_cq_peer` constructs four actual RC QPs per
+`transport::rdma::cq_lane::tests::hardware::shared_cq_peer` constructs four actual RC QPs per
 phase and performs READ then WRITE between two physical hosts. A test-only gate
 pauses the first native dispatch until the other requests have queued. It
 never synthesizes WRs, CQEs or bytes; the provider executes all posts/polls.
@@ -724,7 +726,7 @@ six-request public RDMA source profile requires six allocations/binds/INVs and
 zero remaining MWs. TCP/requester peers have zero MWs. Four-QP source profiles
 require eight binds/INVs over READ and WRITE phases.
 
-The ignored `transport::rdma::workers::tests::hardware::source_window_peer` gate, selected by
+The ignored `transport::rdma::cq_lane::tests::hardware::source_window_peer` gate, selected by
 `runner: orbitte-window`, accepts `window_probe: revoked` or `parent` on CPU
 RDMA peers. It intentionally submits one WRITE with an invalidated key or the
 unadvertised non-remote parent key after successful source BIND. The source
@@ -1167,12 +1169,14 @@ through `CUDA_VISIBLE_DEVICES`, so their kind uses ordinal 0. Resource lock path
 must match the resource owner's existing convention.
 
 For the native library-test executable, `runner: "orbitte-window"` selects
-exactly `transport::rdma::workers::tests::hardware::source_window_peer`.
+exactly `transport::rdma::cq_lane::tests::hardware::source_window_peer`.
 `window_probe` accepts `revoked` (LOCAL_INV), `parent` (unadvertised local-only
 parent key), or `remote` (source receive of SEND_WITH_INV, then same-QP old-key
 access before source close). `runner: "orbitte-shared-cq"` selects the exact
 `shared_cq_peer` test. Both component runners require host RDMA and explicit
-`rdma_max_cqes` (1..4), `rdma_max_send_wr` (1..2). Setting `duplex: true` runs
+`rdma_max_cqes` (1..4), `rdma_max_send_wr` (1..2). The dedicated
+[shared-QP profile](#shared-qp-grant-record-profile) below uses width four.
+Setting `duplex: true` runs
 simultaneous source/requester ownership on each process; optional
 `source_rdma_max_cqes`/`requester_rdma_max_cqes` select asymmetric capacities
 (1..4). Duplex uses SQ window one and incrementally advertises grants after
@@ -1280,6 +1284,34 @@ completion/cancel/timeout, endpoint/native teardown faults, restart/reuse and
 installed-artifact controls, alongside an independently built frozen TENT oracle
 under the same declared budgets. IB and RoCE, GPU directions, GDR, NVLink, MNNVL,
 SSD and GDS require separate evidence. No performance comparison is claimed.
+
+## Shared-QP grant record profile
+
+Use the release library-test binary built with
+`cargo test --release --locked --features rdma,cuda --lib --no-run`
+and the existing `orbitte-shared-cq` runner.
+In an external identity-pinned host RDMA profile, set each case's `shared_qp`
+to `healthy` or `lost-receive`, `operation` to `read` or `write`, and both
+`rdma_max_cqes` and `rdma_max_send_wr` to `4`. Use `payload: 8192` for the
+qualified profile; the fixture accepts 4 KiB through 8 MiB. Set `rdma_events`
+explicitly and repeat the cases for each selected RNIC. The profile requires
+CPU memory on both peers and rejects duplex or multicontext combinations.
+Keep the existing node identities, nonblocking RNIC locks and supervisor.
+
+Four production grant records share one actual RC QP. The fixture holds CQ
+polling until four distinct payload namespaces have been posted, checks full
+bytes and guards, and sends completion messages in reverse grant order.
+Completed source records are cached immediately so that a donated receive
+buffer can outlive its original record. The lost-receive control drops one
+actual successful CQE and checks all four memory loans and RQ credits at both
+native CQ destruction boundaries before release.
+
+This fixture exercises the production physical-QP, grant, queue and CQ owners
+through a test rendezvous. It does not activate concurrent public handshakes
+or qualify fixed-width peer construction. The controller requires both peers'
+native results, provider mappings and child-reaping receipts; retain failed
+runs alongside successful evidence. See [the current qualification](qualification.md#current-source-delivery)
+for source hashes, toolchains, hardware scope and external manifests.
 
 ## Persistent source registration
 
@@ -1476,7 +1508,7 @@ async faults and deterministic idle-debit/lane-failure interleaving. The existin
 native message ABI gate requires FENCE|SIGNALED and SEND_WITH_INV.
 
 The opt-in `orbitte-connected` hardware runner selects exactly
-`transport::rdma::workers::tests::hardware::connected::connected_endpoint_peer`.
+`transport::rdma::cq_lane::tests::hardware::connected::connected_endpoint_peer`.
 It runs public v9 simultaneous host READ/WRITE in both directions on one runtime
 per host, CQ capacity one or an asymmetric pair, four persistent physical QPs,
 four rounds, actual old-parent deregistration/backing release with QPs live,
@@ -3487,8 +3519,9 @@ The current Rust wire protocol prepares all exclusive slice grants before
 payload admission. Arrays therefore grow on demand under `max_endpoints`,
 which still counts physical QPs. They are **not yet TENT's fixed-width QP pool**:
 QP-owned SQ debt and RQ buffers/receipt dispatch are now implemented, but
-simultaneous grants still need separate runtime records and multi-namespace CQ
-lookup. Capping this array at `num_lanes` before completing concurrent admission
+runtime records and multi-namespace CQ lookup now share one physical `RdmaQp`.
+Public handshake multiplexing and whole-parent/RQ admission remain open.
+Capping this array at `num_lanes` before completing concurrent admission
 could deadlock an admitted parent. This remaining multiplexing
 contract stays explicit in the completion plan. Read/write capabilities stay
 per physical QP; a peer array may own both kinds.

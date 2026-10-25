@@ -1,6 +1,7 @@
 //! Physical RC connection, descriptor and native resources; grants own memory authority.
 
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use super::{DESCRIPTOR_SIZE, GrantResources, RdmaContext, RdmaStats, sys};
 use crate::{Error, Result, SourceEpoch};
@@ -71,8 +72,45 @@ impl ConnectionResources {
     }
 }
 
+/// One physical QP and its queues, shared by independently retained grant records.
+pub(super) struct RdmaQp {
+    terminal: AtomicBool,
+    state: Mutex<ConnectionResources>,
+}
+
+impl RdmaQp {
+    pub(super) fn new(resources: ConnectionResources) -> Arc<Self> {
+        Arc::new(Self {
+            terminal: AtomicBool::new(false),
+            state: Mutex::new(resources),
+        })
+    }
+
+    pub(super) fn require_live(&self) -> Result<()> {
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA physical QP is terminal"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn fence(&self) {
+        self.terminal.store(true, Ordering::Release);
+    }
+
+    pub(super) fn lock(&self) -> Result<MutexGuard<'_, ConnectionResources>> {
+        self.state.lock().map_err(|_| Error::Unquiesced {
+            operation: "RDMA QP lock poisoned",
+            code: libc::EIO,
+        })
+    }
+
+    pub(super) fn retiring(&self) -> MutexGuard<'_, ConnectionResources> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
 pub(super) struct Resources {
-    pub(super) connection: ConnectionResources,
+    pub(super) connection: Arc<RdmaQp>,
     pub(super) grant: Option<GrantResources>,
 }
 

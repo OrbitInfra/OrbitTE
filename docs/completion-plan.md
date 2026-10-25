@@ -390,13 +390,15 @@ The first row is in progress: QP-owned send depth and exact outstanding-WR
 accounting are implemented in `qp/send_queue.rs`; per-grant `SendWork` no
 longer owns global SQ credits. Payload, bind and completion SEND consume that
 shared owner, including post errors and native cancellation. This does not
-activate simultaneous wire grants. QP-owned receive buffers and binding/key
-dispatch now exist in `qp/receive_queue.rs`; `ReceiveWork` holds independent
-grant receipt state. Concurrent grant records, multi-namespace CQ lookup and
-fixed-width peer construction still have to be connected.
-Source `6b34ce7` passes the existing 180-case two-host profile on the new
-SQ/RQ owners plus CPU receipt-dispatch contracts; [qualification](qualification.md)
-pins the evidence and distinguishes CPU multiplexing from exclusive native grants.
+activate simultaneous wire grants. `RdmaQp` now owns a shared physical connection;
+independent CQ-lane grant records hold work, namespaces and waiters. Receive CQEs
+dispatch through the QP-owned slot to the exact binding/key grant, including when
+the donor record has retired. Native cancellation fences every affiliated grant,
+and physical retention counters are distinct from grant counters.
+The shared-QP fixture exercises four live native grants, reverse receipts, stale
+record isolation and lost-CQE barriers. Public handshake multiplexing, whole-parent
+admission beyond QP/RQ width and fixed-width peer construction remain to be
+connected. [Qualification](qualification.md) pins each delivered scope.
 No new P4 milestone is added for this prerequisite.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and
@@ -1255,10 +1257,12 @@ and independent acceptance remain separate states.
 
 Implement fixed-width concurrent QP multiplexing, the first row of
 [P4 remaining delivery](#p4-remaining-delivery). Current peer arrays are real
-persistent lookup owners, but one active grant still occupies one physical QP.
+persistent lookup owners; public v12 still admits one active grant per physical QP.
 QP-owned SQ/RQ admission, receive buffers and binding/key dispatch now exist.
-Next connect concurrent grant records and their multiple CQ namespaces to the
-same connection, then impose the fixed width and qualify sibling failure/cancellation. Simply capping the
+Runtime grant records and multiple CQ namespaces are now connected to the same
+physical `RdmaQp`, with native internal multiplexing fixtures. Next activate
+concurrent public handshake admission, define the bounded whole-parent/RQ policy,
+then impose fixed width and qualify public sibling failure/cancellation. Simply capping the
 current array would deadlock parents that prepare more grants than the QP
 width; preserve exact authority and physical drain through that transition.
 

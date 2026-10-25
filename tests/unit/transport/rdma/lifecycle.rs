@@ -281,7 +281,7 @@ fn snapshot(engine: &TransferEngine) -> Snapshot {
             .snapshot(&mut records);
         for record in records {
             let state = record.lock().unwrap();
-            let connection = &state.resources.as_ref().unwrap().connection;
+            let connection = state.resources.as_ref().unwrap().connection.lock().unwrap();
             assert!(
                 state.phase == Phase::Ready && state.resources.as_ref().unwrap().grant.is_none()
             );

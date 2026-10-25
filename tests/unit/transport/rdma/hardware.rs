@@ -207,6 +207,10 @@ fn verify(memory: &crate::RegisteredMemory, expected: &[u8]) {
 #[test]
 #[ignore = "requires an explicitly selected two-host RNIC profile and original resource locks"]
 fn shared_cq_peer() {
+    if env::var("ORBITTE_SHARED_QP").is_ok() {
+        shared_qp::run();
+        return;
+    }
     if env::var("ORBITTE_SHARED_DUPLEX").as_deref() == Ok("1") {
         duplex_completion_peer();
         return;
@@ -1308,3 +1312,6 @@ mod multi_context;
 
 #[path = "multirail.rs"]
 mod multirail;
+
+#[path = "shared_qp.rs"]
+mod shared_qp;

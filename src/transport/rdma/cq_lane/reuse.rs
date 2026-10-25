@@ -59,6 +59,7 @@ impl CqLane {
         }
         let connection = resources
             .connection
+            .lock()?
             .incarnation
             .ok_or(Error::Internal("missing connection incarnation"))?;
         let identity_offset = crate::runtime::control_plane::REQUEST_SIZE
@@ -107,10 +108,7 @@ impl CqLane {
             return Err(Error::Protocol("RDMA grant lacks sealed operation receipt"));
         }
         request.finish = Some(GrantDrain {
-            connection: resources
-                .connection
-                .incarnation
-                .ok_or(Error::Internal("missing connection incarnation"))?,
+            connection,
             generation: grant.generation,
             permission: grant.permission,
         });
@@ -202,8 +200,10 @@ impl CqLane {
             if resources.grant.is_some() {
                 return Err(Error::Internal("idle connection retains a grant"));
             }
-            let local = resources.connection.local;
-            let incarnation = resources.connection.incarnation;
+            let connection = resources.connection.lock()?;
+            let local = connection.local;
+            let incarnation = connection.incarnation;
+            drop(connection);
             request.claim = claim;
             request.phase = Phase::Init;
             (local, incarnation, claim)
@@ -241,11 +241,6 @@ impl CqLane {
             || request.close_requested
             || request.finish.is_some()
             || request.resources.as_ref().is_none_or(|r| r.grant.is_some())
-            || request.resources.as_ref().is_some_and(|r| {
-                r.connection.send_queue.outstanding() != 0
-                    || r.connection.receive_queue.outstanding() != 0
-                    || r.connection.receive_queue.memory_usage() != (0, 0)
-            })
             || request.work.is_some()
             || request.receive.is_some()
             || record.actions.load(Ordering::Acquire) != 0
@@ -263,13 +258,13 @@ impl CqLane {
         if !control.accepting {
             return Ok(false);
         }
-        control.qps.ready(record, peer, claim)?;
+        let inserted = control.qps.ready(record, peer, claim)?;
         request.phase = Phase::Ready;
         self.shared
             .usage
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .idle_endpoints += 1;
+            .idle_endpoints += usize::from(inserted);
         Ok(true)
     }
 

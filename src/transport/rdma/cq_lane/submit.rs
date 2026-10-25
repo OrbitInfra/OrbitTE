@@ -41,7 +41,7 @@ impl CqLane {
                 resources.grant()?.buffer.len(),
                 self.shared.config.block_size,
                 cap,
-                Arc::clone(&resources.connection.send_queue),
+                Arc::clone(&record.send_queue),
                 self.shared.next_work_namespace()? * crate::transport::rdma::WR_ID_STRIDE + 1,
             )?;
             record
@@ -104,9 +104,10 @@ impl CqLane {
                 rkey: resources.grant_mut()?.handles.window_key,
                 ..Default::default()
             };
+            let send_queue = Arc::clone(&record.send_queue);
             request.work = Some(Work {
                 queue: slice::SendWork::control(
-                    Arc::clone(&resources.connection.send_queue),
+                    send_queue,
                     namespace * crate::transport::rdma::WR_ID_STRIDE + slot,
                 )?,
                 operation,
@@ -179,12 +180,15 @@ impl CqLane {
                 resources.grant()?.rkey,
                 deadline,
             );
-            resources.connection.receive_queue.prepare(
+            let mut connection = resources.connection.lock()?;
+            let device = Arc::clone(&connection.device);
+            connection.receive_queue.prepare(
                 Arc::clone(&receive),
                 credits,
-                &resources.connection.device,
+                &device,
                 self.shared.config.max_endpoints,
             )?;
+            drop(connection);
             request.receive = Some(receive);
             record.receive_namespace.store(namespace, Ordering::Release);
         }
@@ -226,10 +230,7 @@ impl CqLane {
             let duration = match remaining(deadline) {
                 Ok(duration) => duration,
                 Err(error) => {
-                    let pending = request
-                        .resources
-                        .as_ref()
-                        .is_some_and(|r| r.connection.receive_queue.outstanding() != 0);
+                    let pending = record.connection.lock()?.receive_queue.outstanding() != 0;
                     request.failure = Some(Fault::Timeout);
                     drop(request);
                     if pending {
@@ -284,14 +285,7 @@ impl CqLane {
             }
             let namespace = self.shared.next_work_namespace()?;
             self.prepare_message(&mut request)?;
-            let send_queue = Arc::clone(
-                &request
-                    .resources
-                    .as_ref()
-                    .ok_or(Error::Internal("missing RDMA connection"))?
-                    .connection
-                    .send_queue,
-            );
+            let send_queue = Arc::clone(&record.send_queue);
             let message = request
                 .resources
                 .as_mut()

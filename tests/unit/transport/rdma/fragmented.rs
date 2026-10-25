@@ -18,7 +18,10 @@ unsafe extern "C" fn destroy_cq(handles: *mut sys::CqHandles) -> i32 {
         let request = probe.record.lock().unwrap();
         let resources = request.resources.as_ref().unwrap();
         assert!(
-            resources.connection.closed && resources.connection.handles.qp.is_null(),
+            {
+                let c = resources.connection.lock().unwrap();
+                c.closed && c.handles.qp.is_null()
+            },
             "the actual QP must be destroyed before its CQ barriers"
         );
         assert!(
