@@ -62,6 +62,7 @@ const FINISH: u8 = 8;
 
 /// A logical grant; its native connection may be shared with other records.
 pub(super) struct Record {
+    pub(super) occupied: AtomicBool,
     pub(super) connection: Arc<super::qp::RdmaQp>,
     send_queue: Arc<super::qp::send_queue::SendQueue>,
     actions: AtomicU8,
@@ -194,7 +195,7 @@ impl CqLane {
         quota: Arc<super::quota::CqQuota>,
         verbs: &'static sys::Verbs,
     ) -> Result<Arc<Self>> {
-        let qps = QpStore::new(config.max_endpoints)?;
+        let qps = QpStore::new(config.max_endpoints + config.max_grants)?;
         let completion_events = if config.progress_mode == RdmaProgressMode::EventDriven {
             Some(CompletionEvents::new(
                 Arc::clone(&device),
@@ -310,7 +311,7 @@ impl CqLane {
         if control.stopping || control.finished {
             return Err(Error::Unavailable("RDMA progress is closed"));
         }
-        if control.qps.len() >= self.shared.config.max_endpoints {
+        if control.qps.len() >= self.shared.config.max_endpoints + self.shared.config.max_grants {
             return Err(Error::ResourceExhausted);
         }
         let tag = control.next_tag;
@@ -321,6 +322,7 @@ impl CqLane {
         control.next_tag = next;
         let send_queue = Arc::clone(&resources.connection.lock()?.send_queue);
         let record = Arc::new(Record {
+            occupied: AtomicBool::new(true),
             send_queue,
             connection: Arc::clone(&resources.connection),
             actions: AtomicU8::new(0),
@@ -344,7 +346,13 @@ impl CqLane {
             }),
             changed: Condvar::new(),
         });
-        control.qps.publish(Arc::clone(&record))?;
+        if control.qps.publish(Arc::clone(&record))? {
+            self.shared
+                .usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .idle_endpoints -= 1;
+        }
         control.dirty = true;
         self.shared.wake();
         Ok(record)
@@ -369,6 +377,27 @@ impl CqLane {
         let mut request = record.lock()?;
         if request.claim != claim {
             return Ok(());
+        }
+        if request.phase == Phase::Init
+            && request
+                .resources
+                .as_ref()
+                .is_some_and(|r| r.grant.is_none())
+        {
+            let mut control = self.shared.control.lock().map_err(|_| Error::Unquiesced {
+                operation: "RDMA endpoint store poisoned",
+                code: libc::EIO,
+            })?;
+            if let Some(idle) = control.qps.discard(record) {
+                request.resources = None;
+                request.phase = Phase::Closed;
+                self.shared
+                    .usage
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .idle_endpoints += usize::from(idle);
+                return Ok(());
+            }
         }
         if !matches!(request.phase, Phase::Closed | Phase::Retained) {
             let drained_record = request.phase == Phase::Ready

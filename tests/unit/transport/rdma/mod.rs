@@ -24,7 +24,6 @@ pub(crate) struct FakeDevice {
     mrs: AtomicUsize,
     windows: AtomicUsize,
     cqs: AtomicUsize,
-    next_qpn: AtomicU32,
     pub(crate) pause: Arc<(Mutex<(bool, bool)>, Condvar)>,
 }
 
@@ -41,8 +40,12 @@ struct Fake {
     device: *const FakeDevice,
     cq: *const FakeCq,
     receive_cq: *const FakeCq,
-    messages: Mutex<Vec<*mut FakeMr>>,
-    receive: Mutex<Option<(u64, u64, usize)>>,
+    grants: Mutex<std::collections::HashMap<usize, FakeGrant>>,
+    messages: Mutex<std::collections::HashMap<u64, usize>>,
+    receive: Mutex<std::collections::VecDeque<(u64, u64, usize)>>,
+    completed_grants: Mutex<std::collections::HashMap<u64, usize>>,
+    payloads: Mutex<std::collections::HashMap<u32, usize>>,
+    remote_qpn: AtomicU32,
     length: AtomicUsize,
     bytes: AtomicU64,
     qpn: u32,
@@ -54,21 +57,18 @@ struct Fake {
     mr: AtomicUsize,
 }
 
-struct FakeReceive {
-    qp: usize,
-    cq: usize,
+struct FakeGrant {
+    mr: usize,
+    window: usize,
     address: u64,
     length: usize,
-    id: u64,
-    qpn: u32,
-    window: usize,
 }
 
-fn receives() -> &'static Mutex<std::collections::HashMap<(u64, u32), FakeReceive>> {
-    static RECEIVES: std::sync::OnceLock<
-        Mutex<std::collections::HashMap<(u64, u32), FakeReceive>>,
-    > = std::sync::OnceLock::new();
-    RECEIVES.get_or_init(Default::default)
+// The lock pins CPU-only native objects while another peer delivers a message.
+fn native_qps() -> &'static Mutex<std::collections::HashMap<u32, usize>> {
+    static QPS: std::sync::OnceLock<Mutex<std::collections::HashMap<u32, usize>>> =
+        std::sync::OnceLock::new();
+    QPS.get_or_init(Default::default)
 }
 
 struct FakeMr {
@@ -86,6 +86,7 @@ struct FakeWindow {
     qp_alive: AtomicBool,
     qp: AtomicUsize,
     received: AtomicBool,
+    key: AtomicU32,
 }
 
 fn block(device: &FakeDevice) {
@@ -122,7 +123,6 @@ pub(super) unsafe extern "C" fn open_device(
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
         cqs: AtomicUsize::new(0),
-        next_qpn: AtomicU32::new(9),
         pause: Arc::default(),
     }));
     unsafe {
@@ -220,16 +220,9 @@ unsafe extern "C" fn prepare_grant(
 ) -> c_int {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     let qp = unsafe { &*(*h).qp.cast::<Fake>() };
-    assert_eq!(
-        qp.mr.load(Ordering::Acquire),
-        0,
-        "previous grant must detach all MR dependencies"
-    );
-    assert!(qp.messages.lock().unwrap().is_empty());
-    assert_eq!(
-        qp.window.load(Ordering::Acquire),
-        0,
-        "no old MW in reused QP"
+    assert!(
+        !qp.grants.lock().unwrap().contains_key(&(memory as usize)),
+        "grant handles cannot be reused before their own completion"
     );
     unsafe {
         if (*memory).mr.is_null() {
@@ -254,6 +247,15 @@ unsafe extern "C" fn prepare_grant(
         (*(*memory).mr.cast::<FakeMr>())
             .qps
             .fetch_add(1, Ordering::SeqCst);
+        qp.grants.lock().unwrap().insert(
+            memory as usize,
+            FakeGrant {
+                mr: (*memory).mr as usize,
+                window: 0,
+                address: bytes as u64,
+                length,
+            },
+        );
         qp.mr.store((*memory).mr as usize, Ordering::Release);
         qp.bytes.store(bytes as u64, Ordering::Release);
         qp.length.store(length, Ordering::Release);
@@ -270,6 +272,7 @@ unsafe extern "C" fn prepare_grant(
                 qp_alive: AtomicBool::new(true),
                 qp: AtomicUsize::new(qp as *const Fake as usize),
                 received: AtomicBool::new(false),
+                key: AtomicU32::new(0),
             }))
             .cast();
             qp.window.store((*memory).mw as usize, Ordering::Release);
@@ -283,6 +286,15 @@ unsafe extern "C" fn prepare_grant(
             };
         }
     }
+    qp.grants.lock().unwrap().insert(
+        memory as usize,
+        FakeGrant {
+            mr: unsafe { (*memory).mr } as usize,
+            window: unsafe { (*memory).mw } as usize,
+            address: bytes as u64,
+            length,
+        },
+    );
     0
 }
 
@@ -297,6 +309,7 @@ unsafe extern "C" fn open(
     length: usize,
     permission: u32,
     psn: u32,
+    _: u32,
     _: u32,
     descriptor: *mut Descriptor,
 ) -> c_int {
@@ -314,13 +327,18 @@ unsafe extern "C" fn open(
     cq.qps.fetch_add(1, Ordering::SeqCst);
     let receive_cq = unsafe { &*(*h).receive_cq.cast::<FakeCq>() };
     receive_cq.qps.fetch_add(1, Ordering::SeqCst);
-    let qpn = device.next_qpn.fetch_add(1, Ordering::SeqCst);
+    static NEXT_QPN: AtomicU32 = AtomicU32::new(9);
+    let qpn = NEXT_QPN.fetch_add(1, Ordering::SeqCst);
     let qp = Box::into_raw(Box::new(Fake {
         device,
         cq,
         receive_cq,
+        grants: Mutex::default(),
         messages: Mutex::default(),
         receive: Mutex::default(),
+        completed_grants: Mutex::default(),
+        payloads: Mutex::default(),
+        remote_qpn: AtomicU32::new(0),
         length: AtomicUsize::new(0),
         bytes: AtomicU64::new(0),
         qpn,
@@ -334,6 +352,7 @@ unsafe extern "C" fn open(
     unsafe {
         (*h).qp = qp.cast();
     }
+    native_qps().lock().unwrap().insert(qpn, qp as usize);
     cq.owners.lock().unwrap().insert(qpn, qp as usize);
     receive_cq.owners.lock().unwrap().insert(qpn, qp as usize);
     let code = unsafe { prepare_grant(h, memory, handles, bytes, length, permission) };
@@ -363,15 +382,30 @@ unsafe extern "C" fn open(
     }
 }
 
-fn detach_grant(qp: &Fake) {
-    let mr = qp.mr.swap(0, Ordering::AcqRel);
+fn detach_grant(qp: &Fake, key: usize) {
+    let mut grants = qp.grants.lock().unwrap();
+    let Some(grant) = grants.get_mut(&key) else {
+        return;
+    };
+    let mr = std::mem::take(&mut grant.mr);
     if mr != 0 {
         unsafe { &*(mr as *const FakeMr) }
             .qps
             .fetch_sub(1, Ordering::SeqCst);
+        let _ = qp
+            .mr
+            .compare_exchange(mr, 0, Ordering::AcqRel, Ordering::Acquire);
     }
-    for mr in qp.messages.lock().unwrap().drain(..) {
-        unsafe { &*mr }.qps.fetch_sub(1, Ordering::SeqCst);
+    if grant.window == 0 {
+        grants.remove(&key);
+    }
+}
+
+fn detach_message(qp: &Fake, id: u64) {
+    if let Some(mr) = qp.messages.lock().unwrap().remove(&id) {
+        unsafe { &*(mr as *const FakeMr) }
+            .qps
+            .fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -394,8 +428,14 @@ unsafe extern "C" fn window(
         .store(unsafe { (*memory).window_key }, Ordering::Release);
     qp.window
         .store(unsafe { (*memory).mw } as usize, Ordering::Release);
-    assert_eq!(address, qp.bytes.load(Ordering::Acquire));
-    assert_eq!(length, qp.length.load(Ordering::Acquire));
+    {
+        let grants = qp.grants.lock().unwrap();
+        let grant = &grants[&(memory as usize)];
+        assert_eq!((address, length), (grant.address, grant.length));
+        unsafe { &*(grant.window as *const FakeWindow) }
+            .key
+            .store(unsafe { (*memory).window_key }, Ordering::Release);
+    }
     assert!(matches!(permission, 1 | 2));
     assert_ne!(state.load(Ordering::Acquire), bind);
     device.events.lock().unwrap().push(if bind {
@@ -456,12 +496,20 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
     }
     if window.qp_alive.load(Ordering::Acquire) {
         let qp = unsafe { &*(window.qp.load(Ordering::Acquire) as *const Fake) };
-        assert_eq!(qp.mr.load(Ordering::Acquire), 0);
-        assert!(
-            qp.window
-                .compare_exchange(h.mw as usize, 0, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
+        let mut grants = qp.grants.lock().unwrap();
+        let key = *grants
+            .iter()
+            .find(|(_, grant)| grant.window == h.mw as usize)
+            .unwrap()
+            .0;
+        let grant = grants.remove(&key).unwrap();
+        assert_eq!(
+            grant.mr, 0,
+            "the exact grant must lose its DMA reference first"
         );
+        let _ = qp
+            .window
+            .compare_exchange(h.mw as usize, 0, Ordering::AcqRel, Ordering::Acquire);
     }
     unsafe {
         drop(Box::from_raw(h.mw.cast::<FakeWindow>()));
@@ -475,13 +523,16 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
 unsafe extern "C" fn connect(
     h: *mut sys::ConnectionHandles,
     _: *const Descriptor,
-    _: *const Descriptor,
+    remote: *const Descriptor,
     _: u8,
     _: u8,
     _: u8,
     _: u8,
 ) -> c_int {
     let state = unsafe { &*(*h).qp.cast::<Fake>() };
+    state
+        .remote_qpn
+        .store(unsafe { (*remote).qpn }, Ordering::Release);
     let device = unsafe { &*state.device };
     device.events.lock().unwrap().push("connect");
     i32::from(device.mode == "connect")
@@ -489,13 +540,13 @@ unsafe extern "C" fn connect(
 
 unsafe extern "C" fn post(
     h: *mut sys::ConnectionHandles,
-    _: *const sys::MemoryHandles,
+    memory: *const sys::MemoryHandles,
     requests: *const sys::WorkRequest,
     count: usize,
     local: u64,
     local_length: usize,
     remote: u64,
-    _: u32,
+    rkey: u32,
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
@@ -503,8 +554,12 @@ unsafe extern "C" fn post(
     let device = unsafe { &*state.device };
     let cq = unsafe { &*state.cq };
     let mode = device.mode.as_str();
-    assert_eq!(local, state.bytes.load(Ordering::Acquire));
-    assert_eq!(local_length, state.length.load(Ordering::Acquire));
+    {
+        let grants = state.grants.lock().unwrap();
+        let grant = &grants[&(memory as usize)];
+        assert_eq!((local, local_length), (grant.address, grant.length));
+    }
+    state.payloads.lock().unwrap().insert(rkey, memory as usize);
     state.remote_address.store(remote, Ordering::Release);
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
     if state.first_id.load(Ordering::Acquire) == 0 {
@@ -521,15 +576,11 @@ unsafe extern "C" fn post(
         count
     };
     for request in &requests[..accepted] {
-        assert!(
-            request.offset as usize + request.length as usize
-                <= state.length.load(Ordering::Acquire)
-        );
+        assert!(request.offset as usize + request.length as usize <= local_length);
         if mode.contains("copy") {
             // CPU mutation under production leases, not a DMA receipt.
             unsafe {
-                let local =
-                    (state.bytes.load(Ordering::Acquire) as *mut u8).add(request.offset as usize);
+                let local = (local as *mut u8).add(request.offset as usize);
                 let remote = (remote as usize as *mut u8).add(request.offset as usize);
                 if write != 0 {
                     std::ptr::copy(local, remote, request.length as usize);
@@ -594,23 +645,14 @@ unsafe extern "C" fn post_receive(
     }
     let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
-    qp.messages.lock().unwrap().push(mr);
-    *qp.receive.lock().unwrap() = Some((id, address, length));
-    receives().lock().unwrap().insert(
-        (
-            qp.bytes.load(Ordering::Acquire),
-            qp.window_key.load(Ordering::Acquire),
-        ),
-        FakeReceive {
-            qp: qp as *const Fake as usize,
-            cq: qp.receive_cq as usize,
-            address,
-            length,
-            id,
-            qpn: qp.qpn,
-            window: qp.window.load(Ordering::Acquire),
-        },
+    assert!(
+        qp.messages
+            .lock()
+            .unwrap()
+            .insert(id, mr as usize)
+            .is_none()
     );
+    qp.receive.lock().unwrap().push_back((id, address, length));
     if device.mode.contains("receive_unknown") {
         unsafe {
             (*result).uncertain = true;
@@ -650,7 +692,13 @@ unsafe extern "C" fn send_completion(
     }
     qp.send_id.store(id, Ordering::Release);
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
-    qp.messages.lock().unwrap().push(mr);
+    assert!(
+        qp.messages
+            .lock()
+            .unwrap()
+            .insert(id, mr as usize)
+            .is_none()
+    );
     if device.mode.contains("send_completion_unknown") {
         unsafe {
             (*result).uncertain = true;
@@ -660,30 +708,68 @@ unsafe extern "C" fn send_completion(
     unsafe {
         (*result).accepted = 1;
     }
-    if let Some(receive) = receives()
+    let key = *qp
+        .payloads
         .lock()
         .unwrap()
-        .remove(&(qp.remote_address.load(Ordering::Acquire), rkey))
-    {
-        assert_eq!(receive.length, length);
-        // Explicit CPU provider control, not evidence of RNIC DMA or ordering.
-        unsafe {
-            std::ptr::copy_nonoverlapping(address as *const u8, receive.address as *mut u8, length);
-            (*(receive.window as *mut FakeWindow))
-                .bound
-                .store(false, Ordering::Release);
-            let cq = &*(receive.cq as *const FakeCq);
-            cq.completions.lock().unwrap().push_back(sys::Completion {
-                id: receive.id,
-                qpn: receive.qpn,
-                opcode: 128,
-                length: length as u32,
-                flags: sys::WITH_INVALIDATE,
-                invalidated_rkey: rkey,
-                ..Default::default()
+        .get(&rkey)
+        .expect("completion must name its payload grant");
+    qp.completed_grants.lock().unwrap().insert(id, key);
+    let routes = native_qps().lock().unwrap();
+    if let Some(target) = routes.get(&qp.remote_qpn.load(Ordering::Acquire)) {
+        let source = unsafe { &*(*target as *const Fake) };
+        let grant = source
+            .grants
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(key, grant)| {
+                if grant.window == 0 {
+                    return None;
+                }
+                let window = unsafe { &*(grant.window as *const FakeWindow) };
+                (window.bound.load(Ordering::Acquire) && window.key.load(Ordering::Acquire) == rkey)
+                    .then_some((*key, grant.window))
             });
+        if let Some((grant_key, window)) = grant {
+            let (receive_id, receive_address, receive_length) = source
+                .receive
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("SEND requires a posted receive");
+            assert_eq!(receive_length, length);
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    address as *const u8,
+                    receive_address as *mut u8,
+                    length,
+                );
+                (*(window as *const FakeWindow))
+                    .bound
+                    .store(false, Ordering::Release);
+            }
+            source
+                .completed_grants
+                .lock()
+                .unwrap()
+                .insert(receive_id, grant_key);
+            unsafe { &*source.receive_cq }
+                .completions
+                .lock()
+                .unwrap()
+                .push_back(sys::Completion {
+                    id: receive_id,
+                    qpn: source.qpn,
+                    opcode: 128,
+                    length: length as u32,
+                    flags: sys::WITH_INVALIDATE,
+                    invalidated_rkey: rkey,
+                    ..Default::default()
+                });
         }
     }
+    drop(routes);
     unsafe { &*qp.cq }
         .completions
         .lock()
@@ -715,25 +801,24 @@ unsafe extern "C" fn poll(
     } else {
         queue.pop_front()
     };
+    drop(queue);
     if let Some(value) = value {
         if value.status == 0 && matches!(value.opcode, 0 | 128) {
             if let Some(owner) = state.owners.lock().unwrap().get(&value.qpn).copied() {
                 let qp = unsafe { &*(owner as *const Fake) };
-                let exact = if value.opcode == 0 {
-                    qp.send_id.load(Ordering::Acquire) == value.id
-                } else {
-                    qp.receive.lock().unwrap().is_some_and(|r| r.0 == value.id)
-                };
-                if exact {
+                let grant = qp.completed_grants.lock().unwrap().remove(&value.id);
+                if let Some(key) = grant {
                     if value.opcode == 128 {
-                        let window = qp.window.load(Ordering::Acquire);
-                        if window != 0 {
-                            unsafe { &*(window as *const FakeWindow) }
-                                .received
-                                .store(true, Ordering::Release);
+                        if let Some(grant) = qp.grants.lock().unwrap().get(&key) {
+                            if grant.window != 0 {
+                                unsafe { &*(grant.window as *const FakeWindow) }
+                                    .received
+                                    .store(true, Ordering::Release);
+                            }
                         }
                     }
-                    detach_grant(qp);
+                    detach_grant(qp, key);
+                    detach_message(qp, value.id);
                 }
             }
         }
@@ -775,18 +860,26 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
     if device.mode.ends_with("close0") {
         return 16;
     }
-    receives()
-        .lock()
-        .unwrap()
-        .retain(|_, receive| receive.qp != state as *const Fake as usize);
+    native_qps().lock().unwrap().remove(&state.qpn);
     let cq = unsafe { &*state.cq };
-    let window = state.window.load(Ordering::Acquire);
-    if window != 0 {
-        unsafe { &*(window as *const FakeWindow) }
-            .qp_alive
-            .store(false, Ordering::Release);
+    let keys: Vec<_> = {
+        let grants = state.grants.lock().unwrap();
+        for grant in grants.values() {
+            if grant.window != 0 {
+                unsafe { &*(grant.window as *const FakeWindow) }
+                    .qp_alive
+                    .store(false, Ordering::Release);
+            }
+        }
+        grants.keys().copied().collect()
+    };
+    for key in keys {
+        detach_grant(state, key);
     }
-    detach_grant(state);
+    let messages: Vec<_> = state.messages.lock().unwrap().keys().copied().collect();
+    for id in messages {
+        detach_message(state, id);
+    }
     cq.owners.lock().unwrap().remove(&state.qpn);
     unsafe { &*state.receive_cq }
         .owners
@@ -1681,7 +1774,16 @@ pub(super) fn deliver_completion(
         qp.cq, qp.receive_cq,
         "SQ and RQ controls must use different actual CQ handles"
     );
-    let (id, address, length) = qp.receive.lock().unwrap().unwrap();
+    let receive_id = endpoint.record.receive_namespace.load(Ordering::Acquire) * WR_ID_STRIDE + 1;
+    let (id, address, length) = *qp
+        .receive
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.0 == receive_id)
+        .unwrap();
+    let grant_key = &resources.grant().unwrap().handles as *const sys::MemoryHandles as usize;
+    qp.completed_grants.lock().unwrap().insert(id, grant_key);
     assert_eq!(length, bytes.len());
     // CPU owner/routing control only; this cannot qualify provider DMA ordering.
     unsafe {
@@ -1693,7 +1795,7 @@ pub(super) fn deliver_completion(
         opcode: 128,
         length: length as u32,
         flags: sys::WITH_INVALIDATE,
-        invalidated_rkey: qp.window_key.load(Ordering::Acquire),
+        invalidated_rkey: resources.grant().unwrap().rkey,
         ..Default::default()
     };
     mutate(&mut completion);
@@ -1741,8 +1843,13 @@ impl RdmaTransport {
         reuse: Option<RdmaGrant>,
     ) -> Result<RdmaGrant> {
         let selection = self.allocate(length, u64::MAX)?;
+        let credits = super::grant::admission::GrantCredits::acquire(
+            Arc::clone(&self.usage),
+            self.config.max_grants,
+            1,
+        )?;
         self.prepare_grant(
-            selection,
+            self.reserve_grant(selection, memory, &credits)?,
             memory,
             offset..offset.checked_add(length).ok_or(Error::InvalidRange)?,
             permission,

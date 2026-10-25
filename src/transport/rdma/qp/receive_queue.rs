@@ -19,6 +19,7 @@ pub(in crate::transport::rdma) struct ReceiveQueue {
     slots: Vec<Slot>,
     receipts: Vec<Arc<ReceiveWork>>,
     limit: usize,
+    grant_limit: usize,
     usage: Arc<Mutex<RdmaStats>>,
     fenced: bool,
 }
@@ -26,11 +27,12 @@ pub(in crate::transport::rdma) struct ReceiveQueue {
 impl ReceiveQueue {
     pub(in crate::transport::rdma) fn new(
         limit: usize,
+        grant_limit: usize,
         usage: Arc<Mutex<RdmaStats>>,
     ) -> Result<Self> {
-        if !(1..=64).contains(&limit) {
+        if !(1..=4096).contains(&limit) || !(1..=4096).contains(&grant_limit) {
             return Err(Error::InvalidConfig(
-                "RDMA QP receive depth must be in 1..=64",
+                "RDMA receive depth and grant capacity must be in 1..=4096",
             ));
         }
         let mut slots = Vec::new();
@@ -39,12 +41,13 @@ impl ReceiveQueue {
             .try_reserve_exact(limit)
             .map_err(|_| Error::ResourceExhausted)?;
         receipts
-            .try_reserve_exact(limit)
+            .try_reserve_exact(grant_limit)
             .map_err(|_| Error::ResourceExhausted)?;
         Ok(Self {
             slots,
             receipts,
             limit,
+            grant_limit,
             usage,
             fenced: false,
         })
@@ -60,7 +63,7 @@ impl ReceiveQueue {
         if self.fenced {
             return Err(Error::Unavailable("RDMA QP receive queue is fenced"));
         }
-        if self.slots.len() >= self.limit || self.receipts.len() >= self.limit {
+        if self.slots.len() >= self.limit || self.receipts.len() >= self.grant_limit {
             return Err(Error::ResourceExhausted);
         }
         if work.id == 0
@@ -231,7 +234,6 @@ impl ReceiveQueue {
                 .receive_work_requests -= 1;
             slot.pending = false;
         }
-        drop(slot.credits.take());
     }
 
     pub(in crate::transport::rdma) fn owns(&self, id: u64) -> bool {
@@ -268,11 +270,13 @@ impl ReceiveQueue {
     fn reap(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
         let mut index = 0;
         while index < self.slots.len() {
-            if self.slots[index].pending || self.slots[index].credits.is_some() {
+            if self.slots[index].pending || !self.slots[index].posted {
                 index += 1;
                 continue;
             }
             self.slots[index].message.close(verbs)?;
+            // Admission includes the actual receive buffer through MR cleanup.
+            drop(self.slots[index].credits.take());
             self.slots.swap_remove(index);
         }
         Ok(())
@@ -298,9 +302,10 @@ impl ReceiveQueue {
         if self.outstanding() != 0 {
             return Err(("RDMA receive before native drain", libc::EBUSY));
         }
-        // Unposted buffers have no DMA debt, but still hold parent admission.
+        // Native drain also permits reclaiming prepared but unposted buffers.
         for slot in &mut self.slots {
             Self::discharge(slot, &self.usage);
+            slot.posted = true;
         }
         self.reap(verbs)?;
         self.receipts.clear();

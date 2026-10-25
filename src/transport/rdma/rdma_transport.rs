@@ -7,9 +7,12 @@ use std::time::{Duration, Instant};
 use super::{
     RdmaConfig, RdmaHostMemory, RdmaStats, buffers,
     context_set::ContextSet,
-    events, path,
+    events,
+    grant::admission::GrantCredits,
+    path,
     protocol::SliceRequest,
     quota,
+    receive::ReceiveCredits,
     slice::{RdmaSlice, plan_rdma_slices},
     sys, workers,
 };
@@ -29,6 +32,28 @@ pub(crate) struct RdmaTransport {
     pub(super) context_set: Mutex<ContextSet>,
     pub(super) drained: Arc<Condvar>,
     pub(crate) registrations: Arc<buffers::LocalBufferManager>,
+}
+
+/// Source admission is all-or-nothing before the first slice grant is offered.
+struct ParentAdmission {
+    grants: Arc<GrantCredits>,
+    receive: ReceiveCredits,
+}
+
+impl ParentAdmission {
+    fn acquire(transport: &RdmaTransport, count: usize) -> Result<Self> {
+        let grants = GrantCredits::acquire(
+            Arc::clone(&transport.usage),
+            transport.config.max_grants,
+            count,
+        )?;
+        let receive = ReceiveCredits::acquire(
+            Arc::clone(&transport.usage),
+            transport.config.max_cqes,
+            count,
+        )?;
+        Ok(Self { grants, receive })
+    }
 }
 
 impl RdmaTransport {
@@ -169,6 +194,8 @@ impl RdmaTransport {
                     &mut effect,
                 );
             }
+            let credits =
+                GrantCredits::acquire(Arc::clone(&self.usage), self.config.max_grants, 1)?;
             let wire = data_request(operation, peer, request);
             let mut pinned = None;
             for attempt in 0..2 {
@@ -194,7 +221,7 @@ impl RdmaTransport {
                     &channel,
                     &wire,
                     request,
-                    selection,
+                    self.reserve_grant(selection, &request.local, &credits)?,
                     remote,
                     attempt == 0,
                 )?;
@@ -242,7 +269,11 @@ impl RdmaTransport {
             return Err(Error::Protocol("RDMA slice window limit"));
         }
         let cap = usize::from(remote_limit[0])
-            .min(self.config.max_endpoints)
+            .min(if self.host_direct(&request.local) {
+                self.config.max_grants
+            } else {
+                self.config.max_grants.min(self.config.max_endpoints)
+            })
             .min(self.config.max_cqes)
             .min(
                 if operation == TransferOp::Write || request.local.is_cuda() {
@@ -252,6 +283,8 @@ impl RdmaTransport {
                 },
             );
         let (block, count) = plan_rdma_slices(request.length, self.config.block_size, cap)?;
+        let credits =
+            GrantCredits::acquire(Arc::clone(&self.usage), self.config.max_grants, count)?;
         let mask = path::local_device_mask(&local_paths, &remote_paths);
         let mut plan = Vec::new();
         plan.try_reserve_exact(count)
@@ -314,7 +347,7 @@ impl RdmaTransport {
                         &channel,
                         &child_wire,
                         &child,
-                        lease,
+                        self.reserve_grant(lease, &child.local, &credits)?,
                         remote,
                         attempt == 0,
                     )?;
@@ -378,17 +411,18 @@ impl RdmaTransport {
         );
         let plan = if multi {
             path::write_paths(channel, epoch, &paths)?;
-            let limit = self.config.max_endpoints.min(self.config.max_cqes).min(64) as u8;
+            let grants = if self.host_direct(memory) {
+                self.config.max_grants
+            } else {
+                self.config.max_grants.min(self.config.max_endpoints)
+            };
+            let limit = grants.min(self.config.max_cqes).min(64) as u8;
             channel.write_all(&[limit])?;
             SliceRequest::read_plan(channel, length, limit, &paths)?
         } else {
             Vec::new()
         };
-        let mut credits = super::receive::ReceiveCredits::acquire(
-            Arc::clone(&self.usage),
-            self.config.max_cqes,
-            if multi { plan.len() } else { 1 },
-        )?;
+        let mut admission = ParentAdmission::acquire(self, if multi { plan.len() } else { 1 })?;
         if multi {
             channel.reply(epoch, 9, 0)?;
         } else {
@@ -420,7 +454,7 @@ impl RdmaTransport {
                             memory,
                             &paths,
                             Some(range.domain),
-                            &mut credits,
+                            &mut admission,
                         )? {
                             prepared = Some(slice);
                             break;
@@ -429,7 +463,7 @@ impl RdmaTransport {
                     slices.push(prepared.ok_or(Error::Protocol("RDMA repeated slice cache miss"))?);
                 }
             } else if let Some(slice) =
-                self.source_slice(channel, request, memory, &paths, None, &mut credits)?
+                self.source_slice(channel, request, memory, &paths, None, &mut admission)?
             {
                 slices.push(slice);
             } else {

@@ -43,7 +43,7 @@ impl QpStore {
         self.live.len() + self.retiring.len()
     }
 
-    pub(super) fn publish(&mut self, endpoint: Arc<Record>) -> Result<()> {
+    pub(super) fn publish(&mut self, endpoint: Arc<Record>) -> Result<bool> {
         endpoint.require_live()?;
         if self.len() >= self.capacity
             || endpoint.terminal.load(Ordering::Acquire)
@@ -55,12 +55,13 @@ impl QpStore {
         {
             return Err(Error::ResourceExhausted);
         }
+        let was_idle = self.is_idle(&endpoint);
         self.live.push(endpoint);
-        Ok(())
+        Ok(was_idle)
     }
 
     pub(super) fn detach(&mut self, endpoint: &Arc<Record>) -> bool {
-        let was_idle = self.idle.len();
+        let was_idle = self.is_idle(endpoint);
         self.idle
             .retain(|entry| !Arc::ptr_eq(&entry.endpoint, endpoint));
         endpoint.terminal.store(true, Ordering::Release);
@@ -72,7 +73,7 @@ impl QpStore {
         {
             self.retiring.push(self.live.swap_remove(index));
         }
-        self.idle.len() != was_idle
+        was_idle && !self.is_idle(endpoint)
     }
 
     pub(super) fn affiliates(&self, record: &Arc<Record>) -> Vec<Arc<Record>> {
@@ -93,7 +94,11 @@ impl QpStore {
     }
 
     pub(super) fn detach_all(&mut self) -> usize {
-        let idle = self.idle.len();
+        let idle = self
+            .idle
+            .iter()
+            .filter(|entry| self.is_idle(&entry.endpoint))
+            .count();
         self.idle.clear();
         for endpoint in &self.live {
             endpoint.terminal.store(true, Ordering::Release);
@@ -121,38 +126,73 @@ impl QpStore {
             .idle
             .iter()
             .position(|entry| Arc::ptr_eq(&entry.endpoint.connection, &endpoint.connection));
-        let inserted = previous.is_none();
         if let Some(index) = previous {
             let old = self.idle.remove(index).endpoint;
             old.terminal.store(true, Ordering::Release);
             self.live.retain(|entry| !Arc::ptr_eq(entry, &old));
         }
+        endpoint.occupied.store(false, Ordering::Release);
         self.idle.push(Idle {
             endpoint: Arc::clone(endpoint),
             peer,
             claim,
         });
-        Ok(inserted)
+        Ok(self.is_idle(endpoint))
     }
 
-    pub(super) fn claim(&mut self, matches: impl Fn(&Peer) -> bool) -> Option<(Arc<Record>, Peer)> {
+    pub(super) fn claim(
+        &mut self,
+        matches: impl Fn(&Peer) -> bool,
+    ) -> Option<(Arc<Record>, Peer, bool)> {
         let index = self.idle.iter().position(|entry| matches(&entry.peer))?;
+        let was_idle = self.is_idle(&self.idle[index].endpoint);
         let idle = self.idle.remove(index);
-        Some((idle.endpoint, idle.peer))
+        idle.endpoint.occupied.store(true, Ordering::Release);
+        Some((idle.endpoint, idle.peer, was_idle))
+    }
+
+    fn is_idle(&self, record: &Arc<Record>) -> bool {
+        self.idle
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.endpoint.connection, &record.connection))
+            && !self.live.iter().chain(&self.retiring).any(|entry| {
+                Arc::ptr_eq(&entry.connection, &record.connection)
+                    && entry.occupied.load(Ordering::Acquire)
+            })
+    }
+
+    /// An unattached grant has no DMA authority and need not retire its siblings.
+    pub(super) fn discard(&mut self, record: &Arc<Record>) -> Option<bool> {
+        if !self.live.iter().chain(&self.retiring).any(|entry| {
+            !Arc::ptr_eq(entry, record) && Arc::ptr_eq(&entry.connection, &record.connection)
+        }) {
+            return None;
+        }
+        let index = self
+            .live
+            .iter()
+            .position(|entry| Arc::ptr_eq(entry, record))?;
+        record.terminal.store(true, Ordering::Release);
+        self.live.swap_remove(index);
+        Some(self.is_idle(record))
     }
 
     pub(super) fn evict(&mut self) -> Option<Arc<Record>> {
-        let idle = self.idle.first()?;
+        let idle = self
+            .idle
+            .iter()
+            .find(|entry| self.is_idle(&entry.endpoint))?;
         let record = Arc::clone(&idle.endpoint);
         self.detach(&record);
         Some(record)
     }
 
     pub(super) fn retire_idle(&mut self, endpoint: &Arc<Record>, claim: u64) -> bool {
-        if self
-            .idle
-            .iter()
-            .any(|entry| Arc::ptr_eq(&entry.endpoint, endpoint) && entry.claim == claim)
+        if self.is_idle(endpoint)
+            && self
+                .idle
+                .iter()
+                .any(|entry| Arc::ptr_eq(&entry.endpoint, endpoint) && entry.claim == claim)
         {
             self.detach(endpoint);
             true

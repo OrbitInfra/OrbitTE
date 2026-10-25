@@ -58,6 +58,8 @@ struct Qp {
     peer: Peer,
 }
 
+type Candidate = (Arc<CqLane>, Arc<Record>, Peer);
+
 pub(super) struct RdmaEndpoint {
     identity: Identity,
     qp_list: Mutex<Vec<Qp>>,
@@ -90,11 +92,11 @@ impl RdmaEndpoint {
             if !qp.peer.same_pair(&peer) || !qp.lane.ptr_eq(&Arc::downgrade(&grant.progress)) {
                 return Err(Error::Protocol("RDMA endpoint QP identity changed"));
             }
-            qp.peer = peer;
+            qp.peer.generation = qp.peer.generation.max(peer.generation);
             qp.record = Arc::clone(&grant.record);
         } else {
-            // QPs are demand-created because one wire grant exclusively owns a QP.
-            // Every actual QP is charged by the transport's aggregate limit.
+            // Cold handshakes still create QPs on demand under the aggregate limit.
+            // Connected QPs can serve independent grants concurrently.
             qps.try_reserve(1).map_err(|_| Error::ResourceExhausted)?;
             qps.push(Qp {
                 record: Arc::clone(&grant.record),
@@ -123,18 +125,19 @@ impl RdmaEndpoint {
         Ok(qps.is_empty())
     }
 
-    pub(super) fn candidates(
-        &self,
-        matches: &impl Fn(&Peer) -> bool,
-    ) -> Result<Vec<(Arc<CqLane>, Peer)>> {
+    pub(super) fn candidates(&self, matches: &impl Fn(&Peer) -> bool) -> Result<Vec<Candidate>> {
         let qps = self
             .qp_list
             .lock()
             .map_err(|_| Error::Internal("RDMA endpoint QP array poisoned"))?;
         Ok(qps
             .iter()
-            .filter(|qp| matches(&qp.peer))
-            .filter_map(|qp| qp.lane.upgrade().map(|lane| (lane, qp.peer)))
+            .filter(|qp| matches(&qp.peer) && qp.record.connection.require_live().is_ok())
+            .filter_map(|qp| {
+                qp.lane
+                    .upgrade()
+                    .map(|lane| (lane, Arc::clone(&qp.record), qp.peer))
+            })
             .collect())
     }
 }

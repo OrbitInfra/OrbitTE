@@ -95,6 +95,7 @@ fn clean(stats: &RdmaStats) {
             stats.active_endpoints,
             stats.retained_endpoints,
             stats.active_grants,
+            stats.grant_credits,
             stats.retained_grants,
             stats.persistent_mrs,
             stats.retained_persistent_mrs,
@@ -188,7 +189,7 @@ fn multirail_peer() {
     if matches!(
         mode.as_str(),
         "concurrent-quota"
-            | "concurrent-endpoints"
+            | "concurrent-grants"
             | "concurrent-close"
             | "concurrent-cq-error"
             | "rq-pressure"
@@ -560,7 +561,7 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
                 let remote = connection.remote.unwrap();
                 result.push((
                     id,
-                    record.tag,
+                    connection.incarnation.unwrap().generation,
                     connection.incarnation.unwrap().encode(),
                     qp.qp_num,
                     connection.local.psn,

@@ -183,7 +183,9 @@ impl Workers {
         progress.shared.attach(handle.thread().clone())?;
         pending.push(Lane {
             state: Arc::clone(&progress.shared),
-            records: Vec::with_capacity(progress.shared.config.max_endpoints),
+            records: Vec::with_capacity(
+                progress.shared.config.max_endpoints + progress.shared.config.max_grants,
+            ),
             cursor: 0,
         });
         handle.thread().unpark();

@@ -1,4 +1,4 @@
-//! OrbitTE v12 rendezvous and exact-grant receipts carried by the control service.
+//! OrbitTE v13 rendezvous and exact-grant receipts carried by the control service.
 //! These messages are distinct from TENT's native metadata and wire formats.
 
 use super::DESCRIPTOR_SIZE;
@@ -63,6 +63,7 @@ pub(super) struct Hello {
     pub(super) source: Option<Identity>,
     pub(super) expected_domain: [u8; 16],
     pub(super) direct: bool,
+    /// Last observed grant on this pair; it is a lower bound, not an exclusive claim.
     pub(super) previous_grant: u64,
 }
 

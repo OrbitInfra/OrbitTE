@@ -261,7 +261,21 @@ fn one_context_fault_preserves_the_other_stores_idle_count_and_fences_new_grants
     let before = runtime.stats().unwrap().opened_direct_endpoints;
     let selection = runtime.allocate(8, 1 << 2).unwrap();
     assert!(matches!(
-        runtime.prepare_grant(selection, &local, 4..12, 0, deadline, None),
+        (move || {
+            let credits = super::super::super::grant::admission::GrantCredits::acquire(
+                Arc::clone(&runtime.usage),
+                runtime.config.max_grants,
+                1,
+            )?;
+            runtime.prepare_grant(
+                runtime.reserve_grant(selection, &local, &credits)?,
+                &local,
+                4..12,
+                0,
+                deadline,
+                None,
+            )
+        })(),
         Err(Error::Unavailable(_))
     ));
     assert_eq!(runtime.stats().unwrap().opened_direct_endpoints, before);
@@ -424,7 +438,8 @@ fn slice_window_intersects_remote_mask_and_single_cq_capacity_before_grants() {
         );
         assert_eq!(
             requester.stats().unwrap().rdma.unwrap().opened_connections,
-            if cqes == 1 { 1 } else { 2 }
+            1,
+            "slices sharing one selected context also share its connected QP"
         );
         assert_eq!(
             source.stats().unwrap().rdma.unwrap().persistent_mrs,
@@ -947,9 +962,15 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
         let runtime = source_runtime(&engine);
         let mut endpoints = [0, 2].map(|id| {
             let selection = runtime.allocate(4, 1 << id).unwrap();
+            let credits = super::super::super::grant::admission::GrantCredits::acquire(
+                Arc::clone(&runtime.usage),
+                runtime.config.max_grants,
+                1,
+            )
+            .unwrap();
             let mut endpoint = runtime
                 .prepare_grant(
-                    selection,
+                    runtime.reserve_grant(selection, &memory, &credits).unwrap(),
                     &memory,
                     id * 4..id * 4 + 4,
                     0,
@@ -1026,100 +1047,112 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
 #[test]
 fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recovers() {
     use super::super::super::receive::ReceiveCredits;
-    for event in [false, true] {
-        for operation in [TransferOp::Read, TransferOp::Write] {
-            let source = rdma_fixture_with_runtime(sliced_runtime(
-                u64::MAX,
-                16,
-                4,
-                RdmaHostMemory::Direct,
-                event,
-            ));
-            let requester = rdma_fixture_with_runtime(sliced_runtime(
-                u64::MAX,
-                16,
-                3,
-                RdmaHostMemory::Direct,
-                event,
-            ));
-            let local = requester
-                .register_memory(vec![0x63; 20].into_boxed_slice(), Permission::LocalOnly)
-                .unwrap();
-            let remote = source
-                .register_memory(
-                    vec![0x29; 20].into_boxed_slice(),
-                    Permission::RemoteReadWrite,
-                )
-                .unwrap();
-            let peer = requester
-                .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
-                .unwrap();
-            let credits =
-                ReceiveCredits::acquire(Arc::clone(&source_runtime(&source).usage), 4, 2).unwrap();
-            let request = TransferRequest {
-                transport: Transport::Rdma,
-                local_address: local.base_address() + 4,
-                remote_address: remote.base_address() + 4,
-                length: 12,
-            };
-            let report = requester
-                .submit_and_wait(operation, &peer, std::slice::from_ref(&request), TIMEOUT)
-                .unwrap();
-            assert!(
-                !report.is_complete() && report.locally_drained,
-                "{report:?}"
-            );
-            let failure = report.failure.unwrap();
-            assert!(matches!(failure.error, Error::ResourceExhausted));
-            assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
-            for engine in [&source, &requester] {
-                let stats = engine.stats().unwrap().rdma.unwrap();
+    for grant_budget in [false, true] {
+        for event in [false, true] {
+            for operation in [TransferOp::Read, TransferOp::Write] {
+                let mut runtime = sliced_runtime(u64::MAX, 16, 4, RdmaHostMemory::Direct, event);
+                runtime.config.max_grants = 4;
+                let source = rdma_fixture_with_runtime(runtime);
+                let requester = rdma_fixture_with_runtime(sliced_runtime(
+                    u64::MAX,
+                    16,
+                    3,
+                    RdmaHostMemory::Direct,
+                    event,
+                ));
+                let local = requester
+                    .register_memory(vec![0x63; 20].into_boxed_slice(), Permission::LocalOnly)
+                    .unwrap();
+                let remote = source
+                    .register_memory(
+                        vec![0x29; 20].into_boxed_slice(),
+                        Permission::RemoteReadWrite,
+                    )
+                    .unwrap();
+                let peer = requester
+                    .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+                    .unwrap();
+                let usage = &source_runtime(&source).usage;
+                let receive = (!grant_budget)
+                    .then(|| ReceiveCredits::acquire(Arc::clone(usage), 4, 2).unwrap());
+                let grants = grant_budget.then(|| {
+                    super::super::super::grant::admission::GrantCredits::acquire(
+                        Arc::clone(usage),
+                        4,
+                        2,
+                    )
+                    .unwrap()
+                });
+                let request = TransferRequest {
+                    transport: Transport::Rdma,
+                    local_address: local.base_address() + 4,
+                    remote_address: remote.base_address() + 4,
+                    length: 12,
+                };
+                let report = requester
+                    .submit_and_wait(operation, &peer, std::slice::from_ref(&request), TIMEOUT)
+                    .unwrap();
+                assert!(
+                    !report.is_complete() && report.locally_drained,
+                    "{report:?}"
+                );
+                let failure = report.failure.unwrap();
+                assert!(matches!(failure.error, Error::ResourceExhausted));
+                assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
+                for engine in [&source, &requester] {
+                    let stats = engine.stats().unwrap().rdma.unwrap();
+                    assert_eq!(
+                        (
+                            stats.opened_connections,
+                            stats.active_grants,
+                            stats.receive_work_requests
+                        ),
+                        (0, 0, 0)
+                    );
+                }
+                let stats = source.stats().unwrap().rdma.unwrap();
                 assert_eq!(
                     (
-                        stats.opened_connections,
-                        stats.active_grants,
-                        stats.receive_work_requests
+                        stats.receive_credits,
+                        stats.receive_admission_rejections,
+                        stats.grant_credits
                     ),
-                    (0, 0, 0)
+                    if grant_budget { (0, 0, 2) } else { (2, 1, 0) }
                 );
-            }
-            let stats = source.stats().unwrap().rdma.unwrap();
-            assert_eq!(
-                (stats.receive_credits, stats.receive_admission_rejections),
-                (2, 1)
-            );
-            drop(credits);
-            let report = requester
-                .submit_and_wait(operation, &peer, &[request], TIMEOUT)
-                .unwrap();
-            assert!(report.is_complete() && report.locally_drained, "{report:?}");
-            let mut bytes = [0; 20];
-            let target = if operation == TransferOp::Read {
-                &local
-            } else {
-                &remote
-            };
-            target.read(0, &mut bytes).unwrap();
-            let guard = if operation == TransferOp::Read {
-                0x63
-            } else {
-                0x29
-            };
-            assert_eq!(&bytes[..4], &[guard; 4]);
-            assert_eq!(
-                &bytes[4..16],
-                &[if operation == TransferOp::Read {
-                    0x29
+                drop((receive, grants));
+                let report = requester
+                    .submit_and_wait(operation, &peer, &[request], TIMEOUT)
+                    .unwrap();
+                assert!(report.is_complete() && report.locally_drained, "{report:?}");
+                let mut bytes = [0; 20];
+                let target = if operation == TransferOp::Read {
+                    &local
                 } else {
+                    &remote
+                };
+                target.read(0, &mut bytes).unwrap();
+                let guard = if operation == TransferOp::Read {
                     0x63
-                }; 12]
-            );
-            assert_eq!(&bytes[16..], &[guard; 4]);
-            requester.unregister_memory(&local).unwrap();
-            source.unregister_memory(&remote).unwrap();
-            requester.close(TIMEOUT).unwrap();
-            source.close(TIMEOUT).unwrap();
-            assert_eq!(source.stats().unwrap().rdma.unwrap().receive_credits, 0);
+                } else {
+                    0x29
+                };
+                assert_eq!(&bytes[..4], &[guard; 4]);
+                assert_eq!(
+                    &bytes[4..16],
+                    &[if operation == TransferOp::Read {
+                        0x29
+                    } else {
+                        0x63
+                    }; 12]
+                );
+                assert_eq!(&bytes[16..], &[guard; 4]);
+                requester.unregister_memory(&local).unwrap();
+                source.unregister_memory(&remote).unwrap();
+                requester.close(TIMEOUT).unwrap();
+                source.close(TIMEOUT).unwrap();
+                let stats = source.stats().unwrap().rdma.unwrap();
+                assert_eq!((stats.receive_credits, stats.grant_credits), (0, 0));
+            }
         }
     }
 }

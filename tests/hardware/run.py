@@ -312,7 +312,7 @@ class Controller:
                 or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
                 or type(case.get('rdma_events')) is not bool
                 or case.get('mode') not in ['healthy', 'cq-error', 'partial-post', 'paused-close', 'mr-rollback',
-                                           'concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
+                                           'concurrent-quota', 'concurrent-grants', 'concurrent-close',
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                                            'large-quota', 'large-close', 'large-cq-error',
                                            'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',

@@ -287,7 +287,7 @@ fn snapshot(engine: &TransferEngine) -> Snapshot {
             );
             let native = unsafe { &*connection.handles.qp.cast::<ffi::ibv_qp>() };
             rows.push((
-                record.tag,
+                connection.incarnation.unwrap().generation,
                 connection.incarnation.unwrap().encode(),
                 native.pd as usize,
                 native.qp_num,

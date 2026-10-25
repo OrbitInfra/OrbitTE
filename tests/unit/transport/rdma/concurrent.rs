@@ -285,7 +285,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let rq_limit = if wide { count + 1 } else { 4 };
     let fault = is_fault(mode);
     let paused = mode.ends_with("close");
-    let endpoint_limit = mode == "concurrent-endpoints";
+    let endpoint_limit = mode == "concurrent-grants";
     let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
     let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
     let operation = if env::var("ORBITTE_RAIL_OPERATION").as_deref() == Ok("read") {
@@ -330,6 +330,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         } else {
             8
         },
+        max_grants: if endpoint_limit { count } else { 64 },
         max_direct_bytes: if wide {
             (shape.parents + 1) * shape.payload
         } else if endpoint_limit {
@@ -435,8 +436,10 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             };
             let mut pending = vec![spawn(0)];
             until(|| {
+                let stats = engine.stats().unwrap().rdma.unwrap();
                 native::initial_posted()
-                    && engine.stats().unwrap().rdma.unwrap().work_requests == sq_limit
+                    && stats.work_requests
+                        == sq_limit.min(stats.active_endpoints * if large { 2 } else { 1 })
             });
             pending.extend((1..shape.parents).map(spawn));
             until(|| {
@@ -454,23 +457,29 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             });
             let stats = engine.stats().unwrap().rdma.unwrap();
             assert_eq!(
-                stats.work_requests, sq_limit,
-                "aggregate SQ quota was exceeded across contexts"
+                stats.work_requests,
+                sq_limit.min(stats.active_endpoints * if large { 2 } else { 1 }),
+                "held payloads must fill the available physical SQ capacity"
             );
             assert_eq!(
-                (
-                    stats.active_endpoints,
-                    stats.active_grants,
-                    stats.direct_bytes
-                ),
-                (
-                    count + stats.idle_endpoints,
-                    count,
-                    shape.parents * shape.payload
-                )
+                (stats.active_grants, stats.direct_bytes),
+                (count, shape.parents * shape.payload)
             );
+            let active_qps = owners(&engine)
+                .iter()
+                .map(|(_, record)| Arc::as_ptr(&record.connection) as usize)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            assert_eq!(stats.active_endpoints, active_qps + stats.idle_endpoints);
+            assert!(active_qps <= count);
+            if wide {
+                assert!(
+                    active_qps < count,
+                    "public grants did not multiplex connected QPs"
+                );
+            }
             assert!(stats.active_endpoints <= 2 * count);
-            assert_eq!(stats.peak_work_requests, sq_limit);
+            assert_eq!(stats.peak_work_requests, stats.work_requests);
             worker_pool::admitted(&engine, count);
             native::admitted(owners(&engine));
             stream.write_all(&[0x3e]).unwrap();
@@ -757,7 +766,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         );
         if !fault && !paused {
             let snapshot = connections(&engine);
-            assert!((count..=2 * count).contains(&snapshot.len()));
+            assert!((2..=count).contains(&snapshot.len()));
             if let Some(first) = &first {
                 assert!(
                     first.iter().all(|connection| snapshot.contains(connection)),
@@ -779,15 +788,11 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             if round != 0 {
                 assert!(reused > 0);
             }
-            if shape.range(0).len() == shape.range(shape.slices - 1).len() {
-                assert_eq!(snapshot.len(), count);
+            if round != 0 {
                 assert_eq!(
                     (opened, reused),
-                    if round == 0 {
-                        (count as u64, 0)
-                    } else {
-                        (0, count as u64)
-                    }
+                    (0, count as u64),
+                    "warm requests must retain their physical connection set"
                 );
             }
             println!(

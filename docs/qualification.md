@@ -13,6 +13,26 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Public v13 handshakes share live physical QPs across independent exact-range
+grants. Whole-parent `max_grants` reservations are separate from physical
+`max_endpoints`; the source also reserves RQ capacity before exposing authority.
+RQ depth uses `max_cqes`, and message-buffer credits survive until MR cleanup.
+Idle eviction requires every sibling grant to finish.
+
+The source and native qualification for this delivery is being frozen under
+`/root/orbitte-artifacts/rdma-public-qp-20261026`. Development runs include
+eight public parents/forty grants on two physical QPs in the single-lane,
+two-RNIC profile. This is a correctness/ownership observation, not a throughput
+result. Current source remains Implemented until the pinned gate manifests
+below are complete; independent acceptance is open.
+
+Concurrent cold construction can still exceed a peer's configured lane width
+under the aggregate QP limit. Fixed-width bootstrap reservations, periodic
+monitor recovery, physical port/device faults, GPUDirect/performance and
+complete P4 acceptance remain open.
+
+## Previous qualified native source: concurrent grant records
+
 The concurrent grant-record delivery gives several runtime records one shared
 `RdmaQp`. SQ completions select the record's namespace; RQ completions identify
 the physical receive slot and then the exact binding/key grant. Native retirement

@@ -101,7 +101,7 @@ pub(super) fn barrier(stream: &mut TcpStream, phase: u8) {
 }
 
 #[test]
-#[ignore = "requires two selected RNIC hosts and original NIC locks; uses the public v12 protocol"]
+#[ignore = "requires two selected RNIC hosts and original NIC locks; uses the public v13 protocol"]
 fn connected_endpoint_peer() {
     println!();
     let role = env::var("ORBITTE_SHARED_ROLE").unwrap();

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 fn fixture(limit: usize) -> (RdmaTransport, Arc<RdmaContext>, ReceiveQueue) {
     let runtime = runtime("ok");
     let device = runtime.device().unwrap();
-    let queue = ReceiveQueue::new(limit, Arc::clone(&runtime.usage)).unwrap();
+    let queue = ReceiveQueue::new(limit, limit, Arc::clone(&runtime.usage)).unwrap();
     (runtime, device, queue)
 }
 
@@ -246,7 +246,11 @@ fn bounded_slots_keep_uncertain_posts_and_dropped_receipts_until_native_drain() 
         drop((first, second));
         let expected = if mode == 1 { 1 } else { 2 };
         assert_eq!(queue.outstanding(), expected);
-        assert_eq!(queue.credited(), expected);
+        assert_eq!(
+            queue.credited(),
+            2,
+            "both prepared MRs retain admission until cleanup"
+        );
         assert_eq!(queue.memory_usage(), (2, 2 * COMPLETION_MESSAGE_SIZE));
         assert!(queue.close(runtime.verbs).is_err());
         assert_eq!(queue.outstanding(), expected);

@@ -17,7 +17,7 @@ pub struct RdmaStats {
     pub retained_windows: usize,
     pub completed_window_binds: u64,
     pub completed_window_invalidations: u64,
-    /// Source completion credits, including unposted parts of admitted parents.
+    /// Source completion credits: parent reservations and unreaped message MRs.
     pub receive_credits: usize,
     pub peak_receive_credits: usize,
     pub receive_admission_rejections: u64,
@@ -69,6 +69,8 @@ pub struct RdmaStats {
     pub completed_reusable_grants: u64,
     /// Per-request memory owners, including outputs after physical QP close.
     pub active_grants: usize,
+    /// Whole-parent grant reservations, held through every child cleanup.
+    pub grant_credits: usize,
     pub retained_grants: usize,
     pub staging_bytes: usize,
     /// Direct host bytes charged through endpoint release, including retention.

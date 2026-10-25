@@ -160,14 +160,23 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
             }
         })
         .collect();
-    assert_eq!(
-        trace
-            .owners
-            .iter()
-            .map(|owner| owner.qp)
-            .collect::<BTreeSet<_>>()
-            .len(),
-        trace.shape.parents * trace.shape.slices
+    let physical = trace
+        .owners
+        .iter()
+        .map(|owner| owner.qp)
+        .collect::<BTreeSet<_>>()
+        .len();
+    assert!((2..=trace.owners.len()).contains(&physical));
+    if trace.shape.parents >= 4 {
+        assert!(
+            physical < trace.owners.len(),
+            "public protocol must share native QPs"
+        );
+    }
+    println!(
+        "ORBITTE_PUBLIC_QPS {{\"requester\":{},\"grants\":{},\"physical_qps\":{physical}}}",
+        trace.requester,
+        trace.owners.len()
     );
     if trace.requester && trace.mode.ends_with("peer-exit") {
         trace.failed_cqs = trace
@@ -285,7 +294,11 @@ unsafe extern "C" fn post(
             let owner = trace
                 .owners
                 .iter()
-                .find(|owner| owner.qp == qp as *const _ as usize)
+                .find(|owner| {
+                    owner.qp == qp as *const _ as usize
+                        && owner.record.send_namespace.load(Ordering::Acquire)
+                            == unsafe { (*requests).id } / crate::transport::rdma::WR_ID_STRIDE
+                })
                 .unwrap();
             assert_eq!(owner.nic, nic, "payload left its admitted context");
         }
@@ -306,7 +319,11 @@ unsafe extern "C" fn post(
                 &trace
                     .owners
                     .iter()
-                    .find(|owner| owner.qp == trace.injected_qp)
+                    .find(|owner| {
+                        owner.qp == trace.injected_qp
+                            && owner.record.send_namespace.load(Ordering::Acquire)
+                                == unsafe { (*requests).id } / crate::transport::rdma::WR_ID_STRIDE
+                    })
                     .unwrap()
                     .record,
             ));
@@ -514,6 +531,19 @@ fn lose_completion(trace: &mut Trace, cq: usize, completion: &sys::Completion) -
         owner.nic == trace.fault_rail
             && owner.qpn == completion.qpn
             && (owner.cq == cq || owner.receive_cq == cq)
+            && if receive {
+                owner
+                    .record
+                    .lock()
+                    .unwrap()
+                    .resources
+                    .as_ref()
+                    .and_then(|r| r.grant.as_ref())
+                    .is_some_and(|grant| grant.rkey == completion.invalidated_rkey)
+            } else {
+                owner.record.send_namespace.load(Ordering::Acquire)
+                    == completion.id / crate::transport::rdma::WR_ID_STRIDE
+            }
     }) else {
         return false;
     };
@@ -617,35 +647,24 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .iter()
                 .filter(|(rq, qpn, _)| *rq == owner.receive_cq && *qpn == owner.qpn)
                 .count();
-            let debt = state
-                .resources
-                .as_ref()
-                .unwrap()
-                .connection
-                .lock()
-                .unwrap()
-                .receive_queue
-                .outstanding();
+            let connection = owner.record.connection.lock().unwrap();
+            let debt = connection.receive_queue.outstanding();
             assert_eq!(
                 debt,
                 accepted - delivered,
                 "source RQ debt escaped before native CQ drain"
             );
-            if debt != 0 {
-                assert!(
-                    state
-                        .resources
-                        .as_ref()
-                        .unwrap()
-                        .connection
-                        .lock()
-                        .unwrap()
-                        .receive_queue
-                        .credited()
-                        == debt,
-                    "source RQ admission credit escaped before native CQ drain"
-                );
-                let grant = state.resources.as_ref().unwrap().grant().unwrap();
+            assert!(
+                connection.receive_queue.credited() >= debt,
+                "unresolved native RQ slots lost admission"
+            );
+            assert_eq!(
+                connection.receive_queue.credited(),
+                connection.receive_queue.memory_usage().0,
+                "credits must cover every unreaped message MR"
+            );
+            drop(connection);
+            if let Some(grant) = state.resources.as_ref().and_then(|r| r.grant.as_ref()) {
                 assert!(trace.active_mrs.contains(&(grant.handles.mr as usize)));
                 let offset = (grant.buffer.address().as_ptr() as u64
                     - trace.memory.as_ref().unwrap().base_address())
@@ -655,9 +674,11 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                         trace.memory.as_ref().unwrap().write(offset, &[0xff]),
                         Err(Error::Unavailable(_))
                     ),
-                    "source RQ DMA loan escaped before native CQ drain"
+                    "source DMA loan escaped before native CQ drain"
                 );
-                pending += 1;
+                if debt != 0 {
+                    pending += 1;
+                }
             }
             checked += 1;
         }
@@ -692,22 +713,31 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .count();
             let expected = accepted - delivered;
             assert_eq!(
-                request.resources.as_ref().map_or(0, |r| r
+                owner
+                    .record
                     .connection
                     .lock()
                     .unwrap()
                     .send_queue
-                    .outstanding()),
+                    .outstanding(),
                 expected,
                 "physical QP lost accepted WR debt before CQ destruction"
             );
+            let namespace = owner.record.send_namespace.load(Ordering::Acquire);
+            let owns = |(cq, qpn, id): &&(usize, u32, u64)| {
+                *cq == owner.cq
+                    && *qpn == owner.qpn
+                    && *id / crate::transport::rdma::WR_ID_STRIDE == namespace
+            };
+            let grant_expected = trace.accepted_wr.iter().filter(owns).count()
+                - trace.delivered_wr.iter().filter(owns).count();
             let debt = request
                 .work
                 .as_ref()
                 .map_or(0, |work| work.queue.outstanding());
             assert_eq!(
-                debt, expected,
-                "admitted parent lost unresolved WR debt before shared CQ drain"
+                debt, grant_expected,
+                "admitted grant lost its own unresolved WR debt before shared CQ drain"
             );
             let injected = trace
                 .injected_record
@@ -738,8 +768,8 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
             } else {
                 assert!(!injected, "the failed parent escaped its CQ drain barrier");
                 assert_eq!(
-                    expected, 0,
-                    "a retired parent still owes native completions"
+                    grant_expected, 0,
+                    "a retired grant still owes native completions"
                 );
                 assert!(matches!(
                     request.phase,
@@ -779,12 +809,22 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
             let accepted = trace
                 .accepted_wr
                 .iter()
-                .filter(|(cq, qpn, _)| *cq == missing.0 && *qpn == missing.1)
+                .filter(|(cq, qpn, id)| {
+                    *cq == missing.0
+                        && *qpn == missing.1
+                        && *id / crate::transport::rdma::WR_ID_STRIDE
+                            == missing.2 / crate::transport::rdma::WR_ID_STRIDE
+                })
                 .count();
             let delivered = trace
                 .delivered_wr
                 .iter()
-                .filter(|(cq, qpn, _)| *cq == missing.0 && *qpn == missing.1)
+                .filter(|(cq, qpn, id)| {
+                    *cq == missing.0
+                        && *qpn == missing.1
+                        && *id / crate::transport::rdma::WR_ID_STRIDE
+                            == missing.2 / crate::transport::rdma::WR_ID_STRIDE
+                })
                 .count();
             assert!(trace.accepted_wr.contains(&missing));
             assert!(!trace.delivered_wr.contains(&missing));
@@ -815,12 +855,20 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         let connection = owner.resources.as_ref().unwrap().connection.lock().unwrap();
         let receive = &connection.receive_queue;
         assert!(
-            receive.outstanding() == 1 && receive.credited() == 1,
+            receive.outstanding() >= 1
+                && receive.credited() >= receive.outstanding()
+                && receive.owns(trace.injected_wr.unwrap().2),
             "a dropped receive CQE lost its credit before native CQ drain"
+        );
+        let debt = receive.outstanding();
+        println!(
+            "ORBITTE_LOST_RECEIVE_DEBT {{\"unresolved\":{debt},\"credits\":{},\"missing_wr\":{}}}",
+            receive.credited(),
+            trace.injected_wr.unwrap().2
         );
         drop(connection);
         drop(owner);
-        trace.fault_debt.push(1);
+        trace.fault_debt.push(debt);
     }
     let mut retirement = trace.retirement.take();
     let code = retirement
@@ -973,7 +1021,8 @@ pub(super) fn finish() {
             ),
             (1, 2, 1)
         );
-        assert_eq!(trace.fault_debt, [1, 1]);
+        assert_eq!(trace.fault_debt.len(), 2);
+        assert!(trace.fault_debt.iter().all(|debt| *debt >= 1));
     }
     println!(
         "ORBITTE_NATIVE_FAULT {{\"requester\":{},\"qp_err_transitions\":{},\"lost_cqes\":{},\"lost_receive\":{},\"target\":{:?},\"debt_before_cq\":{:?}}}",
