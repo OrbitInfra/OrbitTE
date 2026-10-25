@@ -392,6 +392,8 @@ longer owns global SQ credits. Payload, bind and completion SEND consume that
 shared owner, including post errors and native cancellation. This does not
 activate simultaneous wire grants: concurrent grant records, receive-message
 demultiplexing and fixed-width peer construction still have to be connected.
+Source `e7adce9` passes the existing 180-case two-host profile plus shared-SQ
+CPU contracts; [qualification](qualification.md) pins the evidence and limits.
 No new P4 milestone is added for this prerequisite.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and
