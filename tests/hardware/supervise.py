@@ -41,9 +41,14 @@ def supervise(config_path):
         restart = config.get('restart_role')
         if restart is not None and restart not in ('source', 'requester'):
             raise ValueError('restart_role must name the configured native peer')
+        kill_role = config['restart_kill_role'] if restart else None
+        generations = config['restart_generations'] if restart else 1
+        if restart and (kill_role not in ('source', 'requester')
+                        or type(generations) is not int or generations not in (2, 3)):
+            raise ValueError('restart requires an explicit kill role and two or three generations')
         result['command'] = [str(binary), *config['arguments']]
         phases = []
-        for generation in range(2 if restart else 1):
+        for generation in range(generations):
             if restart:
                 environment['ORBITTE_RESTART_GENERATION'] = str(generation)
                 environment['ORBITTE_RESTART_ROOT'] = str(root)
@@ -56,13 +61,13 @@ def supervise(config_path):
                 write(root / 'running.json', result)
                 intentional = False
                 try:
-                    if restart == 'source' and generation == 0:
+                    if restart == kill_role and generation + 1 < generations:
                         deadline = time.monotonic() + config['timeout_seconds']
-                        marker = root / 'restart-request.txt'
+                        marker = root / ('restart-request-' + str(generation) + '.txt')
                         while process.poll() is None:
                             if marker.exists():
                                 fields = marker.read_text().split()
-                                if len(fields) != 4 or int(fields[0]) != process.pid:
+                                if len(fields) != 7 or int(fields[0]) != process.pid or int(fields[6]) != generation:
                                     raise RuntimeError('restart marker does not identify this direct child')
                                 # The Popen handle owns this child. Keep both leases
                                 # through waitpid and the complete second process.
@@ -87,9 +92,9 @@ def supervise(config_path):
                                    intentional_sigkill=intentional))
                 if (root / 'maps.txt').exists():
                     shutil.copy2(root / 'maps.txt', root / ('maps-' + str(generation) + '.txt'))
-                write(root / 'restart.json', dict(phases=phases, locks_held=True))
+                write(root / 'restart.json', dict(phases=phases, locks_held=True, kill_role=kill_role, generations=generations))
                 result['phases'] = phases
-            expected = -9 if restart == 'source' and generation == 0 else 0
+            expected = -9 if restart == kill_role and generation + 1 < generations else 0
             passed = result['exit_code'] == expected and (expected != -9 or intentional) and not result.get('timeout')
             result['status'] = 'passed' if passed else 'failed'
             if not passed:

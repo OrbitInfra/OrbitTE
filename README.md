@@ -33,10 +33,11 @@ CPU DRAM/RoCEv2 profile for cross-rail READ/WRITE, concurrent parents, aggregate
 quotas, whole-parent source RQ admission, connected reuse, registration rollback
 and native fault/drain ownership. The extended profile includes eight parents,
 up to 5 MiB each, folded tails and 32/40-QP reuse. Native QP ERR, lost SQ/RQ
-completions and source-process restart pass scoped checks with separate
-endpoint destruction deadlines. Physical port/device loss, independent P4
-acceptance, full TENT parity, GPUDirect RDMA and optional SSD transports remain
-open.
+completions, source/requester death and repeated fresh-process restart pass
+scoped checks with separate endpoint destruction deadlines. Real CQ/PD cleanup
+errors preserve the affected native owners through caller Drop. Physical
+port/device loss, independent P4 acceptance, full TENT parity, GPUDirect RDMA
+and optional SSD transports remain open.
 The published `orbit-te` alpha reserves the package identity; use the source
 checkout for the implementation described here.
 

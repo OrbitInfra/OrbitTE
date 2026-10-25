@@ -198,6 +198,11 @@ fn multirail_peer() {
             | "large-lost-recv-cqe"
             | "folded-lost-recv-cqe"
             | "large-peer-exit"
+            | "large-peer-restart"
+            | "large-requester-exit"
+            | "large-requester-restart"
+            | "large-cq-busy"
+            | "large-pd-busy"
     ) {
         concurrent::run(&mode, source, &rails);
         return;

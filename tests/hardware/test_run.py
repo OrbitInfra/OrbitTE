@@ -177,20 +177,25 @@ class ResourceSelection(unittest.TestCase):
                          'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                          'large-quota', 'large-close', 'large-cq-error',
                          'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
-                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit']:
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy']:
                 def concurrent_start(*args):
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')
                     raise CapturedStart()
 
                 controller.start = concurrent_start
-                with self.subTest(mode=mode), self.assertRaises(CapturedStart):
-                    controller.case(0, {**case, 'mode': mode, 'mask': 3})
+                for fault_role in (['source', 'requester'] if mode in ('large-cq-busy', 'large-pd-busy') else [None]):
+                    extra = {'fault_role': fault_role} if fault_role else {}
+                    with self.subTest(mode=mode, fault_role=fault_role), self.assertRaises(CapturedStart):
+                        controller.case(0, {**case, 'mode': mode, 'mask': 3, **extra})
                 with self.subTest(mode=mode, mask=1), self.assertRaises(ValueError):
                     controller.case(0, {**case, 'mode': mode})
             for invalid in [{'mode': 'link-down'}, {'mode': 'cq-error'}, {'mask': True},
                             {'mask': 0}, {'mask': 4}, {'fault_rail': True}, {'fault_rail': 2}, {'rdma_events': 1}, {'operation': 'delete'},
-                            {'transport': 'tcp'}, {'source_kind': 'cuda:0'}]:
+                            {'transport': 'tcp'}, {'source_kind': 'cuda:0'},
+                            {'mode': 'large-cq-busy', 'mask': 3},
+                            {'mode': 'large-pd-busy', 'mask': 3, 'fault_role': 'both'},
+                            {'fault_role': 'source'}]:
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     controller.case(0, {**case, **invalid})
 

@@ -131,12 +131,18 @@ fn is_fault(mode: &str) -> bool {
         || mode.ends_with("lost-send-cqe")
         || mode.ends_with("lost-recv-cqe")
         || mode.ends_with("peer-exit")
+        || mode.ends_with("requester-exit")
 }
 
 fn deadline_fault(mode: &str) -> bool {
     mode.ends_with("lost-send-cqe")
         || mode.ends_with("lost-recv-cqe")
         || mode.ends_with("peer-exit")
+        || mode.ends_with("requester-exit")
+        || matches!(
+            mode,
+            "large-peer-restart" | "large-requester-restart" | "large-cq-busy" | "large-pd-busy"
+        )
 }
 
 fn transfer(
@@ -217,15 +223,42 @@ fn verify_bytes(
     }
 }
 
+fn write_outcome(stream: &mut TcpStream, successful: &[bool], accepted: &[Vec<usize>]) {
+    stream.write_all(&[0x31]).unwrap();
+    stream
+        .write_all(&successful.iter().copied().map(u8::from).collect::<Vec<_>>())
+        .unwrap();
+    for row in accepted {
+        for value in row {
+            stream.write_all(&(*value as u32).to_be_bytes()).unwrap();
+        }
+    }
+}
+
+fn read_outcome(stream: &mut TcpStream, successful: &mut [bool], accepted: &mut [Vec<usize>]) {
+    token(stream, 0x31);
+    let mut statuses = vec![0; successful.len()];
+    stream.read_exact(&mut statuses).unwrap();
+    for (output, status) in successful.iter_mut().zip(statuses) {
+        assert!(status <= 1);
+        *output = status == 1;
+    }
+    for row in accepted {
+        for value in row {
+            let mut bytes = [0; 4];
+            stream.read_exact(&mut bytes).unwrap();
+            *value = u32::from_be_bytes(bytes) as usize;
+        }
+    }
+}
+
 pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     assert_eq!(env::var("ORBITTE_RAIL_MASK").unwrap(), "3");
     let generation = restart::generation(mode);
-    let interrupted = mode == "large-peer-exit" && generation == 0;
-    let mode = if mode == "large-peer-exit" && generation == 1 {
-        "large-quota"
-    } else {
-        mode
-    };
+    let interrupted = restart::interrupted(mode, generation);
+    let cleanup = restart::cleanup(mode, generation);
+    let dying = restart::dying(source, generation);
+    let mode = restart::mode(mode, generation);
     let shape = Shape::new(mode);
     let large = shape.parents == 8;
     let wide = large || mode.starts_with("rq-");
@@ -310,9 +343,13 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let engine = Arc::new(rdma_fixture_with_config(
         runtime,
         EngineConfig {
-            bind_addr: restart::bind(source, generation),
+            bind_addr: restart::bind(generation),
             handler_threads: shape.parents + 1,
-            handler_timeout: if mode.ends_with("lost-recv-cqe") {
+            handler_timeout: if mode.ends_with("lost-recv-cqe")
+                || cleanup == Some("cq")
+                || (interrupted
+                    && env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
+            {
                 Duration::from_secs(10)
             } else {
                 TIMEOUT
@@ -333,6 +370,9 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         )
         .unwrap();
     topology(&engine, rails);
+    if let Some(generation) = generation {
+        restart::state(&engine, &memory, generation);
+    }
     let mut stream = restart::control(source, generation);
     let (endpoint, epoch, remote) =
         super::super::connected::exchange(&mut stream, &engine, &memory);
@@ -341,20 +381,20 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     } else {
         Some(engine.open_segment(endpoint, epoch, TIMEOUT).unwrap())
     };
-    if generation == 0 && !source && interrupted {
-        restart::remember(peer.as_ref().unwrap());
+    if let (Some(generation), Some(peer)) = (generation, &peer) {
+        restart::remember(peer, generation);
     }
     native::retain_memory(&memory);
     let rounds = if fault || paused { 1 } else { 2 };
     let mut first = None;
     let mut retired = false;
     for round in 0..rounds {
-        let seed = round + if generation == 1 { 10 } else { 0 };
+        let seed = round + generation.map_or(0, |g| 10 * g);
         let original = bytes(shape, source, seed);
         let incoming = bytes(shape, !source, seed);
         memory.write(0, &original).unwrap();
         super::super::connected::barrier(&mut stream, 0x10 + round as u8);
-        if generation == 1 && round == 0 {
+        if generation.is_some_and(|g| g > 0) && round == 0 {
             restart::stale(
                 &mut stream,
                 &engine,
@@ -479,11 +519,24 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             stream.write_all(&[0x40]).unwrap();
             token(&mut stream, 0x41);
             if interrupted {
-                let mut byte = [0];
-                assert!(
-                    matches!(stream.read(&mut byte), Ok(0) | Err(_)),
-                    "the killed peer's control connection stayed live"
-                );
+                if dying {
+                    successful.fill(false);
+                    accepted = native::accepted();
+                    write_outcome(&mut stream, &successful, &accepted);
+                    token(&mut stream, 0x42);
+                    println!(
+                        "ORBITTE_RESTART_ACCEPTED {{\"generation\":{},\"accepted\":{:?}}}",
+                        generation.unwrap(),
+                        accepted
+                    );
+                    restart::terminate(
+                        source,
+                        generation.unwrap(),
+                        "grants",
+                        &engine.stats().unwrap().rdma.unwrap(),
+                    );
+                }
+                restart::peer_exited(&mut stream);
             }
             native::release();
             wake(&engine);
@@ -499,8 +552,15 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 .into_iter()
                 .map(|task| task.join().unwrap())
                 .collect::<Vec<_>>();
+            let retaining = cleanup == Some("cq") && dying;
+            if retaining {
+                assert!(
+                    reports.iter().any(|report| !report.locally_drained),
+                    "native cleanup failure falsely drained every parent"
+                );
+            }
             for (parent, report) in reports.iter().enumerate() {
-                assert!(report.locally_drained, "{report:?}");
+                assert!(report.locally_drained || retaining, "{report:?}");
                 successful[parent] = report.is_complete();
                 if report.is_complete() {
                     assert_eq!(
@@ -529,7 +589,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     );
                 }
             }
-            if deadline_fault(mode) {
+            if deadline_fault(mode) && !retaining {
                 let unquiesced = reports
                     .iter()
                     .filter(|report| !report.locally_drained)
@@ -555,14 +615,14 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             );
             accepted = native::accepted();
             if !interrupted {
-                stream.write_all(&[0x31]).unwrap();
-                stream
-                    .write_all(&successful.iter().copied().map(u8::from).collect::<Vec<_>>())
-                    .unwrap();
-                for row in &accepted {
-                    for value in row {
-                        stream.write_all(&(*value as u32).to_be_bytes()).unwrap();
+                write_outcome(&mut stream, &successful, &accepted);
+                if cleanup == Some("cq") {
+                    token(&mut stream, 0x42);
+                    if dying {
+                        let stats = native::retained(engine, memory, backing, weak, "cq");
+                        restart::terminate(source, generation.unwrap(), "retained-cq", &stats);
                     }
+                    restart::peer_exited(&mut stream);
                 }
             }
         } else {
@@ -632,26 +692,28 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             }
             native::arm();
             stream.write_all(&[0x41]).unwrap();
-            if interrupted {
-                restart::terminate(&engine, &memory);
+            if interrupted && dying {
+                restart::terminate(
+                    source,
+                    generation.unwrap(),
+                    "grants",
+                    &engine.stats().unwrap().rdma.unwrap(),
+                );
             }
-            token(&mut stream, 0x31);
-            let mut statuses = vec![0; shape.parents];
-            stream.read_exact(&mut statuses).unwrap();
-            assert!(statuses.iter().all(|value| *value <= 1));
-            successful = statuses.into_iter().map(|value| value == 1).collect();
-            for row in &mut accepted {
-                for value in row {
-                    let mut bytes = [0; 4];
-                    stream.read_exact(&mut bytes).unwrap();
-                    *value = u32::from_be_bytes(bytes) as usize;
+            read_outcome(&mut stream, &mut successful, &mut accepted);
+            if interrupted || cleanup == Some("cq") {
+                stream.write_all(&[0x42]).unwrap();
+                if dying {
+                    let stats = native::retained(engine, memory, backing, weak, "cq");
+                    restart::terminate(source, generation.unwrap(), "retained-cq", &stats);
                 }
+                restart::peer_exited(&mut stream);
             }
             if fault || paused {
                 engine.close_source(TIMEOUT).unwrap();
             }
         }
-        if !interrupted {
+        if !interrupted && cleanup != Some("cq") {
             super::super::connected::barrier(&mut stream, 0x32);
         }
         verify_bytes(
@@ -687,12 +749,23 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             "ORBITTE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
             successful, accepted
         );
-        if !interrupted {
+        if !interrupted && cleanup != Some("cq") {
             super::super::connected::barrier(&mut stream, 0x33);
         }
     }
     if !retired {
         engine.unregister_memory(&memory).unwrap();
+    }
+    if cleanup == Some("pd") && dying {
+        assert!(matches!(
+            engine.close(TIMEOUT),
+            Err(Error::Unquiesced {
+                operation: "ibv_dealloc_pd",
+                code: libc::EBUSY
+            })
+        ));
+        let stats = native::retained(engine, memory, backing, weak, "pd");
+        restart::terminate(source, generation.unwrap(), "retained-pd", &stats);
     }
     engine.close(TIMEOUT).unwrap();
     let stats = engine.stats().unwrap().rdma.unwrap();
@@ -705,7 +778,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     )
     .unwrap();
     native::finish();
-    if generation != 2 {
+    if let Some(generation) = generation {
         println!(
             "ORBITTE_RESTART_RESULT {{\"source\":{source},\"generation\":{generation},\"pid\":{},\"epoch\":\"{}\",\"endpoint\":\"{}\",\"drained\":true}}",
             std::process::id(),
