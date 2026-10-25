@@ -13,9 +13,28 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
-P4.12j implements drained shared-progress replacement and declares native
-MR/MW syscall-fault and live-process recovery profiles. Its frozen source,
-hardware and mutation gates are pending. See [the contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
+P4.12j (`586df69`) adds drained shared-progress replacement without replaying
+failed transfers. Later requests rebuild QPs in the original PD/MR owners;
+native MR/MW cleanup failures keep the affected old engine quarantined.
+
+Nineteen stable/Rust 1.85 gates pass, with 192 all-feature units per toolchain
+and eleven runner controls. Both frozen binaries pass 248 two-host/two-RNIC
+CPU DRAM/IPv4 RoCEv2 configurations: 128 new lifecycle cases and 120 targeted
+regressions. The new cases prove 64 native QP ERR transitions, 64 MR and 32 MW
+EIO errors from thread-local syscall injection, observer-free backing/loan
+retention, live-engine replacement with new epochs/PDs and old open/data
+rejection before QPs or effects. All 536 children are reaped: 516 completed
+libtests and twenty deliberate kills in the previous CQ/PD/restart profiles.
+Retained old engines have no zero-counter claim.
+
+Eight native mutation controls reject early MR/MW release and missing engine
+recovery. The real frozen TENT CPU driver/shared-library comparison passes
+25 observations and six controls. See [the contract and external evidence](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
+
+The current execution model remains one shared progress owner per context;
+TENT's configurable transport-level worker pool, spontaneous provider failures,
+physical device recovery, in-place healing of retained owners, wider installed/
+GPU profiles, independent acceptance and the complete P4 exit remain open.
 
 ## Previous native cleanup and repeated process evidence
 

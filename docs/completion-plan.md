@@ -857,16 +857,21 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   completion-channel/device-close failures, poisoned-live-engine recovery and independent
   acceptance remain open. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
 - [ ] **P4.12j — MR/MW command failures and live-process recovery
-  (Implemented; frozen delivery gates pending, independent acceptance open).**
-  Faulted progress owners can retire only after all QPs, both CQs and the
-  endpoint store have drained and the thread has joined. New requests rebuild
-  QPs in the original PD while preserving persistent MRs and rkey history;
-  cumulative failure/recovery counters keep unretired faults fenced. Private
-  native profiles cover two same-engine QP ERR/reconnect cycles, actual MR/MW
-  command errors from thread-local syscall injection, post-Drop backing/loan
-  retention and same-process fresh-engine recovery with new epochs/PDs.
-  Natural provider failure, physical device recovery and in-place healing of
-  retained owners remain open. See [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Frozen operational source `586df69` passes nineteen stable/Rust 1.85 gates,
+  192 all-feature units per toolchain and eleven runner controls. Both binaries
+  pass 248 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 configurations: 128 new cases
+  and 120 targeted regressions. Thirty-two paired configurations complete two
+  QP ERR/reconnect cycles in the same engines, PDs and persistent MR owners.
+  Thread-local uverbs syscall faults produce 64 MR and 32 MW EIO errors;
+  post-Drop backing/loan quarantine survives same-process engine replacement
+  with fresh epochs/PDs and stale open/data rejection before QPs or effects.
+  All 536 children are reaped: 516 completed libtests and twenty deliberate
+  source/requester kills in prior CQ/PD/restart regressions. Eight native
+  mutation runs reject early MR/MW release and missing public-entry recovery.
+  Spontaneous provider failure, physical device recovery, in-place healing of
+  retained owners and the transport-level Workers pool remain open. See
+  [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
@@ -874,7 +879,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   poisoned-live-engine recovery profiles;
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
-  owners under physical-rail pressure. The declared two-/four-/eight-parent quota/reuse and
+  owners under physical-rail pressure. Align the current per-context progress
+  execution model with frozen TENT's transport-level configurable `Workers` pool
+  and qualify its CQ/WR routing and ownership before claiming that parity. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs
@@ -1199,10 +1206,9 @@ P4.12h separates endpoint destruction from expired data deadlines and adds
 declared QP ERR, lost SQ/RQ CQE and fresh-process source restart gates.
 P4.12i adds real CQ/PD EBUSY retention, requester death, both RPC rebindings
 and all-prior-epoch fencing across three fresh process generations.
-P4.12j implements fully drained worker replacement and declares MR/MW command
-faults plus live-process reconnect/replacement profiles; its frozen gates are
-pending. Next deliver physical port/device loss, broader admission/topology and
-process-death/live-peer-reconnect profiles, native QP/MR/MW and
+P4.12j adds qualified scoped MR/MW syscall-failure retention and live-process
+worker/engine replacement profiles. Next deliver physical port/device loss,
+broader admission/topology and process-death/live-peer-reconnect profiles, native QP/MR/MW and
 completion-channel/device-close failures, poisoned-live-engine recovery and
 independent acceptance. The
 earlier P4.8 independent native repeat remains open. Keep the frozen TENT
