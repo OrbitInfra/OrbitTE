@@ -829,7 +829,7 @@ impl ProgressState {
             if progressed {
                 return Schedule::Again;
             }
-            let deadline = records
+            records
                 .iter()
                 .filter_map(|record| {
                     let request = record.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -848,8 +848,7 @@ impl ProgressState {
                         )
                         .min()
                 })
-                .min();
-            deadline
+                .min()
         } else {
             Some(Instant::now() + Duration::from_micros(50))
         };
