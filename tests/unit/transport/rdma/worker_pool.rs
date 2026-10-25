@@ -56,16 +56,25 @@ pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
 
 pub(super) fn running(engine: &crate::TransferEngine) {
     let stats = engine.stats().unwrap().rdma.unwrap();
+    let closed = crate::engine::tests::source_runtime(engine)
+        .context_set
+        .lock()
+        .unwrap()
+        .closed;
     if stats.opened_progress_workers != 0 {
         assert_eq!(
             stats.opened_progress_workers,
             count() as u64,
             "context recovery restarted the transport pool"
         );
-        assert_eq!(stats.progress_workers, count());
+        assert_eq!(stats.progress_workers, if closed { 0 } else { count() });
     }
+    if closed {
+        assert_eq!((stats.progress_contexts, stats.active_cqs), (0, 0));
+    }
+    let phase = if closed { "closed" } else { "running" };
     println!(
-        "ORBITTE_WORKERS_STATS {{\"phase\":\"running\",\"configured\":{},\"workers\":{},\"opened\":{},\"contexts\":{},\"recoveries\":{}}}",
+        "ORBITTE_WORKERS_STATS {{\"phase\":\"{phase}\",\"configured\":{},\"workers\":{},\"opened\":{},\"contexts\":{},\"recoveries\":{}}}",
         count(),
         stats.progress_workers,
         stats.opened_progress_workers,
