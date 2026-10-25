@@ -48,10 +48,31 @@ unsafe extern "C" fn ack(context: *mut c_void, _: *mut sys::AsyncEvent) {
         .push(thread::current().name().unwrap().into());
 }
 
-fn attach(
-    monitor: &Arc<Monitor>,
-    gate: Option<AckGate>,
-) -> (Box<Native>, UnixStream, Registration) {
+struct Registered {
+    registration: Registration,
+    native: Box<Native>,
+    writer: Option<UnixStream>,
+}
+
+struct ReleaseAck(AckGate);
+impl Drop for ReleaseAck {
+    fn drop(&mut self) {
+        self.0.0.lock().unwrap_or_else(|p| p.into_inner()).1 = true;
+        self.0.1.notify_all();
+    }
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        if let Some(gate) = &self.native.gate {
+            drop(ReleaseAck(Arc::clone(gate)));
+        }
+        // Native memory/fd owners survive the consumer even when a guard fails.
+        let _ = self.registration.stop();
+    }
+}
+
+fn attach(monitor: &Arc<Monitor>, gate: Option<AckGate>) -> Registered {
     let (reader, writer) = UnixStream::pair().unwrap();
     reader.set_nonblocking(true).unwrap();
     let fd = reader.as_raw_fd();
@@ -71,7 +92,11 @@ fn attach(
             Arc::default(),
         )
         .unwrap();
-    (native, writer, registration)
+    Registered {
+        registration,
+        native,
+        writer: Some(writer),
+    }
 }
 
 #[test]
@@ -79,7 +104,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
     let monitor = Arc::new(Monitor::default());
     let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
     let mut sources: Vec<_> = (0..4).map(|_| attach(&monitor, None)).collect();
-    let (native, mut writer, mut registration) = attach(&monitor, Some(Arc::clone(&gate)));
+    let mut gated = attach(&monitor, Some(Arc::clone(&gate)));
     assert_eq!(stats(&monitor).monitor_workers, 1);
     assert_eq!(stats(&monitor).async_event_sources, 5);
     assert!(matches!(
@@ -89,7 +114,10 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
             ..
         })
     ));
-    writer
+    gated
+        .writer
+        .as_mut()
+        .unwrap()
         .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
         .unwrap();
     let until = Instant::now() + Duration::from_secs(2);
@@ -104,43 +132,46 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
     }
     drop(state);
     assert!(matches!(
-        registration.watch.source.try_lock(),
+        gated.registration.watch.source.try_lock(),
         Err(std::sync::TryLockError::WouldBlock)
     ));
-    let (entered, waiting) = mpsc::sync_channel(1);
-    let detached = thread::spawn(move || {
-        entered.send(()).unwrap();
-        registration.stop().unwrap();
+    thread::scope(|scope| {
+        let release = ReleaseAck(Arc::clone(&gate));
+        let (entered, waiting) = mpsc::sync_channel(1);
+        let registration = &mut gated.registration;
+        let detached = scope.spawn(move || {
+            entered.send(()).unwrap();
+            registration.stop().unwrap();
+        });
+        waiting.recv().unwrap();
+        drop(release);
+        detached.join().unwrap();
     });
-    waiting.recv().unwrap();
-    {
-        let mut state = gate.0.lock().unwrap();
-        state.1 = true;
-        gate.1.notify_all();
-    }
-    detached.join().unwrap();
     assert_eq!(
-        *native.acknowledgments.lock().unwrap(),
+        *gated.native.acknowledgments.lock().unwrap(),
         ["orbitte-rdma-monitor"]
     );
-    for (_, writer, _) in &mut sources {
-        writer
+    for source in &mut sources {
+        source
+            .writer
+            .as_mut()
+            .unwrap()
             .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
             .unwrap();
     }
     while sources
         .iter()
-        .any(|(native, _, _)| native.acknowledgments.lock().unwrap().is_empty())
+        .any(|source| source.native.acknowledgments.lock().unwrap().is_empty())
     {
         assert!(Instant::now() < until);
         thread::yield_now();
     }
-    for (native, _, registration) in &mut sources {
+    for source in &mut sources {
         assert_eq!(
-            *native.acknowledgments.lock().unwrap(),
+            *source.native.acknowledgments.lock().unwrap(),
             ["orbitte-rdma-monitor"]
         );
-        registration.stop().unwrap();
+        source.registration.stop().unwrap();
     }
     monitor.close(until).unwrap();
     let stats = stats(&monitor);
@@ -157,27 +188,32 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
 #[test]
 fn a_lost_source_does_not_stop_other_devices_or_allow_native_close() {
     let monitor = Arc::new(Monitor::default());
-    let (native, writer, mut failed) = attach(&monitor, None);
-    let (healthy_native, mut healthy_writer, mut healthy) = attach(&monitor, None);
-    drop(writer);
+    let mut failed = attach(&monitor, None);
+    let mut healthy = attach(&monitor, None);
+    drop(failed.writer.take());
     let until = Instant::now() + Duration::from_secs(2);
     while stats(&monitor).async_event_sources != 1 {
         assert!(Instant::now() < until);
         thread::yield_now();
     }
-    assert!(matches!(failed.stop(), Err(Error::Unquiesced { .. })));
-    assert!(failed.watch.state.check().is_err());
-    healthy_writer
+    assert!(matches!(
+        failed.registration.stop(),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(failed.registration.watch.state.check().is_err());
+    healthy
+        .writer
+        .as_mut()
+        .unwrap()
         .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
         .unwrap();
-    while healthy_native.acknowledgments.lock().unwrap().is_empty() {
+    while healthy.native.acknowledgments.lock().unwrap().is_empty() {
         assert!(Instant::now() < until);
         thread::yield_now();
     }
-    assert!(healthy.watch.state.check().is_ok());
-    healthy.stop().unwrap();
+    assert!(healthy.registration.watch.state.check().is_ok());
+    healthy.registration.stop().unwrap();
     monitor.close(until).unwrap();
-    drop(native);
 }
 
 pub(super) fn observe(source: &Source) {
