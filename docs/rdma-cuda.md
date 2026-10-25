@@ -3066,6 +3066,7 @@ remain open. Both selected containers lack CAP_NET_ADMIN. The earlier P4.8
 independent native repeat also remains open. OrbitKV integration stays deferred.
 
 
+(mr-mw-cleanup-faults-and-live-process-recovery)=
 ## MR/MW cleanup faults and live-process recovery
 
 P4.12j adds recovery of completely drained shared RDMA progress owners. The
