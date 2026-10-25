@@ -17,19 +17,49 @@ Public v13 handshakes share live physical QPs across independent exact-range
 grants. Whole-parent `max_grants` reservations are separate from physical
 `max_endpoints`; the source also reserves RQ capacity before exposing authority.
 RQ depth uses `max_cqes`, and message-buffer credits survive until MR cleanup.
-Idle eviction requires every sibling grant to finish.
+Idle eviction requires every sibling grant to finish. Both connection identities
+remain exact; the observed previous grant is a monotonic lower bound, while
+every offer and completion retains its exact binding and WR namespace.
 
-The source and native qualification for this delivery is being frozen under
-`/root/orbitte-artifacts/rdma-public-qp-20261026`. Development runs include
-eight public parents/forty grants on two physical QPs in the single-lane,
-two-RNIC profile. This is a correctness/ownership observation, not a throughput
-result. Current source remains Implemented until the pinned gate manifests
-below are complete; independent acceptance is open.
+Source [`8511c53`](https://github.com/OrbitInfra/OrbitTE/commit/8511c53058b3676c9f8dce93fcb52b176b2e63f8)
+passes 23 local gates on stable 1.99.1 and Rust 1.85.0: four feature combinations,
+210 all-feature unit tests per compiler, twelve hardware-runner controls and
+the isolated frozen TENT slice-geometry comparison. Its two frozen release
+binaries pass 180 public two-RNIC regressions and 32 internal shared-QP controls
+on two hosts, with CPU DRAM and IPv4 RoCEv2. The public profiles cover READ/WRITE,
+1/2/3/6 CQ lanes, polling/events, whole-parent grant/RQ rejection, unequal and
+folded tails, actual QP ERR, lost successful SQ/RQ CQEs, MR/MW syscall errors,
+CQ/PD EBUSY, live reconnect and two-/three-generation process recovery.
 
-Concurrent cold construction can still exceed a peer's configured lane width
-under the aggregate QP limit. Fixed-width bootstrap reservations, periodic
-monitor recovery, physical port/device faults, GPUDirect/performance and
-complete P4 acceptance remain open.
+The public protocol admits eight parents/forty grants over two physical QPs
+in the observed single-lane, two-RNIC runs. A second healthy round opens zero
+new QPs and preserves the previous physical connection set. Native logs count
+physical QPs separately from active grants, reconcile SQ debt per grant
+namespace and physical QP, and keep RQ credits charged through message MR
+cleanup. These are correctness and ownership observations, not throughput
+measurements or a guarantee of simultaneous DMA execution.
+
+All 472 supervised children are reaped: 448 completed libtests and 24 deliberate
+kills. Postflight confirms both RNIC locks are available, node/provider
+identities are unchanged and no GPU compute was used. The actual frozen TENT
+CPU comparison passes 25 observations and six negative controls; its binary
+hashes, input hashes and identical CI merge tree are checked. The source CI
+matrix and strict documentation checks pass.
+
+Raw logs, failed development controls, frozen binaries and manifests are outside
+the checkout at `/root/orbitte-artifacts/rdma-public-qp-20261026`.
+`native-raw-audit.json` reconciles public cases; `shared-native-audit.json`
+reconciles the internal four-grant controls. `final-delivery.json` pins the code,
+documentation-only delivery commit and hashed evidence index. See the
+[public protocol contract](rdma-cuda.md#public-concurrent-qp-grants) and
+[shared-QP reproduction contract](rdma-cuda.md#shared-qp-grant-record-profile).
+
+These are same-agent scoped source/native gates; independent acceptance and
+installed-release qualification remain open. Concurrent cold construction can
+still exceed a peer's configured lane width under the aggregate QP limit.
+Fixed-width bootstrap reservations, periodic monitor recovery, physical
+port/device faults, GPUDirect/performance and complete P4 acceptance remain
+open. OrbitKV integration is deferred until that P4 boundary is accepted.
 
 ## Previous qualified native source: concurrent grant records
 
