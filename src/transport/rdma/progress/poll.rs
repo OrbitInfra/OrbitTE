@@ -849,9 +849,9 @@ impl ProgressState {
                         .min()
                 })
                 .min();
-            deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            deadline
         } else {
-            Some(Duration::from_micros(50))
+            Some(Instant::now() + Duration::from_micros(50))
         };
         records.clear();
         let control = self.control.lock().unwrap_or_else(|p| p.into_inner());

@@ -219,7 +219,7 @@ impl WorkerContext {
                 return;
             }
             let count = exit.lanes.len();
-            let mut wait: Option<Duration> = None;
+            let mut wait: Option<Instant> = None;
             let mut finished = Vec::new();
             for offset in 0..count {
                 let index = (offset + cursor % count) % count;
@@ -231,9 +231,9 @@ impl WorkerContext {
                 tests::before_tick(&lane.state);
                 match lane.state.tick(&mut lane.records, &mut lane.cursor) {
                     Schedule::Finished => finished.push(index),
-                    Schedule::Again => wait = Some(Duration::ZERO),
-                    Schedule::Wait(Some(duration)) => {
-                        wait = Some(wait.map_or(duration, |current| current.min(duration)))
+                    Schedule::Again => wait = Some(Instant::now()),
+                    Schedule::Wait(Some(deadline)) => {
+                        wait = Some(wait.map_or(deadline, |current| current.min(deadline)))
                     }
                     Schedule::Wait(None) => {}
                 }
@@ -248,8 +248,11 @@ impl WorkerContext {
                 continue;
             }
             match wait {
-                Some(duration) if duration.is_zero() => {}
-                Some(duration) => thread::park_timeout(duration),
+                Some(deadline) => {
+                    if let Some(duration) = deadline.checked_duration_since(Instant::now()) {
+                        thread::park_timeout(duration);
+                    }
+                }
                 None => thread::park(),
             }
         }

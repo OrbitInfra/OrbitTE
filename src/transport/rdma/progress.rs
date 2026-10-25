@@ -1138,7 +1138,7 @@ impl Drop for ContextProgress {
 
 pub(super) enum Schedule {
     Again,
-    Wait(Option<Duration>),
+    Wait(Option<Instant>),
     Finished,
 }
 
