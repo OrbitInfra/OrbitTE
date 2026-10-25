@@ -15,7 +15,7 @@ GPU direct transfer or performance.
 
 P4.12j implements drained shared-progress replacement and declares native
 MR/MW syscall-fault and live-process recovery profiles. Its frozen source,
-hardware and mutation gates are pending. See [the contract](rdma-cuda.md#mr-mw-cleanup-faults-and-live-process-recovery).
+hardware and mutation gates are pending. See [the contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
 
 ## Previous native cleanup and repeated process evidence
 

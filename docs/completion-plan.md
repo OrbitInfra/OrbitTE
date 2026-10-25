@@ -866,7 +866,7 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   command errors from thread-local syscall injection, post-Drop backing/loan
   retention and same-process fresh-engine recovery with new epochs/PDs.
   Natural provider failure, physical device recovery and in-place healing of
-  retained owners remain open. See [the recovery contract](rdma-cuda.md#mr-mw-cleanup-faults-and-live-process-recovery).
+  retained owners remain open. See [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
