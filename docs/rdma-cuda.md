@@ -3064,3 +3064,82 @@ QP/MR/MW/completion-channel/device-close failures, broader process/fabric/instal
 profiles, GPU/GDR, performance, independent acceptance and the complete P4 exit
 remain open. Both selected containers lack CAP_NET_ADMIN. The earlier P4.8
 independent native repeat also remains open. OrbitKV integration stays deferred.
+
+
+## MR/MW cleanup faults and live-process recovery
+
+P4.12j adds recovery of completely drained shared RDMA progress owners. The
+engine submission boundary and source path discovery retire a faulted worker
+only after its endpoint store is empty, both native CQs have closed, no owner
+is retained, and the device asynchronous-event state is healthy. The retired
+thread is joined under the context-set lock before its slot becomes available
+for a fresh worker. Subsequent requests create new QPs and bilateral connection
+incarnations; the failed request remains failed and is never replayed.
+
+The context, PD, persistent MR cache and PD-lifetime rkey history remain owned
+by the original `RdmaContext` and `LocalBufferManager`. `progress_failures`
+remains cumulative. `progress_recoveries` counts faulted progress owners with
+complete drain and join receipts; an unmatched failure continues to block
+admission. Retained QP/CQ/MR/MW/channel/device owners and asynchronous device
+faults do not qualify for this replacement. A healthy sibling context may
+retire while a failed native owner remains quarantined; that does not heal the
+retained owner or reopen the poisoned engine.
+
+### Correspondence with frozen TENT
+
+The reference remains Mooncake TENT commit
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
+
+- `FIFOEndpointStore::getOrInsert`, `remove` and `reclaim` detach terminal
+  endpoints, retain them through `finishDestroy`, then construct a new endpoint
+  for later lookups. OrbitTE's `EndpointStore` and connection incarnations have
+  the same one-way lifecycle.
+- `RdmaEndPoint::beginDestroy` / `finishDestroy` separate lookup fencing, QP ERR,
+  completion drain and native destruction. OrbitTE additionally requires actual
+  shared CQ destruction before cancelling unresolved WR/RQ debt.
+- TENT keeps per-context CQs, PD/MRs and workers. OrbitTE's fault path stops a
+  shared worker, so recovery replaces that already-drained worker/CQ owner in
+  the same `ContextSlot`; it preserves the context's PD and registrations.
+- TENT's context-wide `cleanupResources` logs some native cleanup failures and
+  clears their handles. OrbitTE preserves failed owners and rejects admission.
+  Its source uses one-use Type-2 MW grants and exact bilateral generations;
+  this authority protocol is an OrbitTE safety extension, not TENT wire parity.
+
+TCP remains a sibling payload transport. Shared control messages exchange
+metadata and receipts; RDMA payload, QP/MR/MW owners and progress remain in
+`transport/rdma/`.
+
+### Declared validation profile
+
+The private native `lifecycle.rs` fixture runs through the public v12 protocol
+on two explicitly locked RNICs per host, in polling/event modes and both
+READ/WRITE directions:
+
+- `live-reconnect` keeps both processes, engines, RPC endpoints, source epochs,
+  registrations, PDs and persistent MR creation counts unchanged across two
+  native requester QP ERR cycles. Five healthy rounds verify complete bytes,
+  sentinels, new connection incarnations and subsequent QP reuse.
+- `mr-cleanup-error` injects failure on either peer's selected persistent MR;
+  `mw-cleanup-error` injects failure on a source grant's selected MW. A
+  thread-local seccomp filter denies write/ioctl on only that context's uverbs
+  command FD. The actual libibverbs/provider call returns EIO and preserves
+  its original handle. This is deliberate syscall fault injection, not a
+  spontaneous provider failure or a physical device-loss test.
+- Failed MR/MW owners preserve backing after observer-free caller Drop and
+  repeated close; failed MW grants also preserve their actual DMA loan. The
+  old engine stays fenced. Both live processes then create replacement engines
+  at the same public RPC addresses and numeric registration IDs, with new
+  source epochs and PDs. An old-epoch open and an actual old `RemoteSegment`
+  request must fail before new QPs or byte effects. Two healthy rounds verify
+  new transfers and connected reuse while the old failed backing remains held.
+
+A standalone probe on both selected mlx5 devices found that binding a Type-2
+MW did **not** force MR deregistration to fail: deregistration returned zero.
+The initial failed hypothesis and the command-filter probes are retained in
+`/root/orbitte-artifacts/rdma-mr-mw-reconnect-20261025/`; no MR EBUSY claim is
+made. The command filter never alters native handles or another thread's FD.
+
+Hardware matrices, source gates and mutation controls are pending for the
+frozen delivery commit. Physical port/device loss, spontaneous provider cleanup
+failures, healing a retained owner in place, wider admission/fabric/GPU/installed
+profiles, independent acceptance and the full P4 exit remain open.

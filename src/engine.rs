@@ -386,12 +386,13 @@ impl TransferEngine {
                         .rdma
                         .as_ref()
                         .ok_or(Error::Unavailable("RDMA is not configured"))?;
+                    runtime.recover_progress()?;
                     let usage = runtime.stats()?;
                     if usage.retained_endpoints != 0
                         || usage.retained_devices != 0
                         || usage.retained_cqs != 0
                         || usage.retained_persistent_mrs != 0
-                        || usage.progress_failures != 0
+                        || usage.progress_failures != usage.progress_recoveries
                     {
                         return Err(Error::Unavailable("RDMA retained native resources"));
                     }

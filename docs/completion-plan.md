@@ -856,6 +856,17 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   leases between generations. Physical port/device loss, native QP/MR/MW and
   completion-channel/device-close failures, poisoned-live-engine recovery and independent
   acceptance remain open. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
+- [ ] **P4.12j — MR/MW command failures and live-process recovery
+  (Implemented; frozen delivery gates pending, independent acceptance open).**
+  Faulted progress owners can retire only after all QPs, both CQs and the
+  endpoint store have drained and the thread has joined. New requests rebuild
+  QPs in the original PD while preserving persistent MRs and rkey history;
+  cumulative failure/recovery counters keep unretired faults fenced. Private
+  native profiles cover two same-engine QP ERR/reconnect cycles, actual MR/MW
+  command errors from thread-local syscall injection, post-Drop backing/loan
+  retention and same-process fresh-engine recovery with new epochs/PDs.
+  Natural provider failure, physical device recovery and in-place healing of
+  retained owners remain open. See [the recovery contract](rdma-cuda.md#mr-mw-cleanup-faults-and-live-process-recovery).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
@@ -1188,7 +1199,9 @@ P4.12h separates endpoint destruction from expired data deadlines and adds
 declared QP ERR, lost SQ/RQ CQE and fresh-process source restart gates.
 P4.12i adds real CQ/PD EBUSY retention, requester death, both RPC rebindings
 and all-prior-epoch fencing across three fresh process generations.
-Next deliver physical port/device loss, broader admission/topology and
+P4.12j implements fully drained worker replacement and declares MR/MW command
+faults plus live-process reconnect/replacement profiles; its frozen gates are
+pending. Next deliver physical port/device loss, broader admission/topology and
 process-death/live-peer-reconnect profiles, native QP/MR/MW and
 completion-channel/device-close failures, poisoned-live-engine recovery and
 independent acceptance. The

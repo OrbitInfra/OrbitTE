@@ -18,6 +18,7 @@ contracts.
 | RDMA endpoint destruction | Implemented | One independent shared 30 s parent destruction window; data failure is preserved and actual unproven teardown retains owners |
 | Native fault and restart profile | Scoped tests | Actual QP ERR, dropped successful SQ/RQ CQEs, source/requester death and two/three fresh process generations over two RNICs; all earlier source epochs rejected before QPs. Physical port/device loss remains unqualified |
 | Native CQ/PD cleanup failure | Scoped tests | Actual dependent-QP/MW EBUSY on either peer/rail, post-Drop owner retention, and drained-backing release for PD-only failures; native QP/MR/MW, completion-channel and device-close cleanup errors remain unqualified |
+| Live-process RDMA recovery | Implemented; new gates pending | Fully drained shared worker/CQ replacement preserves PD/MRs; failed native MR/MW owners stay quarantined while fresh engines use new epochs/PDs |
 | Device/port/GID discovery | Implemented | CPU and scoped native evidence; complete independent native repeat remains open |
 | Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
 | NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |

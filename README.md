@@ -59,6 +59,8 @@ checkout for the implementation described here.
   granting authority. Returning completion capacity wakes waiting context workers in event mode.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
   owned by native work. Failed cleanup retains its resources and charges.
+  Completely drained progress owners can be replaced for later requests while
+  preserving the context's PD and persistent MRs; new hardware gates are pending.
 
 <div align="center">
   <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE engine, control service and sibling TCP/RDMA transports; planned paths are dashed">

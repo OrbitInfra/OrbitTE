@@ -13,6 +13,12 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12j implements drained shared-progress replacement and declares native
+MR/MW syscall-fault and live-process recovery profiles. Its frozen source,
+hardware and mutation gates are pending. See [the contract](rdma-cuda.md#mr-mw-cleanup-faults-and-live-process-recovery).
+
+## Previous native cleanup and repeated process evidence
+
 P4.12i extends native failure acceptance without changing production source,
 dependencies or wire v12 from PR #38. Frozen operational source `02ef99d`
 passes nineteen stable/Rust 1.85 gates, 191 all-feature unit tests per toolchain

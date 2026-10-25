@@ -1133,6 +1133,20 @@ impl Workers {
         request.check()
     }
 
+    pub(super) fn recoverable(&self) -> Result<bool> {
+        let control = self
+            .shared
+            .control
+            .lock()
+            .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
+        Ok(control.fault.is_some()
+            && control.finished
+            && control.retained.is_none()
+            && control.cq.is_none()
+            && control.receive_cq.is_none()
+            && control.endpoints.len() == 0)
+    }
+
     pub(super) fn close(&self, deadline: Instant) -> Result<()> {
         let mut control = self
             .shared
