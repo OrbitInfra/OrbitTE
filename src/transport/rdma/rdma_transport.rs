@@ -147,6 +147,7 @@ impl RdmaTransport {
     }
 
     fn paths(&self) -> Result<Vec<NicPath>> {
+        self.recover_progress()?;
         let mut contexts = self
             .context_set
             .lock()
@@ -256,6 +257,41 @@ impl RdmaTransport {
                 Err(error)
             }
         }
+    }
+
+    pub(crate) fn recover_progress(&self) -> Result<()> {
+        let mut contexts = self
+            .context_set
+            .lock()
+            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+        if contexts.closed {
+            return Err(Error::Unavailable("RDMA runtime is closed"));
+        }
+        if let Some((operation, code)) = contexts.failure {
+            return Err(Error::Unquiesced { operation, code });
+        }
+        for slot in &mut contexts.slots {
+            let Some(progress) = &slot.progress else {
+                continue;
+            };
+            if !progress.recoverable()? {
+                continue;
+            }
+            let device = slot
+                .owner
+                .as_ref()
+                .ok_or(Error::Internal("RDMA progress has no context owner"))?;
+            device.asynchronous.check()?;
+            // Both CQs and every QP have native destruction receipts. Join the
+            // old worker before allowing a fresh CQ/WR namespace in this PD.
+            progress.close(Instant::now())?;
+            slot.progress = None;
+            self.usage
+                .lock()
+                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
+                .progress_recoveries += 1;
+        }
+        Ok(())
     }
 
     fn evict_idle(&self, deadline: Instant) -> Result<bool> {
@@ -404,7 +440,7 @@ impl RdmaTransport {
                 || usage.retained_cqs != 0
                 || usage.retained_completion_channels != 0
                 || usage.retained_persistent_mrs != 0
-                || usage.progress_failures != 0
+                || usage.progress_failures != usage.progress_recoveries
             {
                 return Err(Error::Unavailable(
                     "RDMA admission is poisoned by retained native resources",

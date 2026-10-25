@@ -10,6 +10,9 @@ mod native;
 #[path = "concurrent.rs"]
 mod concurrent;
 
+#[path = "lifecycle.rs"]
+mod lifecycle;
+
 const PAYLOAD: usize = 12288;
 const LENGTH: usize = 2 * PAYLOAD + 3 * GUARD;
 const DESTINATION: usize = PAYLOAD + 2 * GUARD;
@@ -175,6 +178,13 @@ fn multirail_peer() {
     assert_eq!(rails.len(), 2);
     assert_ne!(rails[0], rails[1]);
     let mode = env::var("ORBITTE_RAIL_MODE").unwrap();
+    if matches!(
+        mode.as_str(),
+        "live-reconnect" | "mr-cleanup-error" | "mw-cleanup-error"
+    ) {
+        lifecycle::run(&mode, source, &rails);
+        return;
+    }
     if matches!(
         mode.as_str(),
         "concurrent-quota"

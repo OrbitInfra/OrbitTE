@@ -3064,3 +3064,155 @@ QP/MR/MW/completion-channel/device-close failures, broader process/fabric/instal
 profiles, GPU/GDR, performance, independent acceptance and the complete P4 exit
 remain open. Both selected containers lack CAP_NET_ADMIN. The earlier P4.8
 independent native repeat also remains open. OrbitKV integration stays deferred.
+
+
+## MR and MW cleanup faults and live-process recovery
+
+P4.12j adds recovery of completely drained shared RDMA progress owners. The
+engine submission boundary and source path discovery retire a faulted worker
+only after its endpoint store is empty, both native CQs have closed, no owner
+is retained, and the device asynchronous-event state is healthy. The retired
+thread is joined under the context-set lock before its slot becomes available
+for a fresh worker. Subsequent requests create new QPs and bilateral connection
+incarnations; the failed request remains failed and is never replayed.
+
+The context, PD, persistent MR cache and PD-lifetime rkey history remain owned
+by the original `RdmaContext` and `LocalBufferManager`. `progress_failures`
+remains cumulative. `progress_recoveries` counts faulted progress owners with
+complete drain and join receipts; an unmatched failure continues to block
+admission. Retained QP/CQ/MR/MW/channel/device owners and asynchronous device
+faults do not qualify for this replacement. A healthy sibling context may
+retire while a failed native owner remains quarantined; that does not heal the
+retained owner or reopen the poisoned engine.
+
+### Correspondence with frozen TENT
+
+The reference remains Mooncake TENT commit
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
+
+- `FIFOEndpointStore::getOrInsert`, `remove` and `reclaim` detach terminal
+  endpoints, retain them through `finishDestroy`, then construct a new endpoint
+  for later lookups. OrbitTE's `EndpointStore` and connection incarnations have
+  the same one-way lifecycle.
+- `RdmaEndPoint::beginDestroy` / `finishDestroy` separate lookup fencing, QP ERR,
+  completion drain and native destruction. OrbitTE additionally requires actual
+  shared CQ destruction before cancelling unresolved WR/RQ debt.
+- TENT keeps CQs and PD/MRs in `RdmaContext`, with a transport-level `Workers`
+  pool progressing slices across its context set. OrbitTE currently has one
+  shared progress owner per context. This existing execution-model difference
+  remains: recovery replaces that already-drained worker/CQ owner in the same
+  `ContextSlot` and preserves the context's PD and registrations. A configurable
+  transport-level worker pool and its broader fairness qualification remain open.
+- TENT's context-wide `cleanupResources` logs some native cleanup failures and
+  clears their handles. OrbitTE preserves failed owners and rejects admission.
+  Its source uses one-use Type-2 MW grants and exact bilateral generations;
+  this authority protocol is an OrbitTE safety extension, not TENT wire parity.
+
+TCP remains a sibling payload transport. Shared control messages exchange
+metadata and receipts; RDMA payload, QP/MR/MW owners and progress remain in
+`transport/rdma/`.
+
+### Declared validation profile
+
+The private native `lifecycle.rs` fixture runs through the public v12 protocol
+on two explicitly locked RNICs per host, in polling/event modes and both
+READ/WRITE directions:
+
+- `live-reconnect` keeps both processes, engines, RPC endpoints, source epochs,
+  registrations, PDs and persistent MR creation counts unchanged across two
+  native requester QP ERR cycles. Five healthy rounds verify complete bytes,
+  sentinels, new connection incarnations and subsequent QP reuse.
+- `mr-cleanup-error` injects failure on either peer's selected persistent MR;
+  `mw-cleanup-error` injects failure on a source grant's selected MW. A
+  thread-local seccomp filter denies write/ioctl on only that context's uverbs
+  command FD. The actual libibverbs/provider call returns EIO and preserves
+  its original handle. This is deliberate syscall fault injection, not a
+  spontaneous provider failure or a physical device-loss test.
+- Failed MR/MW owners preserve backing after observer-free caller Drop and
+  repeated close; failed MW grants also preserve their actual DMA loan. The
+  old engine stays fenced. Both live processes then create replacement engines
+  at the same public RPC addresses and numeric registration IDs, with new
+  source epochs and PDs. An old-epoch open and an actual old `RemoteSegment`
+  request must fail before new QPs or byte effects. Two healthy rounds verify
+  new transfers and connected reuse while the old failed backing remains held.
+
+Use these modes in the existing identity-pinned two-rail hardware profile.
+`live-reconnect` requires `fault_role: "requester"`; `mr-cleanup-error` accepts
+`"source"` or `"requester"`; `mw-cleanup-error` requires `"source"`. All three
+require CPU host memory and `mask: 3`. `rdma_events` selects polling or event
+progress, `fault_rail` selects topology NIC ID 0/1, and `operation` is `read`
+or `write`. Both original NIC locks are held through the entire process.
+Unsupported roles, a single-rail mask and missing roles fail before deployment.
+
+Build and freeze the libtest binary before running a selected profile:
+
+```bash
+cargo test --release --locked --features rdma,cuda --lib --no-run --message-format=json
+python3 -B tests/hardware/run.py --profile "$PROFILE_JSON" \
+  --binary "$FROZEN_LIBTEST" --output "$ARTIFACT_DIR/native-run"
+```
+
+A standalone probe on both selected mlx5 devices found that binding a Type-2
+MW did **not** force MR deregistration to fail: deregistration returned zero.
+The initial failed hypothesis and the command-filter probes are retained in
+`/root/orbitte-artifacts/rdma-mr-mw-reconnect-20261025/`; no MR EBUSY claim is
+made. The command filter never alters native handles or another thread's FD.
+
+### Frozen qualification and evidence
+
+Operational source `586df69839d8aad5bbce00019979114ed8b5cd48` passes nineteen
+sequential stable/Rust 1.85 gates. Each toolchain passes 192 all-feature unit
+tests with four explicitly ignored hardware peers; eleven CPU hardware-runner
+controls also pass. Sixteen plans per binary match the isolated frozen TENT
+geometry function and both geometry mutations are rejected. The actual frozen
+TENT CPU driver/library comparison passes 25 observations and six comparator
+controls; it is a CPU/TCP comparison, not RDMA device parity.
+
+Both frozen native binaries pass 248 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2
+configurations: 128 new lifecycle configurations and 120 targeted regressions.
+The new configurations vary both host directions, READ/WRITE, polling/event
+progress and either selected rail. Thirty-two paired configurations complete
+64 real QP ERR transitions and five healthy rounds each, with stable PDs and
+persistent MR creation counts, fresh connection incarnations and later reuse.
+Sixty-four MR and 32 MW command errors preserve their real handles/backing;
+failed MW grants retain actual DMA loans. Ninety-six paired configurations
+replace both engines while keeping both processes alive. Old-epoch open and
+data requests are rejected before new QPs or effects in each pair.
+
+The targeted regressions retain the previous eight-parent/large/folded/quota,
+lost-CQE, process-death and actual dependent-CQ/PD EBUSY contracts. All 536
+native children are reaped: 516 completed libtests and twenty deliberately
+killed children (twelve sources and eight requesters). A retained old engine
+has no zero-resource claim: fresh-engine drain and retained-old-backing checks
+are separate. Final supervisor/SSH receipts and original lock availability
+confirm process cleanup.
+
+Three deliberately incorrect stable binaries produce eight rejected native
+controls: early MR-owner release on either peer, early retained MW DMA-loan
+release, and disabling public-entry recovery, each in polling/event modes.
+The exact intended guard fires; every child is reaped with no supervisor
+timeout. These controls are additional to the source/geometry/CPU oracle gates.
+
+The external artifact root is
+`/root/orbitte-artifacts/rdma-mr-mw-reconnect-20261025/`:
+
+- `gates-586df69/manifest.json` records exact commands, compilers, source archive
+  and stable/MSRV binary hashes.
+- `all-native-manifest.json` and `native-raw-audit.json` audit all 248 raw cases,
+  identities, both leases, loaded libraries, connections, errors and waitpid
+  receipts; full per-case logs remain in the native run directories.
+- `controls-586df69/` records exact source mutations, binary hashes and the
+  intended failing assertions from all eight controls.
+- `native-cpu-reference.json`, `cpu-ci-40172575336/` and
+  `frozen-design-reference.json` identify the actual native TENT artifacts and
+  the frozen endpoint/context/store/worker source used for design comparison.
+- `exploratory-failures.json`, `provider-*-probe.c`, `provider-*.log` and
+  `pilot-*` preserve the unsuccessful MR EBUSY hypothesis and earlier failures.
+- `finishing-gates.json`, `node-*-postflight.json`, `evidence-files.json` and
+  `final-delivery.json` record final gates, unchanged node/device/library
+  identities, released NIC leases, exact delivery commit and evidence hashes.
+
+These are same-agent scoped gates. Physical port/device loss, spontaneous
+provider cleanup failures, healing a retained owner in place, the configurable
+transport-level Workers pool, wider admission/fabric/GPU/installed profiles,
+independent acceptance and the full P4 exit remain open.

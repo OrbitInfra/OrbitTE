@@ -20,6 +20,13 @@ def restart_plan(case):
         if role not in ('source', 'requester'):
             raise ValueError('native cleanup faults require an explicit source/requester fault_role')
         return role, 2
+    if mode in ('live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error'):
+        role = case.get('fault_role')
+        if (role not in ('source', 'requester')
+                or (mode == 'mw-cleanup-error' and role != 'source')
+                or (mode == 'live-reconnect' and role != 'requester')):
+            raise ValueError('lifecycle cases require an explicit supported fault_role')
+        return None
     if 'fault_role' in case:
         raise ValueError('fault_role is reserved for native cleanup modes')
     if mode in ('large-peer-exit', 'large-peer-restart'):
@@ -295,7 +302,7 @@ class Controller:
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                                            'large-quota', 'large-close', 'large-cq-error',
                                            'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
-                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy']
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error']
                 or case.get('operation') not in ['read', 'write']
                 or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
@@ -317,6 +324,7 @@ class Controller:
                 'ORBITTE_RAIL_OPERATION': case['operation'],
                 'ORBITTE_RAIL_FAULT': str(case['fault_rail']),
                 'ORBITTE_RAIL_MASK': str(case['mask']),
+                'ORBITTE_RAIL_FAULT_ROLE': str(case.get('fault_role', 'source')),
             }
             if restart is not None:
                 environment['ORBITTE_RESTART_KILL_ROLE'] = restart[0]

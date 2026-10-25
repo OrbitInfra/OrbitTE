@@ -212,8 +212,10 @@ pub struct RdmaStats {
     pub progress_workers: usize,
     pub async_event_workers: usize,
     pub acknowledged_async_events: u64,
-    /// A fatal shared-lane fault permanently fences new RDMA admission.
+    /// Cumulative shared-progress faults, including permanently retained owners.
     pub progress_failures: u64,
+    /// Faulted progress owners retired after complete native drain and join.
+    pub progress_recoveries: u64,
     /// Highest pending data-QP count observed by any single context worker.
     pub peak_pending_qps: usize,
     pub active_endpoints: usize,

@@ -479,6 +479,12 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
         assert_eq!(stats.active_cqs, 2);
         assert!(memory.read(0, &mut [0; 1]).is_err());
         assert!(memory.write(8, &[9]).is_err());
+        runtime.recover_progress().unwrap();
+        assert_eq!(runtime.stats().unwrap().progress_recoveries, 0);
+        assert!(Arc::ptr_eq(
+            &progress,
+            &runtime.progress(runtime.device().unwrap()).unwrap()
+        ));
         memory.write(4, &[7; 4]).unwrap();
         release(&pause);
         let (active, result) = worker.join().unwrap();
@@ -494,6 +500,9 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
         );
         assert_eq!(stats.retained_grants, if retained { 2 } else { 0 });
         if retained {
+            runtime.recover_progress().unwrap();
+            assert_eq!(runtime.stats().unwrap().progress_recoveries, 0);
+            assert!(!progress.recoverable().unwrap());
             assert!(memory.read(0, &mut [0; 1]).is_err());
             assert!(memory.write(8, &[9]).is_err());
             assert!(matches!(passive.close(), Err(Error::Unquiesced { .. })));
@@ -1461,4 +1470,63 @@ fn post_receive(
         1,
     )?;
     endpoint.post_receive(binding, credits)
+}
+
+#[test]
+fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
+    for mode in ["copy", "events:copy"] {
+        let runtime = if mode.starts_with("events:") {
+            crate::transport::rdma::tests::event_runtime("copy")
+        } else {
+            configured(mode, 3)
+        };
+        let device = runtime.device().unwrap();
+        let mut identities = std::collections::HashSet::new();
+        for generation in 0..3 {
+            let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
+            endpoint.connect(&endpoint.descriptor()).unwrap();
+            let identity = endpoint.incarnation().unwrap();
+            assert!(identities.insert(identity.encode()));
+            assert_eq!(identity.domain, device.domain().unwrap());
+            let progress = Arc::clone(&endpoint.progress);
+            endpoint
+                .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                .unwrap();
+            progress
+                .shared
+                .fail(Fault::Backend("controlled progress failure", libc::EIO));
+            wait_until(|| progress.shared.control.lock().unwrap().finished);
+            assert!(progress.recoverable().unwrap());
+            let _ = endpoint.close();
+            drop(endpoint);
+            thread::scope(|scope| {
+                for _ in 0..8 {
+                    scope.spawn(|| runtime.recover_progress().unwrap());
+                }
+            });
+            let stats = runtime.stats().unwrap();
+            assert_eq!(
+                (stats.progress_failures, stats.progress_recoveries),
+                (generation + 1, generation + 1)
+            );
+            assert_eq!(
+                (
+                    stats.work_requests,
+                    stats.active_cqs,
+                    stats.progress_workers
+                ),
+                (0, 0, 0)
+            );
+            assert!(Arc::ptr_eq(&device, &runtime.device().unwrap()));
+            assert!(progress.handle(false).is_err());
+        }
+        let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
+        endpoint.connect(&endpoint.descriptor()).unwrap();
+        endpoint
+            .transfer(&endpoint.descriptor(), TransferOp::Write, deadline())
+            .unwrap();
+        endpoint.close().unwrap();
+        drop(endpoint);
+        runtime.close(deadline()).unwrap();
+    }
 }
