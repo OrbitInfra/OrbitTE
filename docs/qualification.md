@@ -13,6 +13,40 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12k (`914761b`) adds a configurable transport-level `Workers` pool.
+Multiple context CQ pairs share data threads; each CQ retains one polling
+owner. Drained context recovery preserves the pool, PDs and persistent MRs.
+Endpoint handles retain the pool after the transport handle is dropped.
+Configuration, resource observations, pool scheduling, endpoint/grant protocol
+and native progress passes now have separate modules.
+
+Nineteen stable/Rust 1.85 gates pass, with 195 all-feature units per toolchain
+and eleven hardware-runner controls. Both frozen binaries pass 168 two-host/
+two-RNIC CPU DRAM/IPv4 RoCEv2 configurations. The declared matrix covers
+1/2/3 workers, polling/event progress, masked and cross-rail READ/WRITE,
+eight-parent/MiB/folded/quarter-tail admission, actual QP/CQ errors, dropped
+successful SQ/RQ CQEs, MR/MW command faults, CQ/PD cleanup failures and two/
+three process generations. All 384 native children are reaped: 360 completed
+libtests and 24 deliberately killed children. Original NIC leases remain held
+through each generation and are available after final cleanup.
+
+Actual native CQ observations bind every recorded poll to its NIC, context,
+worker name and thread ID. Live fault cycles preserve the same threads, PDs
+and MRs. Current grant accounting is independent of historical idle QPs;
+bilateral checkpoints prove a rejected parent creates no new connection.
+Lost-CQE debt equals actual accepted-minus-delivered work through both CQ
+barriers. Two native controls reject assigning a CQ to the wrong worker, and
+one CPU control rejects stopping the pool while endpoint owners remain.
+
+These are same-agent scoped gates. TENT's multiple CQ lanes per context,
+least-loaded slice enqueue, worker affinity and monitor consolidation remain
+open. Priority and bandwidth policies remain in P6. Physical link/device loss,
+spontaneous cleanup failures, GPU direct/installed profiles, independent
+acceptance and the full P4 exit remain open. See the
+[pool contract and evidence](rdma-cuda.md#transport-workers-and-shared-context-progress).
+
+## Previous MR and MW cleanup and live recovery evidence
+
 P4.12j (`586df69`) adds drained shared-progress replacement without replaying
 failed transfers. Later requests rebuild QPs in the original PD/MR owners;
 native MR/MW cleanup failures keep the affected old engine quarantined.
@@ -31,8 +65,8 @@ Eight native mutation controls reject early MR/MW release and missing engine
 recovery. The real frozen TENT CPU driver/shared-library comparison passes
 25 observations and six controls. See [the contract and external evidence](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
 
-The current execution model remains one shared progress owner per context;
-TENT's configurable transport-level worker pool, spontaneous provider failures,
+That frozen source used one data worker per context. P4.12k above replaces
+it with the transport-level pool. Spontaneous provider failures,
 physical device recovery, in-place healing of retained owners, wider installed/
 GPU profiles, independent acceptance and the complete P4 exit remain open.
 

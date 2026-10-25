@@ -1,6 +1,6 @@
 # RDMA registration and CUDA staging
 
-P4.1-P4.12h/P5.1 add opt-in source implementations and qualification gates.
+P4.1-P4.12k/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct
 application host registration and explicit staging share bounded transport
@@ -3216,3 +3216,141 @@ These are same-agent scoped gates. Physical port/device loss, spontaneous
 provider cleanup failures, healing a retained owner in place, the configurable
 transport-level Workers pool, wider admission/fabric/GPU/installed profiles,
 independent acceptance and the full P4 exit remain open.
+
+
+## Transport Workers and shared context progress
+
+P4.12k moves data threads from individual contexts into one transport-level
+`Workers` pool. `RdmaConfig.num_workers` accepts 1..=64 and defaults to one;
+the pool starts lazily on the first progress context. NIC IDs remain stable
+through disabled slots and dispatch masks. A context's SQ/RQ pair is assigned
+to `nic_id % num_workers`. Context count does not create more data threads.
+Idle workers park; asynchronous-event and CQ-event consumers retain their
+existing separate owners.
+
+Frozen TENT revision `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` is the
+reference. Its `RdmaTransport::initialize` creates `Workers(this)`,
+`Workers::start` creates `params_->workers.num_workers` `WorkerContext`s,
+and `asyncPollCq` visits `transport_->context_set_` using
+`context->cq(worker_id % num_cq_list)`. `quiesce` stops new submits while
+workers continue polling, and `stop` joins the workers.
+
+| Native TENT | OrbitTE P4.12k | Scope |
+| --- | --- | --- |
+| Transport-owned `Workers`, configurable `WorkerContext` threads | `rdma_transport.rs`, `workers.rs`, `num_workers` | Implemented; thread count independent of contexts |
+| Context CQs and endpoint store | `ContextProgress`, `RdmaCq`, `EndpointStore` | One SQ/RQ pair and one polling owner per context |
+| Worker post/poll iteration over context CQs | `ProgressState::tick` and rotating `WorkerContext` passes | Bounded per-context WR/CQE work; explicit event and quota wakeups |
+| `quiesce`, endpoint destruction, `stop` | Admission fence, native context drain, snapshot detachment, pool join | Actual failed owners remain retained; logical failure does not authorize reuse |
+| Multiple CQ lanes, least-loaded slice queues, monitor and thread affinity | Further worker/CQ-lane work | Open; priority and bandwidth policies remain in P6 |
+
+`progress_workers` now counts actual transport data threads, including parked
+ones. `opened_progress_workers` counts successful starts cumulatively;
+`progress_contexts` counts context CQ pairs still assigned to data workers.
+Context recovery changes `progress_contexts` and `progress_recoveries`, while
+the existing threads and `opened_progress_workers` remain stable. Async and
+completion-event consumer counts remain separate. Public wire v12 is unchanged.
+
+Each pass rotates its first context and each context rotates its first
+endpoint. Event mode combines the earliest deadline across assigned contexts;
+new work, native CQ notifications, faults and aggregate quota releases retain
+an unpark token. There is no second poller for a CQ. Synchronous provider calls
+remain non-preemptible and may delay contexts on the same worker. Tests that
+intentionally block a native post while requiring a sibling post explicitly
+select distinct workers. This does not establish a throughput improvement or
+bounded isolation from a stalled provider.
+
+`ContextProgress` owns the endpoint/grant protocol and references the pool.
+Its `ProgressState` owns CQ/store/fault state. Worker-local `Lane` snapshots are
+cleared before publishing detachment. Recovery requires both actual native
+cleanup receipts and detachment, preserving the PD, persistent MRs and key
+history. Retained progress cannot be healed. Keeping the pool alive through
+the last endpoint preserves the previous transport-handle Drop contract.
+Explicit close drains every context and then joins all workers, including
+workers with no contexts.
+
+Configuration and validation live in `config.rs`; resource observations in
+`stats.rs`; pool ownership and wake/park/join in `workers.rs`; endpoint/grant
+protocol in `progress.rs`; bounded native post/poll/drain in
+`progress/poll.rs`. `rdma_transport.rs` owns context inventory and parent/slice
+orchestration. TCP remains its own payload transport. Private unit modules
+mirror these owners. Native libtests moved from
+`transport::rdma::workers::tests::hardware` to
+`transport::rdma::progress::tests::hardware`; the hardware runner checks that
+its exact selector matches one test before deployment. Historical frozen
+evidence uses the selector of its recorded commit.
+
+Lost-completion checks reconcile each QP's accepted and delivered WR identities
+with its outstanding debt at both native CQ barriers. Dropping one CQE does not
+require exactly one outstanding WR: another real CQE may still be unconsumed
+when the software deadline fences the context. The injected WR must remain in
+accepted work and absent from delivered work, with its MR and DMA loan retained;
+all unresolved debt remains charged until actual native drain.
+
+The concurrent native observer counts records with a current grant separately
+from idle cached connections. Byte-weighted placement of unequal tails can
+need a new QP on one rail while an old QP remains idle on the other. A recorded
+quarter-tail case has forty live grants, forty-one cached/active QPs, thirty-nine
+reused connections and one new connection in its second round. That is valid
+path selection. The gate checks all earlier healthy QP identities remain,
+every current grant is either newly connected or reused, and equal-size plans
+retain the exact fixed-QP reuse assertions. A test-only bilateral checkpoint
+records each peer's QP count before the rejected parent and requires it to
+remain unchanged afterward. SQ/RQ and byte limits, the ten-second admission
+guard, sentinels and actual native drain checks are unchanged.
+
+The external qualification directory is
+`/root/orbitte-artifacts/rdma-workers-pool-20261025/`.
+
+### P4.12k frozen qualification
+
+Frozen source `914761b` passes nineteen sequential stable/Rust 1.85 gates,
+195 all-feature units per toolchain, eleven runner controls and both unchanged
+native TENT geometry comparisons. Both exact release libtests pass 84 native
+configurations each (168 total) on the two identity-pinned hosts and two RNICs
+per host. Actual CQ/worker/thread records verify stable context assignment,
+single-worker shared progress, distinct-worker dispatch and pool retention
+through live fault recovery. Configuring three workers also checks an idle
+data thread joins at shutdown.
+
+The matrix retains eight-parent quota/RQ and unequal-tail admission, actual QP
+and CQ errors, dropped successful SQ/RQ completions, MR/MW syscall failures,
+CQ/PD cleanup errors and two/three fresh process generations. Sixteen paired
+live-reconnect configurations complete two fault cycles each while preserving
+the engine, PDs, registrations and data threads. Retained old owners have no
+zero-resource claim. All 384 children are reaped: 360 completed libtests and
+24 deliberately killed source/requester children. Supervisor/SSH receipts
+and a fresh stage/identity/library/lock check establish final process cleanup.
+
+Two stable native mutation runs (polling/event) reject wrong CQ-worker
+assignment. One CPU mutation rejects premature pool shutdown while another
+endpoint still owns it. The full frozen native TENT CPU comparison remains a
+separate CI gate; it does not establish native RDMA wire compatibility.
+
+- `gates-914761b/manifest.json` pins source archive, exact commands, compilers
+  and both libtest hashes. Geometry and runner controls live beside the logs.
+- `native-regression-manifest.json`, `native-raw-audit.json` and the two
+  `native-914761b-*` directories retain every case, actual CQ identities,
+  loaded libraries, lease/exit receipts and supervisor configuration.
+- `controls-914761b/qualified-controls.json` records exact mutations, intended
+  guards and control process cleanup; `frozen-design-reference.json` pins the
+  native TENT workers/transport/parameter sources.
+- `fixture-root-cause.json`, `quarter-diagnostic-*`, `quarter-fixed-0` and
+  earlier failed matrices preserve the idle-QP counting diagnosis. The
+  earlier observer failures and corrected lost-CQE/closed-engine contracts
+  remain alongside their logs; none is counted as a passing final case.
+- `node-*-postflight.json`, `finishing-gates.json`, `native-cpu-reference.json`
+  and `final-delivery.json` record final identities, gates, CI and immutable
+  evidence hashes.
+
+Reproduce from the frozen source with the same authorized host profile:
+
+```bash
+python3 -B tests/hardware/run.py \
+  --profile /root/orbitte-artifacts/rdma-workers-pool-20261025/combined-profile.json \
+  --binary /root/orbitte-artifacts/rdma-workers-pool-20261025/gates-914761b/libtest-stable \
+  --output /path/outside/checkout/workers-pool-repeat
+```
+
+Complete P4, independent acceptance, remaining native worker/CQ-lane
+scheduling, physical link/device faults, wider fabrics/workloads, GPU direct
+paths, installed-artifact qualification and performance remain open.

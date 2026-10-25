@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use super::ConnectionId;
-use super::workers::Record;
+use super::progress::Record;
 use crate::{Error, Result, SourceEpoch, TransferOp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -225,9 +225,11 @@ fn multirail_peer() {
     let events = env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
     let fault_rail: usize = env::var("ORBITTE_RAIL_FAULT").unwrap().parse().unwrap();
     assert!(fault_rail < 2);
+    worker_pool::reset();
     native::initialize(&mode, &rails[fault_rail], !source);
     let config = super::super::super::RdmaConfig {
         rdma_whitelist: rails.clone(),
+        num_workers: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         device_mask: mask,
@@ -490,12 +492,14 @@ fn multirail_peer() {
             super::connected::barrier(&mut stream, 0x33);
         }
     }
+    worker_pool::running(&engine);
     if !retired {
         engine.unregister_memory(&memory).unwrap();
     }
     engine.close(TIMEOUT).unwrap();
     let stats = engine.stats().unwrap().rdma.unwrap();
     clean(&stats);
+    worker_pool::closed(&stats);
     assert_eq!(stats.opened_devices, 2);
     if events && mode != "mr-rollback" {
         assert!(stats.completion_events > 0);

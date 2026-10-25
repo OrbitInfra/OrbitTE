@@ -196,7 +196,15 @@ unsafe extern "C" fn post(
     }
 }
 
+unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> i32 {
+    unsafe {
+        worker_pool::observe(h);
+        (sys::REAL.poll)(h, out)
+    }
+}
+
 static VERBS: sys::Verbs = sys::Verbs {
+    poll,
     deregister,
     dealloc_window,
     post,
@@ -204,8 +212,10 @@ static VERBS: sys::Verbs = sys::Verbs {
 };
 
 fn engine(rails: &[String], bind: SocketAddr) -> TransferEngine {
+    worker_pool::reset();
     let config = crate::transport::rdma::RdmaConfig {
         rdma_whitelist: rails.to_vec(),
+        num_workers: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
@@ -556,6 +566,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 ),
                 (pid, endpoint, epoch, region, original_domains.clone())
             );
+            worker_pool::running(&engine);
             assert_eq!(
                 engine.stats().unwrap().rdma.unwrap().opened_persistent_mrs,
                 persistent_mrs,
@@ -739,10 +750,12 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             retained.is_some()
         );
     }
+    worker_pool::running(&engine);
     let weak = Arc::downgrade(&backing);
     engine.unregister_memory(&memory).unwrap();
     engine.close(TIMEOUT).unwrap();
     clean(&engine.stats().unwrap().rdma.unwrap());
+    worker_pool::closed(&engine.stats().unwrap().rdma.unwrap());
     std::fs::write(
         env::var("ORBITTE_SHARED_MAPS").unwrap(),
         std::fs::read("/proc/self/maps").unwrap(),

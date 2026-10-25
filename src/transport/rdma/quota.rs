@@ -2,24 +2,24 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::{Error, Result, Topology};
 
-/// Wakes context workers when aggregate SQ/RQ completion debt returns capacity.
+/// Wakes context progress when aggregate SQ/RQ completion debt returns capacity.
 #[derive(Default)]
 pub(super) struct CqQuota {
-    workers: Mutex<Vec<Weak<super::workers::Shared>>>,
+    progress: Mutex<Vec<Weak<super::progress::ProgressState>>>,
 }
 
 impl CqQuota {
-    pub(super) fn attach(&self, worker: &Arc<super::workers::Shared>) {
-        let mut workers = self.workers.lock().unwrap_or_else(|p| p.into_inner());
-        workers.retain(|worker| worker.strong_count() != 0);
-        workers.push(Arc::downgrade(worker));
+    pub(super) fn attach(&self, state: &Arc<super::progress::ProgressState>) {
+        let mut progress = self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        progress.retain(|state| state.strong_count() != 0);
+        progress.push(Arc::downgrade(state));
     }
 
     pub(super) fn released(&self) {
-        let mut workers = self.workers.lock().unwrap_or_else(|p| p.into_inner());
-        workers.retain(|worker| {
-            if let Some(worker) = worker.upgrade() {
-                worker.wake_quota();
+        let mut progress = self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        progress.retain(|state| {
+            if let Some(state) = state.upgrade() {
+                state.wake_quota();
                 true
             } else {
                 false

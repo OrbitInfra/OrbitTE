@@ -34,10 +34,11 @@ completion contracts.
 | `RdmaContext` | Own actual context/PD, frozen route and persistent key history | `RdmaContext` |
 | `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
 | `ReceiveCredits` | Atomically reserve a parent's source RQ capacity; transfer credits to actual receive owners | OrbitTE source-completion admission alongside TENT's bounded slice queues |
-| `CqQuota` | Wake blocked context workers after actual aggregate SQ/RQ capacity returns | Rust notification adaptation for TENT's worker iteration across context CQs; separate from native cross-process QoS |
+| `Workers`, `WorkerContext` | Own a configurable transport-level thread pool; rotate assigned contexts and park until work, CQ events or deadlines | `RdmaTransport::workers_`, `Workers::start`, `workerThread`, `asyncPollCq` |
+| `ContextProgress`, CQ and queue owners | Own one context's SQ/RQ pair, endpoint records, WR routing and fault/drain state | Per-context CQ/endpoint ownership consumed by TENT workers |
+| `CqQuota` | Wake the assigned worker when aggregate SQ/RQ capacity returns | Explicit wake for polling/event scheduling; separate from native cross-process QoS |
 | Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
 | Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
-| `Workers`, CQ and queue owners | Post bounded WR windows, validate real completions and retire resources | `Workers`, RDMA CQ and slice owners |
 
 The `platform/cpu_probe.rs` filename comes directly from TENT's
 `platform/cpu_probe.cpp`. It discovers host NUMA/RNIC locality. Native verbs
@@ -47,8 +48,9 @@ and GPU topology are still separate work.
 ## Device selection and rail routing
 
 Each permitted NIC retains its topology slot, even if native construction
-fails cleanly. An enabled slot owns its own PD, progress worker, shared SQ/RQ
-CQs and endpoint store. Physical MR copies across contexts share aggregate
+fails cleanly. An enabled slot owns its own PD, context progress state, shared SQ/RQ
+CQs and endpoint store. Data threads belong to the transport-level `Workers`
+pool; `num_workers` is independent of the context count. Physical MR copies across contexts share aggregate
 registration budgets.
 
 The control bootstrap advertises bounded NIC/PD paths before granting memory
@@ -64,8 +66,8 @@ unregister or close, with aggregate context/capability byte and count limits.
 
 Large multi-context requests use TENT's bounded, short-tail-folding slice
 geometry and select a path per slice. One source control handler owns the parent
-and prepares every slice grant before payload submission. Existing per-context
-workers post slices concurrently; each slice retains its own PD, connection,
+and prepares every slice grant before payload submission. Transport workers
+post slices across their assigned contexts; each slice retains its own PD, connection,
 MR borrow, exact-range DMA loan, WR identity and bound completion receipts.
 The parent succeeds only after every slice completes. No thread is created per
 slice. Small or single-context requests retain the single-path protocol.
@@ -85,17 +87,33 @@ and independent acceptance remain in the [completion plan](completion-plan.md).
 All contexts share the existing SQ/RQ debt, byte and connection limits. Each
 native CQ retains its configured capacity. In event mode, a context with no
 posted WR has no local CQE to wake it when another context returns shared
-capacity. `CqQuota` registers weak worker subscribers and wakes only workers
+capacity. `CqQuota` registers weak context-progress subscribers and wakes their assigned workers
 that reported quota pressure. Enrollment precedes a budget recheck, so a
 concurrent release leaves either a notification or an available-capacity wake.
 
-Native TENT's `Workers::asyncPollCq` visits the entire context set while its
-worker has active slices. OrbitTE retains its existing per-context progress
-owners and explicitly notifies across them. This adds no per-slice thread,
-transport facade, bandwidth policy or cross-process quota implementation.
+Native TENT's `Workers::asyncPollCq` visits the entire context set and uses
+`cq(worker_id % num_cq_list)` in each context. OrbitTE now has a transport-level
+`Workers` pool too. Its current single SQ/RQ pair per context is assigned to
+`nic_id % num_workers`; multiple contexts share one worker, and unused workers
+park. The first context and the first endpoint rotate on each pass. CQ events,
+new submissions and shared-quota releases unpark the assigned thread; event
+mode uses the earliest deadline across that worker's contexts.
+
+This is the first pool substage, with one polling owner per context. TENT's
+multiple CQ lanes per context, least-loaded slice enqueue, priority queues,
+NUMA thread affinity and monitor consolidation remain separate open work.
+One synchronous provider call can delay other contexts assigned to its worker;
+native calls remain non-preemptible. Configure distinct workers when a test or
+deployment needs independent native-call progress.
+
 Capacity returns through validated data/control completions, proven unposted
 suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains
-its charges. See the [concurrent native profile](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
+its charges. A failed context's progress state can be replaced only after all
+native drain receipts and removal of the worker's request snapshot. The pool
+stays alive and other contexts keep their owners. Endpoints retain the pool if
+the transport handle is dropped; explicit transport shutdown drains contexts
+before joining every data thread. See the
+[pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
 
 ## Source receive admission
 
@@ -182,7 +200,11 @@ ambiguous WRITE is not replayed automatically. See the detailed
 | `runtime/` | Control service and shared topology descriptions |
 | `platform/` | Host platform discovery |
 | `transport/tcp.rs` | TCP payload transfer |
-| `transport/rdma/` | RDMA context, buffers, connections, queues, scheduling and progress |
+| `transport/rdma/config.rs`, `stats.rs` | RDMA configuration/validation and resource observations |
+| `transport/rdma/rdma_transport.rs` | Context set, registration, parent/slice dispatch and transport shutdown |
+| `transport/rdma/workers.rs` | Transport data-thread pool, context assignment, wake/park and join |
+| `transport/rdma/progress.rs`, `progress/poll.rs` | Endpoint/grant protocol; bounded post/poll passes and native fault/drain state |
+| `transport/rdma/context.rs`, `buffers.rs`, `endpoint*.rs`, `cq.rs` | PD/key domains, MRs, QP/loan owners, endpoint stores and native CQ/event owners |
 | `cuda/` | NVIDIA allocation and synchronized host-staging foundations |
 
 The [parity contract](tent-parity.md) pins the reference revision and capability

@@ -39,13 +39,13 @@ def restart_plan(case):
 def native_peer_test(profile):
     runner = profile.get('runner')
     if runner == 'orbitte-multirail':
-        return 'transport::rdma::workers::tests::hardware::multirail::multirail_peer'
+        return 'transport::rdma::progress::tests::hardware::multirail::multirail_peer'
     if runner == 'orbitte-connected':
-        return 'transport::rdma::workers::tests::hardware::connected::connected_endpoint_peer'
+        return 'transport::rdma::progress::tests::hardware::connected::connected_endpoint_peer'
     if runner == 'orbitte-shared-cq':
-        return 'transport::rdma::workers::tests::hardware::shared_cq_peer'
+        return 'transport::rdma::progress::tests::hardware::shared_cq_peer'
     if runner == 'orbitte-window':
-        return 'transport::rdma::workers::tests::hardware::source_window_peer'
+        return 'transport::rdma::progress::tests::hardware::source_window_peer'
     if runner == 'orbitkv-peer-host':
         return 'peer::orbitte::tests::rdma_host::registered_host_rdma_peer'
     if runner is None:
@@ -309,6 +309,11 @@ class Controller:
             raise ValueError('invalid explicit multirail profile')
         if case['mode'] != 'healthy' and case['mask'] != 3:
             raise ValueError('multirail fault controls require both RNICs')
+        workers = case.get('num_workers', 1)
+        if type(workers) is not int or not 1 <= workers <= 64:
+            raise ValueError('num_workers must be an integer in 1..64')
+        if case['mode'] in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
+            raise ValueError('native blocking sibling-post controls require at least two workers')
         restart = restart_plan(case)
 
         def command(node, role, kind, root, readiness=None):
@@ -320,6 +325,7 @@ class Controller:
                 'ORBITTE_SHARED_GID': str(self.profile['gid_index']),
                 'ORBITTE_SHARED_MAPS': root + '/maps.txt',
                 'ORBITTE_RDMA_EVENTS': str(int(case['rdma_events'])),
+                'ORBITTE_RDMA_WORKERS': str(workers),
                 'ORBITTE_RAIL_MODE': case['mode'],
                 'ORBITTE_RAIL_OPERATION': case['operation'],
                 'ORBITTE_RAIL_FAULT': str(case['fault_rail']),
@@ -360,6 +366,11 @@ class Controller:
         arguments, environment = command(requester, 'requester', case['requester_kind'], requester_root, readiness)
         self.start(requester, requester_root, case['requester_kind'], arguments, case['transport'], environment)
         forwarded = set()
+        workers = case.get('num_workers', 1)
+        if type(workers) is not int or not 1 <= workers <= 64:
+            raise ValueError('num_workers must be an integer in 1..64')
+        if case['mode'] in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
+            raise ValueError('native blocking sibling-post controls require at least two workers')
         restart = restart_plan(case)
         while time.monotonic() - started < 65:
             evidence = {role: self.collect(node, root) for role, node, root in [('source', source, source_root), ('requester', requester, requester_root)]}

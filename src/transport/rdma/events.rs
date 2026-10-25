@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
 
-use super::{RdmaStats, sys, workers};
+use super::{RdmaStats, progress, sys};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -25,7 +25,7 @@ pub(super) struct State {
     stopping: AtomicBool,
     route_fault: AtomicBool,
     completion_fault: AtomicI32,
-    progress: Mutex<Weak<workers::Shared>>,
+    progress: Mutex<Weak<progress::ProgressState>>,
 }
 
 impl State {
@@ -55,7 +55,7 @@ impl State {
         }
     }
 
-    pub(super) fn attach(&self, progress: Weak<workers::Shared>) {
+    pub(super) fn attach(&self, progress: Weak<progress::ProgressState>) {
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = progress;
         self.notify();
     }

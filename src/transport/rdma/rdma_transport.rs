@@ -1,15 +1,16 @@
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::endpoint_store::Peer;
 use super::{
-    ContextSet, ContextSlot, RdmaConfig, RdmaHostMemory, RdmaStats, RdmaTransport, buffers,
+    RdmaConfig, RdmaHostMemory, RdmaStats, buffers,
     context::RdmaContext,
     endpoint::{
         Buffer, ConnectionLease, ConnectionResources, GrantLease, GrantResources, Resources,
         Staging,
     },
+    events, progress, quota,
     quota::{DeviceLease, DeviceSelector},
     rail_monitor::{self, NicPath},
     slice::{RdmaSlice, plan_rdma_slices},
@@ -24,6 +25,33 @@ use crate::{
     Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
 
+pub(crate) struct RdmaTransport {
+    pub(super) config: RdmaConfig,
+    pub(super) usage: Arc<Mutex<RdmaStats>>,
+    pub(super) counters: Arc<events::Counters>,
+    pub(super) workers: Arc<workers::Workers>,
+    pub(super) cq_quota: Arc<quota::CqQuota>,
+    pub(super) verbs: &'static sys::Verbs,
+    pub(super) context_set: Mutex<ContextSet>,
+    pub(super) drained: Arc<Condvar>,
+    pub(crate) registrations: Arc<buffers::LocalBufferManager>,
+}
+
+#[derive(Default)]
+pub(super) struct ContextSet {
+    pub(super) closed: bool,
+    pub(super) topology: Option<crate::Topology>,
+    pub(super) slots: Vec<ContextSlot>,
+    pub(super) selector: Option<Arc<quota::DeviceSelector>>,
+    pub(super) failure: Option<(&'static str, i32)>,
+}
+
+#[derive(Default)]
+pub(super) struct ContextSlot {
+    pub(super) owner: Option<Arc<RdmaContext>>,
+    pub(super) progress: Option<Arc<progress::ContextProgress>>,
+}
+
 impl RdmaTransport {
     pub(crate) fn new(config: RdmaConfig) -> Result<Arc<Self>> {
         config.validate()?;
@@ -34,6 +62,7 @@ impl RdmaTransport {
             config,
             usage,
             counters: Arc::default(),
+            workers: Arc::default(),
             cq_quota: Arc::default(),
             verbs: &sys::REAL,
             context_set: Mutex::default(),
@@ -219,16 +248,20 @@ impl RdmaTransport {
             .ok_or(Error::Unavailable("RDMA context slot is disabled"))
     }
 
-    pub(super) fn progress(&self, device: Arc<RdmaContext>) -> Result<Arc<workers::Workers>> {
+    pub(super) fn progress(
+        &self,
+        device: Arc<RdmaContext>,
+    ) -> Result<Arc<progress::ContextProgress>> {
         let mut contexts = self
             .context_set
             .lock()
             .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
         self.initialize_contexts(&mut contexts)?;
-        let slot = contexts
+        let (nic_id, slot) = contexts
             .slots
             .iter_mut()
-            .find(|slot| {
+            .enumerate()
+            .find(|(_, slot)| {
                 slot.owner
                     .as_ref()
                     .is_some_and(|owner| Arc::ptr_eq(owner, &device))
@@ -239,13 +272,19 @@ impl RdmaTransport {
         if let Some(progress) = &slot.progress {
             return Ok(Arc::clone(progress));
         }
-        match workers::Workers::new(
+        let progress = progress::ContextProgress::new(
             &self.config,
+            Arc::clone(&self.workers),
             device,
             Arc::clone(&self.usage),
             Arc::clone(&self.cq_quota),
             self.verbs,
-        ) {
+        )
+        .and_then(|progress| {
+            self.workers.attach(nic_id, &progress)?;
+            Ok(progress)
+        });
+        match progress {
             Ok(progress) => {
                 slot.progress = Some(Arc::clone(&progress));
                 Ok(progress)
@@ -282,8 +321,8 @@ impl RdmaTransport {
                 .as_ref()
                 .ok_or(Error::Internal("RDMA progress has no context owner"))?;
             device.asynchronous.check()?;
-            // Both CQs and every QP have native destruction receipts. Join the
-            // old worker before allowing a fresh CQ/WR namespace in this PD.
+            // Both CQs and every QP have native destruction receipts. Detach the
+            // old poll state before allowing a fresh CQ/WR namespace in this PD.
             progress.close(Instant::now())?;
             slot.progress = None;
             self.usage
@@ -338,7 +377,7 @@ impl RdmaTransport {
         if let Some(error) = error {
             return Err(error);
         }
-        // A partially constructed retained CQ can own a PD without a Workers
+        // A partially constructed retained CQ can own a PD without a context-progress
         // handle in its slot. Fencing siblings cannot prove that PD quiescent.
         if let Some((operation, code)) = failure {
             return Err(Error::Unquiesced { operation, code });
@@ -377,6 +416,9 @@ impl RdmaTransport {
                     error.get_or_insert(fault);
                 }
             }
+        }
+        if let Err(fault) = self.workers.close(deadline) {
+            error.get_or_insert(fault);
         }
         if let Some(error) = error {
             return Err(error);
