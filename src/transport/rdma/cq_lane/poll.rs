@@ -38,7 +38,7 @@ impl ProgressState {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.fault.is_none() {
             control.accepting = false;
-            let idle = control.endpoints.detach_all();
+            let idle = control.qps.detach_all();
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -110,12 +110,12 @@ impl ProgressState {
             }
             control.fault = Some(Fault::Unquiesced(operation, code));
             control.accepting = false;
-            let idle = control.endpoints.detach_all();
+            let idle = control.qps.detach_all();
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .idle_endpoints -= idle;
-            control.endpoints.take_all()
+            control.qps.take_all()
         };
         let mut count = 0;
         let mut grants = 0;
@@ -294,7 +294,7 @@ impl ProgressState {
         self.control
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .endpoints
+            .qps
             .remove_retired(record);
         drop(request);
         record.changed.notify_all();
@@ -358,7 +358,7 @@ impl ProgressState {
             record.changed.notify_all();
         }
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
-        control.endpoints.clear_after_drain();
+        control.qps.clear_after_drain();
         control.finished = true;
         self.changed.notify_all();
     }
@@ -498,7 +498,7 @@ impl ProgressState {
             .control
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .endpoints
+            .qps
             .work_owner(tag, receive_cq);
         let Some(record) = record else {
             self.fail(Fault::Protocol("RDMA unknown completion owner"));
@@ -680,7 +680,7 @@ impl ProgressState {
         let (fault, stopping, cqs) = {
             let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
             records.clear();
-            control.endpoints.snapshot(records);
+            control.qps.snapshot(records);
             control.dirty = false;
             (
                 control.fault,

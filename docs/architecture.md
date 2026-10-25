@@ -1,248 +1,134 @@
 # Architecture
 
-OrbitTE follows the frozen Mooncake TENT architecture around engines, topology,
-contexts, registered buffers, endpoints and workers. Rust ownership retains the
-actual allocation and native resources through physical completion or teardown.
-The current protocol is OrbitTE-specific; API and wire parity are tracked
-separately.
+OrbitTE follows frozen Mooncake TENT's engine, transport, context, registered
+buffer, endpoint and worker boundaries. The host TCP/RDMA data path exists;
+full TENT behavior, native wire compatibility and complete P4 acceptance remain
+open. Read [capabilities](capabilities.md) for support and
+[the P4 exit queue](completion-plan.md#p4-remaining-delivery) for missing work.
 
 :::{image} _static/architecture.svg
 :alt: OrbitTE engine and sibling TCP/RDMA transports; dashed paths are planned
 :class: dark-light
 :::
 
-## Engine and control plane
+## Engine and transport boundary
 
-`TransferEngine` owns registration, batches, transfer admission and separate
-source/requester shutdown. A registered range retains its backing allocation;
-duplicate registrations retain references to the same range, and overlapping
-views share allocation-level access coordination.
+`TransferEngine` owns registration, batches, admission and directional shutdown.
+`RegisteredMemory` retains actual backing; aliases share allocation-level
+access coordination. `runtime::control_plane::ControlService` owns peer lookup,
+request framing and source handlers. It dispatches payload work to sibling
+`TcpTransport` and `RdmaTransport` implementations.
 
-`runtime::control_plane::ControlService` handles peer descriptors, grants and
-receipts over bounded TCP control connections. TCP payload I/O lives in
-`transport::tcp::TcpTransport`. RDMA payload I/O lives in
-`transport::rdma::RdmaTransport`. The transports share engine ownership and
-completion contracts.
+RDMA uses the control connection to negotiate paths, connections and exact
+memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
+OrbitTE v12 messages; moving them into their own module does not make this
+protocol compatible with TENT's native RPC or metadata.
 
-## RDMA ownership
+## RDMA resource owners
 
-| Owner | Responsibility | Native TENT correspondence |
+| Owner | Resource and lifetime | Frozen TENT correspondence |
 | --- | --- | --- |
-| `Topology`, host discovery | Inventory NICs and NUMA locations; retain stable NIC IDs | `Topology`, `CpuPlatform::probe` |
-| `RdmaTransport`, context set | Initialize permitted NICs and route each request or slice to a compatible context | `RdmaTransport::initializeContexts`, `context_set_` |
-| `DeviceSelector` | Intersect masks, topology tiers and in-flight byte charges | `DeviceSelector` in `quota.h` |
-| `RdmaContext` | Own actual context/PD, frozen route and persistent key history | `RdmaContext` |
-| `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
-| `ReceiveCredits` | Atomically reserve a parent's source RQ capacity; transfer credits to actual receive owners | OrbitTE source-completion admission alongside TENT's bounded slice queues |
-| `Workers`, `WorkerContext` | Own a configurable transport-level thread pool; rotate assigned contexts and park until work, CQ events or deadlines | `RdmaTransport::workers_`, `Workers::start`, `workerThread`, `asyncPollCq` |
-| `CqLane`, CQ and queue owners | Own one lane's SQ/RQ pair, endpoint records, WR routing and fault/drain state | Per-context CQ/endpoint ownership consumed by TENT workers |
-| `CqQuota` | Wake the assigned worker when aggregate SQ/RQ capacity returns | Explicit wake for polling/event scheduling; separate from native cross-process QoS |
-| `EndpointStore`, `RdmaEndpoint` | Context-owned peer lookup and persistent QP arrays across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
-| `QpStore`, physical connection resources | CQ-local WR lookup, idle/retiring QPs and native connection drain | CQ routing, QP depth/retirement owners |
-| `RdmaGrant`, grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
+| `RdmaTransport` | Context slots, registrations, workers and parent dispatch | `RdmaTransport`, `context_set_`, `local_buffer_manager_`, `workers_` |
+| `ContextSet`, `RdmaContext` | Stable NIC IDs, actual context/PD, route and persistent key domain | `RdmaContextSet`, `RdmaContext` |
+| `LocalBufferManager` | Persistent host MRs keyed by actual context, allocation view and capability | Context-keyed `mem_reg_map` |
+| `EndpointStore`, `RdmaEndpoint` | Peer identity and persistent QP array across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
+| `ConnectionResources`, `QpStore` | Actual QP, CQ-local lookup and idle/retiring records | Endpoint QPs, WR depth and retirement |
+| `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, message storage and grant charge | Rust authority extension over TENT's registered-region model |
+| `RdmaSlice`, send/receive queues | Payload geometry, WR IDs, accepted work and completion debt | `RdmaSlice`, per-QP slice queues |
+| `CqLane` | SQ/RQ CQ pair, registered QP records, submission, drain and recovery | Per-context CQs consumed by workers |
+| `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
+| `Monitor` | One transport thread consuming context and CQ events | Event-consumption portion of `Workers::monitorThread` |
+| `DeviceSelector`, `CqQuota`, `ReceiveCredits` | NIC byte load, aggregate SQ/RQ wakes and whole-parent receive admission | Device selection and bounded slice admission; OrbitTE's receive-credit protocol is additional |
 
-The `platform/cpu_probe.rs` filename comes directly from TENT's
-`platform/cpu_probe.cpp`. It discovers host NUMA/RNIC locality. Native verbs
-access remains in the RDMA discovery module; allocation page-location probing
-and GPU topology are still separate work.
+Each context slot owns its PD/context, CQ lanes and peer endpoint registry.
+Physical QP records own connection and active grant resources. A live grant
+retains its lane, worker pool and peer endpoint. Peer arrays retain QP records
+and weak lane references, avoiding an endpoint/lane ownership cycle.
 
-## Device selection and rail routing
+Native cleanup is fallible. A failed QP/MR/MW/CQ teardown retains the actual
+owner, backing and charges; a timeout or terminal task state cannot substitute
+for physical drain. A separate shared thirty-second parent destruction window
+preserves the original data failure unless cleanup reports unquiesced work.
 
-Each permitted NIC retains its topology slot, even if native construction
-fails cleanly. An enabled slot owns one PD and a `cq_list` of independent `CqLane` owners.
-`RdmaConfig.num_lanes` sets both transport worker count and CQ-lane count per
-context. Lane `i` in every context belongs to worker `i`; each lane owns its
-SQ/RQ CQs, QP progress store and drain state. The context slot owns the peer
-endpoint store and its QP arrays. Thread count remains independent
-of the number of contexts. Physical MR copies across contexts share aggregate
-registration budgets.
+## Follow one transfer
 
-The control bootstrap advertises bounded NIC/PD paths before granting memory
-authority. The requester selects a compatible path using its device mask,
-NUMA hint and in-flight byte load. A cached pair remains bound to the selected
-source NIC/PD, both process/connection identities and the previous grant.
+1. **Register.** Host Direct publication prepares local-only MRs and separate
+   MW-bind parents in every enabled context before making the range visible.
+   Partial failures roll back only newly created copies. Device masks restrict
+   dispatch, not the set of enabled contexts receiving registration.
+2. **Plan.** The transport partitions large parents with TENT's bounded,
+   short-tail-folding geometry. Static `path` metadata checks compatible peers;
+   `DeviceSelector` applies device masks, topology ranks and byte charges.
+3. **Authorize.** The source reserves all receive credits for the parent before
+   creating grants. Rendezvous verifies both process/connection identities,
+   source NIC/PD and grant generation. A fresh one-use MW authorizes only the
+   requested range. All slices are prepared before payload submission.
+4. **Progress.** `num_lanes` sets both transport worker count and each context's
+   CQ-pair count. Worker `i` polls lane `i` across contexts. New grants choose
+   the least-loaded lane with rotating ties; reused QPs keep their original
+   lane. Grant-owned `SliceLease` remains charged through drain or quarantine.
+5. **Complete.** Native data completion, same-QP fenced completion messaging,
+   the exact source receive/invalidation and bound DONE/ACK/READY receipts
+   establish grant drain. Every slice must finish before its parent succeeds.
+   Staged output is copied only after the required proof. Ambiguous WRITEs
+   are not replayed automatically.
 
-Host Direct registration prepares a local-only MR in every enabled context,
-plus a separate MW-bind parent for remotely accessible ranges. A batch becomes
-visible only after all copies succeed. Dispatch masks select paths; they do not
-remove enabled contexts from publication. Published copies remain pinned until
-unregister or close, with aggregate context/capability byte and count limits.
+All contexts share aggregate byte, QP and SQ/RQ limits. Quota return wakes
+waiting lanes even when they have no local CQE to wake them. Completely drained
+faulted lanes can be replaced while the PD, persistent MRs and worker pool stay
+alive. Workers bind before admission to NUMA CPU sets intersected with the
+creator's allowed mask; this does not place application pages near an RNIC.
 
-Large requests with multiple contexts or CQ lanes use TENT's bounded, short-tail-folding slice
-geometry and select a path per slice. One source control handler owns the parent
-and prepares every slice grant before payload submission. Transport workers
-post slices across their assigned contexts; each slice retains its own PD, connection,
-MR borrow, exact-range DMA loan, WR identity and bound completion receipts.
-The parent succeeds only after every slice completes. No thread is created per
-slice. Small requests, and single-context requests configured with one lane, retain
-the single-path protocol.
+The monitor serializes native get/ACK with event-source detachment. CQ channels
+stay lane-owned; async FDs stay device-owned. Native owners close only after
+detachment. Lost event-consumption proof fences the affected device and retains
+unproven native resources. See [the lifetime contracts](rdma-cuda.md) for exact
+failure transitions and [qualification](qualification.md) for scoped evidence.
 
-A declared two-host CPU DRAM/IPv4 RoCEv2 profile validates two actual RNICs per
-host: masked and cross-rail READ/WRITE, persistent QP reuse, all-context MR
-publication/rollback, and either-rail CQ/partial-post faults. Test-only native
-observers bind each receipt to the actual device, PD, QP, CQ and WR owner while
-public engine operations drive the existing transport. They add no production
-callback API, worker or hot-path layer. See the
-[native profile](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
-Physical link/device loss, broader concurrency/topology, cross-rail recovery
-and independent acceptance remain in the [completion plan](completion-plan.md).
+## Source reading order
 
-## Aggregate quota progress
+Start at an operation, then follow the resource it borrows. Child modules extend
+their existing owner; they do not introduce forwarding objects or extra locks.
 
-All contexts share the existing SQ/RQ debt, byte and connection limits. Each
-native CQ retains its configured capacity. In event mode, a context with no
-posted WR has no local CQE to wake it when another context returns shared
-capacity. `CqQuota` registers weak context-progress subscribers and wakes their assigned workers
-that reported quota pressure. Enrollment precedes a budget recheck, so a
-concurrent release leaves either a notification or an available-capacity wake.
+| Read | Location | Responsibility |
+| --- | --- | --- |
+| Public request | `engine.rs`, `batch.rs`, `memory.rs` | Engine, tasks and actual backing |
+| Transport entry | `transport/rdma/rdma_transport.rs` | Registration, parent dispatch and source serving |
+| Context selection | `context_set.rs`, `context.rs`, `discovery.rs`, `quota.rs` | Stable slots, PDs, devices and NIC admission |
+| Peer rendezvous | `rdma_transport/handshake.rs` | Existing transport's grant preparation and bilateral handshake |
+| Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
+| Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
+| CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/poll.rs` | Lane lifecycle, work admission/waits, drained reuse and native progress |
+| Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
+| Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
+| Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding and NVIDIA staging owners |
 
-Frozen TENT unifies worker, CQ and QP parallelism under `num_lanes`.
-Its `Workers::asyncPollCq` visits every context's
-`cq(worker_id % num_cq_list)`. OrbitTE follows that lane mapping with one
-polling owner per SQ/RQ pair. `context_set.rs` owns stable NIC slots and lane
-construction/recovery; `cq_lane.rs` owns endpoint/grant state and
-`cq_lane/poll.rs` owns native post/poll/drain. `Workers` rotates assigned
-context lanes and endpoints, combining their earliest absolute deadlines.
+Paths after the transport entry are relative to `src/transport/rdma/`, except
+the public, host and GPU rows, which are relative to `src/`.
+Private tests remain under `tests/unit/`; moving methods preserves the existing
+transport and hardware test selectors. `BoundDone` can still be constructed
+only by the protocol's successful bound DONE read.
 
-When TENT's `Workers::submit` receives no explicit worker, it chooses the
-least-loaded `inflight_slices` counter. OrbitTE selects a worker at slice-grant
-admission, rotating equal-load ties. A `SliceLease` charges that worker until
-the grant leaves after its required drain; actual quarantined grants keep
-their charge. Cached QPs keep their CQ lane, and reuse searches idle pairs in
-load order. Source rendezvous searches every lane by both connection identities
-and the last grant. PDs, key history and persistent MRs remain context-owned.
+## Correspondence and remaining differences
 
-Device/route faults wake every attached lane; shared quota wakes only lanes
-waiting for capacity. Completion-event channels remain lane-owned, so a lane's
-native failure and recovery do not destroy a sibling channel. One transport
-monitor consumes all context async FDs and CQ event channels. Registrations
-serialize get/ACK with detachment; native owners close only after detachment.
-Monitor counters are atomic, so event failure cannot wait for a native
-destructor's budget lock. One failed event source fences its device; loss of
-the monitor fences every remaining source.
+The reference is frozen at `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+TENT's [transport header][transport], [endpoint implementation][endpoint] and
+[workers implementation][workers] are the source references, not a moving main.
 
-Data workers bind before admission to NUMA node CPU sets intersected with the
-creator's allowed affinity. Workers round-robin over available nodes, including
-sparse node IDs; a missing NUMA inventory preserves the allowed mask and records
-no node. Startup verifies the actual mask and propagates binding errors. This
-does not place application memory or establish RNIC-local page placement.
+| Area | Current OrbitTE | Remaining correspondence |
+| --- | --- | --- |
+| QP arrays | Demand-grown peer arrays; one active grant owns one QP | TENT's fixed-width arrays admit concurrent slices per QP using separate depth and slice queues |
+| Monitor | Unified async/CQ get and ACK; lane workers drain retired QPs | TENT also performs periodic endpoint/orphan reclaim, paused-port recovery and address/link-speed refresh |
+| Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Native `RailMonitor` additionally owns dynamic rail health and recovery; a static codec is not that owner |
+| Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
+| CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
+| Worker load | Unfinished grant charge including retained native work | Priority queues, QoS, retry/failover and deadline policies remain P6 work |
 
-Peer endpoints collect connected QPs across lanes by remote epoch, PD and role.
-Reuse selects candidates from these arrays, then atomically claims the exact
-idle bilateral connection in its CQ-local store. A terminal bit removes lookup
-permission; array removal still requires the physical QP's Closed state.
-`RdmaGrant` retains the peer endpoint while it owns an exclusive authorization.
-The array currently grows on demand within the aggregate physical-QP limit:
-one active wire grant still owns one QP. TENT's fixed `num_lanes` QP width,
-concurrent slices on each QP, and bounded priority MPSC queues remain open. One synchronous provider call
-can delay the other context lanes assigned to that worker; native calls remain
-non-preemptible. This change makes no throughput claim.
+The `cpu_probe` filename does match TENT's host-probing source. Names that match
+native concepts retain that meaning; new Rust ownership or protocol mechanisms
+are identified explicitly. Architecture alignment alone does not establish
+behavioral, ABI, wire or performance parity.
 
-Capacity returns through validated data/control completions, proven unposted
-suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains
-its charges. A failed context's progress state can be replaced only after all
-native drain receipts and removal of the worker's request snapshot. The pool
-stays alive and other contexts keep their owners. Live grant handles retain the pool if
-the transport handle is dropped; explicit transport shutdown drains contexts
-before joining every data thread. See the
-[pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
-
-## Source receive admission
-
-Each parent prepares every grant before payload submission. Reserving RQ slots
-one slice at a time can leave concurrent parents holding incomplete plans with
-no payload able to complete. `ReceiveCredits` acquires the whole validated plan
-under the aggregate budget lock, then moves one credit into each `ReceiveQueue`.
-Insufficient capacity returns `ResourceExhausted` before either peer creates a
-new QP for that parent. This is immediate bounded admission; callers decide when
-to retry. Single-path source requests acquire one credit through the same owner.
-
-Wire v12 adds a source admission reply after the multirail plan. Requesters wait
-for it before preparing endpoints. Previous wire versions are rejected. Unused
-credits roll back on preparation failure; accepted or uncertain receives retain
-their own credits until validated CQ completion or successful native QP/CQ drain.
-`receive_credits` includes unposted reservations; `receive_work_requests` counts
-actual reserved/possibly posted WR debt. Neither is payload-byte progress.
-
-TENT's `Workers`, `RdmaSlice`, `DeviceSelector`, context set and endpoint store
-remain the architectural reference. This additional RQ credit owner belongs to
-OrbitTE's exact source receive/invalidation protocol, rather than a native TENT
-wire contract or its cross-process bandwidth arbitration.
-
-The extended native fixture exercises eight concurrent parents: 5 MiB,
-MiB-plus-one folded and exact-quarter-tail requests over 32/40 QPs. TENT's
-`planRdmaSlices` rounds to the base quantum and folds tails strictly below a
-quarter block; an exact-quarter tail remains separate. Both outer routing and
-inner WR queues use that rule. A native fixture checks each submitted WR offset
-and length, including the folded final byte. `DeviceSelector` charges bytes,
-so unequal tails need not create equal QP counts on the two RNICs.
-
-Five shared SQ credits bound actual outstanding requester WRs, with at most two
-WRs per post. The 5 MiB profile submits eighty payload WRs per parent, 640 per
-eight-parent round, while retaining that five-slot aggregate bound. One source
-RQ credit is reserved per outer slice's completion receive, independently of
-the number of payload WRs. A ninth whole plan is
-rejected before new QPs despite one residual RQ credit. Native observers bind
-the injected fault to its exact CQ/QPN/WR and reconcile unresolved siblings,
-DMA loans, MRs and receive credits through shared CQ teardown. Four native
-mutation runs reject premature debt/credit return. This extends qualification
-of existing owners without adding a production layer or changing wire v12.
-See the [geometry evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission)
-and [source RQ contract](rdma-cuda.md#whole-parent-source-rq-admission).
-
-## Completion and failure
-
-RDMA data and endpoint destruction have separate deadlines. `close_slices`
-shares one fresh thirty-second destruction window across a parent's slices,
-matching TENT's `RdmaEndPoint::finishDestroy` timeout. Exhausting the data
-deadline preserves the original failure. Only actual QP/CQ teardown permits
-resource return; unproven destruction retains admission and backing. The failed
-call may wait up to thirty additional seconds for this barrier, and native
-provider calls remain non-preemptible. This adds no retry or WRITE replay.
-
-The declared native profile now includes actual process-owned QP ERR/flush,
-lost successful SQ/RQ CQEs and source SIGKILL with leases held through waitpid
-and replacement exit. Fresh sources rebind the same RPC address and numeric
-registration ID; old source epochs fail before new QPs or remote effects.
-Healthy transfers resume with explicit new descriptors and fresh engine
-processes. Physical port/device-down and recovery of a poisoned live engine
-remain separate open profiles. See the
-[destruction and restart evidence](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
-
-Frozen TENT publishes context-specific region rkeys from its registered
-buffers. OrbitTE adds exact-range memory-window grants while retaining TENT's
-context, buffer and endpoint ownership boundaries. The MW handshake is an
-OrbitTE authority contract.
-
-A source MR is a local parent registration. A fresh one-use memory window
-authorizes only the granted range. Data completion, same-QP fenced completion
-messaging, exact source receive/invalidation and bound DONE/ACK/READY receipts
-establish the negotiated grant-drain proof before connected reuse.
-
-Logical cancellation and timeouts do not prove native quiescence. Failed
-cleanup retains the actual QP/MR/allocation owners and their charges. An
-ambiguous WRITE is not replayed automatically. See the detailed
-[RDMA lifetime contracts](rdma-cuda.md) for the state transitions and evidence.
-
-## Source layout
-
-| Location | What it owns |
-| --- | --- |
-| `engine.rs`, `memory.rs`, `batch.rs` | Public operations, backing allocations and batch lifetime |
-| `runtime/` | Control service and shared topology descriptions |
-| `platform/` | Host platform discovery |
-| `transport/tcp.rs` | TCP payload transfer |
-| `transport/rdma/config.rs`, `stats.rs` | RDMA configuration/validation and resource observations |
-| `transport/rdma/rdma_transport.rs` | Context set, registration, parent/slice dispatch and transport shutdown |
-| `transport/rdma/workers.rs` | Transport data-thread pool, context assignment, wake/park and join |
-| `transport/rdma/context_set.rs`, `cq_lane.rs`, `cq_lane/poll.rs` | Context/lane lifecycle; grant protocol and bounded native post/poll/drain |
-| `transport/rdma/context.rs`, `buffers.rs` | PD/key domains and persistent MRs |
-| `transport/rdma/endpoint.rs`, `endpoint_store.rs` | Peer endpoint identities and persistent cross-lane QP arrays |
-| `transport/rdma/qp.rs`, `qp_store.rs`, `grant.rs` | Physical QP handles/retirement and separate exact-range grant owners |
-| `transport/rdma/cq.rs`, `events.rs`, `monitor.rs` | CQ/channel owners, device event state and one transport event consumer |
-| `platform/cpu_probe/affinity.rs` | Allowed CPU/NUMA intersections and verified worker socket binding |
-| `cuda/` | NVIDIA allocation and synchronized host-staging foundations |
-
-The [parity contract](tent-parity.md) pins the reference revision and capability
-inventory. Architecture correspondence does not establish native ABI, wire or
-performance equivalence.
+[transport]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/rdma_transport.h
+[endpoint]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp
+[workers]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/workers.cpp

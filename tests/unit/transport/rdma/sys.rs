@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 
+use super::device::{endpoint_address, validate_gid_entry};
 use super::*;
 
 #[derive(Debug, PartialEq)]

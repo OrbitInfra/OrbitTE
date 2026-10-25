@@ -773,10 +773,10 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
                 .expect("native close must not hold the endpoint-store lock");
             assert!(record.require_live().is_err());
             assert!(Arc::ptr_eq(
-                &control.endpoints.work_owner(1, false).unwrap(),
+                &control.qps.work_owner(1, false).unwrap(),
                 &record
             ));
-            assert_eq!(control.endpoints.len(), 1);
+            assert_eq!(control.qps.len(), 1);
         }
         assert_eq!(transport.stats().unwrap().active_endpoints, 1);
         second = Some(transport.staging_endpoint(8, 0).unwrap());
@@ -1205,7 +1205,7 @@ fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
             .control
             .lock()
             .unwrap()
-            .endpoints
+            .qps
             .snapshot(&mut records);
         assert_eq!(records.len(), 1);
         let record = records.remove(0);
@@ -1311,7 +1311,7 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
         .control
         .lock()
         .unwrap()
-        .endpoints
+        .qps
         .snapshot(&mut records);
     let record = records.remove(0);
     record.lock().unwrap().claim = u64::MAX;
@@ -1562,7 +1562,7 @@ impl CqLane {
             .control
             .lock()
             .unwrap()
-            .endpoints
+            .qps
             .snapshot(&mut records);
         records
     }

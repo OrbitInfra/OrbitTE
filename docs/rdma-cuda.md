@@ -1,5 +1,12 @@
 # RDMA registration and CUDA staging
 
+For the current source layout and a concise request path, start with
+[Architecture](architecture.md#source-reading-order). The sections below retain
+stage-specific contracts and evidence at their recorded revisions. Historical
+filenames, including `rail_monitor.rs`, describe those revisions; current
+static NIC/PD metadata lives in `path.rs`. The remaining host-runtime work is
+tracked in [P4 remaining delivery](completion-plan.md#p4-remaining-delivery).
+
 P4.1-P4.12k/P5.1 add opt-in source implementations and qualification gates.
 Acceptance is scoped to the exact native profiles below; the complete hardware and parity stages stay open.
 The [completion plan](completion-plan.md) is the only execution queue. Direct

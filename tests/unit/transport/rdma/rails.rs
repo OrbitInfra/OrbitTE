@@ -261,7 +261,7 @@ fn one_context_fault_preserves_the_other_stores_idle_count_and_fences_new_grants
     let before = runtime.stats().unwrap().opened_direct_endpoints;
     let selection = runtime.allocate(8, 1 << 2).unwrap();
     assert!(matches!(
-        runtime.endpoint_on(selection, &local, 4..12, 0, deadline, None),
+        runtime.prepare_grant(selection, &local, 4..12, 0, deadline, None),
         Err(Error::Unavailable(_))
     ));
     assert_eq!(runtime.stats().unwrap().opened_direct_endpoints, before);
@@ -557,7 +557,7 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&request.encode()).unwrap();
-        let paths = rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+        let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
         let mut limit = [0];
         channel.read_exact(&mut limit).unwrap();
         if case == 0 {
@@ -948,7 +948,7 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
         let mut endpoints = [0, 2].map(|id| {
             let selection = runtime.allocate(4, 1 << id).unwrap();
             let mut endpoint = runtime
-                .endpoint_on(
+                .prepare_grant(
                     selection,
                     &memory,
                     id * 4..id * 4 + 4,

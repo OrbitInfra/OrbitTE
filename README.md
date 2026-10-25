@@ -27,24 +27,17 @@ The runtime has no Mooncake C++ dependency. TCP and RDMA are separate payload
 transports; a shared control service handles discovery, grants and receipts.
 Applications retain cache identity, recovery policy and replica ownership.
 
-**Under development.** TCP, host RDMA and synchronized NVIDIA host staging are
-implemented with scoped validation. Two physical RNICs per host pass a declared
-CPU DRAM/RoCEv2 profile for cross-rail READ/WRITE, concurrent parents, aggregate
-quotas, whole-parent source RQ admission, connected reuse, registration rollback
-and native fault/drain ownership. The extended profile includes eight parents,
-up to 5 MiB each, folded tails, 32/40 active slice grants and connected QP reuse. Native QP ERR, lost SQ/RQ
-completions, source/requester death and repeated fresh-process restart pass
-scoped checks with separate endpoint destruction deadlines. Real CQ/PD cleanup
-errors preserve the affected native owners through caller Drop. Completely
-drained progress owners recover for later requests; MR/MW syscall-failure tests
-keep the old owners quarantined while fresh engines recover in live processes.
-Per-context CQ lanes and load-based slice admission pass scoped 1/2/3/6-lane
-checks; context PD/MR owners and aggregate limits remain shared.
-Peer QP arrays, verified NUMA worker binding and a unified event monitor are
-validated in the declared two-host CPU DRAM/RoCEv2 profile. Fixed-width QP
-multiplexing, physical
-port/device loss, independent P4 acceptance, full TENT parity, GPUDirect RDMA
-and optional SSD transports remain open.
+**Under development.** CPU TCP, host RDMA READ/WRITE, persistent MRs,
+connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
+unified event monitoring are implemented with scoped native validation.
+NVIDIA device transfers currently use synchronized host staging.
+
+The host RDMA stage still needs fixed-width concurrent QP multiplexing,
+periodic monitor recovery and complete physical-fault/independent acceptance.
+GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
+compatibility are later-stage work. See the
+[P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
+[capability matrix](docs/capabilities.md); full TENT parity is not complete.
 The published `orbit-te` alpha reserves the package identity; use the source
 checkout for the implementation described here.
 

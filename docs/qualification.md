@@ -13,6 +13,22 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The ownership-layout cleanup after PR #43 separates transport dispatch,
+bilateral grant handshake and OrbitTE v12 wire messages. CQ-lane submission
+and drained reuse remain methods of the existing owner in separate files;
+the native verbs boundary groups device, QP, MR/MW and CQ calls. Static NIC/PD
+metadata now lives in `path.rs`, and the lane's `QpStore` field is named `qps`.
+No new resource owner, queue, lock, protocol version or public API is added.
+
+The [architecture reading order](architecture.md#source-reading-order) describes
+the current paths. Source audit and validation artifacts are recorded under
+`/root/orbitte-artifacts/rdma-layout-20261025`. This delivery does not rerun
+hardware or qualify a new native artifact; the most recent native evidence is
+the exact P4.12m source and binaries below. Missing runtime features and the
+complete P4 acceptance remain in [one exit queue](completion-plan.md#p4-remaining-delivery).
+
+## Latest qualified native source: peer arrays and monitor
+
 P4.12m (`5ea3a35`) adds context-owned peer QP arrays, verified worker NUMA
 CPU binding and one transport monitor for async/completion events. Physical QP,
 CQ-lane progress and exclusive `RdmaGrant` resources have separate owners.

@@ -1,6 +1,14 @@
 use super::*;
 use crate::engine::deadline;
 use crate::engine::tests::{rdma_fixture, source_runtime};
+use crate::runtime::control_plane::{REQUEST_SIZE, u64_at};
+use crate::transport::rdma::{
+    DESCRIPTOR_SIZE,
+    grant::RdmaGrant,
+    path::NicPath,
+    protocol::*,
+    qp::{ConnectionId, Descriptor},
+};
 use crate::{Permission, RemoteRegion, TransferEngine, TransferRequest, Transport};
 use std::{io, net::TcpListener, thread, time::Duration};
 
@@ -88,7 +96,7 @@ fn source_offer(
     let mut channel =
         ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel.write_all(&request.encode()).unwrap();
-    let paths = rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+    let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
     Hello {
         requester: identity(9, 8, 7),
         source: None,
@@ -270,7 +278,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 stopping: None,
             };
             let wire = crate::runtime::control_plane::tests::read_request(&mut channel);
-            rail_monitor::write_paths(
+            path::write_paths(
                 &mut channel,
                 epoch,
                 &[NicPath {
@@ -442,7 +450,7 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     channel.deadline = deadline(Duration::from_secs(1)).unwrap();
     thread::scope(|scope| {
         let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory));
-        let paths = rail_monitor::read_paths(&mut peer, epoch).unwrap();
+        let paths = path::read_paths(&mut peer, epoch).unwrap();
         Hello {
             requester: identity(9, 8, 7),
             source: None,

@@ -495,7 +495,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 }
             };
             relay(REQUEST_SIZE, true);
-            relay(36 + rail_monitor::PATH_SIZE, false);
+            relay(36 + path::PATH_SIZE, false);
             relay(HELLO_SIZE, true);
             relay(36 + OFFER_SIZE, false);
             relay(1 + BINDING_SIZE + DESCRIPTOR_SIZE, true);
@@ -575,7 +575,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&wire.encode()).unwrap();
-        let paths = rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+        let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
         let local_identity = Identity::local(&endpoint, SourceEpoch([9; 16])).unwrap();
         Hello {
             requester: local_identity,
@@ -718,7 +718,7 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&wire.encode()).unwrap();
-        rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+        path::read_paths(&mut channel, source.source_epoch()).unwrap();
         if case == 6 {
             let mut bytes = [0; HELLO_SIZE];
             bytes[0] = 5;
@@ -786,11 +786,11 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                 let mut hello = [0; REQUEST_SIZE + HELLO_SIZE];
                 client.read_exact(&mut hello[..REQUEST_SIZE]).unwrap();
                 server.write_all(&hello[..REQUEST_SIZE]).unwrap();
-                let mut paths = rail_monitor::read_paths(&mut server, epoch).unwrap();
+                let mut paths = path::read_paths(&mut server, epoch).unwrap();
                 if changed == "table_domain" && attempt == 1 {
                     paths[0].domain = [0xff; 16];
                 }
-                rail_monitor::write_paths(&mut client, epoch, &paths).unwrap();
+                path::write_paths(&mut client, epoch, &paths).unwrap();
                 if changed == "table_domain" && attempt == 1 {
                     expect_closed_without_next_phase(&mut client);
                     break;
@@ -961,7 +961,7 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&wire.encode()).unwrap();
-        rail_monitor::read_paths(&mut channel, source.source_epoch()).unwrap();
+        path::read_paths(&mut channel, source.source_epoch()).unwrap();
         hello.write(&mut channel).unwrap();
         let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
         assert_eq!((reply.status, reply.length), (CACHE_MISS, 0), "{changed}");

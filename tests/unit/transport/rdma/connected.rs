@@ -17,7 +17,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
         .control
         .lock()
         .unwrap()
-        .endpoints
+        .qps
         .snapshot(&mut records);
     let mut rows = Vec::new();
     for record in records {
