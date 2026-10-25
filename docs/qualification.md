@@ -13,6 +13,13 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+P4.12l implements unified `num_lanes`, multiple CQ lanes per context and
+load-based slice admission. Its native qualification is pending. Context
+PD/MR owners and aggregate limits remain shared; cached QPs keep their lane.
+See [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
+
+## Previous qualified source
+
 P4.12k (`914761b`) adds a configurable transport-level `Workers` pool.
 Multiple context CQ pairs share data threads; each CQ retains one polling
 owner. Drained context recovery preserves the pool, PDs and persistent MRs.

@@ -160,7 +160,7 @@ fn public_transfers_rotate_stable_contexts_reuse_only_the_selected_pair_and_reti
                 stats.opened_devices, 2,
                 "disabled slot 1 preserves actual topology IDs"
             );
-            assert_eq!(stats.progress_contexts, ids.len());
+            assert_eq!(stats.progress_lanes, ids.len());
             assert_eq!(stats.progress_workers, 1);
             assert_eq!(stats.opened_progress_workers, 1);
             assert_eq!(stats.active_cqs, ids.len() * 2);
@@ -225,7 +225,7 @@ fn aggregate_connection_budget_evicts_an_idle_pair_on_another_context() {
             ),
             (4, 3, 3)
         );
-        assert_eq!(stats.progress_contexts, 2);
+        assert_eq!(stats.progress_lanes, 2);
     }
     requester.close(TIMEOUT).unwrap();
     source.close(TIMEOUT).unwrap();
@@ -345,7 +345,7 @@ fn parent_slices_use_one_source_handler_and_aggregate_read_write_receipts_across
             }
             for engine in [&source, &requester] {
                 let stats = engine.stats().unwrap().rdma.unwrap();
-                assert_eq!(stats.progress_contexts, 2);
+                assert_eq!(stats.progress_lanes, 2);
                 assert_eq!(
                     stats.completed_reusable_grants,
                     if source_policy == Direct && local_policy == Direct {
@@ -459,7 +459,7 @@ fn both_rail_workers_can_own_payloads_before_parent_completion_and_unregister_wa
         false,
     )));
     let mut local_runtime = sliced_runtime(u64::MAX, 8, 4, RdmaHostMemory::Direct, false);
-    local_runtime.config.num_workers = 3;
+    local_runtime.config.num_lanes = 3;
     local_runtime.verbs = &PAUSED;
     local_runtime.registrations = buffers::LocalBufferManager::new(
         &local_runtime.config,
@@ -936,7 +936,7 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
     };
     for operation in [TransferOp::Read, TransferOp::Write] {
         let mut runtime = sliced_runtime(u64::MAX, 8, 1, RdmaHostMemory::Direct, true);
-        runtime.config.num_workers = 3;
+        runtime.config.num_lanes = 3;
         runtime.verbs = &PAUSED;
         runtime.registrations =
             buffers::LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), &PAUSED);
@@ -1120,6 +1120,124 @@ fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recove
             requester.close(TIMEOUT).unwrap();
             source.close(TIMEOUT).unwrap();
             assert_eq!(source.stats().unwrap().rdma.unwrap().receive_credits, 0);
+        }
+    }
+}
+
+#[test]
+fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
+    for event in [false, true] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            let make = |lanes| {
+                let mut runtime = sliced_runtime(1, 16, 4, RdmaHostMemory::Direct, event);
+                runtime.config.num_lanes = lanes;
+                single_handler(runtime)
+            };
+            let source = make(2);
+            let requester = make(3);
+            let local = requester
+                .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap();
+            let remote = source
+                .register_memory(
+                    vec![0x29; 16].into_boxed_slice(),
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap();
+            let peer = requester
+                .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+                .unwrap();
+            let mut previous = [Vec::new(), Vec::new()];
+            for round in 0..3 {
+                local.write(0, &[0x63; 16]).unwrap();
+                remote.write(0, &[0x29; 16]).unwrap();
+                let report = requester
+                    .submit_and_wait(
+                        operation,
+                        &peer,
+                        &[TransferRequest {
+                            transport: Transport::Rdma,
+                            local_address: local.base_address() + 2,
+                            remote_address: remote.base_address() + 2,
+                            length: 12,
+                        }],
+                        TIMEOUT,
+                    )
+                    .unwrap();
+                assert!(report.is_complete() && report.locally_drained, "{report:?}");
+                let mut actual = [0; 16];
+                let (target, payload, guard) = if operation == TransferOp::Read {
+                    (&local, 0x29, 0x63)
+                } else {
+                    (&remote, 0x63, 0x29)
+                };
+                target.read(0, &mut actual).unwrap();
+                assert_eq!(&actual[2..14], &[payload; 12]);
+                assert_eq!(&actual[..2], &[guard; 2]);
+                assert_eq!(&actual[14..], &[guard; 2]);
+                for (index, (engine, lanes, published)) in [(&requester, 3, 2), (&source, 2, 4)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let runtime = source_runtime(engine);
+                    let mut pairs = Vec::new();
+                    for (lane_id, lane) in runtime.context_set.lock().unwrap().slots[0]
+                        .cq_list
+                        .iter()
+                        .enumerate()
+                    {
+                        let lane = lane.as_ref().unwrap();
+                        let records = lane.records();
+                        for record in records {
+                            let state = record.lock().unwrap();
+                            let resources = state.resources.as_ref().unwrap();
+                            assert!(resources.grant.is_none());
+                            pairs.push((
+                                lane_id,
+                                resources.connection.incarnation.unwrap().encode(),
+                                resources.connection.handles.qp as usize,
+                            ));
+                        }
+                    }
+                    pairs.sort_unstable();
+                    assert_eq!(pairs.len(), 3);
+                    assert_eq!(
+                        pairs
+                            .iter()
+                            .map(|row| row.0)
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len(),
+                        lanes
+                    );
+                    if round != 0 {
+                        assert_eq!(
+                            pairs, previous[index],
+                            "reuse must preserve actual QP and CQ lane"
+                        );
+                    }
+                    previous[index] = pairs;
+                    let stats = runtime.stats().unwrap();
+                    assert_eq!(
+                        (
+                            stats.progress_workers,
+                            stats.progress_lanes,
+                            stats.active_cqs
+                        ),
+                        (lanes, lanes, lanes * 2)
+                    );
+                    assert_eq!(stats.opened_connections, 3);
+                    assert_eq!(stats.reused_connections, round * 3);
+                    assert_eq!(
+                        stats.persistent_mrs, published,
+                        "CQ lanes must share per-context MRs"
+                    );
+                    assert_eq!(runtime.workers.inflight_slices(), vec![0; lanes]);
+                }
+            }
+            requester.unregister_memory(&local).unwrap();
+            source.unregister_memory(&remote).unwrap();
+            requester.close(TIMEOUT).unwrap();
+            source.close(TIMEOUT).unwrap();
         }
     }
 }

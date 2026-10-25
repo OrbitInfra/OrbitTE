@@ -148,6 +148,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             }),
         },
         grant: Some(GrantResources {
+            _worker: runtime.workers.reserve(&progress).unwrap(),
             device,
             handles: sys::MemoryHandles::default(),
             cached_mr: None,
@@ -1474,12 +1475,18 @@ fn post_receive(
 
 #[test]
 fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
-    for mode in ["copy", "events:copy"] {
-        let runtime = if mode.starts_with("events:") {
+    for (mode, count) in [
+        ("copy", 1),
+        ("events:copy", 1),
+        ("copy", 3),
+        ("events:copy", 3),
+    ] {
+        let mut runtime = if mode.starts_with("events:") {
             crate::transport::rdma::tests::event_runtime("copy")
         } else {
             configured(mode, 3)
         };
+        runtime.config.num_lanes = count;
         let device = runtime.device().unwrap();
         let mut identities = std::collections::HashSet::new();
         for generation in 0..3 {
@@ -1510,17 +1517,13 @@ fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
                 (generation + 1, generation + 1)
             );
             assert_eq!(
-                (
-                    stats.work_requests,
-                    stats.active_cqs,
-                    stats.progress_contexts
-                ),
-                (0, 0, 0)
+                (stats.work_requests, stats.active_cqs, stats.progress_lanes),
+                (0, 2 * (count - 1), count - 1)
             );
             assert!(Arc::ptr_eq(&device, &runtime.device().unwrap()));
             assert!(progress.handle(false).is_err());
-            assert_eq!(stats.progress_workers, 1);
-            assert_eq!(stats.opened_progress_workers, 1);
+            assert_eq!(stats.progress_workers, count);
+            assert_eq!(stats.opened_progress_workers, count as u64);
         }
         let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
         endpoint.connect(&endpoint.descriptor()).unwrap();
@@ -1530,5 +1533,35 @@ fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
         endpoint.close().unwrap();
         drop(endpoint);
         runtime.close(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn context_async_fence_wakes_every_parked_cq_lane() {
+    let mut runtime = crate::transport::rdma::tests::event_runtime("copy");
+    runtime.config.num_lanes = 3;
+    let device = runtime.device().unwrap();
+    let lanes = runtime.cq_list(Arc::clone(&device)).unwrap();
+    // Each lane has no records and can park indefinitely in event mode.
+    device.asynchronous.fence_route();
+    device.asynchronous.notify();
+    wait_until(|| lanes.iter().all(|lane| lane.recoverable().unwrap()));
+    assert_eq!(runtime.stats().unwrap().progress_failures, 3);
+    for lane in lanes {
+        lane.close(deadline()).unwrap();
+    }
+    let _ = runtime.close(deadline());
+}
+
+impl CqLane {
+    pub(in crate::transport::rdma) fn records(&self) -> Vec<Arc<Record>> {
+        let mut records = Vec::new();
+        self.shared
+            .control
+            .lock()
+            .unwrap()
+            .endpoints
+            .snapshot(&mut records);
+        records
     }
 }

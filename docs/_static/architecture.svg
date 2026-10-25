@@ -23,7 +23,7 @@
 <path class="edge" d="M730 226V260" marker-end="url(#arrow)"/>
 <rect class="box" x="600" y="260" width="260" height="86"/>
 <text class="label" x="730" y="292" text-anchor="middle">Per-NIC contexts</text>
-<text class="small" x="730" y="318" text-anchor="middle">PD · MRs · QP · CQ · Workers</text>
+<text class="small" x="730" y="318" text-anchor="middle">PD · MRs · CQ lanes · QPs</text>
 <rect class="box" x="20" y="260" width="550" height="86"/>
 <text class="label" x="295" y="292" text-anchor="middle">CPU DRAM · NVIDIA host staging</text>
 <text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>

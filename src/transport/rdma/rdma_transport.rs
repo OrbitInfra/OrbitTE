@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 use super::endpoint_store::Peer;
 use super::{
     RdmaConfig, RdmaHostMemory, RdmaStats, buffers,
-    context::RdmaContext,
+    context_set::ContextSet,
     endpoint::{
         Buffer, ConnectionLease, ConnectionResources, GrantLease, GrantResources, Resources,
         Staging,
     },
-    events, progress, quota,
-    quota::{DeviceLease, DeviceSelector},
+    events, quota,
+    quota::DeviceLease,
     rail_monitor::{self, NicPath},
     slice::{RdmaSlice, plan_rdma_slices},
     sys, workers,
@@ -35,21 +35,6 @@ pub(crate) struct RdmaTransport {
     pub(super) context_set: Mutex<ContextSet>,
     pub(super) drained: Arc<Condvar>,
     pub(crate) registrations: Arc<buffers::LocalBufferManager>,
-}
-
-#[derive(Default)]
-pub(super) struct ContextSet {
-    pub(super) closed: bool,
-    pub(super) topology: Option<crate::Topology>,
-    pub(super) slots: Vec<ContextSlot>,
-    pub(super) selector: Option<Arc<quota::DeviceSelector>>,
-    pub(super) failure: Option<(&'static str, i32)>,
-}
-
-#[derive(Default)]
-pub(super) struct ContextSlot {
-    pub(super) owner: Option<Arc<RdmaContext>>,
-    pub(super) progress: Option<Arc<progress::ContextProgress>>,
 }
 
 impl RdmaTransport {
@@ -124,313 +109,6 @@ impl RdmaTransport {
             .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?
             .topology
             .clone())
-    }
-
-    pub(super) fn initialize_contexts(&self, contexts: &mut ContextSet) -> Result<()> {
-        if contexts.closed {
-            return Err(Error::Unavailable("RDMA runtime is closed"));
-        }
-        if let Some((operation, code)) = contexts.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        if contexts.topology.is_some() {
-            return Ok(());
-        }
-        let (mut topology, candidates) = (self.verbs.discover)(&self.config)?;
-        if topology.nic_list.len() > 64 {
-            return Err(Error::InvalidConfig(
-                "RDMA device masks support at most 64 topology NICs",
-            ));
-        }
-        contexts
-            .slots
-            .resize_with(topology.nic_list.len(), ContextSlot::default);
-        let mut available = 0;
-        for (id, slot) in contexts.slots.iter_mut().enumerate() {
-            let name = topology.nic_list[id].name.clone();
-            for address in candidates.iter().filter(|address| address.device == name) {
-                match RdmaContext::open_selected(
-                    &self.config,
-                    self.verbs,
-                    Arc::clone(&self.usage),
-                    Arc::clone(&self.counters),
-                    address.clone(),
-                ) {
-                    Ok(owner) => {
-                        owner.address()?.publish(&mut topology)?;
-                        slot.owner = Some(owner);
-                        available |= 1u64 << id;
-                        break;
-                    }
-                    Err(Error::Unquiesced { operation, code }) => {
-                        contexts.failure = Some((operation, code));
-                        return Err(Error::Unquiesced { operation, code });
-                    }
-                    Err(_) => continue,
-                }
-            }
-        }
-        contexts.selector = Some(DeviceSelector::new(topology.clone(), available));
-        contexts.topology = Some(topology);
-        Ok(())
-    }
-
-    fn paths(&self) -> Result<Vec<NicPath>> {
-        self.recover_progress()?;
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        self.initialize_contexts(&mut contexts)?;
-        let topology = contexts
-            .topology
-            .as_ref()
-            .ok_or(Error::Internal("missing RDMA topology"))?;
-        let mut paths = Vec::new();
-        for (id, slot) in contexts.slots.iter().enumerate() {
-            if self.config.device_mask & (1u64 << id) == 0 {
-                continue;
-            }
-            if let Some(owner) = &slot.owner {
-                if owner.asynchronous.check().is_err() {
-                    continue;
-                }
-                let address = owner.address()?;
-                paths.push(NicPath {
-                    nic_id: id,
-                    name: topology.nic_list[id].name.clone(),
-                    domain: owner.domain()?,
-                    gid_type: address.gid_type,
-                    descriptor: address.descriptor,
-                });
-            }
-        }
-        if paths.is_empty() {
-            return Err(Error::Unavailable(
-                "no enabled RDMA context matches device mask",
-            ));
-        }
-        Ok(paths)
-    }
-
-    pub(super) fn allocate(&self, length: usize, mask: u64) -> Result<DeviceLease> {
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        self.initialize_contexts(&mut contexts)?;
-        contexts
-            .selector
-            .as_ref()
-            .ok_or(Error::Internal("missing RDMA device selector"))?
-            .allocate(
-                length,
-                self.config.preferred_numa_node,
-                mask & self.config.device_mask,
-            )
-    }
-
-    fn device_at(&self, id: usize) -> Result<Arc<RdmaContext>> {
-        let contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        if contexts.closed {
-            return Err(Error::Unavailable("RDMA runtime is closed"));
-        }
-        if let Some((operation, code)) = contexts.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        contexts
-            .slots
-            .get(id)
-            .and_then(|slot| slot.owner.clone())
-            .ok_or(Error::Unavailable("RDMA context slot is disabled"))
-    }
-
-    pub(super) fn progress(
-        &self,
-        device: Arc<RdmaContext>,
-    ) -> Result<Arc<progress::ContextProgress>> {
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        self.initialize_contexts(&mut contexts)?;
-        let (nic_id, slot) = contexts
-            .slots
-            .iter_mut()
-            .enumerate()
-            .find(|(_, slot)| {
-                slot.owner
-                    .as_ref()
-                    .is_some_and(|owner| Arc::ptr_eq(owner, &device))
-            })
-            .ok_or(Error::Internal(
-                "RDMA progress context is not owned by this transport",
-            ))?;
-        if let Some(progress) = &slot.progress {
-            return Ok(Arc::clone(progress));
-        }
-        let progress = progress::ContextProgress::new(
-            &self.config,
-            Arc::clone(&self.workers),
-            device,
-            Arc::clone(&self.usage),
-            Arc::clone(&self.cq_quota),
-            self.verbs,
-        )
-        .and_then(|progress| {
-            self.workers.attach(nic_id, &progress)?;
-            Ok(progress)
-        });
-        match progress {
-            Ok(progress) => {
-                slot.progress = Some(Arc::clone(&progress));
-                Ok(progress)
-            }
-            Err(error) => {
-                if let Error::Unquiesced { operation, code } = error {
-                    contexts.failure = Some((operation, code));
-                }
-                Err(error)
-            }
-        }
-    }
-
-    pub(crate) fn recover_progress(&self) -> Result<()> {
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        if contexts.closed {
-            return Err(Error::Unavailable("RDMA runtime is closed"));
-        }
-        if let Some((operation, code)) = contexts.failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        for slot in &mut contexts.slots {
-            let Some(progress) = &slot.progress else {
-                continue;
-            };
-            if !progress.recoverable()? {
-                continue;
-            }
-            let device = slot
-                .owner
-                .as_ref()
-                .ok_or(Error::Internal("RDMA progress has no context owner"))?;
-            device.asynchronous.check()?;
-            // Both CQs and every QP have native destruction receipts. Detach the
-            // old poll state before allowing a fresh CQ/WR namespace in this PD.
-            progress.close(Instant::now())?;
-            slot.progress = None;
-            self.usage
-                .lock()
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                .progress_recoveries += 1;
-        }
-        Ok(())
-    }
-
-    fn evict_idle(&self, deadline: Instant) -> Result<bool> {
-        let workers: Vec<_> = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?
-            .slots
-            .iter()
-            .filter_map(|slot| slot.progress.clone())
-            .collect();
-        for progress in workers {
-            if progress.evict_idle(deadline)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
-        let (owners, failure) = {
-            let mut contexts = self
-                .context_set
-                .lock()
-                .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-            contexts.closed = true;
-            (
-                contexts
-                    .slots
-                    .iter()
-                    .map(|slot| (slot.owner.clone(), slot.progress.clone()))
-                    .collect::<Vec<_>>(),
-                contexts.failure,
-            )
-        };
-        let mut error = None;
-        for (_, progress) in &owners {
-            if let Some(progress) = progress {
-                if let Err(fault) = progress.fence(deadline) {
-                    error.get_or_insert(fault);
-                }
-            }
-        }
-        if let Some(error) = error {
-            return Err(error);
-        }
-        // A partially constructed retained CQ can own a PD without a context-progress
-        // handle in its slot. Fencing siblings cannot prove that PD quiescent.
-        if let Some((operation, code)) = failure {
-            return Err(Error::Unquiesced { operation, code });
-        }
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        loop {
-            if usage.retained_endpoints != 0 || usage.retained_grants != 0 {
-                return Err(Error::Unquiesced {
-                    operation: "RDMA endpoint resources retained",
-                    code: libc::EIO,
-                });
-            }
-            if usage.active_endpoints == 0 && usage.active_grants == 0 {
-                break;
-            }
-            usage = self
-                .drained
-                .wait_timeout(usage, remaining(deadline)?)
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                .0;
-        }
-        drop(usage);
-        self.registrations.close(deadline)?;
-        for (owner, progress) in owners {
-            if let Some(progress) = progress {
-                if let Err(fault) = progress.close(deadline) {
-                    error.get_or_insert(fault);
-                    continue;
-                }
-            }
-            if let Some(owner) = owner {
-                if let Err(fault) = owner.close() {
-                    error.get_or_insert(fault);
-                }
-            }
-        }
-        if let Err(fault) = self.workers.close(deadline) {
-            error.get_or_insert(fault);
-        }
-        if let Some(error) = error {
-            return Err(error);
-        }
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        contexts.slots.clear();
-        contexts.topology = None;
-        contexts.selector = None;
-        Ok(())
     }
 
     pub(super) fn endpoint_on(
@@ -514,7 +192,14 @@ impl RdmaTransport {
             None => Buffer::Staged(Staging::new(length)?),
         };
         let device = self.device_at(grant_lease._selection.device_id())?;
-        let progress = self.progress(Arc::clone(&device))?;
+        let (progress, worker_lease) = if let Some(endpoint) = &reuse {
+            (
+                Arc::clone(&endpoint.progress),
+                self.workers.reserve(&endpoint.progress)?,
+            )
+        } else {
+            self.workers.select(&self.cq_list(Arc::clone(&device))?)?
+        };
         let new_connection_lease = if reuse.is_none() {
             Some(loop {
                 let mut usage = self
@@ -551,6 +236,7 @@ impl RdmaTransport {
             memory_handles.mr = registration.handle()?;
         }
         let mut grant = GrantResources {
+            _worker: worker_lease,
             device: Arc::clone(&device),
             handles: memory_handles,
             cached_mr,
@@ -948,9 +634,9 @@ impl RdmaTransport {
         let direct = self.host_direct(&request.local);
         let device = self.device_at(selection.device_id())?;
         device.check_address()?;
-        let progress = self.progress(device)?;
         let mut reuse = if direct && reuse_pair {
-            progress.claim(
+            self.claim(
+                device,
                 |peer| {
                     !peer.source
                         && peer.route == Some(route)
@@ -1145,7 +831,7 @@ impl RdmaTransport {
         let mut effect = RemoteEffect::None;
         let result = (|| {
             let local_paths = self.paths()?;
-            if local_paths.len() > 1
+            if (local_paths.len() > 1 || self.config.num_lanes > 1)
                 && plan_rdma_slices(request.length, self.config.block_size, 64)?.1 > 1
             {
                 return self.transfer_slices(
@@ -1322,7 +1008,7 @@ impl RdmaTransport {
                 }
                 slices.push(prepared.ok_or(Error::Protocol("RDMA repeated slice cache miss"))?);
             }
-            // Every grant is ready before payload admission. Existing per-context
+            // Every grant is ready before payload admission. Transport-level
             // workers post and poll all QPs; no per-slice requester thread exists.
             for slice in &slices {
                 if operation == TransferOp::Write {
@@ -1385,13 +1071,13 @@ impl RdmaTransport {
         let source_nic_id = selection.device_id();
         let device = self.device_at(source_nic_id)?;
         device.check_address()?;
-        let progress = self.progress(device)?;
         let reuse = if let Some(source) = hello.source {
             if !cacheable {
                 channel.reply(epoch, CACHE_MISS, 0)?;
                 return Ok(None);
             }
-            let reuse = progress.claim(
+            let reuse = self.claim(
+                device,
                 |peer| {
                     peer.source
                         && peer.local == source.connection

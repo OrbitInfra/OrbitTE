@@ -143,7 +143,8 @@ impl Record {
     }
 }
 
-pub(super) struct ContextProgress {
+pub(super) struct CqLane {
+    pub(super) worker_id: OnceLock<usize>,
     pub(super) workers: Arc<super::workers::Workers>,
     pub(super) shared: Arc<ProgressState>,
 }
@@ -176,7 +177,7 @@ struct Control {
     retained: Option<(&'static str, i32)>,
 }
 
-impl ContextProgress {
+impl CqLane {
     pub(super) fn new(
         config: &RdmaConfig,
         workers: Arc<super::workers::Workers>,
@@ -261,7 +262,11 @@ impl ContextProgress {
         });
         shared.quota.attach(&shared);
         device.asynchronous.attach(Arc::downgrade(&shared));
-        Ok(Arc::new(Self { workers, shared }))
+        Ok(Arc::new(Self {
+            worker_id: OnceLock::new(),
+            workers,
+            shared,
+        }))
     }
 
     pub(super) fn handle(&self, receive: bool) -> Result<*mut std::ffi::c_void> {
@@ -1128,7 +1133,7 @@ impl ContextProgress {
     }
 }
 
-impl Drop for ContextProgress {
+impl Drop for CqLane {
     fn drop(&mut self) {
         // Last public/native request owner is gone. Native calls remain non-preemptible.
         let deadline = Instant::now() + Duration::from_secs(300);
@@ -1150,7 +1155,7 @@ impl ProgressState {
         self.usage
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .progress_contexts += 1;
+            .progress_lanes += 1;
         Ok(())
     }
 
@@ -1173,7 +1178,7 @@ impl ProgressState {
         self.usage
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .progress_contexts -= 1;
+            .progress_lanes -= 1;
         control.detached = true;
         self.changed.notify_all();
     }
@@ -1182,5 +1187,5 @@ impl ProgressState {
 mod poll;
 
 #[cfg(test)]
-#[path = "../../../tests/unit/transport/rdma/progress.rs"]
+#[path = "../../../tests/unit/transport/rdma/cq_lane.rs"]
 mod tests;

@@ -37,8 +37,8 @@ pub struct RdmaConfig {
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
     pub device_mask: u64,
     pub progress_mode: RdmaProgressMode,
-    /// Transport-level data workers, independent of the number of NIC contexts (1..=64).
-    pub num_workers: usize,
+    /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
+    pub num_lanes: usize,
     pub traffic_class: u8,
     pub hop_limit: u8,
     pub max_endpoints: usize,
@@ -71,7 +71,7 @@ impl Default for RdmaConfig {
             preferred_numa_node: None,
             device_mask: u64::MAX,
             progress_mode: RdmaProgressMode::Polling,
-            num_workers: 1,
+            num_lanes: 1,
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
@@ -117,7 +117,7 @@ impl RdmaConfig {
                 .as_deref()
                 .is_some_and(|name| !discovery::permitted(self, name))
             || self.device_mask == 0
-            || !(1..=64).contains(&self.num_workers)
+            || !(1..=64).contains(&self.num_lanes)
             || self.port == Some(0)
             || self.hop_limit == 0
             || self.max_cached_mrs == 0

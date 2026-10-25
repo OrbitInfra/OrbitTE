@@ -1,12 +1,12 @@
-//! Transport-owned data threads. A context's SQ/RQ pair has one polling owner.
+//! Transport-owned workers, CQ-lane assignment and unfinished slice accounting.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::RdmaStats;
-use super::progress::{ContextProgress, ProgressState, Record, Schedule};
+use super::cq_lane::{CqLane, ProgressState, Record, Schedule};
 use crate::engine::remaining;
 use crate::{Error, Result};
 
@@ -19,9 +19,11 @@ pub(super) struct Workers {
 struct Pool {
     workers: Vec<(Arc<WorkerContext>, JoinHandle<()>)>,
     stopped: bool,
+    next_worker: usize,
 }
 
 struct WorkerContext {
+    inflight_slices: AtomicUsize,
     pending: Mutex<Vec<Lane>>,
     thread: OnceLock<thread::Thread>,
     stopping: AtomicBool,
@@ -74,7 +76,7 @@ impl Drop for WorkerExit {
 }
 
 impl Workers {
-    pub(super) fn attach(&self, nic_id: usize, progress: &ContextProgress) -> Result<()> {
+    pub(super) fn attach(&self, worker_id: usize, progress: &CqLane) -> Result<()> {
         if !std::ptr::eq(self, progress.workers.as_ref()) {
             return Err(Error::Internal(
                 "RDMA progress belongs to another worker pool",
@@ -87,10 +89,11 @@ impl Workers {
         if pool.stopped {
             return Err(Error::Unavailable("RDMA workers are stopped"));
         }
-        let count = progress.shared.config.num_workers;
+        let count = progress.shared.config.num_lanes;
         if pool.workers.is_empty() {
             for id in 0..count {
                 let context = Arc::new(WorkerContext {
+                    inflight_slices: AtomicUsize::new(0),
                     pending: Mutex::default(),
                     thread: OnceLock::new(),
                     stopping: AtomicBool::new(false),
@@ -135,7 +138,10 @@ impl Workers {
                 }
             }
         }
-        let (worker, handle) = &pool.workers[nic_id % pool.workers.len()];
+        let (worker, handle) = pool
+            .workers
+            .get(worker_id)
+            .ok_or(Error::Internal("RDMA CQ lane has no worker"))?;
         let mut pending = worker
             .pending
             .lock()
@@ -146,6 +152,12 @@ impl Workers {
                 code: libc::EIO,
             });
         }
+        progress
+            .worker_id
+            .set(worker_id)
+            .map_err(|_| Error::Internal("RDMA CQ lane already assigned"))?;
+        #[cfg(test)]
+        super::tests::expect_cq_lane(progress, worker_id);
         progress.shared.attach(handle.thread().clone())?;
         pending.push(Lane {
             state: Arc::clone(&progress.shared),
@@ -154,6 +166,80 @@ impl Workers {
         });
         handle.thread().unpark();
         Ok(())
+    }
+
+    pub(super) fn order(&self, lanes: &mut [Arc<CqLane>]) -> Result<()> {
+        let pool = self
+            .pool
+            .lock()
+            .map_err(|_| Error::Internal("RDMA workers lock poisoned"))?;
+        if pool.stopped {
+            return Err(Error::Unavailable("RDMA workers are stopped"));
+        }
+        let count = pool.workers.len();
+        lanes.sort_by_cached_key(|lane| {
+            let id = *lane.worker_id.get().unwrap_or(&usize::MAX);
+            pool.workers
+                .get(id)
+                .map_or((usize::MAX, usize::MAX), |(worker, _)| {
+                    (
+                        worker.inflight_slices.load(Ordering::Acquire),
+                        (id + count - pool.next_worker % count) % count,
+                    )
+                })
+        });
+        Ok(())
+    }
+
+    pub(super) fn select(&self, lanes: &[Arc<CqLane>]) -> Result<(Arc<CqLane>, SliceLease)> {
+        let mut pool = self
+            .pool
+            .lock()
+            .map_err(|_| Error::Internal("RDMA workers lock poisoned"))?;
+        if pool.stopped || pool.workers.is_empty() {
+            return Err(Error::Unavailable("RDMA workers are stopped"));
+        }
+        let count = pool.workers.len();
+        let lane = lanes
+            .iter()
+            .filter(|lane| std::ptr::eq(self, lane.workers.as_ref()))
+            .filter_map(|lane| {
+                lane.worker_id
+                    .get()
+                    .and_then(|&id| pool.workers.get(id).map(|(worker, _)| (lane, id, worker)))
+            })
+            .filter(|(_, _, worker)| !worker.stopping.load(Ordering::Acquire))
+            .min_by_key(|(_, id, worker)| {
+                (
+                    worker.inflight_slices.load(Ordering::Acquire),
+                    (id + count - pool.next_worker % count) % count,
+                )
+            })
+            .map(|(lane, id, worker)| (Arc::clone(lane), id, Arc::clone(worker)))
+            .ok_or(Error::Unavailable("RDMA context has no live CQ lane"))?;
+        let lease = SliceLease::new(lane.2)?;
+        pool.next_worker = (lane.1 + 1) % count;
+        Ok((lane.0, lease))
+    }
+
+    pub(super) fn reserve(&self, lane: &CqLane) -> Result<SliceLease> {
+        let pool = self
+            .pool
+            .lock()
+            .map_err(|_| Error::Internal("RDMA workers lock poisoned"))?;
+        if pool.stopped || !std::ptr::eq(self, lane.workers.as_ref()) {
+            return Err(Error::Unavailable("RDMA workers are stopped or foreign"));
+        }
+        let worker = lane
+            .worker_id
+            .get()
+            .and_then(|&id| pool.workers.get(id))
+            .map(|(worker, _)| worker)
+            .ok_or(Error::Internal("RDMA CQ lane has no worker"))?;
+        if worker.stopping.load(Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA progress worker stopped"));
+        }
+        SliceLease::new(Arc::clone(worker))
     }
 
     pub(super) fn close(&self, deadline: Instant) -> Result<()> {
@@ -188,6 +274,37 @@ impl Workers {
             }
         }
         failure.map_or(Ok(()), Err)
+    }
+}
+
+/// One admitted wire slice, charged through grant drain or native quarantine.
+pub(super) struct SliceLease {
+    worker: Arc<WorkerContext>,
+}
+
+impl SliceLease {
+    fn new(worker: Arc<WorkerContext>) -> Result<Self> {
+        let mut load = worker.inflight_slices.load(Ordering::Acquire);
+        loop {
+            let next = load.checked_add(1).ok_or(Error::ResourceExhausted)?;
+            match worker.inflight_slices.compare_exchange_weak(
+                load,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => load = current,
+            }
+        }
+        Ok(Self { worker })
+    }
+}
+
+impl Drop for SliceLease {
+    fn drop(&mut self) {
+        let previous = self.worker.inflight_slices.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "RDMA slice load returned twice");
     }
 }
 

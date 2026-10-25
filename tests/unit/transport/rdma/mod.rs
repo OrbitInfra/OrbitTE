@@ -1735,3 +1735,35 @@ impl RdmaTransport {
         )
     }
 }
+
+// Existing single-lane protocol fixtures pin lane zero explicitly.
+impl RdmaTransport {
+    pub(super) fn progress(
+        &self,
+        device: Arc<context::RdmaContext>,
+    ) -> crate::Result<Arc<cq_lane::CqLane>> {
+        self.cq_list(device)?
+            .into_iter()
+            .next()
+            .ok_or(crate::Error::Internal("missing test CQ lane"))
+    }
+}
+
+static CQ_LANES: std::sync::OnceLock<Mutex<std::collections::BTreeMap<usize, usize>>> =
+    std::sync::OnceLock::new();
+
+pub(super) fn expect_cq_lane(lane: &cq_lane::CqLane, id: usize) {
+    let mut owners = CQ_LANES.get_or_init(Default::default).lock().unwrap();
+    for receive in [false, true] {
+        owners.insert(lane.handle(receive).unwrap() as usize, id);
+    }
+}
+
+pub(super) fn cq_lane_owner(cq: usize) -> usize {
+    *CQ_LANES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&cq)
+        .expect("actual CQ has no assigned lane")
+}

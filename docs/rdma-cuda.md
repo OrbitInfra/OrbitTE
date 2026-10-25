@@ -3220,6 +3220,9 @@ independent acceptance and the full P4 exit remain open.
 
 ## Transport Workers and shared context progress
 
+This section records the P4.12k frozen delivery. Current lane naming and
+parallelism are described in P4.12l below.
+
 P4.12k moves data threads from individual contexts into one transport-level
 `Workers` pool. `RdmaConfig.num_workers` accepts 1..=64 and defaults to one;
 the pool starts lazily on the first progress context. NIC IDs remain stable
@@ -3354,3 +3357,60 @@ python3 -B tests/hardware/run.py \
 Complete P4, independent acceptance, remaining native worker/CQ-lane
 scheduling, physical link/device faults, wider fabrics/workloads, GPU direct
 paths, installed-artifact qualification and performance remain open.
+
+
+## Multiple CQ lanes and load-based slice dispatch
+
+P4.12l replaces the P4.12k-only `RdmaConfig.num_workers` knob with the frozen
+TENT name `num_lanes` (1..=64, default one). There is no compatibility alias.
+It sets transport workers and SQ/RQ CQ pairs per enabled context together.
+`RdmaStats.progress_lanes` replaces `progress_contexts` and counts attached
+CQ pairs across contexts. `progress_workers` and cumulative worker-start
+counts retain their meanings. Native hardware profiles use `num_lanes` and
+`ORBITTE_RDMA_LANES`; an old `num_workers` profile is rejected before launch.
+
+The reference is frozen TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
+
+| Native TENT contract | OrbitTE implementation |
+| --- | --- |
+| `configureLaneCount` aligns workers, CQ count and QP parallelism | `num_lanes` aligns transport workers and each context's CQ lanes; QPs remain owned per reusable connection |
+| `RdmaContext::cq`, `Workers::asyncPollCq` | Stable `ContextSlot.cq_list`; worker `i` polls lane `i` across contexts |
+| Unspecified-worker `Workers::submit` selects minimum `inflight_slices` | `Workers::select` atomically chooses and charges an admitted wire slice; equal-load ties rotate |
+| Slice owner and exactly-once counted-lane release | Non-cloneable `SliceLease` in actual `GrantResources`; native failure retains the owner and charge |
+| Registered region and endpoint reuse | PD/MR/key history stays per context; cached QPs keep their original CQ lane |
+
+The requester uses bounded TENT slice geometry for large requests when either
+multiple RNIC paths or multiple lanes are available. This also distributes
+one-RNIC requests across lanes. Both peers may configure different lane counts;
+lane indices stay local and wire v12 is unchanged. Reusing a QP pins that
+grant's load to the existing lane. The source searches all lanes by exact
+bilateral connection identity and previous grant instead of choosing a new
+lane for an established QP. Aggregate endpoint, SQ/RQ, direct-byte and MR
+budgets remain unchanged; additional lanes do not multiply admission limits.
+
+Each lane has independent CQ/store/WR namespaces and completion-event owners.
+The device asynchronous-event state broadcasts wakeups to weak lane subscribers;
+quota return also wakes waiting lanes on other contexts. Native drain and
+worker-snapshot detachment are required before replacing only the failed lane.
+Sibling lanes, the PD, persistent MRs and worker threads remain live. Retained
+native owners cannot be healed or retried by moving them to another worker.
+
+Resource layout is `context_set.rs` for stable NIC slots and context/lane
+lifetimes, `context.rs` for device/PD/key owners, `buffers.rs` for persistent
+MRs, `cq_lane.rs` for lane protocol, `cq_lane/poll.rs` for bounded native
+progress and `workers.rs` for the pool and slice load. Native libtest selectors
+now live under `transport::rdma::cq_lane::tests::hardware`; the runner requires
+one exact match before deployment. Frozen historical evidence retains its
+recorded selector.
+
+CPU gates cover simultaneous slice admission, load held through completed-data
+grant ownership, cached-lane pressure, asymmetric 2/3-lane byte/sentinel and QP
+reuse, shared context MRs, parked-lane fault broadcast and individual-lane
+recovery without new PDs or threads. Native qualification is recorded after
+running frozen binaries on the declared two-host/two-RNIC profile.
+
+This is a CQ-lane and load-dispatch substage. Priority MPSC queues, endpoint QP
+arrays, monitor consolidation, affinity, physical device recovery and complete
+P4 acceptance remain open; no performance or full native wire-parity claim is
+made.

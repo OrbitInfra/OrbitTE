@@ -46,15 +46,15 @@ pub struct RdmaStats {
     pub progress_workers: usize,
     /// Successful data-thread starts; context recovery does not start threads.
     pub opened_progress_workers: u64,
-    /// Context CQ pairs still assigned to a data worker.
-    pub progress_contexts: usize,
+    /// CQ lanes still assigned to data workers, summed across all contexts.
+    pub progress_lanes: usize,
     pub async_event_workers: usize,
     pub acknowledged_async_events: u64,
     /// Cumulative shared-progress faults, including permanently retained owners.
     pub progress_failures: u64,
     /// Faulted progress owners retired after complete native drain and worker detachment.
     pub progress_recoveries: u64,
-    /// Highest pending data-QP count observed by any single context progress pass.
+    /// Highest pending data-QP count observed by any single CQ lane progress pass.
     pub peak_pending_qps: usize,
     pub active_endpoints: usize,
     pub idle_endpoints: usize,

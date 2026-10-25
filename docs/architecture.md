@@ -35,7 +35,7 @@ completion contracts.
 | `LocalBufferManager` | Prepare all-context host MRs before publication; retain physical copies by context, range and capability | Context-keyed `mem_reg_map` |
 | `ReceiveCredits` | Atomically reserve a parent's source RQ capacity; transfer credits to actual receive owners | OrbitTE source-completion admission alongside TENT's bounded slice queues |
 | `Workers`, `WorkerContext` | Own a configurable transport-level thread pool; rotate assigned contexts and park until work, CQ events or deadlines | `RdmaTransport::workers_`, `Workers::start`, `workerThread`, `asyncPollCq` |
-| `ContextProgress`, CQ and queue owners | Own one context's SQ/RQ pair, endpoint records, WR routing and fault/drain state | Per-context CQ/endpoint ownership consumed by TENT workers |
+| `CqLane`, CQ and queue owners | Own one lane's SQ/RQ pair, endpoint records, WR routing and fault/drain state | Per-context CQ/endpoint ownership consumed by TENT workers |
 | `CqQuota` | Wake the assigned worker when aggregate SQ/RQ capacity returns | Explicit wake for polling/event scheduling; separate from native cross-process QoS |
 | Connection resources, `EndpointStore` | Own QPs, immutable connection identities and idle reuse | `RdmaEndPoint`, endpoint store |
 | Grant resources | Own one slice's exact loan, source MW and completion buffers | Rust-specific exact-range authority over TENT's registered-region model |
@@ -48,9 +48,11 @@ and GPU topology are still separate work.
 ## Device selection and rail routing
 
 Each permitted NIC retains its topology slot, even if native construction
-fails cleanly. An enabled slot owns its own PD, context progress state, shared SQ/RQ
-CQs and endpoint store. Data threads belong to the transport-level `Workers`
-pool; `num_workers` is independent of the context count. Physical MR copies across contexts share aggregate
+fails cleanly. An enabled slot owns one PD and a `cq_list` of independent `CqLane` owners.
+`RdmaConfig.num_lanes` sets both transport worker count and CQ-lane count per
+context. Lane `i` in every context belongs to worker `i`; each lane owns its
+SQ/RQ CQs, endpoint store and drain state. Thread count remains independent
+of the number of contexts. Physical MR copies across contexts share aggregate
 registration budgets.
 
 The control bootstrap advertises bounded NIC/PD paths before granting memory
@@ -64,13 +66,14 @@ visible only after all copies succeed. Dispatch masks select paths; they do not
 remove enabled contexts from publication. Published copies remain pinned until
 unregister or close, with aggregate context/capability byte and count limits.
 
-Large multi-context requests use TENT's bounded, short-tail-folding slice
+Large requests with multiple contexts or CQ lanes use TENT's bounded, short-tail-folding slice
 geometry and select a path per slice. One source control handler owns the parent
 and prepares every slice grant before payload submission. Transport workers
 post slices across their assigned contexts; each slice retains its own PD, connection,
 MR borrow, exact-range DMA loan, WR identity and bound completion receipts.
 The parent succeeds only after every slice completes. No thread is created per
-slice. Small or single-context requests retain the single-path protocol.
+slice. Small requests, and single-context requests configured with one lane, retain
+the single-path protocol.
 
 A declared two-host CPU DRAM/IPv4 RoCEv2 profile validates two actual RNICs per
 host: masked and cross-rail READ/WRITE, persistent QP reuse, all-context MR
@@ -91,20 +94,29 @@ capacity. `CqQuota` registers weak context-progress subscribers and wakes their 
 that reported quota pressure. Enrollment precedes a budget recheck, so a
 concurrent release leaves either a notification or an available-capacity wake.
 
-Native TENT's `Workers::asyncPollCq` visits the entire context set and uses
-`cq(worker_id % num_cq_list)` in each context. OrbitTE now has a transport-level
-`Workers` pool too. Its current single SQ/RQ pair per context is assigned to
-`nic_id % num_workers`; multiple contexts share one worker, and unused workers
-park. The first context and the first endpoint rotate on each pass. CQ events,
-new submissions and shared-quota releases unpark the assigned thread; event
-mode uses the earliest deadline across that worker's contexts.
+Frozen TENT unifies worker, CQ and QP parallelism under `num_lanes`.
+Its `Workers::asyncPollCq` visits every context's
+`cq(worker_id % num_cq_list)`. OrbitTE follows that lane mapping with one
+polling owner per SQ/RQ pair. `context_set.rs` owns stable NIC slots and lane
+construction/recovery; `cq_lane.rs` owns endpoint/grant state and
+`cq_lane/poll.rs` owns native post/poll/drain. `Workers` rotates assigned
+context lanes and endpoints, combining their earliest absolute deadlines.
 
-This is the first pool substage, with one polling owner per context. TENT's
-multiple CQ lanes per context, least-loaded slice enqueue, priority queues,
-NUMA thread affinity and monitor consolidation remain separate open work.
-One synchronous provider call can delay other contexts assigned to its worker;
-native calls remain non-preemptible. Configure distinct workers when a test or
-deployment needs independent native-call progress.
+When TENT's `Workers::submit` receives no explicit worker, it chooses the
+least-loaded `inflight_slices` counter. OrbitTE selects a worker at slice-grant
+admission, rotating equal-load ties. A `SliceLease` charges that worker until
+the grant leaves after its required drain; actual quarantined grants keep
+their charge. Cached QPs keep their CQ lane, and reuse searches idle pairs in
+load order. Source rendezvous searches every lane by both connection identities
+and the last grant. PDs, key history and persistent MRs remain context-owned.
+
+Device/route faults wake every attached lane; shared quota wakes only lanes
+waiting for capacity. Completion-event channels remain lane-owned, so a lane's
+native failure and recovery do not destroy a sibling channel. TENT's bounded
+priority MPSC slice queues, endpoint QP arrays, NUMA thread affinity and
+consolidated monitor remain further parity work. One synchronous provider call
+can delay the other context lanes assigned to that worker; native calls remain
+non-preemptible. This change makes no throughput claim.
 
 Capacity returns through validated data/control completions, proven unposted
 suffixes or the existing native QP/CQ drain barrier. Unproven cleanup retains

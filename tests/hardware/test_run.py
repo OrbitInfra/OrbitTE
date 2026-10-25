@@ -164,7 +164,7 @@ class ResourceSelection(unittest.TestCase):
             controller = runner.Controller(profile, binary, root)
 
             def start(*args):
-                self.assertEqual(args[-1]['ORBITTE_RDMA_WORKERS'], '1')
+                self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], '1')
                 self.assertEqual(args[-1]['ORBITTE_SHARED_RAILS'], 'mlx5_1,mlx5_2')
                 self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '1')
                 self.assertEqual(args[-1]['ORBITTE_RAIL_FAULT'], '1')
@@ -176,22 +176,22 @@ class ResourceSelection(unittest.TestCase):
                 controller.case(0, case)
             for count in [2, 3, 64]:
                 def pool_start(*args):
-                    self.assertEqual(args[-1]['ORBITTE_RDMA_WORKERS'], str(count))
+                    self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], str(count))
                     raise CapturedStart()
 
                 controller.start = pool_start
                 with self.subTest(workers=count), self.assertRaises(CapturedStart):
-                    controller.case(0, {**case, 'num_workers': count})
+                    controller.case(0, {**case, 'num_lanes': count})
             def blocking_start(*args):
-                self.assertEqual(args[-1]['ORBITTE_RDMA_WORKERS'], '2')
+                self.assertEqual(args[-1]['ORBITTE_RDMA_LANES'], '2')
                 raise CapturedStart()
 
             controller.start = blocking_start
             for mode in ['cq-error', 'partial-post', 'paused-close']:
                 with self.subTest(mode=mode), self.assertRaises(CapturedStart):
-                    controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_workers': 2})
+                    controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_lanes': 2})
                 with self.assertRaises(ValueError):
-                    controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_workers': 1})
+                    controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_lanes': 1})
             for mode in ['concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
                          'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                          'large-quota', 'large-close', 'large-cq-error',
@@ -209,7 +209,7 @@ class ResourceSelection(unittest.TestCase):
                         controller.case(0, {**case, 'mode': mode, 'mask': 3, **extra})
                 with self.subTest(mode=mode, mask=1), self.assertRaises(ValueError):
                     controller.case(0, {**case, 'mode': mode})
-            for invalid in [{'num_workers': True}, {'num_workers': 0}, {'num_workers': 65}, {'num_workers': '2'},
+            for invalid in [{'num_workers': 3}, {'num_lanes': True}, {'num_lanes': 0}, {'num_lanes': 65}, {'num_lanes': '2'},
                             {'mode': 'link-down'}, {'mode': 'cq-error'}, {'mask': True},
                             {'mask': 0}, {'mask': 4}, {'fault_rail': True}, {'fault_rail': 2}, {'rdma_events': 1}, {'operation': 'delete'},
                             {'transport': 'tcp'}, {'source_kind': 'cuda:0'},
