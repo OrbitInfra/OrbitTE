@@ -107,7 +107,7 @@ impl GrantDrain {
 }
 
 struct Work {
-    queue: slice::SendQueue,
+    queue: slice::SendWork,
     operation: slice::Operation,
     remote: Descriptor,
     deadline: Instant,

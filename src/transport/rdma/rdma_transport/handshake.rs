@@ -194,6 +194,10 @@ impl RdmaTransport {
                 connection: ConnectionResources {
                     device,
                     handles: connection_handles,
+                    send_queue: super::super::qp::send_queue::SendQueue::new(
+                        self.config.max_send_wr,
+                        Arc::clone(&self.usage),
+                    )?,
                     incarnation: None,
                     local: Descriptor::default(),
                     remote: None,

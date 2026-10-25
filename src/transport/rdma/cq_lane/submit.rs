@@ -37,11 +37,11 @@ impl CqLane {
             } else {
                 resources.grant()?.max_read_slices
             };
-            let queue = slice::SendQueue::new(
+            let queue = slice::SendWork::new(
                 resources.grant()?.buffer.len(),
                 self.shared.config.block_size,
                 cap,
-                Arc::clone(&self.shared.usage),
+                Arc::clone(&resources.connection.send_queue),
                 self.shared.next_work_namespace()? * crate::transport::rdma::WR_ID_STRIDE + 1,
             )?;
             record
@@ -105,8 +105,8 @@ impl CqLane {
                 ..Default::default()
             };
             request.work = Some(Work {
-                queue: slice::SendQueue::control(
-                    Arc::clone(&self.shared.usage),
+                queue: slice::SendWork::control(
+                    Arc::clone(&resources.connection.send_queue),
                     namespace * crate::transport::rdma::WR_ID_STRIDE + slot,
                 )?,
                 operation,
@@ -278,6 +278,14 @@ impl CqLane {
             }
             let namespace = self.shared.next_work_namespace()?;
             self.prepare_message(&mut request)?;
+            let send_queue = Arc::clone(
+                &request
+                    .resources
+                    .as_ref()
+                    .ok_or(Error::Internal("missing RDMA connection"))?
+                    .connection
+                    .send_queue,
+            );
             let message = request
                 .resources
                 .as_mut()
@@ -287,8 +295,8 @@ impl CqLane {
             message.memory.bytes_mut().copy_from_slice(&binding);
             request.message_sent = true;
             request.work = Some(Work {
-                queue: slice::SendQueue::control(
-                    Arc::clone(&self.shared.usage),
+                queue: slice::SendWork::control(
+                    send_queue,
                     namespace * crate::transport::rdma::WR_ID_STRIDE + 1,
                 )?,
                 operation: slice::Operation::Send,

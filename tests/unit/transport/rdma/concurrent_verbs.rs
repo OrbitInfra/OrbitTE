@@ -671,6 +671,14 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
                 .filter(|(cq, qpn, _)| *cq == owner.cq && *qpn == owner.qpn)
                 .count();
             let expected = accepted - delivered;
+            assert_eq!(
+                request
+                    .resources
+                    .as_ref()
+                    .map_or(0, |r| r.connection.send_queue.outstanding()),
+                expected,
+                "physical QP lost accepted WR debt before CQ destruction"
+            );
             let debt = request
                 .work
                 .as_ref()

@@ -132,6 +132,11 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
     }
     let resources = Box::new(Resources {
         connection: ConnectionResources {
+            send_queue: super::super::qp::send_queue::SendQueue::new(
+                runtime.config.max_send_wr,
+                Arc::clone(&runtime.usage),
+            )
+            .unwrap(),
             device: Arc::clone(&device),
             handles: sys::ConnectionHandles {
                 cq: progress.handle(false).unwrap(),

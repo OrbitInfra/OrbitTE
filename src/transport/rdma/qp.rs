@@ -5,6 +5,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use super::{DESCRIPTOR_SIZE, GrantResources, RdmaContext, RdmaStats, sys};
 use crate::{Error, Result, SourceEpoch};
 
+pub(super) mod send_queue;
+
 pub(super) struct ConnectionLease {
     pub(super) usage: Arc<Mutex<RdmaStats>>,
     pub(super) drained: Arc<Condvar>,
@@ -23,6 +25,7 @@ impl Drop for ConnectionLease {
 pub(super) struct ConnectionResources {
     pub(super) device: Arc<RdmaContext>,
     pub(super) handles: sys::ConnectionHandles,
+    pub(super) send_queue: Arc<send_queue::SendQueue>,
     pub(super) incarnation: Option<ConnectionId>,
     pub(super) local: Descriptor,
     pub(super) remote: Option<Descriptor>,
@@ -36,6 +39,7 @@ impl ConnectionResources {
         &mut self,
         verbs: &sys::Verbs,
     ) -> std::result::Result<(), (&'static str, i32)> {
+        self.send_queue.fence();
         if self.closed {
             return Ok(());
         }

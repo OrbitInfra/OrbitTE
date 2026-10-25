@@ -13,21 +13,47 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
-The ownership-layout cleanup after PR #43 separates transport dispatch,
-bilateral grant handshake and OrbitTE v12 wire messages. CQ-lane submission
-and drained reuse remain methods of the existing owner in separate files;
-the native verbs boundary groups device, QP, MR/MW and CQ calls. Static NIC/PD
-metadata now lives in `path.rs`, and the lane's `QpStore` field is named `qps`.
-No new resource owner, queue, lock, protocol version or public API is added.
+The QP send-owner delivery moves physical send depth and unresolved WR IDs to
+`ConnectionResources::send_queue`. Each grant's `SendWork` borrows this owner
+for payload, MW bind and completion SEND. Duplicate/foreign completions cannot
+release another work's credit; post failures fence admission, ambiguous posts
+retain possible debt, and cancellation needs QP/CQ destruction before release.
 
-The [architecture reading order](architecture.md#source-reading-order) describes
-the current paths. Source audit and validation artifacts are recorded under
-`/root/orbitte-artifacts/rdma-layout-20261025`. This delivery does not rerun
-hardware or qualify a new native artifact; the most recent native evidence is
-the exact P4.12m source and binaries below. Missing runtime features and the
-complete P4 acceptance remain in [one exit queue](completion-plan.md#p4-remaining-delivery).
+Source `e7adce9` passes 23 local gates on stable and Rust 1.85, including
+206 all-feature unit tests per compiler, eleven hardware-runner controls and
+the frozen TENT geometry comparison. New CPU contracts exercise simultaneous
+grants sharing SQ depth/CQ capacity, sibling completion isolation, ambiguous
+posts and cancellation without early credit return. The public connected-reuse
+fixture verifies that successive grants retain the same physical SQ owner.
 
-## Latest qualified native source: peer arrays and monitor
+Both frozen binaries pass the existing 90-case two-host/two-RNIC profile:
+180 configurations in total, with polling/event progress, 1/2/3/6 lanes,
+READ/WRITE, multirail admission, QP/CQ errors, lost completions, MR/MW syscall
+failures, CQ/PD cleanup retention, live reconnect and process generations.
+The native fault fixtures compare QP-owned debt with actual accepted-minus-
+delivered WRs before CQ destruction. All 408 supervised children are reaped
+(384 completed libtests and 24 deliberate kills); both NIC locks are available
+after the run, with unchanged node/provider identities. No GPU compute is used.
+
+The artifact root is `/root/orbitte-artifacts/rdma-qp-send-20261025`.
+`native-regression-manifest.json`, `native-raw-audit.json` and the gate manifests
+pin the tested source, binary hashes and per-case evidence. GitHub's actual
+frozen TENT CPU run also passes 25 observations and six negative controls;
+`native-cpu-reference.json` verifies the merge-tree identity and Rust/C++/TENT
+library hashes. Strict documentation and the source CI matrix pass.
+
+These are same-agent scoped gates. Shared-QP admission is exercised by CPU
+contracts; the native wire profile still has one active grant per QP. The
+[send-owner contract](architecture.md#qp-send-ownership) and
+[P4 exit queue](completion-plan.md#p4-remaining-delivery) retain concurrent
+grant/RQ ownership, fixed-width peer construction, periodic recovery and full
+physical-fault/installed/independent P4 acceptance as open work. This delivery
+makes no new physical fabric, GPUDirect or performance claim.
+
+PR #44's earlier layout cleanup is merged. Its source audit and CPU validation
+remain at `/root/orbitte-artifacts/rdma-layout-20261025`.
+
+## Previous qualified native source: peer arrays and monitor
 
 P4.12m (`5ea3a35`) adds context-owned peer QP arrays, verified worker NUMA
 CPU binding and one transport monitor for async/completion events. Physical QP,

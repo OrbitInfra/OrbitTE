@@ -58,6 +58,8 @@ checkout for the implementation described here.
   priorities and in-flight byte charges select compatible paths per RDMA slice.
   Parent completion requires every slice and its source receipt.
 - **Shared quotas.** Concurrent parents share SQ/RQ, byte and connection limits.
+  Physical QPs own send depth and exact outstanding WRs across payload, bind
+  and completion messages; grant work handles cannot release unresolved debt.
   Source admission reserves every slice's receive credit together before
   granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
