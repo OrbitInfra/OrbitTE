@@ -10,7 +10,7 @@ spec.loader.exec_module(runner)
 
 class NativePeerSelection(unittest.TestCase):
     def test_known_profiles_select_the_current_exact_native_test(self):
-        prefix = 'transport::rdma::workers::tests::hardware::'
+        prefix = 'transport::rdma::progress::tests::hardware::'
         for profile, expected in [(None, None), ('orbitte-shared-cq', prefix + 'shared_cq_peer'),
                                   ('orbitte-window', prefix + 'source_window_peer'),
                                   ('orbitte-connected', prefix + 'connected::connected_endpoint_peer'),

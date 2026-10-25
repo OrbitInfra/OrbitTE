@@ -75,6 +75,9 @@ static VERBS: sys::Verbs = sys::Verbs {
     close_device: sys::REAL.close_device,
 };
 
+#[path = "worker_pool.rs"]
+mod worker_pool;
+
 fn rdma_config() -> RdmaConfig {
     let name = env::var("ORBITTE_SHARED_DEVICE").unwrap();
     let mut config = if env::var("ORBITTE_RDMA_DISCOVERY").as_deref() == Ok("1") {
@@ -101,7 +104,7 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         !aborted || fault_profile,
         "healthy profile unexpectedly aborted its lane"
     );
-    assert_eq!(idle.progress_workers, usize::from(!fault_profile));
+    assert_eq!(idle.progress_workers, 1);
     assert_eq!(
         (
             idle.active_completion_channels,
@@ -238,6 +241,7 @@ fn shared_cq_peer() {
         config,
         usage,
         counters: Arc::default(),
+        workers: Arc::default(),
         cq_quota: Arc::default(),
         verbs: &VERBS,
         context_set: Mutex::default(),

@@ -297,9 +297,11 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             .collect::<Vec<_>>(),
         if large { 2 } else { 1 }
     );
+    worker_pool::reset();
     native::initialize(mode, !source, fault_rail, shape);
     let config = super::super::super::super::RdmaConfig {
         rdma_whitelist: rails.to_vec(),
+        num_workers: worker_pool::count(),
         port: Some(1),
         gid_index: Some(env::var("ORBITTE_SHARED_GID").unwrap().parse().unwrap()),
         host_memory: RdmaHostMemory::Direct,
@@ -753,6 +755,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             super::super::connected::barrier(&mut stream, 0x33);
         }
     }
+    worker_pool::running(&engine);
     if !retired {
         engine.unregister_memory(&memory).unwrap();
     }
@@ -770,6 +773,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     engine.close(TIMEOUT).unwrap();
     let stats = engine.stats().unwrap().rdma.unwrap();
     clean(&stats);
+    worker_pool::closed(&stats);
     assert!(stats.peak_work_requests <= if source { rq_limit } else { sq_limit });
     assert!(stats.peak_receive_work_requests <= if source { rq_limit } else { sq_limit });
     std::fs::write(

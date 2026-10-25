@@ -4,6 +4,7 @@ use crate::{RegisteredMemory, SourceEpoch, TransferOp};
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) use super::context::tests::{events, pause};
@@ -1073,6 +1074,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         config,
         usage,
         counters: Arc::default(),
+        workers: Arc::default(),
         cq_quota: Arc::default(),
         drained: Arc::default(),
         verbs,

@@ -872,6 +872,17 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Spontaneous provider failure, physical device recovery, in-place healing of
   retained owners and the transport-level Workers pool remain open. See
   [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
+- [ ] **P4.12k — transport Workers pool and multi-context progress
+  (Implemented; qualification in progress, independent acceptance open).**
+  `RdmaTransport` owns one configurable `Workers` pool. Stable NIC IDs assign
+  context CQ pairs to data workers; polling/event passes rotate contexts and
+  endpoints, share aggregate quota wakes and use the earliest event deadline.
+  Context fault recovery detaches drained snapshots without restarting the pool.
+  Endpoint owners retain the pool after transport-handle Drop. Configuration,
+  statistics, pool scheduling, grant protocol and native progress passes have
+  separate modules. Native TENT's per-context multiple CQ lanes, least-loaded
+  slice enqueue, priority queues, worker affinity and monitor consolidation
+  remain open. See [the pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native QP/MR/MW and
@@ -879,9 +890,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   poisoned-live-engine recovery profiles;
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
-  owners under physical-rail pressure. Align the current per-context progress
-  execution model with frozen TENT's transport-level configurable `Workers` pool
-  and qualify its CQ/WR routing and ownership before claiming that parity. The declared two-/four-/eight-parent quota/reuse and
+  owners under physical-rail pressure. Complete the remaining frozen TENT
+  worker/CQ-lane scheduling obligations beyond P4.12k's shared-context pool
+  before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs

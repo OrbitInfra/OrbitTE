@@ -160,7 +160,9 @@ fn public_transfers_rotate_stable_contexts_reuse_only_the_selected_pair_and_reti
                 stats.opened_devices, 2,
                 "disabled slot 1 preserves actual topology IDs"
             );
-            assert_eq!(stats.progress_workers, ids.len());
+            assert_eq!(stats.progress_contexts, ids.len());
+            assert_eq!(stats.progress_workers, 1);
+            assert_eq!(stats.opened_progress_workers, 1);
             assert_eq!(stats.active_cqs, ids.len() * 2);
             assert_eq!(stats.opened_connections, (ids.len() * 2) as u64);
             assert_eq!(stats.reused_connections, (8 - ids.len() * 2) as u64);
@@ -223,7 +225,7 @@ fn aggregate_connection_budget_evicts_an_idle_pair_on_another_context() {
             ),
             (4, 3, 3)
         );
-        assert_eq!(stats.progress_workers, 2);
+        assert_eq!(stats.progress_contexts, 2);
     }
     requester.close(TIMEOUT).unwrap();
     source.close(TIMEOUT).unwrap();
@@ -343,7 +345,7 @@ fn parent_slices_use_one_source_handler_and_aggregate_read_write_receipts_across
             }
             for engine in [&source, &requester] {
                 let stats = engine.stats().unwrap().rdma.unwrap();
-                assert_eq!(stats.progress_workers, 2);
+                assert_eq!(stats.progress_contexts, 2);
                 assert_eq!(
                     stats.completed_reusable_grants,
                     if source_policy == Direct && local_policy == Direct {
@@ -457,6 +459,7 @@ fn both_rail_workers_can_own_payloads_before_parent_completion_and_unregister_wa
         false,
     )));
     let mut local_runtime = sliced_runtime(u64::MAX, 8, 4, RdmaHostMemory::Direct, false);
+    local_runtime.config.num_workers = 3;
     local_runtime.verbs = &PAUSED;
     local_runtime.registrations = buffers::LocalBufferManager::new(
         &local_runtime.config,
@@ -933,6 +936,7 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
     };
     for operation in [TransferOp::Read, TransferOp::Write] {
         let mut runtime = sliced_runtime(u64::MAX, 8, 1, RdmaHostMemory::Direct, true);
+        runtime.config.num_workers = 3;
         runtime.verbs = &PAUSED;
         runtime.registrations =
             buffers::LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), &PAUSED);

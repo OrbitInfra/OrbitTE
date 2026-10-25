@@ -2,7 +2,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-use super::{DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, slice, sys, workers};
+use super::{DESCRIPTOR_SIZE, RdmaConfig, RdmaContext, RdmaStats, buffers, progress, slice, sys};
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
 pub(super) struct ConnectionLease {
@@ -186,7 +186,7 @@ impl GrantResources {
     pub(super) fn close_drained(
         &mut self,
         connection: &ConnectionResources,
-        receipt: &workers::GrantDrain,
+        receipt: &progress::GrantDrain,
         verbs: &sys::Verbs,
     ) -> std::result::Result<(), (&'static str, i32)> {
         if !Arc::ptr_eq(&self.device, &connection.device) || !receipt.matches(connection, self) {
@@ -408,8 +408,8 @@ impl ConnectionId {
 }
 
 pub(crate) struct RdmaEndpoint {
-    pub(super) record: Arc<workers::Record>,
-    pub(super) progress: Arc<workers::Workers>,
+    pub(super) record: Arc<progress::Record>,
+    pub(super) progress: Arc<progress::ContextProgress>,
     pub(super) local: Descriptor,
     pub(super) incarnation: Option<ConnectionId>,
     pub(super) config: RdmaConfig,
@@ -421,7 +421,7 @@ pub(crate) struct RdmaEndpoint {
 }
 
 impl RdmaEndpoint {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, workers::Request>> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, progress::Request>> {
         if self.released {
             return Err(Error::Unavailable("RDMA grant handle has been consumed"));
         }

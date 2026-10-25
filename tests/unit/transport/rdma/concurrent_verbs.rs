@@ -452,6 +452,7 @@ unsafe extern "C" fn send_completion(
 }
 
 unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> c_int {
+    unsafe { worker_pool::observe(h) };
     let cq = unsafe { (*h).cq } as usize;
     {
         let mut trace = TRACE.get().unwrap().lock().unwrap();

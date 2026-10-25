@@ -340,7 +340,15 @@ unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
     code
 }
 
+unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> i32 {
+    unsafe {
+        worker_pool::observe(h);
+        (sys::REAL.poll)(h, out)
+    }
+}
+
 pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    poll,
     open_device,
     register_memory: register,
     post,
