@@ -192,6 +192,10 @@ impl RdmaTransport {
             };
             let record = progress.register(Box::new(Resources {
                 connection: ConnectionResources {
+                    receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
+                        self.config.max_send_wr,
+                        Arc::clone(&self.usage),
+                    )?,
                     device,
                     handles: connection_handles,
                     send_queue: super::super::qp::send_queue::SendQueue::new(

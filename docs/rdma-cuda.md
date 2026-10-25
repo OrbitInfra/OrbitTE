@@ -247,7 +247,13 @@ into the preceding slice. The entire requested range remains leased even after
 a window's CQEs have arrived. Each request keeps an exclusive QP window within
 the shared CQ.
 
-`max_send_wr` defaults to 16 and accepts 1..64 per QP. `max_cqes` defaults to
+`max_send_wr` defaults to 16 and accepts 1..64 per QP. It provisions both
+native SQ and RQ depths; the physical receive owner also bounds its slots and
+receipt table to this width. SQ and RQ keep separate outstanding-WR accounts.
+Receive-buffer identity and grant receipt identity are separated as described
+in [QP receive ownership](architecture.md#qp-receive-ownership). Public wire
+grants remain exclusive while concurrent records are being connected.
+`max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
 1..4096. The provider must return the requested CQ and QP capacities. The worker
@@ -1008,20 +1014,24 @@ The frozen TENT context/buffer/endpoint/store/worker/slice ownership remains the
 reference. TENT `RdmaCQ`/`Workers` own CQ progress; `RdmaEndPoint::submitSlices`
 and native `Slice*` WR identities associate completions with their slices.
 OrbitTE `Workers` now polls two actual `RdmaCq` owners (SQ and RQ) fairly in one
-thread, including when only RQ debt remains. `ReceiveQueue` owns a single
-posted receive's exact identity, expected binding, key and deadline. Checked
-per-submission WR namespaces replace resettable/pointer identities. These are
+thread, including when only RQ debt remains. P4.7d originally kept receive
+storage and receipt state together per grant. The current physical QP's
+`ReceiveQueue` owns buffer WRs; each `ReceiveWork` separately identifies an
+expected binding/key and deadline. Checked per-submission WR namespaces replace
+resettable/pointer identities. These are
 Rust lifetime/authorization adaptations; frozen TENT does not implement this
 OrbitTE grant receipt or wire format.
 
-`GrantResources` owns `MessageBuffer`: separate stable bytes and a local-only
-MR. No Rust slice accesses posted receive memory before its validated CQE.
-Requester SEND bytes cannot alias a mutable READ destination. Checked control
-storage has its own `max_endpoints * 140` byte limit, separate from payload
-staging/direct quotas; allocation charges precede native registration. Partial
-registration and uncertain WR posts retain that actual owner. After physical
-grant cleanup the message MR and bytes are freed immediately, before payload
-output handoff, so retained completed output cannot expand this control budget.
+`GrantResources` owns the SEND `MessageBuffer`; the QP receive queue owns RQ
+buffers and their local-only MRs. No Rust slice accesses posted receive memory
+before its validated CQE. Requester SEND bytes cannot alias a mutable READ
+destination. Current v12 control storage has a `max_endpoints * 141` byte limit,
+separate from payload staging/direct quotas; allocation charges precede native
+registration. Partial registration and uncertain WR posts retain that actual
+owner. Completed buffers are reaped before payload output handoff in the
+exclusive public path. Queue-owned buffers that still await a CQE or native
+drain survive a different grant's completion; prepared slots survive reaping.
+See [the current RQ contract](architecture.md#qp-receive-ownership).
 
 `max_cqes` bounds SQ and RQ reservations independently. A capacity-one receive
 cannot block the SQ needed to produce the peer's receipt. Every receive uses
@@ -2593,7 +2603,7 @@ that does not fit receives `ResourceExhausted` with no remote payload effect.
 The wire v12 admission reply precedes all requester endpoint construction;
 single-path requests reserve one credit before publishing bootstrap paths.
 
-Each prepared slice takes one credit into its actual `ReceiveQueue`. Dropping
+Each prepared slice contributes one credit to a slot in the physical QP's `ReceiveQueue`. Dropping
 unassigned credits rolls them back. A known unposted receive, a validated CQE or
 successful native QP/CQ teardown releases its own credit. An uncertain post or
 failed native cleanup retains it with the actual WR/DMA owner. The new
@@ -3476,9 +3486,10 @@ erase an unfinished or retained QP; only Closed records leave the array.
 The current Rust wire protocol prepares all exclusive slice grants before
 payload admission. Arrays therefore grow on demand under `max_endpoints`,
 which still counts physical QPs. They are **not yet TENT's fixed-width QP pool**:
-sharing one QP among simultaneous grants requires separating receive/message
-ownership and WR debt from the connection. Capping this array at `num_lanes`
-without that work could deadlock an admitted parent. This remaining multiplexing
+QP-owned SQ debt and RQ buffers/receipt dispatch are now implemented, but
+simultaneous grants still need separate runtime records and multi-namespace CQ
+lookup. Capping this array at `num_lanes` before completing concurrent admission
+could deadlock an admitted parent. This remaining multiplexing
 contract stays explicit in the completion plan. Read/write capabilities stay
 per physical QP; a peer array may own both kinds.
 

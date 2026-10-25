@@ -169,20 +169,23 @@ impl CqLane {
                 return Err(Error::Internal("RDMA receive before source grant"));
             }
             let namespace = self.shared.next_work_namespace()?;
-            self.prepare_message(&mut request)?;
-            let rkey = request
+            let resources = request
                 .resources
-                .as_ref()
-                .ok_or(Error::Internal("missing RDMA grant"))?
-                .grant()?
-                .rkey;
-            request.receive = Some(ReceiveQueue::new(
+                .as_mut()
+                .ok_or(Error::Internal("missing RDMA grant"))?;
+            let receive = ReceiveWork::new(
                 namespace * crate::transport::rdma::WR_ID_STRIDE + 1,
                 expected,
-                rkey,
+                resources.grant()?.rkey,
                 deadline,
+            );
+            resources.connection.receive_queue.prepare(
+                Arc::clone(&receive),
                 credits,
-            ));
+                &resources.connection.device,
+                self.shared.config.max_endpoints,
+            )?;
+            request.receive = Some(receive);
             record.receive_namespace.store(namespace, Ordering::Release);
         }
         record.actions.fetch_or(RECEIVE, Ordering::Release);
@@ -214,16 +217,19 @@ impl CqLane {
                 .as_ref()
                 .ok_or(Error::Internal("missing RDMA receive"))?;
             if if completed {
-                receive.completed
+                receive.completed()
             } else {
-                receive.posted
+                receive.posted()
             } {
                 return Ok(());
             }
             let duration = match remaining(deadline) {
                 Ok(duration) => duration,
                 Err(error) => {
-                    let pending = receive.pending();
+                    let pending = request
+                        .resources
+                        .as_ref()
+                        .is_some_and(|r| r.connection.receive_queue.outstanding() != 0);
                     request.failure = Some(Fault::Timeout);
                     drop(request);
                     if pending {

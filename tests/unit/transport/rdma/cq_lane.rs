@@ -132,6 +132,11 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
     }
     let resources = Box::new(Resources {
         connection: ConnectionResources {
+            receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
+                runtime.config.max_send_wr,
+                Arc::clone(&runtime.usage),
+            )
+            .unwrap(),
             send_queue: super::super::qp::send_queue::SendQueue::new(
                 runtime.config.max_send_wr,
                 Arc::clone(&runtime.usage),
@@ -833,7 +838,7 @@ fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output
             .receive
             .as_ref()
             .unwrap()
-            .completed
+            .completed()
     );
 
     let mut requester = runtime.staging_endpoint(8, 0).unwrap();

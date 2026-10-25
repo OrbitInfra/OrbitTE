@@ -390,10 +390,13 @@ The first row is in progress: QP-owned send depth and exact outstanding-WR
 accounting are implemented in `qp/send_queue.rs`; per-grant `SendWork` no
 longer owns global SQ credits. Payload, bind and completion SEND consume that
 shared owner, including post errors and native cancellation. This does not
-activate simultaneous wire grants: concurrent grant records, receive-message
-demultiplexing and fixed-width peer construction still have to be connected.
-Source `e7adce9` passes the existing 180-case two-host profile plus shared-SQ
-CPU contracts; [qualification](qualification.md) pins the evidence and limits.
+activate simultaneous wire grants. QP-owned receive buffers and binding/key
+dispatch now exist in `qp/receive_queue.rs`; `ReceiveWork` holds independent
+grant receipt state. Concurrent grant records, multi-namespace CQ lookup and
+fixed-width peer construction still have to be connected.
+Source `6b34ce7` passes the existing 180-case two-host profile on the new
+SQ/RQ owners plus CPU receipt-dispatch contracts; [qualification](qualification.md)
+pins the evidence and distinguishes CPU multiplexing from exclusive native grants.
 No new P4 milestone is added for this prerequisite.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and
@@ -1253,14 +1256,14 @@ and independent acceptance remain separate states.
 Implement fixed-width concurrent QP multiplexing, the first row of
 [P4 remaining delivery](#p4-remaining-delivery). Current peer arrays are real
 persistent lookup owners, but one active grant still occupies one physical QP.
-QP-owned send admission and debt now exist. Next separate concurrent grant
-records and receive-message delivery from the connection, then impose the
-fixed width and qualify sibling failure/cancellation. Simply capping the
+QP-owned SQ/RQ admission, receive buffers and binding/key dispatch now exist.
+Next connect concurrent grant records and their multiple CQ namespaces to the
+same connection, then impose the fixed width and qualify sibling failure/cancellation. Simply capping the
 current array would deadlock parents that prepare more grants than the QP
 width; preserve exact authority and physical drain through that transition.
 
 Then complete periodic monitor recovery and the final P4 gate in the same
-queue. The earlier ownership-layout cleanup and current SQ prerequisite do
+queue. The earlier ownership-layout cleanup and current SQ/RQ prerequisites do
 not complete fixed-width multiplexing or periodic recovery.
 Keep frozen TENT comparison, CPU controls and scoped native manifests with
 each behavior change. The [architecture reading order](architecture.md#source-reading-order)

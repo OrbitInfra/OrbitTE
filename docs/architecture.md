@@ -34,8 +34,9 @@ protocol compatible with TENT's native RPC or metadata.
 | `EndpointStore`, `RdmaEndpoint` | Peer identity and persistent QP array across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
 | `ConnectionResources`, `QpStore` | Actual QP, CQ-local lookup and idle/retiring records | Endpoint QPs and retirement |
 | `qp::send_queue::SendQueue` | Physical QP send depth, exact outstanding WR IDs and fenced admission | Per-QP `wr_depth_list_` and `slice_queue_` accounting |
-| `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, message storage and grant charge | Rust authority extension over TENT's registered-region model |
-| `RdmaSlice`, `SendWork`, `ReceiveQueue` | Per-grant geometry, WR windows, completion validation and receive messages | `RdmaSlice` work and completion state; source receipts are a Rust extension |
+| `qp::receive_queue::ReceiveQueue` | QP-owned receive buffers/MRs, RQ debt and binding/key dispatch | QP-owned receive WRs; exact grant receipts are a Rust extension |
+| `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, SEND message storage and grant charge | Rust authority extension over TENT's registered-region model |
+| `RdmaSlice`, `SendWork`, `ReceiveWork` | Per-grant geometry, WR windows and independent completion identities | `RdmaSlice` work and completion state; source receipts are a Rust extension |
 | `CqLane` | SQ/RQ CQ pair, registered QP records, submission, drain and recovery | Per-context CQs consumed by workers |
 | `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
 | `Monitor` | One transport thread consuming context and CQ events | Event-consumption portion of `Workers::monitorThread` |
@@ -43,8 +44,9 @@ protocol compatible with TENT's native RPC or metadata.
 
 Each context slot owns its PD/context, CQ lanes and peer endpoint registry.
 Physical QP records still own connection and one active grant. The connection
-retains its `SendQueue` across grant reuse; each `SendWork` borrows that same
-owner. A live grant
+retains its `SendQueue` and `ReceiveQueue` across grant reuse. `SendWork` borrows
+the shared SQ; `ReceiveWork` tracks an exact binding/key receipt independently
+of the buffer that receives it. A live grant
 retains its lane, worker pool and peer endpoint. Peer arrays retain QP records
 and weak lane references, avoiding an endpoint/lane ownership cycle.
 
@@ -71,9 +73,34 @@ accepted-minus-delivered WRs before CQ destruction.
 
 This is the send-accounting prerequisite for fixed-width multiplexing, not
 its activation. Wire v12 still gives one active grant exclusive use of a QP.
-Concurrent grant records, RQ message demultiplexing and bounded peer-array
-construction remain in the first P4 exit item. The existing all-slices-first
+Concurrent grant records and bounded peer-array construction remain in the
+first P4 exit item. The RQ dispatcher below provides receipt demultiplexing,
+but CQ-lane records still expose only one active wire grant. The existing all-slices-first
 preparation must keep working before the QP count is capped.
+
+## QP receive ownership
+
+`ConnectionResources::receive_queue` owns registered receive slots and their
+parent admission credits. A successful RQ CQE names the consumed buffer by WR
+ID; its full 141-byte binding and invalidated rkey identify the grant receipt.
+The buffer's donor is not used to identify the completed grant. `ReceiveWork`
+holds immutable binding/key/deadline metadata and independent posted/completed
+state. Dropping that handle cannot release an unresolved receive slot.
+
+Completing grant B through buffer A releases A's RQ debt. B's donated buffer
+remains QP-owned until its own CQE or physical drain, even after B is released.
+Reaping completed buffers preserves prepared but unposted slots. Duplicate,
+stale or mismatched messages cannot complete another receipt. Ambiguous posts
+retain buffer/MR/credit ownership; cancellation requires QP/CQ destruction.
+Failed message-MR cleanup retains the actual queue along with its connection.
+
+Native SQ and RQ depths are both provisioned from `max_send_wr`; each queue
+has a separate aggregate CQ budget. TENT likewise owns WRs at the physical
+endpoint/QP and dispatches CQEs to work identities. This full-binding source
+receipt protocol is an OrbitTE authority extension, not TENT wire parity.
+The dispatcher supports multiple registered receipts in CPU contracts; the
+public v12 path still admits one active grant per QP. Concurrent grant records,
+multi-namespace CQ lookup and fixed-width peer activation remain open.
 
 ## Follow one transfer
 
@@ -123,7 +150,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Peer rendezvous | `rdma_transport/handshake.rs` | Existing transport's grant preparation and bilateral handshake |
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
-| QP send accounting | `qp/send_queue.rs`, `slice.rs` | Shared physical SQ depth and independent grant WR completion |
+| QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/poll.rs` | Lane lifecycle, work admission/waits, drained reuse and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
@@ -143,7 +170,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 
 | Area | Current OrbitTE | Remaining correspondence |
 | --- | --- | --- |
-| QP arrays | Demand-grown peer arrays; QP-owned send depth/debt, but one active wire grant per QP | Concurrent grant/RQ ownership and fixed-width peer arrays remain open |
+| QP arrays | Demand-grown peer arrays; QP-owned send depth/debt, but one active wire grant per QP | Concurrent grant records/CQ lookup and fixed-width peer arrays remain open |
 | Monitor | Unified async/CQ get and ACK; lane workers drain retired QPs | TENT also performs periodic endpoint/orphan reclaim, paused-port recovery and address/link-speed refresh |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Native `RailMonitor` additionally owns dynamic rail health and recovery; a static codec is not that owner |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
