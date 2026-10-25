@@ -5,12 +5,13 @@ use std::time::{Duration, Instant};
 
 use super::COMPLETION_MESSAGE_SIZE;
 use super::cq::{CompletionEvents, RdmaCq};
-use super::endpoint_store::{EndpointStore, Peer};
+use super::endpoint::Peer;
+use super::qp_store::QpStore;
 use super::rdma_transport::BoundDone;
 use super::receive::{MessageBuffer, ReceiveQueue};
 use super::{
-    Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaEndpoint,
-    RdmaProgressMode, RdmaStats, Resources, events, slice, sys,
+    Buffer, ConnectionId, Descriptor, Phase, RdmaConfig, RdmaContext, RdmaGrant, RdmaProgressMode,
+    RdmaStats, Resources, events, slice, sys,
 };
 use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
@@ -166,7 +167,7 @@ pub(super) struct ProgressState {
 struct Control {
     cq: Option<Box<RdmaCq>>,
     receive_cq: Option<Box<RdmaCq>>,
-    endpoints: EndpointStore,
+    endpoints: QpStore,
     next_tag: u64,
     dirty: bool,
     stopping: bool,
@@ -186,7 +187,7 @@ impl CqLane {
         quota: Arc<super::quota::CqQuota>,
         verbs: &'static sys::Verbs,
     ) -> Result<Arc<Self>> {
-        let endpoints = EndpointStore::new(config.max_endpoints)?;
+        let endpoints = QpStore::new(config.max_endpoints)?;
         let completion_events = if config.progress_mode == RdmaProgressMode::EventDriven {
             Some(CompletionEvents::new(
                 Arc::clone(&device),
@@ -826,7 +827,7 @@ impl CqLane {
         self: &Arc<Self>,
         matches: impl Fn(&Peer) -> bool,
         deadline: Instant,
-    ) -> Result<Option<RdmaEndpoint>> {
+    ) -> Result<Option<RdmaGrant>> {
         remaining(deadline)?;
         let claimed = {
             let mut control = self
@@ -891,7 +892,7 @@ impl CqLane {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .reused_connections += 1;
-        Ok(Some(RdmaEndpoint {
+        Ok(Some(RdmaGrant {
             record,
             progress: Arc::clone(self),
             local,
@@ -902,6 +903,7 @@ impl CqLane {
             claim,
             released: false,
             cached_peer: Some(peer),
+            endpoint: None,
         }))
     }
 

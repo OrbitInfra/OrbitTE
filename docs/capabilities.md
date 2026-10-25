@@ -49,3 +49,9 @@ is optional. Other accelerator platforms are outside the selected scope.
 Implemented, qualified and independently accepted are different states.
 See [qualification](qualification.md) for the latest declared evidence and
 [the completion plan](completion-plan.md) for outstanding acceptance gates.
+
+
+Peer QP arrays, verified NUMA data-worker binding and a unified device/CQ event
+monitor pass the declared P4.12m CPU DRAM/RoCEv2 native gates. Fixed-width concurrent QP multiplexing and
+physical port recovery remain open. See [qualification](qualification.md) for
+the exact source and hardware gate state.

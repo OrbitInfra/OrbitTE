@@ -1,8 +1,12 @@
 use super::*;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_int;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::TransferOp;
@@ -411,7 +415,7 @@ fn event_wakes_the_existing_worker_and_both_cqs_close_before_the_channel() {
             (
                 stats.active_cqs,
                 stats.active_completion_channels,
-                stats.completion_event_workers,
+                stats.completion_event_sources,
                 stats.progress_workers,
                 stats.active_devices
             ),
@@ -447,7 +451,7 @@ fn partial_channel_and_cq_creation_release_every_proven_owner() {
             (
                 stats.active_cqs,
                 stats.active_completion_channels,
-                stats.completion_event_workers,
+                stats.completion_event_sources,
                 stats.active_devices
             ),
             (0, 0, 0, 0),
@@ -480,7 +484,7 @@ fn arm_failure_uses_physical_lane_retirement_without_polling_fallback() {
         (
             stats.active_cqs,
             stats.active_completion_channels,
-            stats.completion_event_workers,
+            stats.completion_event_sources,
             stats.active_devices
         ),
         (0, 0, 0, 0)
@@ -494,7 +498,7 @@ fn lost_event_consumer_retains_the_actual_lane_and_never_fabricates_an_ack() {
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     endpoint.connect(&endpoint.descriptor()).unwrap();
     let _ = endpoint.transfer(&endpoint.descriptor(), TransferOp::Read, deadline());
-    wait_until(|| runtime.stats().unwrap().completion_event_workers == 0);
+    wait_until(|| runtime.stats().unwrap().completion_event_sources == 0);
     assert!(matches!(
         runtime.close(deadline()),
         Err(Error::Unquiesced { .. })
@@ -538,7 +542,7 @@ fn channel_close_failure_keeps_its_context_and_is_not_retried() {
             stats.active_cqs,
             stats.active_completion_channels,
             stats.retained_completion_channels,
-            stats.completion_event_workers,
+            stats.completion_event_sources,
             stats.active_devices
         ),
         (0, 1, 1, 0, 1)
@@ -574,7 +578,7 @@ fn event_wait_honors_transfer_deadline_and_physical_retirement() {
             stats.active_endpoints,
             stats.active_cqs,
             stats.active_completion_channels,
-            stats.completion_event_workers,
+            stats.completion_event_sources,
             stats.active_devices,
             stats.work_requests
         ),

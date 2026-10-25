@@ -13,6 +13,7 @@ use crate::{Error, Result};
 #[derive(Default)]
 pub(super) struct Workers {
     pool: Mutex<Pool>,
+    pub(super) monitor: Arc<super::monitor::Monitor>,
 }
 
 #[derive(Default)]
@@ -24,6 +25,7 @@ struct Pool {
 
 struct WorkerContext {
     inflight_slices: AtomicUsize,
+    affinity: crate::platform::cpu_probe::CpuAffinity,
     pending: Mutex<Vec<Lane>>,
     thread: OnceLock<thread::Thread>,
     stopping: AtomicBool,
@@ -91,9 +93,11 @@ impl Workers {
         }
         let count = progress.shared.config.num_lanes;
         if pool.workers.is_empty() {
+            let affinities = crate::platform::cpu_probe::worker_affinities()?;
             for id in 0..count {
                 let context = Arc::new(WorkerContext {
                     inflight_slices: AtomicUsize::new(0),
+                    affinity: affinities[id % affinities.len()].clone(),
                     pending: Mutex::default(),
                     thread: OnceLock::new(),
                     stopping: AtomicBool::new(false),
@@ -107,9 +111,10 @@ impl Workers {
                     .unwrap_or_else(|p| p.into_inner())
                     .progress_workers += 1;
                 let run = Arc::clone(&context);
+                let (started, ready) = std::sync::mpsc::sync_channel(1);
                 match thread::Builder::new()
                     .name(format!("orbitte-rdma-{id}"))
-                    .spawn(move || run.run())
+                    .spawn(move || run.run(started))
                 {
                     Ok(handle) => {
                         let _ = context.thread.set(handle.thread().clone());
@@ -119,6 +124,23 @@ impl Workers {
                             .unwrap_or_else(|p| p.into_inner())
                             .opened_progress_workers += 1;
                         pool.workers.push((context, handle));
+                        let initialized = ready
+                            .recv()
+                            .map_err(|_| Error::Unquiesced {
+                                operation: "RDMA worker affinity startup",
+                                code: libc::EIO,
+                            })
+                            .and_then(|result| result);
+                        if let Err(error) = initialized {
+                            pool.stopped = true;
+                            for (worker, _) in &pool.workers {
+                                worker.stop();
+                            }
+                            for (_, worker) in pool.workers.drain(..) {
+                                let _ = worker.join();
+                            }
+                            return Err(error);
+                        }
                     }
                     Err(error) => {
                         context
@@ -273,6 +295,7 @@ impl Workers {
                 });
             }
         }
+        self.monitor.close(deadline)?;
         failure.map_or(Ok(()), Err)
     }
 }
@@ -322,11 +345,20 @@ impl WorkerContext {
         }
     }
 
-    fn run(self: Arc<Self>) {
+    fn run(self: Arc<Self>, started: std::sync::mpsc::SyncSender<Result<()>>) {
         let mut exit = WorkerExit {
             context: Arc::clone(&self),
             lanes: Vec::new(),
         };
+        let bound = self.affinity.bind();
+        #[cfg(test)]
+        if bound.is_ok() {
+            tests::observe_affinity(&self.affinity);
+        }
+        let success = bound.is_ok();
+        if started.send(bound).is_err() || !success {
+            return;
+        }
         let mut cursor = 0usize;
         loop {
             exit.lanes

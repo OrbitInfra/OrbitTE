@@ -1,8 +1,9 @@
 use super::*;
-use crate::transport::rdma::endpoint::{ConnectionLease, GrantLease};
+use crate::transport::rdma::grant::GrantLease;
+use crate::transport::rdma::qp::ConnectionLease;
 use crate::transport::rdma::tests::{events, pause, runtime};
 use crate::transport::rdma::{
-    ConnectionResources, GrantResources, RdmaEndpoint, RdmaTransport, Staging,
+    ConnectionResources, GrantResources, RdmaGrant, RdmaTransport, Staging,
 };
 
 fn deadline() -> Instant {
@@ -56,7 +57,7 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
             let first = endpoints.remove(0);
             let pause = pause(&runtime);
             thread::scope(|scope| {
-                let run = |mut endpoint: RdmaEndpoint| {
+                let run = |mut endpoint: RdmaGrant| {
                     let remote = endpoint.descriptor();
                     endpoint.transfer(&remote, operation, deadline()).unwrap();
                     endpoint.close().unwrap();
@@ -120,7 +121,7 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
 }
 
 // Pause at the real owner boundary: accepted by the lane, before QP creation.
-fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
+fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
     let device = runtime.device().unwrap();
     let progress = runtime.progress(Arc::clone(&device)).unwrap();
     {
@@ -170,7 +171,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
             message: None,
         }),
     });
-    RdmaEndpoint {
+    RdmaGrant {
         record: progress.register(resources).unwrap(),
         progress,
         local: Descriptor::default(),
@@ -181,6 +182,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaEndpoint {
         claim: 1,
         released: false,
         cached_peer: None,
+        endpoint: None,
     }
 }
 
@@ -653,7 +655,7 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
         thread::yield_now();
     }
     crate::transport::rdma::context::tests::emit_async(&runtime, 255);
-    while runtime.stats().unwrap().async_event_workers != 0 {
+    while runtime.stats().unwrap().async_event_sources != 0 {
         assert!(Instant::now() < deadline);
         thread::yield_now();
     }
@@ -705,7 +707,7 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
     crate::transport::rdma::context::tests::emit_async(&runtime, 3);
     wait_blocked(&pause);
     crate::transport::rdma::context::tests::emit_async(&runtime, 255);
-    wait_until(|| runtime.stats().unwrap().async_event_workers == 0);
+    wait_until(|| runtime.stats().unwrap().async_event_sources == 0);
     release(&pause);
     drop(constructor);
     wait_until(|| runtime.stats().unwrap().retained_grants == 2);
@@ -1367,7 +1369,7 @@ fn completion_event_ack_precedes_progress_lock_and_cq_destruction_wait() {
         (
             stats.active_cqs,
             stats.active_completion_channels,
-            stats.completion_event_workers,
+            stats.completion_event_sources,
             stats.active_devices
         ),
         (0, 0, 0, 0)
@@ -1409,7 +1411,7 @@ fn completion_event_burst_is_acked_while_progress_or_budget_is_locked() {
             (
                 stats.active_cqs,
                 stats.active_completion_channels,
-                stats.completion_event_workers
+                stats.completion_event_sources
             ),
             (0, 0, 0)
         );
@@ -1454,7 +1456,7 @@ fn asynchronous_event_burst_is_acked_while_progress_or_budget_is_locked() {
             (
                 stats.active_cqs,
                 stats.active_devices,
-                stats.async_event_workers
+                stats.async_event_sources
             ),
             (0, 0, 0)
         );
@@ -1462,7 +1464,7 @@ fn asynchronous_event_burst_is_acked_while_progress_or_budget_is_locked() {
 }
 
 fn post_receive(
-    endpoint: &mut super::super::RdmaEndpoint,
+    endpoint: &mut super::super::RdmaGrant,
     binding: &[u8; COMPLETION_MESSAGE_SIZE],
 ) -> crate::Result<()> {
     let credits = super::super::receive::ReceiveCredits::acquire(

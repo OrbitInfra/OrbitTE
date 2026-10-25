@@ -695,7 +695,7 @@ unsafe extern "C" fn connect(
     traffic_class: u8,
     hop_limit: u8,
 ) -> c_int {
-    // SAFETY: RdmaEndpoint owns an initialized QP and validates both descriptors
+    // SAFETY: RdmaGrant owns an initialized QP and validates both descriptors
     // before this call. Each mask matches the initialized fields for its state.
     unsafe {
         let h = &mut *handles;
@@ -832,7 +832,7 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: RdmaEndpoint owns the MR/QP and bytes until successful teardown. The
+    // SAFETY: RdmaGrant owns the MR/QP and bytes until successful teardown. The
     // provider consumes these WR/SGE descriptors synchronously during post.
     unsafe {
         *result = PostResult::default();
@@ -1025,7 +1025,7 @@ unsafe extern "C" fn send_completion(
 }
 
 unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Completion) -> c_int {
-    // SAFETY: RdmaEndpoint retains the CQ; one initialized output receives one CQE.
+    // SAFETY: RdmaGrant retains the CQ; one initialized output receives one CQE.
     unsafe {
         let cq = (*h).cq.cast::<ffi::ibv_cq>();
         let Some(poll_cq) = (*(*cq).context).ops.poll_cq else {

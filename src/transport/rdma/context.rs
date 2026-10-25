@@ -14,6 +14,7 @@ pub(super) struct RdmaContext {
     verbs: &'static sys::Verbs,
     pub(super) asynchronous: Arc<events::State>,
     pub(super) counters: Arc<events::Counters>,
+    pub(super) monitor: Arc<super::monitor::Monitor>,
 }
 
 enum State {
@@ -24,7 +25,7 @@ enum State {
 
 struct Resources {
     handles: sys::DeviceHandles,
-    events: Option<events::Events>,
+    events: Option<super::monitor::Registration>,
     usage: Arc<Mutex<RdmaStats>>,
     domain: [u8; 16],
     next_connection: u64,
@@ -51,6 +52,7 @@ impl RdmaContext {
         usage: Arc<Mutex<RdmaStats>>,
         counters: Arc<events::Counters>,
         address: RdmaAddress,
+        monitor: Arc<super::monitor::Monitor>,
     ) -> Result<Arc<Self>> {
         let name = CString::new(address.device.as_str())
             .map_err(|_| Error::InvalidConfig("RDMA device contains NUL"))?;
@@ -73,6 +75,7 @@ impl RdmaContext {
             verbs,
             asynchronous: Arc::default(),
             counters,
+            monitor,
         });
         let initialized = {
             let mut state = owner
@@ -97,11 +100,15 @@ impl RdmaContext {
                 }
                 resources.address = observed;
                 if let Some(asynchronous) = verbs.asynchronous {
-                    resources.events = Some(events::Events::start(
-                        &resources.handles,
-                        asynchronous,
+                    let context = NonNull::new(resources.handles.context)
+                        .ok_or(Error::Internal("missing RDMA context"))?;
+                    resources.events = Some(owner.monitor.register(
+                        super::monitor::Source::Async {
+                            context,
+                            fd: resources.handles.async_fd,
+                            verbs: asynchronous,
+                        },
                         Arc::clone(&owner.asynchronous),
-                        Arc::clone(&resources.usage),
                         Arc::clone(&owner.counters),
                     )?);
                 }

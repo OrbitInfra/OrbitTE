@@ -14,7 +14,11 @@ mod discovery;
 mod endpoint;
 mod endpoint_store;
 mod events;
+mod grant;
 mod keys;
+mod monitor;
+mod qp;
+mod qp_store;
 mod quota;
 mod rail_monitor;
 mod rdma_transport;
@@ -29,10 +33,8 @@ pub(crate) use rdma_transport::RdmaTransport;
 pub use stats::RdmaStats;
 
 use context::RdmaContext;
-use endpoint::{
-    Buffer, ConnectionId, ConnectionResources, Descriptor, GrantResources, Phase, RdmaEndpoint,
-    Resources, Staging,
-};
+use grant::{Buffer, GrantResources, RdmaGrant, Staging};
+use qp::{ConnectionId, ConnectionResources, Descriptor, Phase, Resources};
 
 pub(crate) const DESCRIPTOR_SIZE: usize = 40;
 pub(super) const WR_ID_STRIDE: u64 = 128;

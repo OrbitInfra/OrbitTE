@@ -341,7 +341,7 @@ fn connected_endpoint_peer() {
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
-            closed.async_event_workers,
+            closed.async_event_sources,
             closed.persistent_mrs,
             closed.window_key_indices,
             closed.retained_endpoints,
@@ -362,8 +362,8 @@ fn connected_endpoint_peer() {
         (4, 4)
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
-        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     println!(
         "ORBITTE_OWNER_STATS {{\"idle_connections\":4,\"idle_grants\":0,\"connections\":0,\"grants\":0,\"retained_connections\":0,\"retained_grants\":0}}"

@@ -108,7 +108,7 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
     assert_eq!(
         (
             idle.active_completion_channels,
-            idle.completion_event_workers
+            idle.completion_event_sources
         ),
         (
             usize::from(enabled && !fault_profile),
@@ -120,7 +120,7 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         (
             closed.active_completion_channels,
             closed.retained_completion_channels,
-            closed.completion_event_workers
+            closed.completion_event_sources
         ),
         (0, 0, 0)
     );
@@ -139,9 +139,9 @@ fn record_completion_events(idle: &RdmaStats, closed: &RdmaStats, fault_profile:
         }
     }
     println!(
-        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_workers\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"workers\":0}}",
+        "ORBITTE_CQ_EVENT_STATS {{\"opened_channels\":{},\"idle_sources\":{},\"events\":{},\"arms\":{},\"waits\":{},\"active_channels\":0,\"retained_channels\":0,\"sources\":0}}",
         closed.opened_completion_channels,
-        idle.completion_event_workers,
+        idle.completion_event_sources,
         closed.completion_events,
         closed.cq_notification_arms,
         closed.cq_event_waits
@@ -542,15 +542,15 @@ fn shared_cq_peer() {
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
-        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     assert_eq!(
         (
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
-            closed.async_event_workers,
+            closed.async_event_sources,
             closed.active_endpoints,
             closed.persistent_mrs
         ),
@@ -882,15 +882,15 @@ fn source_window_peer() {
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
-        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     assert_eq!(
         (
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
-            closed.async_event_workers,
+            closed.async_event_sources,
             closed.active_windows,
             closed.active_endpoints,
             closed.persistent_mrs,
@@ -1178,7 +1178,7 @@ fn duplex_completion_peer() {
             idle.opened_cqs,
             idle.active_cqs,
             idle.progress_workers,
-            idle.async_event_workers
+            idle.async_event_sources
         ),
         (2, 2, 1, 1)
     );
@@ -1241,7 +1241,7 @@ fn duplex_completion_peer() {
             closed.active_devices,
             closed.active_cqs,
             closed.progress_workers,
-            closed.async_event_workers,
+            closed.async_event_sources,
             closed.active_endpoints,
             closed.active_grants,
             closed.persistent_mrs,
@@ -1277,8 +1277,8 @@ fn duplex_completion_peer() {
         closed.window_key_exhaustions
     );
     println!(
-        "ORBITTE_ASYNC_STATS {{\"idle_workers\":{},\"workers\":{},\"acknowledged_events\":{}}}",
-        idle.async_event_workers, closed.async_event_workers, closed.acknowledged_async_events
+        "ORBITTE_ASYNC_STATS {{\"idle_sources\":{},\"sources\":{},\"acknowledged_events\":{}}}",
+        idle.async_event_sources, closed.async_event_sources, closed.acknowledged_async_events
     );
     println!(
         "{{\"role\":\"{role}\",\"status\":\"passed\",\"duplex\":true,\"qps_per_phase\":{},\"cq_capacity\":{capacity},\"sq_window\":1,\"peak_work_requests\":{},\"peak_receive_work_requests\":{},\"peak_pending_qps\":{},\"opened_cqs\":{},\"completed_read_bytes\":{},\"completed_write_bytes\":{},\"completed_sends\":{},\"completed_receives\":{},\"full_buffer_and_guards\":true,\"all_resources_drained\":true,\"performance_measurement\":false}}",

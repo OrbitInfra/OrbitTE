@@ -910,6 +910,28 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   Two native wrong-owner controls and one CPU reversed-load control reject
   their intended errors. Independent acceptance and full P4 remain open. See
   [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
+- [ ] **P4.12m — peer QP arrays, NUMA worker binding and unified event monitor
+  (Implemented; declared native gates pass, independent acceptance open).**
+  Context-owned peer endpoints retain cross-lane physical QP arrays; CQ-local
+  stores own idle/retiring progress and exact WR lookup. `RdmaGrant` separates
+  each memory authorization from its persistent peer. Reuse consults the array
+  while preserving bilateral identities, capability, generation and lane.
+  Workers bind to allowed NUMA CPU sets before admission. One transport monitor
+  owns all device/CQ event consumption, with get/ACK serialized before native
+  owner detachment and atomic fault/receipt bookkeeping. CPU gates cover
+  cpuset intersection, actual binding, multiple event sources, concurrent ACK
+  detachment and preserved grant/drain ownership. Frozen source `5ea3a35`
+  passes nineteen stable/Rust 1.85 gates, 203 all-feature units per toolchain
+  and eleven runner controls. Both binaries pass 180 two-host/two-RNIC CPU
+  DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual NUMA masks,
+  CQ/thread and QP-array identities, unified event consumption, admission,
+  faults, native cleanup failures, live recovery and repeated generations.
+  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
+  Two native and one CPU mutation controls reject their intended errors.
+  An initial repeated-close EPIPE is repaired; failed evidence is archived.
+  Fixed-width concurrent QP multiplexing, periodic port recovery and full P4
+  acceptance remain open. See
+  [the owner contract](rdma-cuda.md#peer-qp-arrays-worker-affinity-and-unified-monitor).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native QP and
@@ -919,8 +941,9 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   endpoint-state faults do not qualify physical port/device loss.
 - [ ] Qualify broader multi-context CQ/SQ quota fairness and persistent MR
   owners under physical-rail pressure. Complete the remaining frozen TENT
-  worker/CQ-lane scheduling obligations beyond P4.12l: endpoint QP arrays,
-  thread affinity and monitor consolidation, before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
+  worker/CQ-lane scheduling obligations beyond P4.12m: fixed-width peer QP
+  arrays with concurrent grants per QP and separate message/WR owners, periodic
+  monitor route/recovery responsibilities, before claiming complete worker parity. The declared two-/four-/eight-parent quota/reuse and
   two-RNIC publication/rollback profiles pass. Priority, cross-process bandwidth,
   receiver pacing and adaptive/deadline policies remain in P6.
 - [ ] Establish the real source/requester quiescence contract for each verbs

@@ -2,15 +2,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use super::endpoint_store::Peer;
+use super::endpoint::Peer;
 use super::{
     RdmaConfig, RdmaHostMemory, RdmaStats, buffers,
     context_set::ContextSet,
-    endpoint::{
-        Buffer, ConnectionLease, ConnectionResources, GrantLease, GrantResources, Resources,
-        Staging,
-    },
-    events, quota,
+    events,
+    grant::{Buffer, GrantLease, GrantResources, Staging},
+    qp::{ConnectionLease, ConnectionResources, Resources},
+    quota,
     quota::DeviceLease,
     rail_monitor::{self, NicPath},
     slice::{RdmaSlice, plan_rdma_slices},
@@ -20,7 +19,7 @@ use crate::engine::{PreparedTransfer, remaining};
 use crate::runtime::control_plane::{
     ControlChannel, Operation, REQUEST_SIZE, Reply, Request, u64_at,
 };
-use crate::transport::rdma::{ConnectionId, DESCRIPTOR_SIZE, Descriptor, RdmaEndpoint};
+use crate::transport::rdma::{ConnectionId, DESCRIPTOR_SIZE, Descriptor, RdmaGrant};
 use crate::{
     Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
@@ -99,6 +98,7 @@ impl RdmaTransport {
             .acknowledged_async_events
             .load(Ordering::Relaxed);
         stats.completion_events = self.counters.completion_events.load(Ordering::Relaxed);
+        self.workers.monitor.stats(&mut stats);
         Ok(stats)
     }
 
@@ -118,8 +118,8 @@ impl RdmaTransport {
         range: std::ops::Range<usize>,
         permission: u32,
         deadline: Instant,
-        reuse: Option<RdmaEndpoint>,
-    ) -> Result<RdmaEndpoint> {
+        reuse: Option<RdmaGrant>,
+    ) -> Result<RdmaGrant> {
         remaining(deadline)?;
         let offset = range.start;
         let length = range.end.checked_sub(offset).ok_or(Error::InvalidRange)?;
@@ -291,7 +291,7 @@ impl RdmaTransport {
                 },
                 grant: Some(grant),
             }))?;
-            RdmaEndpoint {
+            RdmaGrant {
                 record,
                 progress,
                 local: Descriptor::default(),
@@ -302,6 +302,7 @@ impl RdmaTransport {
                 claim: 1,
                 released: false,
                 cached_peer: None,
+                endpoint: None,
             }
         };
         #[cfg(test)]
@@ -345,7 +346,7 @@ struct Identity {
 }
 
 impl Identity {
-    fn local(endpoint: &RdmaEndpoint, epoch: SourceEpoch) -> Result<Self> {
+    fn local(endpoint: &RdmaGrant, epoch: SourceEpoch) -> Result<Self> {
         Ok(Self {
             epoch,
             connection: endpoint.incarnation()?,
@@ -600,13 +601,13 @@ const ENDPOINT_DESTROY_TIMEOUT: Duration = Duration::from_secs(30);
 fn close_slices(slices: &mut [RdmaSlice], mut result: Result<()>, requester: bool) -> Result<()> {
     let retirement_deadline = Instant::now() + ENDPOINT_DESTROY_TIMEOUT;
     for slice in slices {
-        slice.endpoint.deadline = retirement_deadline;
+        slice.grant.deadline = retirement_deadline;
         #[cfg(test)]
         if requester {
-            super::tests::before_requester_close(&mut slice.endpoint, &result);
+            super::tests::before_requester_close(&mut slice.grant, &result);
         }
         let _ = requester;
-        if let Err(error) = slice.endpoint.close() {
+        if let Err(error) = slice.grant.close() {
             if result.is_ok() || matches!(error, Error::Unquiesced { .. }) {
                 result = Err(error);
             }
@@ -624,7 +625,7 @@ impl RdmaTransport {
         selection: DeviceLease,
         remote_path: &NicPath,
         reuse_pair: bool,
-    ) -> Result<RdmaEndpoint> {
+    ) -> Result<RdmaGrant> {
         let route = channel.stream.peer_addr()?;
         let operation = if wire.operation == Operation::RdmaRead {
             TransferOp::Read
@@ -679,7 +680,7 @@ impl RdmaTransport {
         request: &PreparedTransfer,
         epoch: SourceEpoch,
         remote_path: &NicPath,
-        mut endpoint: RdmaEndpoint,
+        mut endpoint: RdmaGrant,
     ) -> Result<Option<RdmaSlice>> {
         let route = channel.stream.peer_addr()?;
         let operation = if wire.operation == Operation::RdmaRead {
@@ -772,11 +773,12 @@ impl RdmaTransport {
                 source: false,
                 generation: grant,
             };
+            self.adopt_peer(&mut endpoint, peer)?;
             Ok(Some((binding, remote, peer)))
         })();
         match prepared {
             Ok(Some((binding, remote, peer))) => Ok(Some(RdmaSlice {
-                endpoint,
+                grant: endpoint,
                 binding,
                 remote,
                 peer,
@@ -795,7 +797,7 @@ impl RdmaTransport {
         slice: &mut RdmaSlice,
         memory: &RegisteredMemory,
     ) -> Result<()> {
-        let endpoint = &mut slice.endpoint;
+        let endpoint = &mut slice.grant;
         endpoint.send_completion(&slice.binding.0, slice.remote.rkey)?;
         let cacheable = slice.binding.0[BINDING_SIZE - 1] == 1;
         if cacheable {
@@ -881,9 +883,7 @@ impl RdmaTransport {
                     if operation == TransferOp::Write {
                         effect = RemoteEffect::Unknown;
                     }
-                    slice
-                        .endpoint
-                        .transfer(&slice.remote, operation, deadline)?;
+                    slice.grant.transfer(&slice.remote, operation, deadline)?;
                     self.finish_requester_slice(&mut channel, &mut slice, &request.local)
                 })();
                 return close_slices(std::slice::from_mut(&mut slice), transfer, true);
@@ -1014,20 +1014,19 @@ impl RdmaTransport {
                 if operation == TransferOp::Write {
                     *effect = RemoteEffect::Unknown;
                 }
-                slice.endpoint.progress.submit(
-                    &slice.endpoint.record,
-                    slice.endpoint.claim,
+                slice.grant.progress.submit(
+                    &slice.grant.record,
+                    slice.grant.claim,
                     slice.remote,
                     operation,
                     deadline,
                 )?;
             }
             for slice in &mut slices {
-                slice.endpoint.progress.wait(
-                    &slice.endpoint.record,
-                    slice.endpoint.claim,
-                    deadline,
-                )?;
+                slice
+                    .grant
+                    .progress
+                    .wait(&slice.grant.record, slice.grant.claim, deadline)?;
                 self.finish_requester_slice(&mut channel, slice, &request.local)?;
             }
             Ok(())
@@ -1144,11 +1143,12 @@ impl RdmaTransport {
                 source: true,
                 generation: grant,
             };
+            self.adopt_peer(&mut endpoint, peer)?;
             Ok((binding, remote, peer))
         })();
         match prepared {
             Ok((binding, remote, peer)) => Ok(Some(RdmaSlice {
-                endpoint,
+                grant: endpoint,
                 binding,
                 remote,
                 peer,
@@ -1169,7 +1169,7 @@ impl RdmaTransport {
         slice: &mut RdmaSlice,
     ) -> Result<()> {
         let done = slice.binding.done(channel)?;
-        let endpoint = &mut slice.endpoint;
+        let endpoint = &mut slice.grant;
         endpoint.receive_completion()?;
         let cacheable = slice.binding.0[BINDING_SIZE - 1] == 1;
         if cacheable {

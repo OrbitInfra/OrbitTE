@@ -180,7 +180,7 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
                 assert_eq!(
                     (
                         stats.active_completion_channels,
-                        stats.completion_event_workers
+                        stats.completion_event_sources
                     ),
                     (0, 0)
                 );
@@ -313,7 +313,7 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         .unwrap();
     let (record, peer, descriptor, old_claim) = captured.lock().unwrap().take().unwrap();
     assert_eq!(winner.claim, old_claim + 1);
-    let mut stale = RdmaEndpoint {
+    let mut stale = RdmaGrant {
         record,
         progress: Arc::clone(&progress),
         local: descriptor,
@@ -324,6 +324,7 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         claim: old_claim,
         released: false,
         cached_peer: Some(peer),
+        endpoint: None,
     };
     let log = events(runtime);
     let before = log.lock().unwrap().clone();

@@ -163,7 +163,7 @@ pub(super) fn registration() {
             stats.persistent_mrs,
             stats.persistent_mr_bytes,
             stats.persistent_source_mrs,
-            stats.async_event_workers
+            stats.async_event_sources
         ),
         (0, 0, 0, 0, 0)
     );

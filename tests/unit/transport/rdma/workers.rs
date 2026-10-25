@@ -312,3 +312,19 @@ fn concurrent_dispatch_balances_admitted_slices_and_counts_completed_grant_owner
         .close(Instant::now() + Duration::from_secs(3))
         .unwrap();
 }
+
+pub(super) fn observe_affinity(affinity: &crate::platform::cpu_probe::CpuAffinity) {
+    let actual = crate::platform::cpu_probe::allowed_cpus().unwrap();
+    assert_eq!(
+        actual, affinity.cpus,
+        "RDMA data worker ignored its NUMA CPU mask"
+    );
+    if std::env::var_os("ORBITTE_SHARED_RAILS").is_some() {
+        let node = affinity.node.map_or("null".into(), |node| node.to_string());
+        println!(
+            "ORBITTE_WORKER_AFFINITY {{\"worker\":\"{}\",\"thread\":\"{:?}\",\"node\":{node},\"cpus\":{actual:?}}}",
+            thread::current().name().unwrap(),
+            thread::current().id()
+        );
+    }
+}

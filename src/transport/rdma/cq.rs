@@ -1,11 +1,7 @@
 use std::ffi::c_void;
-use std::io::Write;
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
 
 use super::{RdmaContext, RdmaStats, check, events, sys};
 use crate::{Error, Result};
@@ -21,9 +17,7 @@ struct ChannelResources {
     _device: Arc<RdmaContext>,
     usage: Arc<Mutex<RdmaStats>>,
     verbs: sys::CqEventVerbs,
-    stopping: Arc<AtomicBool>,
-    wake: UnixStream,
-    worker: Option<JoinHandle<()>>,
+    registration: Option<super::monitor::Registration>,
     charged: bool,
     retained: bool,
     failure: Option<(&'static str, i32)>,
@@ -52,105 +46,6 @@ impl Drop for ChannelResources {
     }
 }
 
-struct EventSource {
-    channel: NonNull<c_void>,
-    fd: i32,
-    verbs: sys::CqEventVerbs,
-}
-
-// The channel owner joins this sole consumer before destroying the native handle.
-unsafe impl Send for EventSource {}
-
-struct EventExit {
-    asynchronous: Arc<events::State>,
-    counters: Arc<events::Counters>,
-    usage: Arc<Mutex<RdmaStats>>,
-    stopping: Arc<AtomicBool>,
-}
-
-impl Drop for EventExit {
-    fn drop(&mut self) {
-        if !self.stopping.load(Ordering::Acquire) {
-            self.asynchronous.lost_completion(libc::EIO);
-        }
-        self.usage
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .completion_event_workers -= 1;
-    }
-}
-
-impl EventSource {
-    fn run(&self, wake: UnixStream, exit: &EventExit) {
-        let mut fds = [
-            libc::pollfd {
-                fd: self.fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wake.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        loop {
-            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, -1) };
-            if ready < 0 {
-                let code = std::io::Error::last_os_error()
-                    .raw_os_error()
-                    .unwrap_or(libc::EIO);
-                if code == libc::EINTR {
-                    continue;
-                }
-                exit.asynchronous.lost_completion(code);
-                return;
-            }
-            if exit.stopping.load(Ordering::Acquire) {
-                return;
-            }
-            if fds
-                .iter()
-                .any(|fd| fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0)
-            {
-                exit.asynchronous.lost_completion(libc::EIO);
-                return;
-            }
-            if fds[0].revents & libc::POLLIN == 0 {
-                continue;
-            }
-            loop {
-                if exit.stopping.load(Ordering::Acquire) {
-                    return;
-                }
-                let mut cq = std::ptr::null_mut();
-                let code = unsafe { (self.verbs.get)(self.channel.as_ptr(), &mut cq) };
-                if code == libc::EINTR {
-                    continue;
-                }
-                if code == libc::EAGAIN {
-                    break;
-                }
-                if code != 0 || cq.is_null() {
-                    exit.asynchronous
-                        .lost_completion(if code == 0 { libc::EPROTO } else { code });
-                    return;
-                }
-                // Native destruction may await any receipt in the burst. Neither
-                // telemetry nor progress wake may wait for a teardown-held lock.
-                unsafe { (self.verbs.ack)(cq) };
-                exit.counters
-                    .completion_events
-                    .fetch_add(1, Ordering::Relaxed);
-                exit.asynchronous.notify();
-                if exit.stopping.load(Ordering::Acquire) {
-                    return;
-                }
-            }
-        }
-    }
-}
-
 impl CompletionEvents {
     pub(super) fn new(
         device: Arc<RdmaContext>,
@@ -160,17 +55,13 @@ impl CompletionEvents {
         let native = verbs
             .completion
             .ok_or(Error::Unavailable("RDMA CQ events are unavailable"))?;
-        let (wake, receiver) = UnixStream::pair()?;
-        wake.set_nonblocking(true)?;
         let asynchronous = Arc::clone(&device.asynchronous);
         let mut resources = Box::new(ChannelResources {
             handles: sys::ChannelHandles::default(),
             _device: device,
             usage,
             verbs: native,
-            stopping: Arc::new(AtomicBool::new(false)),
-            wake,
-            worker: None,
+            registration: None,
             charged: false,
             retained: false,
             failure: None,
@@ -185,47 +76,18 @@ impl CompletionEvents {
             usage.opened_completion_channels += 1;
         }
         let initialized = created.and_then(|()| {
-            let source = EventSource {
-                channel: NonNull::new(resources.handles.channel)
-                    .ok_or(Error::Internal("missing RDMA completion channel"))?,
-                fd: resources.handles.fd,
-                verbs: native,
-            };
-            if source.fd < 0 {
-                return Err(Error::Internal("missing RDMA completion fd"));
-            }
-            let state = Arc::clone(&asynchronous);
-            let counters = Arc::clone(&resources._device.counters);
-            let usage = Arc::clone(&resources.usage);
-            let stopping = Arc::clone(&resources.stopping);
-            usage
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .completion_event_workers += 1;
-            match thread::Builder::new()
-                .name("orbitte-rdma-cq-events".into())
-                .spawn(move || {
-                    let exit = EventExit {
-                        asynchronous: state,
-                        counters,
-                        usage,
-                        stopping,
-                    };
-                    source.run(receiver, &exit);
-                }) {
-                Ok(worker) => {
-                    resources.worker = Some(worker);
-                    Ok(())
-                }
-                Err(error) => {
-                    resources
-                        .usage
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .completion_event_workers -= 1;
-                    Err(Error::Io(error))
-                }
-            }
+            let channel = NonNull::new(resources.handles.channel)
+                .ok_or(Error::Internal("missing RDMA completion channel"))?;
+            resources.registration = Some(resources._device.monitor.register(
+                super::monitor::Source::Completion {
+                    channel,
+                    fd: resources.handles.fd,
+                    verbs: native,
+                },
+                Arc::clone(&asynchronous),
+                Arc::clone(&resources._device.counters),
+            )?);
+            Ok(())
         });
         let owner = Arc::new(Self {
             resources: Mutex::new(Some(resources)),
@@ -277,26 +139,12 @@ impl CompletionEvents {
             if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
                 return Err((operation, code));
             }
-            resources.stopping.store(true, Ordering::Release);
-            if resources.worker.is_some() {
-                loop {
-                    match resources.wake.write(&[1]) {
-                        Ok(_) => break,
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(error) => {
-                            return Err((
-                                "RDMA completion consumer wake",
-                                error.raw_os_error().unwrap_or(libc::EIO),
-                            ));
-                        }
-                    }
-                }
-            }
-            if let Some(worker) = resources.worker.take() {
-                if worker.join().is_err() {
-                    return Err(("RDMA completion consumer join", libc::EIO));
-                }
+            if let Some(registration) = &mut resources.registration {
+                registration.stop().map_err(|error| match error {
+                    Error::Unquiesced { operation, code } => (operation, code),
+                    _ => ("RDMA completion monitor detach", libc::EIO),
+                })?;
+                resources.registration = None;
             }
             if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
                 return Err((operation, code));

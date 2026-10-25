@@ -19,11 +19,11 @@
 <text class="small" x="440" y="199" text-anchor="middle">Bounded READ / WRITE</text>
 <rect class="box" x="600" y="140" width="260" height="86"/>
 <text class="label" x="730" y="173" text-anchor="middle">RDMA transport</text>
-<text class="small" x="730" y="199" text-anchor="middle">DeviceSelector · Workers</text>
+<text class="small" x="730" y="199" text-anchor="middle">Workers · NUMA · Monitor</text>
 <path class="edge" d="M730 226V260" marker-end="url(#arrow)"/>
 <rect class="box" x="600" y="260" width="260" height="86"/>
 <text class="label" x="730" y="292" text-anchor="middle">Per-NIC contexts</text>
-<text class="small" x="730" y="318" text-anchor="middle">PD · MRs · CQ lanes · QPs</text>
+<text class="small" x="730" y="318" text-anchor="middle">PD · MRs · CQ lanes · QP arrays</text>
 <rect class="box" x="20" y="260" width="550" height="86"/>
 <text class="label" x="295" y="292" text-anchor="middle">CPU DRAM · NVIDIA host staging</text>
 <text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>
