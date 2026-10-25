@@ -836,6 +836,17 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
   mutation rejects releasing leases between restart generations. Both selected
   containers lack CAP_NET_ADMIN; physical port/device-down is unqualified.
   See [the destruction and restart contract](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
+- [ ] **P4.12i — native cleanup failure and repeated process generations
+  (In progress; source fixture compiles, native qualification pending).**
+  Exercise real provider EBUSY from a dependent RESET QP at CQ destruction and
+  an unbound memory window at PD deallocation, on either peer and rail. Keep
+  unproven CQ debt, backing and admission owned after repeated close/Drop; allow
+  already drained backing to leave a retained PD/context. Expand direct-child
+  supervision to requester death and three process generations under both
+  original RNIC locks. Check every earlier source epoch against a re-bound RPC
+  address and registration ID before new QPs. These are fresh-process recovery
+  profiles; poisoned-live-engine recovery and physical link/device loss remain
+  unqualified. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
 - [ ] Qualify geometry and admission contention beyond the declared eight-parent,
   5 MiB/folded/exact-quarter-tail profiles, topology ranks, timeout/retry and
   endpoint incarnations. Add physical link/device loss, native cleanup failure,

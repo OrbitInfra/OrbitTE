@@ -97,53 +97,43 @@ class SupervisionOwnership(unittest.TestCase):
             self.assertEqual(result['exit_code'], -9)
 
     def test_restart_keeps_both_leases_through_owned_kill_reap_and_replacement(self):
-        for unexpected in (False, True):
-            with self.subTest(unexpected=unexpected), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                case = root / 'case'
-                case.mkdir()
+        cases = [(role, killed, generations, unexpected)
+                 for role in ('source', 'requester')
+                 for killed in ('source', 'requester')
+                 for generations in (2, 3) for unexpected in (False, True)]
+        for role, killed, generations, unexpected in cases:
+            with self.subTest(role=role, killed=killed, generations=generations, unexpected=unexpected), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory);case = root / 'case';case.mkdir()
                 locks = [root / 'nic1.lock', root / 'nic2.lock']
-                for lock in locks:
-                    lock.touch()
+                for lock in locks: lock.touch()
                 binary = root / 'hardware_peer'
-                binary.write_text('#!' + sys.executable + '\n' + '''import fcntl,json,os,pathlib,time
-root=pathlib.Path(os.environ['ORBITTE_RESTART_ROOT'])
-generation=int(os.environ['ORBITTE_RESTART_GENERATION'])
-if generation==0:
- if os.environ['UNEXPECTED']=='1':raise SystemExit(7)
- (root/'restart-request.txt').write_text(str(os.getpid())+' 127.0.0.1:1 00 0')
- while True:time.sleep(1)
-held=[]
-for name in json.loads(os.environ['LOCKS']):
- with open(name,'a+') as lock:
-  try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-  except BlockingIOError:held.append(name)
-(root/'replacement-leases.json').write_text(json.dumps(held))
-''')
+                binary.write_text('#!' + sys.executable + '\n' + "import fcntl,json,os,pathlib,time\nroot=pathlib.Path(os.environ['ORBITTE_RESTART_ROOT'])\ngeneration=int(os.environ['ORBITTE_RESTART_GENERATION'])\nif os.environ['UNEXPECTED']=='1':raise SystemExit(7)\nheld=[]\nfor name in json.loads(os.environ['LOCKS']):\n with open(name,'a+') as lock:\n  try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)\n  except BlockingIOError:held.append(name)\n(root/('leases-'+str(generation)+'.json')).write_text(json.dumps(held))\nif os.environ['ROLE']==os.environ['KILLED'] and generation+1<int(os.environ['GENERATIONS']):\n marker=root/('restart-request-'+str(generation)+'.txt')\n temporary=marker.with_suffix('.tmp')\n temporary.write_text(str(os.getpid())+' 127.0.0.1:1 00 1 0 1 '+str(generation))\n temporary.replace(marker)\n while True:time.sleep(1)\n")
                 binary.chmod(0o700)
                 config = case / 'config.json'
                 config.write_text(json.dumps(dict(hostname=socket.gethostname(),
                     boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                     binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                     locks=[str(lock) for lock in locks], arguments=[], timeout_seconds=3,
-                    restart_role='source', env=dict(UNEXPECTED=str(int(unexpected)), LOCKS=json.dumps([str(lock) for lock in locks])))))
+                    restart_role=role, restart_kill_role=killed, restart_generations=generations,
+                    env=dict(ROLE=role, KILLED=killed, GENERATIONS=str(generations),
+                             UNEXPECTED=str(int(unexpected)), LOCKS=json.dumps([str(lock) for lock in locks])))))
                 process = subprocess.run([sys.executable, '-B', str(Path(supervise.__file__)), 'start', str(config)],
                                          capture_output=True, text=True, timeout=12)
                 self.assertEqual(process.returncode, 0, process.stderr)
                 result = json.loads((case / 'result.json').read_text())
                 self.assertTrue(result['child_reaped'] and result['resource_locks_released'])
                 self.assertEqual(result['status'], 'failed' if unexpected else 'passed')
-                self.assertEqual(len(result['phases']), 1 if unexpected else 2)
+                self.assertEqual(len(result['phases']), 1 if unexpected else generations)
                 for phase in result['phases']:
                     self.assertTrue(phase['child_reaped'])
                     self.assertFalse(Path('/proc', str(phase['native_pid'])).exists())
-                if not unexpected:
-                    self.assertEqual([phase['exit_code'] for phase in result['phases']], [-9, 0])
-                    self.assertTrue(result['phases'][0]['intentional_sigkill'])
-                    self.assertEqual(json.loads((case / 'replacement-leases.json').read_text()), [str(lock) for lock in locks])
+                    if not unexpected:
+                        killed_phase = role == killed and phase['generation'] + 1 < generations
+                        self.assertEqual(phase['exit_code'], -9 if killed_phase else 0)
+                        self.assertEqual(phase['intentional_sigkill'], killed_phase)
+                        self.assertEqual(json.loads((case / ('leases-' + str(phase['generation']) + '.json')).read_text()), [str(lock) for lock in locks])
                 for lock in locks:
-                    with lock.open('a+') as contender:
-                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    with lock.open('a+') as contender: fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 

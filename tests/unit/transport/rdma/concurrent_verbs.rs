@@ -4,8 +4,13 @@ use ibverbs_sys as ffi;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{CStr, c_char, c_int};
 
+#[path = "retention.rs"]
+mod retention;
+pub(super) use retention::retained;
+
 struct Owner {
     nic: usize,
+    pd: usize,
     qp: usize,
     qpn: u32,
     cq: usize,
@@ -16,6 +21,7 @@ struct Owner {
 #[derive(Default)]
 struct Trace {
     mode: String,
+    retirement: Option<retention::Retirement>,
     shape: Shape,
     requester: bool,
     fault_rail: usize,
@@ -65,6 +71,7 @@ static TRACE: OnceLock<Mutex<Trace>> = OnceLock::new();
 pub(super) fn initialize(mode: &str, requester: bool, fault_rail: usize, shape: Shape) {
     *TRACE.get_or_init(Default::default).lock().unwrap() = Trace {
         mode: mode.into(),
+        retirement: retention::Retirement::new(requester),
         shape,
         requester,
         fault_rail,
@@ -135,8 +142,10 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .connection
                 .handles
                 .receive_cq as usize;
+            let pd = unsafe { (*(qp as *const ffi::ibv_qp)).pd } as usize;
             Owner {
                 nic,
+                pd,
                 qp,
                 qpn,
                 cq,
@@ -763,7 +772,12 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         drop(owner);
         trace.fault_debt.push(1);
     }
-    let code = unsafe { (sys::REAL.destroy_cq)(h) };
+    let mut retirement = trace.retirement.take();
+    let code = retirement
+        .as_mut()
+        .and_then(|r| unsafe { r.destroy_cq(&trace, h) })
+        .unwrap_or_else(|| unsafe { (sys::REAL.destroy_cq)(h) });
+    trace.retirement = retirement;
     if code == 0 {
         if observed {
             trace.failed_cq_receipts += 1;
@@ -785,7 +799,21 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     code
 }
 
+unsafe extern "C" fn dealloc_pd(h: *mut sys::DeviceHandles) -> c_int {
+    let mut trace = TRACE.get().unwrap().lock().unwrap();
+    let mut retirement = trace.retirement.take();
+    let code = retirement
+        .as_mut()
+        .and_then(|r| unsafe { r.dealloc_pd(&trace, h) })
+        .unwrap_or_else(|| unsafe { (sys::REAL.dealloc_pd)(h) });
+    trace.retirement = retirement;
+    code
+}
+
 unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
+    if let Some(retirement) = &TRACE.get().unwrap().lock().unwrap().retirement {
+        retirement.before_context_close(unsafe { &*h });
+    }
     let code = unsafe { (sys::REAL.close_device)(h) };
     if code == 0 {
         TRACE.get().unwrap().lock().unwrap().closed += 1;
@@ -803,6 +831,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     destroy_qp,
     destroy_cq,
     deregister,
+    dealloc_pd,
     close_device,
     ..sys::REAL
 };

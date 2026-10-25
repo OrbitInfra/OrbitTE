@@ -13,6 +13,22 @@ import time
 import uuid
 
 
+def restart_plan(case):
+    mode = case.get('mode')
+    if mode in ('large-cq-busy', 'large-pd-busy'):
+        role = case.get('fault_role')
+        if role not in ('source', 'requester'):
+            raise ValueError('native cleanup faults require an explicit source/requester fault_role')
+        return role, 2
+    if 'fault_role' in case:
+        raise ValueError('fault_role is reserved for native cleanup modes')
+    if mode in ('large-peer-exit', 'large-peer-restart'):
+        return 'source', 3 if mode.endswith('restart') else 2
+    if mode in ('large-requester-exit', 'large-requester-restart'):
+        return 'requester', 3 if mode.endswith('restart') else 2
+    return None
+
+
 def native_peer_test(profile):
     runner = profile.get('runner')
     if runner == 'orbitte-multirail':
@@ -74,7 +90,11 @@ class Controller:
         self.ssh(node, ['ldd', self.remote + '/hardware_peer'])
 
     def collect(self, node, root):
-        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in ['running.json','stdout.log','stderr.log','result.json','supervisor.log','maps.txt','maps-0.txt','maps-1.txt','restart.json','restart-request.txt','restart-peer-state.txt','restart-peer.txt']}))"
+        names = ['running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
+        names += ['maps-' + str(g) + '.txt' for g in range(3)]
+        names += ['restart-' + kind + '-' + str(g) + '.txt'
+                  for kind in ('state', 'request', 'peer-state', 'peer') for g in range(3)]
+        script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in " + repr(names) + "}))"
         return json.loads(self.ssh(node, ['python3', '-c', script]))
 
     def start(self, node, root, kind, arguments, transport, environment=None):
@@ -90,8 +110,10 @@ class Controller:
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
         config = {'hostname': target['hostname'], 'boot_id': target['boot_id'], 'binary_sha256': self.sha256, 'arguments': arguments, 'locks': locks, 'env': environment, 'timeout_seconds': 55}
-        if environment.get('ORBITTE_RAIL_MODE') == 'large-peer-exit':
-            config['restart_role'] = environment['ORBITTE_SHARED_ROLE']
+        if 'ORBITTE_RESTART_GENERATIONS' in environment:
+            config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
+                          restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
+                          restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']))
         local = self.output / (Path(root).name + '.json')
         local.write_text(json.dumps(config, indent=2) + '\n')
         self.ssh(node, ['mkdir', '-m', '700', '-p', root])
@@ -273,13 +295,14 @@ class Controller:
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                                            'large-quota', 'large-close', 'large-cq-error',
                                            'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
-                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit']
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy']
                 or case.get('operation') not in ['read', 'write']
                 or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
             raise ValueError('invalid explicit multirail profile')
         if case['mode'] != 'healthy' and case['mask'] != 3:
             raise ValueError('multirail fault controls require both RNICs')
+        restart = restart_plan(case)
 
         def command(node, role, kind, root, readiness=None):
             arguments = [native_peer_test(self.profile), '--exact', '--ignored', '--test-threads=1', '--nocapture']
@@ -295,6 +318,9 @@ class Controller:
                 'ORBITTE_RAIL_FAULT': str(case['fault_rail']),
                 'ORBITTE_RAIL_MASK': str(case['mask']),
             }
+            if restart is not None:
+                environment['ORBITTE_RESTART_KILL_ROLE'] = restart[0]
+                environment['ORBITTE_RESTART_GENERATIONS'] = str(restart[1])
             if readiness is not None:
                 if len(readiness) != 1:
                     raise ValueError('invalid multirail readiness')
@@ -325,24 +351,27 @@ class Controller:
             raise RuntimeError('source readiness timeout; supervisor will collect and reap its own child')
         arguments, environment = command(requester, 'requester', case['requester_kind'], requester_root, readiness)
         self.start(requester, requester_root, case['requester_kind'], arguments, case['transport'], environment)
-        forwarded = False
+        forwarded = set()
+        restart = restart_plan(case)
         while time.monotonic() - started < 65:
             evidence = {role: self.collect(node, root) for role, node, root in [('source', source, source_root), ('requester', requester, requester_root)]}
-            if case.get('mode') == 'large-peer-exit' and not forwarded:
+            if restart is not None:
                 running = json.loads(evidence['source']['running.json'] or '{}')
                 ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
                          if line.startswith('ORBITTE_READY ')]
-                if running.get('generation') == 1 and len(ready) == 2:
-                    destination = requester_root + '/restart-peer.txt'
-                    script = "from pathlib import Path;p=Path(" + repr(destination) + ");t=p.with_suffix('.tmp');t.write_text(" + repr(ready[-1]) + ");t.replace(p)"
+                generation = running.get('generation')
+                if (type(generation) is int and 0 < generation < restart[1]
+                        and generation not in forwarded and len(ready) > generation):
+                    destination = requester_root + '/restart-peer-' + str(generation) + '.txt'
+                    script = "from pathlib import Path;p=Path(" + repr(destination) + ");t=p.with_suffix('.tmp');t.write_text(" + repr(ready[generation]) + ");t.replace(p)"
                     self.ssh(requester, ['python3', '-c', script])
-                    forwarded = True
+                    forwarded.add(generation)
             if all(record['result.json'] is not None for record in evidence.values()):
                 break
             time.sleep(0.3)
         passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
         # Preserve every successful/failed run verbatim, including supervisors.
-        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'restart_ready_forwarded': forwarded, 'evidence': evidence}, indent=2) + '\n')
+        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'restart_ready_forwarded': sorted(forwarded), 'evidence': evidence}, indent=2) + '\n')
         if not passed:
             raise RuntimeError(f'case {index} failed; retained evidence in {self.output}')
         print(json.dumps({'case': index, 'status': 'passed', **case}), flush=True)

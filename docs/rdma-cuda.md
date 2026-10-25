@@ -2943,3 +2943,52 @@ topologies, poisoned-live-engine recovery, installed consumers, GPU/GDR,
 performance, independent acceptance and the full P4 exit remain unqualified.
 The earlier independent P4.8 repeat also remains open. OrbitKV integration stays
 deferred until the large native stage boundary is accepted.
+
+## Native cleanup failure and repeated process generations
+
+P4.12i extends the private native acceptance contract. Its source compiles and
+its runner controls pass; native qualification is in progress. Production
+source, public APIs and wire v12 are unchanged from PR #38.
+
+The frozen TENT endpoint uses `beginDestroyNoLock` to fence submissions and
+transition ready QPs to ERR. `finishDestroy` waits for WR/notification debt in
+its own thirty-second window, then calls `deconstructUnlocked`. That method
+keeps failed native handles and marks EP_DESTROYED only after its children are
+gone; a later finish call can retry. OrbitTE follows the context/PD, endpoint,
+local-buffer and worker boundaries, with an explicit ownership difference:
+failed native teardown quarantines actual owners and their charges without a
+native Drop retry. A live poisoned engine is not automatically repaired.
+
+The new CQ profile creates a real RESET RC QP depending on the selected native
+CQ immediately before calling the real `ibv_destroy_cq`. The provider's EBUSY
+must leave the CQ handle intact. A deliberately hidden actual successful CQE
+leaves exact SQ or RQ debt outstanding. The worker must retain that debt,
+endpoint/grant, MR borrow, backing, DMA loan and admission. Test observers drop
+their extra references before a weak-allocation check. Repeated close and Drop
+must neither retry destruction nor report drain. The live blocker is queried
+again after caller handles are dropped.
+
+The PD profile first completes and drains both payload rounds, MRs and CQs.
+It then allocates an actual unbound Type-2 memory window in the selected PD
+before real `ibv_dealloc_pd`. EBUSY must retain PD/context and prohibit device
+close; already drained application memory must be released. CQ-level backing
+retention and device-only retention protect different resource boundaries.
+
+Supervisors SIGKILL only their exact marked direct child, waitpid it, and retain
+both original RNIC leases through two or three fresh process generations.
+Source and requester each rebind their own RPC address; source registration IDs
+repeat while epochs change. Every earlier source epoch must fail descriptors
+and READ/WRITE admission before QPs or remote effects. Requester-death tests
+send the actual accepted WR prefixes to the surviving source before exit;
+only that survivor can claim its own native drain and guard verification.
+Retained or abruptly killed processes have waitpid/lease receipts, never a
+post-death in-process zero-counter or sentinel claim. Final healthy processes
+verify two payload generations and forty-QP reuse.
+
+The external working evidence is under
+`/root/orbitte-artifacts/rdma-cleanup-restart-20261025`. Completed standalone
+provider probes on both locked RNICs of both hosts establish real CQ and PD
+EBUSY and release all probe resources. Those probes alone do not qualify the
+engine's failure path. Physical port/device loss, native MR deregistration
+failure, poisoned-live-engine recovery, GPU/GDR, independent acceptance and the
+full P4 exit remain open. OrbitKV integration stays deferred.
