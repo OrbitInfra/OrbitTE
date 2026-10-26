@@ -13,6 +13,24 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The P4 closeout audit and context-module refactor change source organization
+and the execution queue. Context orchestration remains on `RdmaTransport`, with
+its previous method bodies and resource semantics. The audit records two real
+code gaps (initial-down contexts and automatic GID reselection) separately from
+outstanding hardware gates. It grants no new hardware qualification; the scoped
+installed results below retain their original artifacts. See
+[the source audit](architecture.md#p4-source-audit) and
+[remaining delivery](completion-plan.md#p4-remaining-delivery).
+
+Stable and Rust 1.85.0 each pass all-feature Clippy and 234 existing
+CPU/integration/doc tests. Normalizing the equivalent visibility and formatting
+confirms all eight relocated transport method bodies are unchanged. Strict
+Sphinx and the 19-page local link/fragment check pass. Logs remain outside Git
+at `/root/orbitte-artifacts/rdma-p4-closeout-20261026`. Native gates are not
+rerun by this source-only refactor; the newly identified code gaps remain open.
+
+## Latest installed lost-completion delivery
+
 Source [`02c15bd`](https://github.com/OrbitInfra/OrbitTE/commit/02c15bda4de913b367ee881bd39ffb3d70b3c63c)
 adds installed lost-payload-completion qualification. Production owners,
 public API, dependencies and wire v14 are unchanged. Fixture protocol v4

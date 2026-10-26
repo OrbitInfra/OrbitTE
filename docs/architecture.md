@@ -240,7 +240,8 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | --- | --- | --- |
 | Public request | `engine.rs`, `batch.rs`, `memory.rs` | Engine, tasks and actual backing |
 | Transport entry | `transport/rdma/rdma_transport.rs` | Registration, parent dispatch and source serving |
-| Context selection | `context_set.rs`, `context.rs`, `discovery.rs`, `quota.rs` | Stable slots, PDs, devices and NIC admission |
+| Context orchestration | `rdma_transport/contexts.rs` | Transport initialization, selection, CQ attachment, recovery and shutdown |
+| Context owners | `context_set.rs`, `context.rs`, `discovery.rs`, `quota.rs` | Stable slots and reclaim, PDs, device discovery and NIC admission |
 | Peer rendezvous | `rdma_transport/connections.rs`, `rdma_transport/handshake.rs` | Fixed-width connection claims, grant preparation and bilateral publication |
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
@@ -249,6 +250,12 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding and NVIDIA staging owners |
+
+`rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only
+the slot state and its monitor-driven reclaim. The methods retain their existing
+lock scopes, call order and visibility to the RDMA module. This mirrors TENT's
+transport-owned `RdmaContextSet` and context-owned PD/CQ/endpoint resources
+without introducing a forwarding owner or changing cleanup semantics.
 
 Paths after the transport entry are relative to `src/transport/rdma/`, except
 the public, host and GPU rows, which are relative to `src/`.
@@ -274,6 +281,36 @@ Private tests remain under `tests/unit/`; moving methods preserves the existing
 transport and hardware test selectors. `BoundDone` can still be constructed
 only by the protocol's successful bound DONE read.
 
+## P4 source audit
+
+The audit compares OrbitTE `f2c7e7f` (PR #55 merged) with frozen TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`. Count the complete RDMA implementation
+and headers when comparing size: OrbitTE has 38 Rust source files / 11,387
+physical lines in `src/transport/rdma`; TENT has 28 `.cpp`/`.h` files / 11,133
+physical lines across its RDMA source and include directories. Counts include
+comments and blank lines, exclude tests and are not measures of feature parity.
+The current context-method relocation adds one source file, not a new owner.
+
+The basic context/MR/endpoint/worker/slice decomposition is present. Per-request
+MW authority, exact source receipts, bilateral epochs and conservative retention
+add work beyond TENT's registered-region path. These are deliberate OrbitTE
+contracts, not automatic requirements of writing Rust. Removing them would
+require a separately reviewed public lifetime/authority change.
+
+Two selected-context behaviors remain missing against the frozen
+[context implementation][context]:
+
+| Behavior | Frozen TENT | OrbitTE at this audit |
+| --- | --- | --- |
+| Initially down port with otherwise valid device/GID | `RdmaContext::enable` retains the context as `DEVICE_PAUSED` | `discovery::discover_at` filters non-active ports before constructing context slots |
+| Automatic GID reselection on port recovery | `RdmaContext::refreshAddress` reruns `getBestGidIndex` when the configuration is automatic | `RdmaContext::refresh_address` calls `query_address` with the existing index only |
+
+These are code gaps. Physical-fault, fabric and installed-consumer evidence are
+qualification gaps; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
+keeps them separate. Selected-port address refresh, periodic reclaim and
+fixed-width QP reuse already exist. Broader bandwidth/QoS/retry policy remains
+in P6; GPU direct paths and native wire compatibility remain separate stages.
+
 ## Correspondence and remaining differences
 
 The reference is frozen at `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
@@ -283,7 +320,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | Area | Current OrbitTE | Remaining correspondence |
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
-| Monitor | Unified get/ACK, periodic endpoint/lane reclaim and native selected-port address recovery | TENT additionally refreshes effective link bandwidth; OrbitTE preserves conservative retained-resource quarantine |
+| Monitor | Unified get/ACK, periodic endpoint/lane reclaim and native selected-port address recovery | Initial-down/automatic-GID gaps are listed above; TENT also refreshes effective link bandwidth. OrbitTE preserves conservative retained-resource quarantine |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
@@ -296,4 +333,5 @@ behavioral, ABI, wire or performance parity.
 
 [transport]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/rdma_transport.h
 [endpoint]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp
+[context]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp
 [workers]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/workers.cpp
