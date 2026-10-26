@@ -51,10 +51,12 @@ of the buffer that receives it. A live grant
 retains its lane, worker pool and peer endpoint. Peer arrays retain QP records
 and weak lane references, avoiding an endpoint/lane ownership cycle.
 
-Native cleanup is fallible. A failed QP/MR/MW/CQ teardown retains the actual
-owner, backing and charges; a timeout or terminal task state cannot substitute
-for physical drain. A separate shared thirty-second parent destruction window
+Native cleanup is fallible. A failed QP/MR/MW/CQ/channel teardown retains the
+remaining owner, backing and charges; a timeout or terminal task state cannot
+substitute for physical drain. A separate shared thirty-second parent destruction window
 preserves the original data failure unless cleanup reports unquiesced work.
+The [native cleanup gate](native-cleanup.md) checks these owners after failed
+destruction and explains the difference from TENT's retry policy.
 
 ## Fixed-width cold construction
 

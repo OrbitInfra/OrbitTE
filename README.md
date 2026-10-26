@@ -74,7 +74,8 @@ checkout for the implementation described here.
   owned by native work. Failed cleanup retains its resources and charges.
   Completely drained progress owners can be replaced for later requests while
   preserving the context's PD and persistent MRs. Scoped live-process recovery
-  and MR/MW syscall-failure retention checks pass; full P4 acceptance remains open.
+  and QP/MR/MW syscall-failure and CQ/channel/PD EBUSY retention checks have
+  [scoped evidence](docs/native-cleanup.md); full P4 acceptance remains open.
 
 <div align="center">
   <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE engine, control service and sibling TCP/RDMA transports; planned paths are dashed">

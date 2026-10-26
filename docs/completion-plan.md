@@ -423,11 +423,17 @@ and persistent MRs under physical rail pressure. Freeze the declared limits
 and negative controls before that run, rather than treating each extra parent
 count as another implementation milestone.
 
-Outstanding failure coverage includes physical link/device loss; QP,
-completion-channel and device-close failures; spontaneous MR/MW cleanup errors
-beyond syscall controls; broader source/requester death and live reconnect;
-and poisoned-live-engine recovery. Existing QP ERR, lost-CQE, CQ/PD EBUSY,
-MR/MW syscall and process-generation results remain scoped evidence. For every
+Native QP destruction EIO and completion-channel EBUSY now have scoped
+source/requester ownership and restart evidence; see the [cleanup gate](native-cleanup.md).
+Device-close nonzero returns remain a CPU ABI defense: the selected native
+implementation returns zero after its provider callback, so a fabricated
+return value is not native qualification.
+Outstanding coverage includes physical link/device loss and provider teardown;
+spontaneous MR/MW cleanup errors beyond syscall controls; broader
+source/requester death and live reconnect; poisoned-live-engine recovery;
+and failure profiles through the installed consumer. Existing QP ERR,
+lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
+remain scoped evidence. For every
 verbs operation, the source/requester proof must prevent stale rkeys, connections
 or outstanding DMA from reaching reused backing. Local reference counts do not
 establish physical quiescence. Independent discovery/topology qualification,
