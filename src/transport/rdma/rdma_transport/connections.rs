@@ -98,6 +98,8 @@ impl RdmaTransport {
             }
             // A cold builder publishes before payload execution. Waiting here
             // therefore never depends on the rest of our parent's slice list.
+            #[cfg(test)]
+            crate::transport::rdma::tests::cold_connection_wait(self);
             endpoint.wait(deadline)?;
         }
     }

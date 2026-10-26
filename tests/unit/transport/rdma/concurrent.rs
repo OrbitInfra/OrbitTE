@@ -437,13 +437,21 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             let pending = if mode == "large-cold" && round == 0 {
                 crate::transport::rdma::tests::hold_cold_open(source_runtime(&engine));
                 let pending: Vec<_> = (0..shape.parents).map(spawn).collect();
-                until(|| engine.stats().unwrap().rdma.unwrap().active_grants == shape.parents);
+                until(|| {
+                    let (builders, waiters) = crate::transport::rdma::tests::cold_contention();
+                    builders + waiters == shape.parents
+                });
                 let stats = engine.stats().unwrap().rdma.unwrap();
+                let (builders, waiters) = crate::transport::rdma::tests::cold_contention();
                 let entered = crate::transport::rdma::tests::release_cold_open();
+                assert!(builders > 0 && waiters > 0);
+                assert_eq!(builders, entered);
+                assert_eq!(stats.active_endpoints, builders);
+                assert_eq!(stats.active_grants, shape.parents);
                 assert_eq!(stats.opened_connections, 0);
                 assert!(stats.active_endpoints <= 2 * worker_pool::count());
                 println!(
-                    "ORBITTE_COLD_CONSTRUCTION {{\"parents\":{},\"builders\":{},\"entered\":{entered},\"width\":{},\"contexts\":2,\"opened\":0}}",
+                    "ORBITTE_COLD_CONSTRUCTION {{\"parents\":{},\"builders\":{},\"entered\":{entered},\"waiters\":{waiters},\"width\":{},\"contexts\":2,\"opened\":0}}",
                     shape.parents,
                     stats.active_endpoints,
                     worker_pool::count()

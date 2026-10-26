@@ -1912,6 +1912,7 @@ struct ColdOpen {
     runtime: usize,
     released: bool,
     entered: usize,
+    waiters: Vec<std::thread::ThreadId>,
 }
 static COLD_OPEN: std::sync::OnceLock<(Mutex<ColdOpen>, std::sync::Condvar)> =
     std::sync::OnceLock::new();
@@ -1929,4 +1930,21 @@ pub(super) fn release_cold_open() -> usize {
     state.released = true;
     changed.notify_all();
     state.entered
+}
+
+pub(super) fn cold_connection_wait(runtime: &RdmaTransport) {
+    let (lock, changed) = COLD_OPEN.get_or_init(Default::default);
+    let mut state = lock.lock().unwrap();
+    if state.runtime == runtime as *const _ as usize && !state.released {
+        let thread = std::thread::current().id();
+        if !state.waiters.contains(&thread) {
+            state.waiters.push(thread);
+        }
+        changed.notify_all();
+    }
+}
+
+pub(super) fn cold_contention() -> (usize, usize) {
+    let state = COLD_OPEN.get().unwrap().0.lock().unwrap();
+    (state.entered, state.waiters.len())
 }
