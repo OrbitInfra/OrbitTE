@@ -13,6 +13,48 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+The packaged host RDMA consumer now has scoped two-host/two-RNIC qualification.
+Source [`ba09b1f`](https://github.com/OrbitInfra/OrbitTE/commit/ba09b1f2ec2200f733493612270b477787e3a65d)
+produces two archived crates and installed release consumers, built with stable
+1.99.1 and Rust 1.85.0. Each consumer depends only on the extracted package's
+public API with `rdma`; private libtests, injected verbs tables and CUDA are
+absent. The delivery preserves all runtime, fixture and lockfile inputs.
+
+Both binaries pass **72 native configurations** in total, covering READ/WRITE,
+both node directions, polling/events, widths 1/3 and one-/two-rail masks.
+Workloads include twelve 9 MiB parents, sixteen 6 MiB + 1 byte parents and
+thirty-two 1 MiB + 64 KiB parents. Three rounds vary parent-specific bytes,
+compare every payload/guard byte, prove bounded QPs and increasing reuse,
+preserve four persistent MR copies and verify orderly close.
+
+All **4,704 parent transfers** pass and all **144 supervised children** are
+reaped. The postflight checks the original node/provider identities, free RNIC
+locks and no GPU compute. Fourteen controller tests include negative controls
+for missing rounds, wrong native bytes, unbounded QPs, missing providers,
+unproven drain, unreaped children and invalid profiles.
+
+The initial CI exposed an offline-build assumption: a clean runner had not
+cached a platform-specific locked dependency. The builder now fetches the
+packaged lockfile first, then resolves and installs offline. An empty local
+Cargo cache also passes this flow; the runtime/fixture inputs match the native
+artifacts. CI retains the archived crate, installed binary, lockfile and build
+manifest for both compilers.
+
+Raw artifacts, initial CI failure, controls and postflight evidence remain
+outside Git at `/root/orbitte-artifacts/rdma-installed-host-20261026`.
+`native-audit.json` reconciles every configuration and child;
+`input-equivalence.json` maps the frozen native inputs to the delivery;
+`final-delivery.json` pins the source, CI and evidence hashes. See the
+[installed host methodology](installed-host.md).
+
+This qualifies the declared healthy installed host profile. Physical
+link/device faults, remaining native-cleanup failure profiles, InfiniBand,
+performance/fairness and independent P4 acceptance remain open. Existing
+private native fault evidence retains its earlier scope. OrbitKV integration
+remains deferred until P4 acceptance.
+
+## Previous periodic monitor recovery delivery
+
 Periodic context/endpoint reclaim and selected-port recovery are implemented.
 The monitor queries native addresses every second, filters port events, preserves
 newer fault generations and resumes selection only after old native owners drain.

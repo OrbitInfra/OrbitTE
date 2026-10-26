@@ -168,13 +168,15 @@ class ResourceSelection(unittest.TestCase):
             profile = {'runner': 'orbitte-multirail', 'rails': ['mlx5_1', 'mlx5_2'], 'ssh_config': 'fixture-ssh',
                        'nodes': {'a': {'alias': 'fixture', 'hostname': 'fixture', 'boot_id': 'fixture',
                                        'nic_locks': {'mlx5_1': '/fixture/nic1', 'mlx5_2': '/fixture/nic2'}}}}
-            controller = runner.Controller(profile, binary, root)
-            controller.ssh = lambda *args: None
-            controller.copy = lambda *args: None
-            with patch.object(runner.subprocess, 'Popen'):
-                controller.start('a', '/fixture/case', 'cpu', ['one::exact::test'], 'rdma', {'ORBITTE_RAIL_MASK': '1'})
-            config = json.loads((root / 'case.json').read_text())
-            self.assertEqual(config['locks'], ['/fixture/nic1', '/fixture/nic2'])
+            for selection in ['orbitte-multirail', 'orbitte-installed-host']:
+                with self.subTest(runner=selection):
+                    controller = runner.Controller({**profile, 'runner': selection}, binary, root)
+                    controller.ssh = lambda *args: None
+                    controller.copy = lambda *args: None
+                    with patch.object(runner.subprocess, 'Popen'):
+                        controller.start('a', '/fixture/case', 'cpu', [], 'rdma', {'ORBITTE_RAIL_MASK': '1'})
+                    config = json.loads((root / 'case.json').read_text())
+                    self.assertEqual(config['locks'], ['/fixture/nic1', '/fixture/nic2'])
             for rails, locks in [(['mlx5_1', 'mlx5_1'], profile['nodes']['a']['nic_locks']),
                                  (['mlx5_1', {}], profile['nodes']['a']['nic_locks']),
                                  (['mlx5_1', 'mlx5_2'], {'mlx5_1': '/same', 'mlx5_2': '/same'}),

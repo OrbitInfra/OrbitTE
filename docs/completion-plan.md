@@ -1275,9 +1275,12 @@ and periodic monitor recovery now have reachable implementations and focused
 controls; do not add another implementation milestone for these prerequisites.
 
 Use the [installed host gate](installed-host.md) to freeze packaged crates and
-independent public-API consumers. Its runtime profile is not yet qualified.
-Freeze the declared host envelope and outstanding fault controls before running
-that gate. Physical link/device loss and InfiniBand
+independent public-API consumers. The declared healthy RoCEv2 profile now
+passes 72 installed configurations on two compilers, with 12/16/32 parents
+and requests up to 9 MiB. Physical faults, remaining native-cleanup failure
+profiles, InfiniBand and independent acceptance still require their own gates.
+Freeze those remaining fault profiles before running them; the installed
+healthy gate does not substitute for their native ownership evidence. Physical link/device loss and InfiniBand
 remain unqualified. Link-bandwidth scheduling, new-device/GID migration and
 general retry policy are not implied by selected-port recovery. Keep frozen
 TENT comparisons, native manifests and failed controls outside Git. The

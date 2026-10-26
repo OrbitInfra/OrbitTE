@@ -33,8 +33,8 @@ unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
 Periodic monitor reclaim and selected-port recovery are implemented. The host
-RDMA stage still needs complete physical-fault/installed qualification and
-independent acceptance.
+RDMA stage now has scoped packaged-crate/installed-consumer validation;
+remaining physical-fault profiles and independent acceptance are open.
 GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
 compatibility are later-stage work. See the
 [P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
