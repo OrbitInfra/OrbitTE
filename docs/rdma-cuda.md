@@ -3674,3 +3674,53 @@ READ/WRITE and polling/event variants in the external hardware profile consumed
 by `tests/hardware/run.py`. Raw `ORBITTE_COLD_CONSTRUCTION` and
 `ORBITTE_ENDPOINT_ARRAY` records identify builders, slots and physical QPs.
 See [qualification](qualification.md) for the frozen artifact and evidence.
+
+
+## Periodic monitor recovery
+
+This delivery completes the second implementation row of the P4 exit queue;
+it does not add another P4 substage. It follows frozen TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
+
+| TENT owner | OrbitTE owner | Contract |
+| --- | --- | --- |
+| `Workers::monitorThread`, `reclaimEndpoints`, `reapOrphanSlices` | `Monitor` tick, `ContextSet::reclaim`, data-worker drain | Scan each second without application submissions; remove endpoint/lane owners only after physical QP/CQ closure and worker detachment |
+| `applyContextEvent`, `resumePausedContexts` | `events::State`, selected-port filtering, periodic native queries | Port events fence only their selected port; native query fallback covers missed down/active events |
+| `activateContext`, `RdmaContext::refreshAddress`, `resume` | `RdmaContext::refresh_address`, `DeviceSelector::set_available` | Fence changed addresses, drain old connections, publish the selected native tuple and resume under a matching route generation |
+
+The monitor retains weak registrations. Transport close/Drop synchronizes with
+the current maintenance tick before releasing owners; native device/CQ
+destruction cannot occur on its ACK thread. Try-lock inspection defers busy
+contexts, lanes and QPs to a later tick while event get/ACK continues. Data
+workers retain fallible native destruction and DMA ownership. A successful
+query cannot free a retained QP/MR/MW/CQ or repair a lost event consumer.
+
+Port recovery preserves the actual PD, key history and persistent MRs. Both
+peers retain exact connection incarnations. If the source discarded an entire
+array, a new request can encounter one explicit CACHE_MISS per stale slot;
+bootstrap allows the configured width plus one fresh attempt, bounded by the
+original deadline. No payload is posted until every slice has a valid grant.
+Other errors and ambiguous WRITEs are not retried.
+
+`monitor_ticks`, `route_queries` and `route_recoveries` distinguish periodic
+scans, actual native queries and resumed selected contexts. Existing
+`progress_recoveries` counts fully drained lane owners reclaimed either by
+the tick or by an application entry. A scan can be deferred by a busy owner;
+the one-second interval is not a real-time recovery guarantee.
+
+The native `monitor-recovery` mode uses the existing `orbitte-multirail`
+supervisor. Provide two locked RNICs, `mask: 3`, an explicit `fault_role` of
+`source` or `requester`, `fault_rail: 0` or `1`, READ/WRITE, polling/events and
+`num_lanes: 1` or `3`. The fixture calls real query verbs, injects ENETDOWN only
+inside the selected test process, waits without path lookup or submission for
+native QP/CQ drain, then removes the injection without emitting PORT_ACTIVE.
+After a native query resumes selection, two complete byte/sentinel rounds prove
+fresh generation and warm reuse on that rail, with unchanged PD/MRs and the
+healthy rail's QPs preserved. All process/provider/lock evidence stays outside
+the checkout. See [qualification](qualification.md).
+
+No physical port is changed by this fixture. Physical link/device loss,
+initially down or newly added devices, automatic selection of another GID
+index, link-bandwidth policy, InfiniBand and final installed-host/independent
+acceptance remain open. Native TENT wire parity and OrbitKV integration are
+separate later gates.

@@ -881,3 +881,6 @@ impl RdmaContext {
         Err(last_error)
     }
 }
+
+#[path = "recovery.rs"]
+mod recovery;

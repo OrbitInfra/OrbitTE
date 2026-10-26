@@ -181,7 +181,7 @@ fn multirail_peer() {
     let mode = env::var("ORBITTE_RAIL_MODE").unwrap();
     if matches!(
         mode.as_str(),
-        "live-reconnect" | "mr-cleanup-error" | "mw-cleanup-error"
+        "live-reconnect" | "mr-cleanup-error" | "mw-cleanup-error" | "monitor-recovery"
     ) {
         lifecycle::run(&mode, source, &rails);
         return;

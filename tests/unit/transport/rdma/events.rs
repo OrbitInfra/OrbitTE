@@ -184,7 +184,7 @@ fn lost_async_consumer_retains_actual_qp_mw_mr_and_direct_backing() {
 }
 
 #[test]
-fn route_fault_is_permanent_but_lost_consumer_keeps_unquiesced_precedence() {
+fn route_generations_preserve_new_faults_and_lost_consumer_precedence() {
     let state = State::default();
     state.fence_route();
     assert!(matches!(
@@ -194,13 +194,34 @@ fn route_fault_is_permanent_but_lost_consumer_keeps_unquiesced_precedence() {
             code: libc::ESTALE
         })
     ));
+    let old = state.generation();
+    state.fence_route();
+    assert!(!state.resume(old));
+    assert!(state.resume(state.generation()));
+    state.event(ibverbs_sys::IBV_EVENT_DEVICE_FATAL);
+    state.event(ibverbs_sys::IBV_EVENT_PORT_ACTIVE);
+    assert!(!state.resume(state.generation()));
     state.lost(libc::EIO);
     state.fence_route();
+    assert!(!state.resume(state.generation()));
     assert!(matches!(
         state.check(),
         Err(Error::Unquiesced {
             operation: "RDMA asynchronous event consumer",
             code: libc::EIO
+        })
+    ));
+    let exhausted = State::default();
+    exhausted
+        .route_generation
+        .store(u64::MAX, Ordering::Release);
+    exhausted.fence_route();
+    assert!(!exhausted.resume(u64::MAX));
+    assert!(matches!(
+        exhausted.check(),
+        Err(Error::Unquiesced {
+            code: libc::EOVERFLOW,
+            ..
         })
     ));
 }

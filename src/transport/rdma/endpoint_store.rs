@@ -25,6 +25,15 @@ impl EndpointStore {
         Ok(())
     }
 
+    pub(super) fn quiescent(&self) -> Result<bool> {
+        for endpoint in &self.endpoints {
+            if !endpoint.prune()? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn get_or_insert(
         &mut self,
         key: EndpointKey,

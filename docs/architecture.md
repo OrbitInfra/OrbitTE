@@ -39,7 +39,7 @@ protocol compatible with TENT's native RPC or metadata.
 | `RdmaSlice`, `SendWork`, `ReceiveWork` | Per-grant geometry, WR windows and independent completion identities | `RdmaSlice` work and completion state; source receipts are a Rust extension |
 | `CqLane` | SQ/RQ CQ pair, registered grant records, submission, drain and recovery | Per-context CQs consumed by workers |
 | `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
-| `Monitor` | One transport thread consuming context and CQ events | Event-consumption portion of `Workers::monitorThread` |
+| `Monitor` | One transport thread consuming events and driving periodic context reclaim/recovery | `Workers::monitorThread`, `reclaimEndpoints`, `resumePausedContexts` |
 | `DeviceSelector`, `CqQuota`, `GrantCredits`, `ReceiveCredits` | NIC byte load, aggregate SQ/RQ wakes and whole-parent grant/receive admission | Device selection and bounded slice admission; OrbitTE's receive-credit protocol is additional |
 
 Each context slot owns its PD/context, CQ lanes and peer endpoint registry.
@@ -192,6 +192,43 @@ detachment. Lost event-consumption proof fences the affected device and retains
 unproven native resources. See [the lifetime contracts](rdma-cuda.md) for exact
 failure transitions and [qualification](qualification.md) for scoped evidence.
 
+## Periodic monitor reclaim and port recovery
+
+The transport's existing monitor scans its registered context set once per
+second, including when applications submit no new work. It removes faulted CQ
+lanes only after data workers have closed native QPs/CQs and detached. Endpoint
+slots are reclaimed only when their physical QP is closed; retained cleanup
+failures remain charged. The monitor uses nonblocking context, lane and QP
+inspection so a native destructor waiting for event ACK cannot stall its ACK
+consumer. Transport shutdown detaches the weak context registration before
+dropping resource owners; the monitor cannot become their last owner.
+
+`RdmaContext::refresh_address` queries the selected native port/GID tuple.
+Down ports and changed GID/LID/MTU fence admission and wake every old lane.
+PORT_ERR, PORT_ACTIVE, GID_CHANGE and LID_CHANGE apply only to the selected
+port, though all native events are acknowledged. A monotonic route generation
+prevents an older query result from clearing a newer fault. Recovery requires
+all old lanes and endpoint construction slots to drain, a successful native
+query and unchanged fault generation. It publishes the new address and restores
+`DeviceSelector` availability under the context-set lock. Missing PORT_ACTIVE
+events therefore do not require an application request to trigger recovery.
+Device-fatal events, lost event consumers and retained owners cannot be healed
+by a successful port query.
+
+Frozen TENT's monitor performs a similar one-second reclaim/resume pass;
+`activateContext` pauses selection, refreshes the address and evicts old
+endpoints before enabling. OrbitTE keeps physical destruction in its data
+workers and waits for their native drain proof. It preserves PD/key domains and
+persistent MRs. When the peer discarded several cached QPs, bootstrap may
+consume one explicit CACHE_MISS per array slot before a fresh handshake;
+the original deadline still applies and payload submission has not begun.
+This does not retry an ambiguous data transfer.
+
+Initial down-device discovery, automatic migration to a different GID index,
+link-bandwidth policy and physical fabric/device-loss qualification remain
+outside this delivery. See [the recovery contract](rdma-cuda.md#periodic-monitor-recovery)
+and [qualification](qualification.md).
+
 ## Source reading order
 
 Start at an operation, then follow the resource it borrows. Child modules extend
@@ -226,8 +263,8 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | Area | Current OrbitTE | Remaining correspondence |
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
-| Monitor | Unified async/CQ get and ACK; lane workers drain retired QPs | TENT also performs periodic endpoint/orphan reclaim, paused-port recovery and address/link-speed refresh |
-| Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Native `RailMonitor` additionally owns dynamic rail health and recovery; a static codec is not that owner |
+| Monitor | Unified get/ACK, periodic endpoint/lane reclaim and native selected-port address recovery | TENT additionally refreshes effective link bandwidth; OrbitTE preserves conservative retained-resource quarantine |
+| Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
 | Worker load | Unfinished grant charge including retained native work | Priority queues, QoS, retry/failover and deadline policies remain P6 work |

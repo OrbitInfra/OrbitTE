@@ -11,6 +11,7 @@ fn stats(monitor: &Monitor) -> RdmaStats {
 type AckGate = Arc<(Mutex<(bool, bool)>, Condvar)>;
 
 struct Native {
+    port: std::sync::atomic::AtomicU8,
     reader: Mutex<UnixStream>,
     acknowledgments: Mutex<Vec<String>>,
     gate: Option<AckGate>,
@@ -23,6 +24,7 @@ unsafe extern "C" fn get(context: *mut c_void, event: *mut sys::AsyncEvent) -> i
         Ok(1) => {
             unsafe {
                 (*event).kind = byte[0] as u32;
+                (*event).port = native.port.load(Ordering::Acquire);
             };
             0
         }
@@ -77,6 +79,7 @@ fn attach(monitor: &Arc<Monitor>, gate: Option<AckGate>) -> Registered {
     reader.set_nonblocking(true).unwrap();
     let fd = reader.as_raw_fd();
     let mut native = Box::new(Native {
+        port: std::sync::atomic::AtomicU8::new(1),
         reader: Mutex::new(reader),
         acknowledgments: Mutex::default(),
         gate,
@@ -86,6 +89,7 @@ fn attach(monitor: &Arc<Monitor>, gate: Option<AckGate>) -> Registered {
             Source::Async {
                 context: NonNull::from(native.as_mut()).cast(),
                 fd,
+                port: 1,
                 verbs: sys::AsyncVerbs { get, ack },
             },
             Arc::default(),
@@ -287,4 +291,39 @@ fn close_joins_a_stopped_monitor_even_when_its_wake_reader_has_already_exited() 
     );
     assert_eq!(stats(&monitor).monitor_workers, 0);
     monitor.close(Instant::now()).unwrap();
+}
+
+#[test]
+fn foreign_port_events_are_acknowledged_without_pausing_selected_port() {
+    let monitor = Arc::new(Monitor::default());
+    let mut source = attach(&monitor, None);
+    source.native.port.store(2, Ordering::Release);
+    source
+        .writer
+        .as_mut()
+        .unwrap()
+        .write_all(&[ibverbs_sys::IBV_EVENT_PORT_ERR as u8])
+        .unwrap();
+    let end = Instant::now() + Duration::from_secs(2);
+    while source.native.acknowledgments.lock().unwrap().is_empty() {
+        assert!(Instant::now() < end);
+        thread::yield_now();
+    }
+    assert!(source.registration.watch.state.check().is_ok());
+    source.native.port.store(1, Ordering::Release);
+    source
+        .writer
+        .as_mut()
+        .unwrap()
+        .write_all(&[ibverbs_sys::IBV_EVENT_PORT_ERR as u8])
+        .unwrap();
+    while source.native.acknowledgments.lock().unwrap().len() < 2 {
+        assert!(Instant::now() < end);
+        thread::yield_now();
+    }
+    assert!(source.registration.watch.state.paused());
+    drop(source);
+    monitor
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
 }

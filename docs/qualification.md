@@ -13,6 +13,53 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Periodic context/endpoint reclaim and selected-port recovery are implemented.
+The monitor queries native addresses every second, filters port events, preserves
+newer fault generations and resumes selection only after old native owners drain.
+PDs and persistent MRs survive; failed cleanup and event-consumer loss remain
+quarantined. Recovery never replays an ambiguous payload.
+
+Source [`08fb8ac`](https://github.com/OrbitInfra/OrbitTE/commit/08fb8ac2c8c1aef5b6c94e04c7583f6870eb6888)
+passes 23 local gates on stable 1.99.1 and Rust 1.85.0, including 225
+all-feature unit tests per compiler, twelve runner controls and frozen TENT
+geometry comparisons. The native TENT CPU oracle passes 25 observations and
+six negative controls; its merge tree, inputs and native/Rust binary hashes
+match this source. The delivery also fixes a CPU test's observation race:
+CACHE_MISS can arrive before the handler drops temporary admission, so the
+test now awaits handler completion before checking charges.
+
+Two frozen release binaries pass **276 public two-host/two-RNIC
+configurations**, including **64 periodic-recovery cases**, plus **32 internal
+shared-QP configurations**. Recovery covers READ/WRITE, polling/events, both
+source/requester roles, either rail and widths 1/3. The fixture calls real
+verbs, injects a process-private port-query failure, waits without new
+submissions for old QPs/CQs to drain, then restores native queries without
+emitting PORT_ACTIVE. Two complete byte/sentinel rounds verify reconnection
+and warm reuse, unchanged PD/MRs and preserved healthy-rail QPs.
+
+Existing cold construction, concurrent grant/RQ pressure, folded-tail geometry,
+QP ERR, lost successful CQEs, MR/MW syscall errors, CQ/PD EBUSY, live reconnect
+and process restart controls pass. All **664 supervised children** are
+reaped, including 24 intentional kills. Postflight verifies node/provider
+identity, released RNIC locks and no GPU compute. A failed development run
+exposed the bounded-array bootstrap retry bug and remains with the evidence.
+
+Raw manifests, binaries, failed runs and source/CI controls remain outside Git
+at `/root/orbitte-artifacts/rdma-monitor-recovery-20261026`.
+`native-raw-audit.json` reconciles recovery, native ownership and process/lock
+records; `shared-native-audit.json` checks exact grant/receipt drain.
+`final-delivery.json` pins source, delivery, CI and evidence hashes. See
+[the recovery contract](rdma-cuda.md#periodic-monitor-recovery) and
+[resource ownership](architecture.md#periodic-monitor-reclaim-and-port-recovery).
+
+These are scoped, same-agent source/native gates. Query-failure injection is
+not a physical link flap. Physical port/device loss, InfiniBand, installed host
+qualification and independent P4 acceptance remain open. GPUDirect RDMA,
+NVLink, general retry/bandwidth policy and native TENT wire parity are later
+stages. OrbitKV integration remains deferred until P4 acceptance.
+
+## Previous fixed-width cold construction delivery
+
 Wire v14 implements fixed-width cold construction. Both peers negotiate the
 smaller `num_lanes` width before preparing a grant. A canonical endpoint owns
 unbound, handshaking, connected and native-retained slots; concurrent grants

@@ -32,7 +32,9 @@ connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
 unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
-The host RDMA stage still needs periodic monitor recovery and complete physical-fault/independent acceptance.
+Periodic monitor reclaim and selected-port recovery are implemented. The host
+RDMA stage still needs complete physical-fault/installed qualification and
+independent acceptance.
 GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
 compatibility are later-stage work. See the
 [P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
@@ -54,7 +56,9 @@ checkout for the implementation described here.
   builders reserve slots before native creation and concurrent requests share
   published connections. Peer endpoint arrays, physical QPs and per-slice
   grants have separate owners; data workers bind to allowed NUMA CPU sets and
-  one transport monitor consumes device/CQ events.
+  one transport monitor consumes device/CQ events and scans contexts each second.
+  A recovered port becomes selectable only after old QPs/CQs drain and the
+  selected native address is revalidated; PDs and persistent MRs remain owned.
 - **Topology-aware device selection.** Stable NIC IDs, device masks, NUMA
   priorities and in-flight byte charges select compatible paths per RDMA slice.
   Parent completion requires every slice and its source receipt.

@@ -14,6 +14,7 @@ use super::*;
 pub(crate) struct FakeDevice {
     pub(super) mode: String,
     pub(super) route: Mutex<Option<discovery::RdmaAddress>>,
+    pub(super) route_error: std::sync::atomic::AtomicI32,
     asynchronous: Option<(
         Mutex<std::os::unix::net::UnixStream>,
         Mutex<std::os::unix::net::UnixStream>,
@@ -116,6 +117,7 @@ pub(super) unsafe extern "C" fn open_device(
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
         route: Mutex::default(),
+        route_error: std::sync::atomic::AtomicI32::new(0),
         asynchronous,
         async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
@@ -1049,6 +1051,13 @@ unsafe fn query_address(
     address: &discovery::RdmaAddress,
 ) -> Result<discovery::RdmaAddress> {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    let code = device.route_error.load(Ordering::Acquire);
+    if code != 0 {
+        return Err(Error::Backend {
+            operation: "controlled port query",
+            code,
+        });
+    }
     if let Some(route) = &*device.route.lock().unwrap() {
         return Ok(route.clone());
     }
@@ -1125,6 +1134,7 @@ unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent
     }
     unsafe {
         (*event).kind = kind[0] as u32;
+        (*event).port = 1;
     }
     0
 }
@@ -1171,7 +1181,7 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         cq_quota: Arc::default(),
         drained: Arc::default(),
         verbs,
-        context_set: Mutex::default(),
+        context_set: Arc::default(),
         registrations,
     }
 }

@@ -4,6 +4,9 @@ use ibverbs_sys as ffi;
 use std::ffi::c_int;
 use std::net::SocketAddr;
 
+#[path = "monitor_recovery.rs"]
+mod monitor_recovery;
+
 #[derive(Default)]
 struct Trace {
     mode: String,
@@ -19,6 +22,7 @@ struct Trace {
     pd: usize,
     context: usize,
     qp_errors: usize,
+    native_queries: usize,
 }
 
 static TRACE: OnceLock<Mutex<Trace>> = OnceLock::new();
@@ -204,6 +208,7 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
 }
 
 static VERBS: sys::Verbs = sys::Verbs {
+    query_address: monitor_recovery::query_address,
     poll,
     deregister,
     dealloc_window,
@@ -551,7 +556,19 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         )
     };
     let mut healthy: Option<Snapshot> = None;
-    if mode == "live-reconnect" {
+    if mode == "monitor-recovery" {
+        monitor_recovery::run(
+            &mut stream,
+            &engine,
+            &memory,
+            peer.as_ref(),
+            remote,
+            source,
+            target,
+            fault_rail,
+            operation,
+        );
+    } else if mode == "live-reconnect" {
         for sequence in 0..7 {
             let fault = matches!(sequence, 1 | 4);
             TRACE.get().unwrap().lock().unwrap().armed = fault;

@@ -29,7 +29,7 @@ pub(crate) struct RdmaTransport {
     pub(super) workers: Arc<workers::Workers>,
     pub(super) cq_quota: Arc<quota::CqQuota>,
     pub(super) verbs: &'static sys::Verbs,
-    pub(super) context_set: Mutex<ContextSet>,
+    pub(super) context_set: Arc<Mutex<ContextSet>>,
     pub(super) drained: Arc<Condvar>,
     pub(crate) registrations: Arc<buffers::LocalBufferManager>,
 }
@@ -69,7 +69,7 @@ impl RdmaTransport {
             workers: Arc::default(),
             cq_quota: Arc::default(),
             verbs: &sys::REAL,
-            context_set: Mutex::default(),
+            context_set: Arc::default(),
             drained: Arc::default(),
             registrations,
         }))
@@ -198,7 +198,10 @@ impl RdmaTransport {
                 GrantCredits::acquire(Arc::clone(&self.usage), self.config.max_grants, 1)?;
             let wire = data_request(operation, peer, request);
             let mut pinned = None;
-            for _ in 0..2 {
+            // A recovered peer can discard every cached QP in this array.
+            // Each miss closes one stale pair before another bootstrap; no
+            // payload has been submitted and the original deadline still applies.
+            for _ in 0..=self.config.num_lanes {
                 let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
                 channel.write_all(&wire.encode())?;
                 let (mut remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
@@ -338,7 +341,7 @@ impl RdmaTransport {
                 let child_wire = data_request(operation, peer, &child);
                 let mut selection = Some(selection);
                 let mut prepared = None;
-                for _ in 0..2 {
+                for _ in 0..=remote_width.min(self.config.num_lanes) {
                     let lease = match selection.take() {
                         Some(lease) => lease,
                         None => self.allocate(range.length, 1u64 << local_id)?,
@@ -452,7 +455,7 @@ impl RdmaTransport {
                         length: range.length as u64,
                     };
                     let mut prepared = None;
-                    for _ in 0..2 {
+                    for _ in 0..=qp_width {
                         if let Some(slice) = self.source_slice(
                             channel,
                             &child,
@@ -480,6 +483,14 @@ impl RdmaTransport {
             Ok(())
         })();
         close_slices(&mut slices, result, false)
+    }
+}
+
+impl Drop for RdmaTransport {
+    fn drop(&mut self) {
+        // Detach and wait for the current tick before the last context owner can
+        // disappear. Native owners must never be dropped by their ACK thread.
+        self.workers.monitor.unwatch_contexts();
     }
 }
 

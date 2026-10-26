@@ -233,7 +233,11 @@ pub(super) unsafe extern "C" fn get_async_event(
         if ffi::ibv_get_async_event(context.cast(), (*event).native.as_mut_ptr()) != 0 {
             return failure();
         }
-        (*event).kind = (*(*event).native.as_ptr()).event_type;
+        let native = &*(*event).native.as_ptr();
+        (*event).kind = native.event_type;
+        if crate::transport::rdma::events::port_event(native.event_type) {
+            (*event).port = u8::try_from(native.element.port_num).unwrap_or(0);
+        }
         0
     }
 }

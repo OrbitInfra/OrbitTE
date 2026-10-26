@@ -1592,3 +1592,28 @@ impl CqLane {
 
 #[path = "grant_records.rs"]
 mod grant_records;
+
+#[test]
+fn periodic_reclaim_removes_drained_faulted_lanes_without_port_recovery() {
+    let runtime = configured("ok", 3);
+    let mut grant = runtime.staging_endpoint(8, 0).unwrap();
+    let owner = runtime.device().unwrap();
+    grant
+        .progress
+        .shared
+        .fail(Fault::Backend("controlled CQ failure", libc::EIO));
+    wait_until(|| runtime.stats().unwrap().progress_recoveries == 1);
+    assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
+    assert!(owner.asynchronous.check().is_ok());
+    assert!(
+        runtime.context_set.lock().unwrap().slots[0]
+            .cq_list
+            .iter()
+            .all(Option::is_none)
+    );
+    let _ = grant.close();
+    drop(grant);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}

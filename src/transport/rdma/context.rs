@@ -17,6 +17,13 @@ pub(super) struct RdmaContext {
     pub(super) monitor: Arc<super::monitor::Monitor>,
 }
 
+pub(super) enum AddressRefresh {
+    Deferred,
+    Paused,
+    Active(RdmaAddress),
+    Resumed(RdmaAddress),
+}
+
 enum State {
     Open(Box<Resources>),
     Closed,
@@ -106,6 +113,7 @@ impl RdmaContext {
                         super::monitor::Source::Async {
                             context,
                             fd: resources.handles.async_fd,
+                            port: resources.address.port,
                             verbs: asynchronous,
                         },
                         Arc::clone(&owner.asynchronous),
@@ -136,6 +144,43 @@ impl RdmaContext {
             State::Open(resources) => Ok(resources.address.clone()),
             _ => Err(Error::Unavailable("RDMA device is closed or retained")),
         }
+    }
+
+    pub(super) fn refresh_address(&self, drained: bool) -> AddressRefresh {
+        // The ACK thread must not wait for a creator or native destructor.
+        let Ok(mut state) = self.state.try_lock() else {
+            return AddressRefresh::Deferred;
+        };
+        let State::Open(resources) = &mut *state else {
+            return AddressRefresh::Deferred;
+        };
+        if !self.asynchronous.recoverable() {
+            return AddressRefresh::Deferred;
+        }
+        let generation = self.asynchronous.generation();
+        let observed =
+            unsafe { (self.verbs.query_address)(&resources.handles, &resources.address) };
+        let Ok(address) = observed else {
+            if !self.asynchronous.paused() {
+                self.asynchronous.fence_route();
+            }
+            return AddressRefresh::Paused;
+        };
+        if address != resources.address && !self.asynchronous.paused() {
+            self.asynchronous.fence_route();
+            return AddressRefresh::Paused;
+        }
+        if self.asynchronous.paused() {
+            if !drained || self.asynchronous.generation() != generation {
+                return AddressRefresh::Paused;
+            }
+            resources.address = address.clone();
+            if !self.asynchronous.resume(generation) {
+                return AddressRefresh::Paused;
+            }
+            return AddressRefresh::Resumed(address);
+        }
+        AddressRefresh::Active(address)
     }
 
     fn verify_address(&self, resources: &Resources) -> Result<()> {
