@@ -66,6 +66,7 @@ def build(root, output, toolchain, allow_dirty=False):
         fixture = library / 'tests/hardware/rdma_host.rs'
         if fixture.read_bytes() != (root / 'tests/hardware/rdma_host.rs').read_bytes():
             raise ValueError('packaged consumer differs from the qualified source')
+        run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)
         shutil.copy2(fixture, consumer / 'src/main.rs')

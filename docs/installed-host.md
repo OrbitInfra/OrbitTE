@@ -21,8 +21,8 @@ python3 tests/hardware/build_installed.py \
 
 The script creates a `.crate`, extracts it into the artifact directory and
 copies its packaged `rdma_host` fixture into an independent consumer package.
-Cargo resolves OrbitTE from that extracted package, preserves its locked
-dependency versions, checks formatting/Clippy and installs a release executable
+Cargo fetches the packaged lockfile dependencies first, then resolves OrbitTE
+from that extracted package offline, preserves locked dependency versions, checks formatting/Clippy and installs a release executable
 under `installed/bin/orbitte-rdma-host`. The manifest pins the source commit,
 archive, fixture, consumer lockfile, binary, features and local native libraries.
 The consumer is an acceptance fixture, not a new production CLI/API.
