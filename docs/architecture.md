@@ -264,7 +264,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
 | Monitor | Unified get/ACK, periodic endpoint/lane reclaim and native selected-port address recovery | TENT additionally refreshes effective link bandwidth; OrbitTE preserves conservative retained-resource quarantine |
-| Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Native `RailMonitor` additionally owns dynamic rail health and recovery; a static codec is not that owner |
+| Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
 | Worker load | Unfinished grant charge including retained native work | Priority queues, QoS, retry/failover and deadline policies remain P6 work |

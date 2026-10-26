@@ -980,6 +980,13 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
         let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
         assert_eq!((reply.status, reply.length), (CACHE_MISS, 0), "{changed}");
         drop(channel);
+        // CACHE_MISS can reach the requester before the handler drops its
+        // temporary admission lease. Observe handler completion before charges.
+        let end = Instant::now() + TIMEOUT;
+        while source.stats().unwrap().active_source_operations != 0 {
+            assert!(Instant::now() < end, "cache-miss handler did not finish");
+            thread::sleep(Duration::from_millis(1));
+        }
         let stats = source.stats().unwrap().rdma.unwrap();
         assert_eq!(
             (
