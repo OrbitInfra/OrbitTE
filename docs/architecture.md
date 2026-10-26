@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v13 messages; moving them into their own module does not make this
+OrbitTE v14 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -31,7 +31,7 @@ protocol compatible with TENT's native RPC or metadata.
 | `RdmaTransport` | Context slots, registrations, workers and parent dispatch | `RdmaTransport`, `context_set_`, `local_buffer_manager_`, `workers_` |
 | `ContextSet`, `RdmaContext` | Stable NIC IDs, actual context/PD, route and persistent key domain | `RdmaContextSet`, `RdmaContext` |
 | `LocalBufferManager` | Persistent host MRs keyed by actual context, allocation view and capability | Context-keyed `mem_reg_map` |
-| `EndpointStore`, `RdmaEndpoint` | Peer identity and persistent QP array across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
+| `EndpointStore`, `RdmaEndpoint` | Peer identity, fixed-width construction slots and persistent QPs across CQ lanes | Context endpoint store, `RdmaEndPoint::qp_list_` |
 | `RdmaQp`, `ConnectionResources`, `QpStore` | One actual QP shared by independently retained grant records; CQ-local lookup and retirement | Endpoint QPs and affiliated slice ownership |
 | `qp::send_queue::SendQueue` | Physical QP send depth, exact outstanding WR IDs and fenced admission | Per-QP `wr_depth_list_` and `slice_queue_` accounting |
 | `qp::receive_queue::ReceiveQueue` | QP-owned receive buffers/MRs, RQ debt and binding/key dispatch | QP-owned receive WRs; exact grant receipts are a Rust extension |
@@ -56,6 +56,40 @@ owner, backing and charges; a timeout or terminal task state cannot substitute
 for physical drain. A separate shared thirty-second parent destruction window
 preserves the original data failure unless cleanup reports unquiesced work.
 
+## Fixed-width cold construction
+
+`EndpointStore::get_or_insert` gives every caller the same `RdmaEndpoint`, even
+while the first builder has not created a QP. Each array has
+`min(local.num_lanes, remote.num_lanes)` slots, negotiated before any slice is
+prepared. Its key includes the local context, remote process/PD and NIC path,
+requester/source role and READ/WRITE capability. Opposite roles do not wait on
+one another. Staged/device paths advertise zero reusable width and retain
+their existing per-grant physical connection budget.
+
+An uncloneable `Construction` reserves a slot under the endpoint mutex. It
+attaches the actual QP owner before native creation, then survives until the
+bilateral connection is published. An unpublished slot cannot be shared.
+Waiters release all store/endpoint locks and use their own deadlines; they
+cannot cancel the builder. Cancellation releases an unbound slot immediately,
+but a created QP occupies its slot until native destruction succeeds. A unique
+reservation token prevents an old guard from releasing a replacement slot.
+
+The source publishes its connected pair before sending GRANT. A subsequent
+handshake therefore finds that exact pair as soon as the requester can share
+it. Duplicate cold bootstraps join the same remote connection identity. Fresh
+bootstrap after a peer discarded a QP can retire an old **idle** pair in that
+array, using the existing all-affiliates-finished check; active siblings are
+never evicted to make a slot. Malformed path metadata rejects the new request
+without replacing an established connection. Whole-parent grant/RQ admission
+remains separate, so more slices than QPs can be prepared without waiting for
+payload completion.
+
+Frozen TENT uses `EndpointStore::getOrInsert`, `RdmaEndPoint::construct` and
+`EP_HANDSHAKING`/`EP_READY`; its connect path releases the endpoint lock for
+bootstrap RPC and revalidates on return. OrbitTE expresses that ownership with
+bounded slots and Rust guards. TENT's eager, bidirectional QP list and native
+bootstrap format differ from OrbitTE's lazy, capability-specific grant protocol.
+
 ## QP send ownership
 
 `ConnectionResources::send_queue` owns the physical SQ's unresolved WR IDs.
@@ -77,11 +111,11 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v13 handshake can attach independent grants to a
+QP creation lock. The public v14 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
-forward when concurrent handshakes arrive out of order. Fixed-width cold QP
-construction remains in the first P4 exit item.
+forward when concurrent handshakes arrive out of order. Cold construction
+reserves the same fixed array used for established pairs.
 
 ## QP receive ownership
 
@@ -115,8 +149,8 @@ affiliated record and drains the connection once; unresolved work still requires
 all QPs and both CQs to close. Retention counts each physical QP/SQ/RQ once and
 each grant/loan separately. A stale claim or replaced idle record has no authority
 to retire a sibling or later grant. The native shared-QP fixture exercises these
-owners directly. The public handshake now uses the same owners; fixed-width
-cold peer construction remains open. See [qualification](qualification.md) for the exact tested scope.
+owners directly. The public handshake uses the same owners and fixed-width
+construction reservations. See [qualification](qualification.md) for the tested scope.
 
 ## Follow one transfer
 
@@ -191,7 +225,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 
 | Area | Current OrbitTE | Remaining correspondence |
 | --- | --- | --- |
-| QP arrays | Demand-grown peer arrays; QP-owned send depth/debt, but one active wire grant per QP | Concurrent runtime records/CQ lookup exist; public handshake admission and fixed-width peer arrays remain open |
+| QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
 | Monitor | Unified async/CQ get and ACK; lane workers drain retired QPs | TENT also performs periodic endpoint/orphan reclaim, paused-port recovery and address/link-speed refresh |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Native `RailMonitor` additionally owns dynamic rail health and recovery; a static codec is not that owner |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |

@@ -103,12 +103,14 @@ pub(super) fn write_paths(
     channel: &mut ControlChannel<'_>,
     epoch: SourceEpoch,
     paths: &[NicPath],
+    qp_width: usize,
 ) -> Result<()> {
-    if paths.is_empty() || paths.len() > 64 {
+    if paths.is_empty() || paths.len() > 64 || qp_width > 64 {
         return Err(Error::Protocol("RDMA NIC path count"));
     }
     let payload: Vec<_> = paths.iter().map(NicPath::encode).collect::<Result<_>>()?;
-    channel.reply(epoch, 0, (payload.len() * PATH_SIZE) as u64)?;
+    channel.reply(epoch, 0, (1 + payload.len() * PATH_SIZE) as u64)?;
+    channel.write_all(&[qp_width as u8])?;
     for bytes in payload {
         channel.write_all(&bytes)?;
     }
@@ -118,17 +120,22 @@ pub(super) fn write_paths(
 pub(super) fn read_paths(
     channel: &mut ControlChannel<'_>,
     epoch: SourceEpoch,
-) -> Result<Vec<NicPath>> {
+) -> Result<(Vec<NicPath>, usize)> {
     let reply = Reply::read(channel, epoch)?;
     if reply.status != 0
-        || reply.length == 0
-        || reply.length > (64 * PATH_SIZE) as u64
-        || reply.length % PATH_SIZE as u64 != 0
+        || reply.length <= 1
+        || reply.length > (1 + 64 * PATH_SIZE) as u64
+        || (reply.length - 1) % PATH_SIZE as u64 != 0
     {
         return Err(Error::Protocol("RDMA NIC path table length/status"));
     }
+    let mut width = [0];
+    channel.read_exact(&mut width)?;
+    if width[0] > 64 {
+        return Err(Error::Protocol("RDMA peer QP width"));
+    }
     let mut paths: Vec<NicPath> = Vec::new();
-    for _ in 0..reply.length as usize / PATH_SIZE {
+    for _ in 0..(reply.length as usize - 1) / PATH_SIZE {
         let mut bytes = [0; PATH_SIZE];
         channel.read_exact(&mut bytes)?;
         let path = NicPath::decode(&bytes)?;
@@ -140,7 +147,7 @@ pub(super) fn read_paths(
         }
         paths.push(path);
     }
-    Ok(paths)
+    Ok((paths, width[0] as usize))
 }
 
 /// Filter wire-incompatible paths. Matching NIC names wins within a profile;

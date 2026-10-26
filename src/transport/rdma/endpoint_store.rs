@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use super::RdmaGrant;
-use super::endpoint::{Peer, RdmaEndpoint};
+use super::endpoint::{EndpointKey, RdmaEndpoint};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -15,7 +14,9 @@ impl EndpointStore {
     pub(super) fn prune(&mut self) -> Result<()> {
         let mut index = 0;
         while index < self.endpoints.len() {
-            if self.endpoints[index].prune()? {
+            let endpoint = &self.endpoints[index];
+            // An unbound builder or waiter must keep the canonical array.
+            if endpoint.prune()? && Arc::strong_count(endpoint) == 1 {
                 self.endpoints.swap_remove(index);
             } else {
                 index += 1;
@@ -24,33 +25,35 @@ impl EndpointStore {
         Ok(())
     }
 
-    pub(super) fn adopt(&mut self, grant: &RdmaGrant, peer: Peer) -> Result<Arc<RdmaEndpoint>> {
-        if grant
-            .endpoint
-            .as_ref()
-            .is_some_and(|endpoint| !endpoint.matches(peer))
-        {
-            return Err(Error::Protocol(
-                "RDMA QP cannot move to a different peer endpoint",
-            ));
-        }
+    pub(super) fn get_or_insert(
+        &mut self,
+        key: EndpointKey,
+        width: usize,
+    ) -> Result<Arc<RdmaEndpoint>> {
         self.prune()?;
-        let endpoint = match self
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.matches(peer))
-        {
-            Some(endpoint) => Arc::clone(endpoint),
-            None => Arc::new(RdmaEndpoint::new(peer)),
-        };
-        endpoint.adopt(grant, peer)?;
-        if !self
-            .endpoints
-            .iter()
-            .any(|entry| Arc::ptr_eq(entry, &endpoint))
-        {
-            self.endpoints.push(Arc::clone(&endpoint));
+        for endpoint in &self.endpoints {
+            if endpoint.key == key {
+                if endpoint.width()? != width {
+                    return Err(Error::Protocol("RDMA peer changed QP width"));
+                }
+                return Ok(Arc::clone(endpoint));
+            }
+            if !key.source
+                && (EndpointKey {
+                    domain: key.domain,
+                    ..endpoint.key
+                }) == key
+            {
+                return Err(Error::Protocol(
+                    "RDMA path table replaced a cached protection domain",
+                ));
+            }
         }
+        let endpoint = Arc::new(RdmaEndpoint::new(key, width)?);
+        self.endpoints
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        self.endpoints.push(Arc::clone(&endpoint));
         Ok(endpoint)
     }
 

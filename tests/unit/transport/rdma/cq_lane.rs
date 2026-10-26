@@ -202,6 +202,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
         released: false,
         cached_peer: None,
         endpoint: None,
+        construction: None,
     }
 }
 

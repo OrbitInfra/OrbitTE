@@ -375,21 +375,21 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
 ### P4 remaining delivery
 
-The host READ/WRITE path is implemented. P4 is still open because two concrete
-runtime gaps remain and the complete hardware/independent acceptance has not
+The host READ/WRITE path is implemented. P4 is still open because periodic
+monitor recovery remains and the complete hardware/independent acceptance has not
 passed. The historical entries below record delivered code and scoped evidence;
 they are not a queue of features to implement again.
 
 | Order | Work | Completion condition |
 | --- | --- | --- |
-| 1 | Fixed-width peer QP arrays with concurrent grants | Bound the peer's QP count by the configured `num_lanes` width; give concurrent grants independent WR/message owners and shared QP-depth admission. Preparing an entire parent must not deadlock when slices exceed QP count. QP failure drains every affiliated grant exactly once; stale generations and cancellation cannot affect a newer or sibling grant. |
+| 1 | Fixed-width peer QP arrays with concurrent grants — implemented | Bound the peer's QP count by the configured `num_lanes` width; give concurrent grants independent WR/message owners and shared QP-depth admission. Preparing an entire parent must not deadlock when slices exceed QP count. QP failure drains every affiliated grant exactly once; stale generations and cancellation cannot affect a newer or sibling grant. |
 | 2 | Periodic monitor recovery | Reclaim retired endpoint/orphan owners without new submissions; re-query paused ports and address/link changes, invalidate stale connections and resume selection only with safe native evidence. Missing events must not leave a recovered port permanently unselectable. |
 | 3 | Complete P4 qualification and independent acceptance | Freeze the final host support envelope and run the outstanding gates below against the installed artifact. An independent reviewer checks the diff, reruns relevant gates and accepts the remaining limits. Missing hardware stays unqualified. |
 
-The first row is in progress: QP-owned send depth and exact outstanding-WR
+The first row is implemented; qualification and acceptance are tracked separately: QP-owned send depth and exact outstanding-WR
 accounting are implemented in `qp/send_queue.rs`; per-grant `SendWork` no
 longer owns global SQ credits. Payload, bind and completion SEND consume that
-shared owner, including post errors and native cancellation. Public v13 now
+shared owner, including post errors and native cancellation. Public v14 now
 activates simultaneous grants on connected QPs. `RdmaQp` now owns a shared physical connection;
 independent CQ-lane grant records hold work, namespaces and waiters. Receive CQEs
 dispatch through the QP-owned slot to the exact binding/key grant, including when
@@ -398,8 +398,10 @@ and physical retention counters are distinct from grant counters.
 The shared-QP fixture exercises four live native grants, reverse receipts, stale
 record isolation and lost-CQE barriers. Whole-parent grant reservations and
 source RQ admission now precede authority; source RQ depth is independent of
-the SQ width. Fixed-width cold peer construction remains open: concurrent
-first handshakes can still create additional QPs under the aggregate limit. [Qualification](qualification.md) pins each delivered scope.
+the SQ width. Cold construction now reserves fixed endpoint slots before QP
+creation, negotiates a common width, publishes the passive pair before GRANT
+and retains failed native cleanup in its slot. Waiter deadlines and reservation
+tokens isolate cancellation from other builders and replacement generations. [Qualification](qualification.md) pins each delivered scope.
 No new P4 milestone is added for this prerequisite.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and
@@ -1256,22 +1258,18 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Finish fixed-width cold peer construction, the first row of
-[P4 remaining delivery](#p4-remaining-delivery). Public v13 now attaches
-independent grant records to connected QPs and admits whole parents under
-separate grant/RQ budgets. A small physical SQ cannot block preparing its
-larger source RQ. Idle eviction requires every affiliated grant to finish.
-Concurrent initial handshakes can still overshoot a peer's `num_lanes` target,
-although `max_endpoints` bounds aggregate physical QPs. Add a peer-owned
-construction reservation, bilateral bootstrap arbitration and failure rollback;
-qualify simultaneous first contact, cancellation and retry without deadlock or
-replacing an established physical connection. No new P4 milestone is added.
+Proceed to periodic monitor recovery, the second row of
+[P4 remaining delivery](#p4-remaining-delivery), after reviewing the fixed-width
+construction delivery. Cold builders, concurrent grants, whole-parent grant/RQ
+admission and native-drain-aware rollback now have explicit owners. Do not add
+another P4 milestone for these delivered prerequisites.
 
-Then complete periodic monitor recovery and the final P4 gate in the same
-queue. The earlier ownership-layout cleanup and current SQ/RQ prerequisites do
-not complete fixed-width multiplexing or periodic recovery.
-Keep frozen TENT comparison, CPU controls and scoped native manifests with
-each behavior change. The [architecture reading order](architecture.md#source-reading-order)
+The next change must reclaim retired endpoint/orphan owners without new
+submissions, periodically re-query paused ports and address/link changes, and
+resume selection only after stale connections drain and native evidence permits
+it. Then run the final host qualification and independent acceptance in the
+same queue. Keep frozen TENT comparison, CPU controls and scoped native manifests
+with each behavior change. The [architecture reading order](architecture.md#source-reading-order)
 points to the current resource owners.
 
 OrbitKV dependency migration, whole-engine shutdown consumption and installed

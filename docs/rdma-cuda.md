@@ -3624,5 +3624,49 @@ grant namespace before CQ destruction. The `concurrent-grants` mode tests the
 independent grant budget; old `concurrent-endpoints` result sets remain
 historical evidence. The existing large/folded/RQ and failure profiles use the
 public protocol. See [qualification](qualification.md) for exact artifacts.
-Fixed-width cold construction, periodic recovery and final P4 acceptance remain
-open; the data path still selects host staging for NVIDIA device pointers.
+Fixed-width cold construction is described below. Periodic recovery and final
+P4 acceptance remain open; NVIDIA device pointers still select host staging.
+
+
+## Fixed-width cold bootstrap
+
+Wire v14 adds the source's reusable QP width to the path table and echoes the
+negotiated width in HELLO. Zero means per-grant non-reusable connections. Host
+Direct pairs use the smaller `num_lanes` value; older wire versions are rejected
+before dispatch. Exact grant binding size remains 141 bytes. A reused pair
+cannot change its width or either connection identity.
+
+`endpoint.rs` owns a fixed array and the `Construction` guard. A slot counts
+while unbound, handshaking, connected or awaiting native destruction. Only the
+native `closed` barrier frees an attached slot. `endpoint_store.rs` preserves a
+canonical empty array while a caller holds it. `rdma_transport/connections.rs`
+selects completed records, reserves cold slots, shares busy QPs and waits with
+an absolute deadline. Native create, bootstrap I/O and cleanup run outside the
+endpoint/store mutexes. `handshake.rs` publishes the source pair before GRANT,
+so concurrent first requests cannot mistake a newly connected pair for a miss.
+
+Arrays are scoped to a local context, remote process/PD/NIC, role and capability.
+READ and WRITE, and the two requester/source roles, retain separate arrays;
+`max_endpoints` still bounds their aggregate physical QPs. TENT's frozen
+`getOrInsert`, fixed `qp_list_`, `construct`, `connect` and `accept` are the
+reference boundaries. TENT eagerly creates its complete list and handles
+simultaneous active/passive open on that shared endpoint; OrbitTE lazily fills
+reserved slots and keeps its explicit grant authority protocol. Neither native
+wire interoperability nor eager bidirectional-array parity is claimed.
+
+CPU controls force cold builders to pause before opening a QP while eight
+parents contend, then check exact width, READ/WRITE bytes and warm reuse. They
+also cover duplicate reservations, unbound cancellation, waiter timeout/retry,
+failed ACCEPT rollback, retained native cleanup, old guard isolation, unequal
+lane counts and simultaneous bidirectional first contact.
+
+The native `large-cold` mode extends the supervised two-RNIC concurrent profile.
+Eight parents compete before the cold-open gate is released; the fixture checks
+the construction count before any native QP opens. The resulting forty grants
+must fit each negotiated array, preserve bytes/sentinels and use the same
+physical QPs in the next round. Every existing concurrent profile now checks
+its array width too. Include `mode: "large-cold"`, `num_lanes: 1` or `3`,
+READ/WRITE and polling/event variants in the external hardware profile consumed
+by `tests/hardware/run.py`. Raw `ORBITTE_COLD_CONSTRUCTION` and
+`ORBITTE_ENDPOINT_ARRAY` records identify builders, slots and physical QPs.
+See [qualification](qualification.md) for the frozen artifact and evidence.

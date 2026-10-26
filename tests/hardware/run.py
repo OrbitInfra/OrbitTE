@@ -314,7 +314,7 @@ class Controller:
                 or case.get('mode') not in ['healthy', 'cq-error', 'partial-post', 'paused-close', 'mr-rollback',
                                            'concurrent-quota', 'concurrent-grants', 'concurrent-close',
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
-                                           'large-quota', 'large-close', 'large-cq-error',
+                                           'large-quota', 'large-cold', 'large-close', 'large-cq-error',
                                            'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
                          'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error']
                 or case.get('operation') not in ['read', 'write']

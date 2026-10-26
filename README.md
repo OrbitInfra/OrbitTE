@@ -32,8 +32,7 @@ connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
 unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
-The host RDMA stage still needs fixed-width cold QP construction,
-periodic monitor recovery and complete physical-fault/independent acceptance.
+The host RDMA stage still needs periodic monitor recovery and complete physical-fault/independent acceptance.
 GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
 compatibility are later-stage work. See the
 [P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
@@ -51,7 +50,9 @@ checkout for the implementation described here.
   per-context CQ lanes and a transport-level worker pool keep resources with
   their physical owners. `num_lanes` aligns workers and CQ parallelism; new
   slices use worker load while cached QPs retain their CQ lane. Host Direct registration prepares all enabled contexts
-  before exposing a range. Peer endpoint arrays, physical QPs and per-slice
+  before exposing a range. Direct peers negotiate a fixed QP width; cold
+  builders reserve slots before native creation and concurrent requests share
+  published connections. Peer endpoint arrays, physical QPs and per-slice
   grants have separate owners; data workers bind to allowed NUMA CPU sets and
   one transport monitor consumes device/CQ events.
 - **Topology-aware device selection.** Stable NIC IDs, device masks, NUMA
@@ -62,7 +63,7 @@ checkout for the implementation described here.
   and completion messages; grant work handles cannot release unresolved debt.
   QP-owned receive buffers dispatch by exact binding/key, independently of
   which grant supplied the buffer. Independent runtime grant records share a
-  physical QP through the public v13 handshake. `max_endpoints` bounds physical
+  physical QP through the public v14 handshake. `max_endpoints` bounds physical
   QPs; `max_grants` independently bounds parent grant reservations. The source
   reserves every slice's grant and receive credit before granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
 - **Explicit drain.** Timeouts and logical failures do not release memory still

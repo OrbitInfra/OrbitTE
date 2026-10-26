@@ -273,7 +273,7 @@ fn one_context_fault_preserves_the_other_stores_idle_count_and_fences_new_grants
                 4..12,
                 0,
                 deadline,
-                None,
+                crate::transport::rdma::rdma_transport::connections::Connection::Fresh(None),
             )
         })(),
         Err(Error::Unavailable(_))
@@ -572,7 +572,7 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&request.encode()).unwrap();
-        let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
+        let (paths, _) = path::read_paths(&mut channel, source.source_epoch()).unwrap();
         let mut limit = [0];
         channel.read_exact(&mut limit).unwrap();
         if case == 0 {
@@ -599,6 +599,7 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
                     source: None,
                     expected_domain: paths[1].domain,
                     direct: true,
+                    qp_width: 1,
                     previous_grant: 0,
                 }
                 .write(&mut channel)
@@ -975,7 +976,7 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
                     id * 4..id * 4 + 4,
                     0,
                     Instant::now() + TIMEOUT,
-                    None,
+                    crate::transport::rdma::rdma_transport::connections::Connection::Fresh(None),
                 )
                 .unwrap();
             endpoint.connect(&endpoint.descriptor()).unwrap();
@@ -1234,14 +1235,14 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                         }
                     }
                     pairs.sort_unstable();
-                    assert_eq!(pairs.len(), 3);
+                    assert_eq!(pairs.len(), 2);
                     assert_eq!(
                         pairs
                             .iter()
                             .map(|row| row.0)
                             .collect::<std::collections::BTreeSet<_>>()
                             .len(),
-                        lanes
+                        2
                     );
                     if round != 0 {
                         assert_eq!(
@@ -1259,8 +1260,8 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                         ),
                         (lanes, lanes, lanes * 2)
                     );
-                    assert_eq!(stats.opened_connections, 3);
-                    assert_eq!(stats.reused_connections, round * 3);
+                    assert_eq!(stats.opened_connections, 2);
+                    assert_eq!(stats.reused_connections, round * 3 + 1);
                     assert_eq!(
                         stats.persistent_mrs, published,
                         "CQ lanes must share per-context MRs"

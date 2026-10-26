@@ -434,14 +434,32 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     transfer(shape, &engine, &peer, base, remote, operation, parent)
                 })
             };
-            let mut pending = vec![spawn(0)];
-            until(|| {
+            let pending = if mode == "large-cold" && round == 0 {
+                crate::transport::rdma::tests::hold_cold_open(source_runtime(&engine));
+                let pending: Vec<_> = (0..shape.parents).map(spawn).collect();
+                until(|| engine.stats().unwrap().rdma.unwrap().active_grants == shape.parents);
                 let stats = engine.stats().unwrap().rdma.unwrap();
-                native::initial_posted()
-                    && stats.work_requests
-                        == sq_limit.min(stats.active_endpoints * if large { 2 } else { 1 })
-            });
-            pending.extend((1..shape.parents).map(spawn));
+                let entered = crate::transport::rdma::tests::release_cold_open();
+                assert_eq!(stats.opened_connections, 0);
+                assert!(stats.active_endpoints <= 2 * worker_pool::count());
+                println!(
+                    "ORBITTE_COLD_CONSTRUCTION {{\"parents\":{},\"builders\":{},\"entered\":{entered},\"width\":{},\"contexts\":2,\"opened\":0}}",
+                    shape.parents,
+                    stats.active_endpoints,
+                    worker_pool::count()
+                );
+                pending
+            } else {
+                let mut pending = vec![spawn(0)];
+                until(|| {
+                    let stats = engine.stats().unwrap().rdma.unwrap();
+                    native::initial_posted()
+                        && stats.work_requests
+                            == sq_limit.min(stats.active_endpoints * if large { 2 } else { 1 })
+                });
+                pending.extend((1..shape.parents).map(spawn));
+                pending
+            };
             until(|| {
                 let records = owners(&engine);
                 records.len() == count

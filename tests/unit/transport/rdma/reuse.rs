@@ -232,7 +232,7 @@ fn one_slot_cache_evicts_other_capability_and_reconnects_only_after_explicit_cac
     source_runtime
         .progress(source_runtime.device().unwrap())
         .unwrap()
-        .evict_idle(deadline(TIMEOUT).unwrap())
+        .evict_idle(|_| true, deadline(TIMEOUT).unwrap())
         .unwrap();
     transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
     for op in [TransferOp::Write, TransferOp::Read] {
@@ -333,6 +333,7 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         released: false,
         cached_peer: Some(peer),
         endpoint: None,
+        construction: None,
     };
     let log = events(runtime);
     let before = log.lock().unwrap().clone();
@@ -503,7 +504,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 }
             };
             relay(REQUEST_SIZE, true);
-            relay(36 + path::PATH_SIZE, false);
+            relay(37 + path::PATH_SIZE, false);
             relay(HELLO_SIZE, true);
             relay(36 + OFFER_SIZE, false);
             relay(1 + BINDING_SIZE + DESCRIPTOR_SIZE, true);
@@ -583,13 +584,14 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
         let mut channel =
             ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
         channel.write_all(&wire.encode()).unwrap();
-        let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
+        let (paths, _) = path::read_paths(&mut channel, source.source_epoch()).unwrap();
         let local_identity = Identity::local(&endpoint, SourceEpoch([9; 16])).unwrap();
         Hello {
             requester: local_identity,
             source: None,
             expected_domain: paths[0].domain,
             direct: true,
+            qp_width: 1,
             previous_grant: 0,
         }
         .write(&mut channel)
@@ -695,6 +697,7 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
             source: None,
             expected_domain: domain,
             direct: true,
+            qp_width: 1,
             previous_grant: 0,
         };
         match case {
@@ -794,11 +797,11 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                 let mut hello = [0; REQUEST_SIZE + HELLO_SIZE];
                 client.read_exact(&mut hello[..REQUEST_SIZE]).unwrap();
                 server.write_all(&hello[..REQUEST_SIZE]).unwrap();
-                let mut paths = path::read_paths(&mut server, epoch).unwrap();
+                let (mut paths, width) = path::read_paths(&mut server, epoch).unwrap();
                 if changed == "table_domain" && attempt == 1 {
                     paths[0].domain = [0xff; 16];
                 }
-                path::write_paths(&mut client, epoch, &paths).unwrap();
+                path::write_paths(&mut client, epoch, &paths, width).unwrap();
                 if changed == "table_domain" && attempt == 1 {
                     expect_closed_without_next_phase(&mut client);
                     break;
@@ -874,7 +877,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                 runtime
                     .progress(runtime.device().unwrap())
                     .unwrap()
-                    .evict_idle(deadline(TIMEOUT).unwrap())
+                    .evict_idle(|_| true, deadline(TIMEOUT).unwrap())
                     .unwrap()
             );
         }
@@ -904,12 +907,14 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                 stats.completed_sends,
                 stats.reused_connections
             ),
-            (1, 1, 1)
+            (1, 1, u64::from(changed != "table_domain"))
         );
         assert_eq!(stats.opened_connections, if changed_domain { 2 } else { 1 });
-        assert_eq!(stats.opened_connections, stats.closed_connections);
-        assert_eq!((stats.active_grants, stats.idle_endpoints), (0, 0));
+        assert_eq!(stats.active_grants, 0);
+        assert_eq!(stats.idle_endpoints, usize::from(changed == "table_domain"));
         requester.close(TIMEOUT).unwrap();
+        let stats = requester.stats().unwrap().rdma.unwrap();
+        assert_eq!(stats.opened_connections, stats.closed_connections);
     }
 }
 
@@ -953,6 +958,7 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
             }),
             expected_domain: peer.connection.domain,
             direct: true,
+            qp_width: 1,
             previous_grant: peer.generation,
         };
         let mut wire = request(source.source_epoch(), remote.id());
@@ -1097,7 +1103,7 @@ fn unattached_shared_claim_cannot_evict_or_fence_a_live_sibling() {
         let end = deadline(TIMEOUT).unwrap();
         let mut active = if attached {
             let cached = runtime
-                .claim(runtime.device().unwrap(), |peer| !peer.source, 1, end)
+                .claim(runtime.device().unwrap(), |peer| !peer.source, end)
                 .unwrap()
                 .unwrap();
             Some(
@@ -1117,7 +1123,7 @@ fn unattached_shared_claim_cannot_evict_or_fence_a_live_sibling() {
         let placeholder = lane.share(&record, peer, end).unwrap();
         assert_eq!(runtime.stats().unwrap().idle_endpoints, 0);
         assert!(
-            !lane.evict_idle(end).unwrap(),
+            !lane.evict_idle(|_| true, end).unwrap(),
             "a shared active claim makes the physical QP busy"
         );
         drop(placeholder);

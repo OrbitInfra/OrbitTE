@@ -96,12 +96,13 @@ fn source_offer(
     let mut channel =
         ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
     channel.write_all(&request.encode()).unwrap();
-    let paths = path::read_paths(&mut channel, source.source_epoch()).unwrap();
+    let (paths, _) = path::read_paths(&mut channel, source.source_epoch()).unwrap();
     Hello {
         requester: identity(9, 8, 7),
         source: None,
         expected_domain: paths[0].domain,
         direct: false,
+        qp_width: 0,
         previous_grant: 0,
     }
     .write(&mut channel)
@@ -293,6 +294,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                         ..Default::default()
                     },
                 }],
+                0,
             )
             .unwrap();
             let hello = Hello::read(&mut channel, epoch).unwrap();
@@ -450,12 +452,13 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
     channel.deadline = deadline(Duration::from_secs(1)).unwrap();
     thread::scope(|scope| {
         let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory));
-        let paths = path::read_paths(&mut peer, epoch).unwrap();
+        let (paths, _) = path::read_paths(&mut peer, epoch).unwrap();
         Hello {
             requester: identity(9, 8, 7),
             source: None,
             expected_domain: paths[0].domain,
             direct: false,
+            qp_width: 0,
             previous_grant: 0,
         }
         .write(&mut peer)
@@ -529,3 +532,6 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
 mod reuse;
 
 mod rails;
+
+#[path = "cold_connections.rs"]
+mod cold_connections;

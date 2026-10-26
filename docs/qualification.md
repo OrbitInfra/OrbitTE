@@ -13,6 +13,17 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Wire v14 implements fixed-width cold construction. The negotiated endpoint
+array bounds both builders and connected/native-retained QPs. Concurrent grants
+keep independent authority, and passive publication precedes GRANT. Source
+contracts and reproduction are in [fixed-width cold bootstrap](rdma-cuda.md#fixed-width-cold-bootstrap).
+
+This delivery's frozen validation is recorded after its gates complete. Older
+results below qualify only their named commits. Independent P4 acceptance,
+periodic recovery and final installed host qualification remain open.
+
+## Previous public concurrent-grant delivery
+
 Public v13 handshakes share live physical QPs across independent exact-range
 grants. Whole-parent `max_grants` reservations are separate from physical
 `max_endpoints`; the source also reserves RQ capacity before exposing authority.

@@ -193,9 +193,19 @@ pub(crate) struct RdmaGrant {
     pub(super) released: bool,
     pub(super) cached_peer: Option<super::endpoint::Peer>,
     pub(super) endpoint: Option<Arc<super::endpoint::RdmaEndpoint>>,
+    pub(super) construction: Option<super::endpoint::Construction>,
 }
 
 impl RdmaGrant {
+    pub(super) fn publish_peer(&mut self, peer: super::endpoint::Peer) -> Result<()> {
+        let endpoint = self.endpoint.as_ref().ok_or(Error::Internal(
+            "RDMA reusable connection has no endpoint owner",
+        ))?;
+        endpoint.adopt(self, peer)?;
+        self.construction = None;
+        Ok(())
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, cq_lane::Request>> {
         if self.released {
             return Err(Error::Unavailable("RDMA grant handle has been consumed"));
