@@ -46,9 +46,13 @@ def supervise(config_path):
         if restart and (kill_role not in ('source', 'requester')
                         or type(generations) is not int or generations not in (2, 3)):
             raise ValueError('restart requires an explicit kill role and two or three generations')
+        live_peer = config.get('restart_live_peer', False)
+        if type(live_peer) is not bool or (live_peer and restart is None):
+            raise ValueError('live peer policy requires a restart plan')
+        process_generations = 1 if live_peer and restart != kill_role else generations
         result['command'] = [str(binary), *config['arguments']]
         phases = []
-        for generation in range(generations):
+        for generation in range(process_generations):
             if restart:
                 environment['ORBITTE_RESTART_GENERATION'] = str(generation)
                 environment['ORBITTE_RESTART_ROOT'] = str(root)
@@ -92,7 +96,7 @@ def supervise(config_path):
                                    intentional_sigkill=intentional))
                 if (root / 'maps.txt').exists():
                     shutil.copy2(root / 'maps.txt', root / ('maps-' + str(generation) + '.txt'))
-                write(root / 'restart.json', dict(phases=phases, locks_held=True, kill_role=kill_role, generations=generations))
+                write(root / 'restart.json', dict(phases=phases, locks_held=True, kill_role=kill_role, generations=generations, live_peer=live_peer))
                 result['phases'] = phases
             expected = -9 if restart == kill_role and generation + 1 < generations else 0
             passed = result['exit_code'] == expected and (expected != -9 or intentional) and not result.get('timeout')

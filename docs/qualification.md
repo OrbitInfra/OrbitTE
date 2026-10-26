@@ -13,6 +13,59 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Source [`0b6229c`](https://github.com/OrbitInfra/OrbitTE/commit/0b6229c0f72fe0bd32604043a6f3d8c11f194a6b)
+adds a public-API installed-consumer gate for repeated peer death with a
+surviving engine. Production owners, public API, dependencies and wire v14
+are unchanged. Stable 1.99.1 and Rust 1.85.0 each build a separate archived crate
+and installed release consumer; every fixture module, lockfile and binary is
+hashed. Later documentation changes preserve those runtime and test inputs.
+
+Both installed binaries pass **40 two-host/two-RNIC configurations** in total:
+**32 three-generation restart cases** and eight healthy single-rail regressions.
+The restart matrix crosses source/requester kill role, READ/WRITE, both node
+directions and polling/events. It alternates width 1 with sixteen 6 MiB + 1
+byte parents and width 3 with thirty-two 1 MiB + 64 KiB parents, using a 1 MiB
+slice block and two-rail mask. Geometry/width are selected profiles, not an
+additional complete Cartesian dimension. Each generation checks three rounds
+of full payload and guard bytes. The healthy regressions exercise masks 1/2.
+
+All **7,296 parent transfers** pass. The supervisor reaps **144 children**,
+including **64 intentional SIGKILLs**. Exactly one peer remains alive through
+each restart sequence, keeping its PID, engine epoch, registration ID/address
+and four opened persistent MRs. Replacement processes reuse their original
+service address and registration ID with new epochs. **96 stale data
+submissions**, each paired with a stale metadata lookup, reject all prior
+public segment handles before new QPs or WRs and without byte effects.
+Fresh-authority rounds obey the QP budget and close all remaining owners.
+
+Kill points have zero outstanding SQ/RQ debt and active grants, but live cached
+QPs and MRs. Killed processes do not report Rust orderly close; the supervisor
+proves their termination. This qualifies abrupt idle-resource process death
+and live-engine reconnect, not outstanding-DMA interruption. Native QP/MR/MW
+faults and retention controls below remain separate internal evidence.
+
+Both compiler gates pass Clippy and **234 CPU/integration/doc tests** each.
+Seventeen controller tests reject incomplete phases, wrong child identities,
+stale side effects, reset survivor counters, missing providers, false drain
+and premature resource release. The 32-case supervision control matrix checks
+both restart policies, kill roles, two/three generations and unexpected exits.
+Two initial pilot cases also pass; they are excluded from the 40-case totals.
+
+Raw crates, installed executables, source archive, profiles and native receipts
+remain outside Git at
+`/root/orbitte-artifacts/rdma-installed-failures-20261026`.
+`native-audit.json` reconciles every case, byte ledger, child and RNIC identity.
+Postflight confirms unchanged node/provider identities, released RNIC locks
+and no GPU compute. See [the installed restart contract and TENT mapping](installed-host.md#peer-restart-with-a-surviving-engine).
+
+Installed outstanding-DMA death, lost completions and native cleanup failures;
+physical link/device loss and provider faults; InfiniBand; physical rail
+pressure/fairness; and independent P4 acceptance remain open. OrbitKV
+integration stays after that acceptance. This delivery adds qualification
+coverage, not another P4 implementation milestone.
+
+## Previous native cleanup delivery
+
 Production host-RDMA owners and the public protocol are unchanged in this
 qualification stage. Source [`d5514d4`](https://github.com/OrbitInfra/OrbitTE/commit/d5514d4630797e07baead3f8a1ddf08d24ca7487)
 adds native QP destruction EIO and completion-channel EBUSY profiles. The QP
@@ -50,8 +103,9 @@ and returns zero; its nonzero error branch is covered only by the existing
 CPU ABI control. No native device-close error result is claimed.
 
 See [native cleanup methodology and TENT mapping](native-cleanup.md).
-These are instrumented native libtests; installed consumers retain their
-previous healthy-only qualification. Physical port/device faults, spontaneous
+These are instrumented native libtests. At that delivery, installed consumers
+had healthy-only qualification; the current restart delivery above adds its
+separately scoped installed failure profile. Physical port/device faults, spontaneous
 provider failures beyond these controls, InfiniBand, fairness/physical rail
 pressure and independent P4 acceptance remain open. OrbitKV integration stays
 after that acceptance.

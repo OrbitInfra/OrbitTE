@@ -97,12 +97,12 @@ class SupervisionOwnership(unittest.TestCase):
             self.assertEqual(result['exit_code'], -9)
 
     def test_restart_keeps_both_leases_through_owned_kill_reap_and_replacement(self):
-        cases = [(role, killed, generations, unexpected)
+        cases = [(role, killed, generations, unexpected, live_peer)
                  for role in ('source', 'requester')
                  for killed in ('source', 'requester')
-                 for generations in (2, 3) for unexpected in (False, True)]
-        for role, killed, generations, unexpected in cases:
-            with self.subTest(role=role, killed=killed, generations=generations, unexpected=unexpected), tempfile.TemporaryDirectory() as directory:
+                 for generations in (2, 3) for unexpected in (False, True) for live_peer in (False, True)]
+        for role, killed, generations, unexpected, live_peer in cases:
+            with self.subTest(role=role, killed=killed, generations=generations, unexpected=unexpected, live_peer=live_peer), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory);case = root / 'case';case.mkdir()
                 locks = [root / 'nic1.lock', root / 'nic2.lock']
                 for lock in locks: lock.touch()
@@ -114,7 +114,7 @@ class SupervisionOwnership(unittest.TestCase):
                     boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                     binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                     locks=[str(lock) for lock in locks], arguments=[], timeout_seconds=3,
-                    restart_role=role, restart_kill_role=killed, restart_generations=generations,
+                    restart_role=role, restart_kill_role=killed, restart_generations=generations, restart_live_peer=live_peer,
                     env=dict(ROLE=role, KILLED=killed, GENERATIONS=str(generations),
                              UNEXPECTED=str(int(unexpected)), LOCKS=json.dumps([str(lock) for lock in locks])))))
                 process = subprocess.run([sys.executable, '-B', str(Path(supervise.__file__)), 'start', str(config)],
@@ -123,7 +123,7 @@ class SupervisionOwnership(unittest.TestCase):
                 result = json.loads((case / 'result.json').read_text())
                 self.assertTrue(result['child_reaped'] and result['resource_locks_released'])
                 self.assertEqual(result['status'], 'failed' if unexpected else 'passed')
-                self.assertEqual(len(result['phases']), 1 if unexpected else generations)
+                self.assertEqual(len(result['phases']), 1 if unexpected or (live_peer and role != killed) else generations)
                 for phase in result['phases']:
                     self.assertTrue(phase['child_reaped'])
                     self.assertFalse(Path('/proc', str(phase['native_pid'])).exists())

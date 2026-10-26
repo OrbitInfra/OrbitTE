@@ -66,10 +66,19 @@ def build(root, output, toolchain, allow_dirty=False):
         fixture = library / 'tests/hardware/rdma_host.rs'
         if fixture.read_bytes() != (root / 'tests/hardware/rdma_host.rs').read_bytes():
             raise ValueError('packaged consumer differs from the qualified source')
+        fixture_modules = library / 'tests/hardware/rdma_host'
+        fixture_files = [fixture, *sorted(fixture_modules.rglob('*.rs'))]
+        fixture_hashes = {}
+        for path in fixture_files:
+            relative = path.relative_to(library)
+            if path.read_bytes() != (root / relative).read_bytes():
+                raise ValueError('packaged consumer module differs from source')
+            fixture_hashes[str(relative)] = digest(path)
         run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)
         shutil.copy2(fixture, consumer / 'src/main.rs')
+        shutil.copytree(fixture_modules, consumer / 'src/rdma_host')
         (consumer / 'Cargo.toml').write_text(
             '[package]\nname = "orbitte-rdma-host"\nversion = "0.0.0"\n'
             'edition = "2024"\nrust-version = "1.85"\npublish = false\n'
@@ -96,7 +105,7 @@ def build(root, output, toolchain, allow_dirty=False):
                         '--locked', '--offline'], cwd=consumer)
         binary = prefix / 'bin/orbitte-rdma-host'
         probe = run('protocol', [str(binary), '--protocol'], cwd=output).strip()
-        if probe != 'orbitte-installed-host-v1':
+        if probe != 'orbitte-installed-host-v2':
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
         if 'not found' in linkage or 'libibverbs' not in linkage or 'libcuda' in linkage:
@@ -104,7 +113,7 @@ def build(root, output, toolchain, allow_dirty=False):
         libraries = {word: digest(Path(word)) for word in linkage.split() if word.startswith('/') and Path(word).is_file()}
         manifest.update(status='passed', native_libraries=libraries, archive=str(archive), archive_sha256=digest(archive),
                         library_manifest=str(library / 'Cargo.toml'), features=features,
-                        fixture_sha256=digest(fixture), consumer_lock_sha256=digest(consumer / 'Cargo.lock'),
+                        fixture_sha256=digest(fixture), fixture_files_sha256=fixture_hashes, consumer_lock_sha256=digest(consumer / 'Cargo.lock'),
                         binary=str(binary), binary_sha256=digest(binary), protocol=probe)
     except Exception as error:
         manifest.update(status='failed', error=str(error))
