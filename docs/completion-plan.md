@@ -1274,8 +1274,10 @@ row of [P4 remaining delivery](#p4-remaining-delivery). Fixed-width construction
 and periodic monitor recovery now have reachable implementations and focused
 controls; do not add another implementation milestone for these prerequisites.
 
-Freeze the declared host envelope, installed artifacts and outstanding fault
-controls before running that gate. Physical link/device loss and InfiniBand
+Use the [installed host gate](installed-host.md) to freeze packaged crates and
+independent public-API consumers. Its runtime profile is not yet qualified.
+Freeze the declared host envelope and outstanding fault controls before running
+that gate. Physical link/device loss and InfiniBand
 remain unqualified. Link-bandwidth scheduling, new-device/GID migration and
 general retry policy are not implied by selected-port recovery. Keep frozen
 TENT comparisons, native manifests and failed controls outside Git. The

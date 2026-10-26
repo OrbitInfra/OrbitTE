@@ -120,6 +120,9 @@ OrbitTE's native P4 stage comes before renewed OrbitKV integration. Historical
 implementation details remain in the [RDMA contract](docs/rdma-cuda.md) and the
 [earlier README](https://github.com/OrbitInfra/OrbitTE/blob/0ec2a88ba01511f40445d498249e947486034aa4/README.md#status).
 
+See the [installed host RDMA gate](docs/installed-host.md) for packaged-crate
+consumption, native peer supervision and evidence requirements.
+
 ## Development
 
 ```sh

@@ -57,6 +57,6 @@ See [qualification](qualification.md) for the latest declared evidence and
 [the completion plan](completion-plan.md) for outstanding acceptance gates.
 
 
-See [the P4 exit queue](completion-plan.md#p4-remaining-delivery) for the two
-remaining host-runtime gaps and final acceptance boundary. P4 acceptance alone
+See [the P4 exit queue](completion-plan.md#p4-remaining-delivery) for the final host hardware
+qualification and independent acceptance boundary. P4 acceptance alone
 does not complete the full TENT core.

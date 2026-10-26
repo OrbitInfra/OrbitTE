@@ -107,6 +107,7 @@ troubleshooting
 
 contributing
 qualification
+installed-host
 cpu-oracle
 completion-plan
 :::

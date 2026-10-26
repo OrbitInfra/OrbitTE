@@ -38,3 +38,8 @@ path = "tests/reference/rust_driver.rs"
 name = "hardware_peer"
 path = "examples/hardware_peer.rs"
 required-features = ["rdma", "cuda"]
+
+[[example]]
+name = "rdma_host"
+path = "tests/hardware/rdma_host.rs"
+required-features = ["rdma"]

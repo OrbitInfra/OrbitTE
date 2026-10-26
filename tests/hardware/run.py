@@ -12,6 +12,8 @@ import subprocess
 import time
 import uuid
 
+import installed
+
 
 def restart_plan(case):
     mode = case.get('mode')
@@ -48,7 +50,7 @@ def native_peer_test(profile):
         return 'transport::rdma::cq_lane::tests::hardware::source_window_peer'
     if runner == 'orbitkv-peer-host':
         return 'peer::orbitte::tests::rdma_host::registered_host_rdma_peer'
-    if runner is None:
+    if runner in (None, 'orbitte-installed-host'):
         return None
     raise ValueError('unsupported hardware runner')
 
@@ -108,7 +110,7 @@ class Controller:
         target = self.profile['nodes'][node]
         locks = []
         if transport == 'rdma':
-            if self.profile.get('runner') == 'orbitte-multirail':
+            if self.profile.get('runner') in ('orbitte-multirail', 'orbitte-installed-host'):
                 locks.extend(self.rail_locks(node))
             else:
                 locks.append(target['nic_lock'])
@@ -178,6 +180,12 @@ class Controller:
         return [locks[name] for name in rails]
 
     def case(self, index, case):
+        if self.profile.get('runner') == 'orbitte-installed-host':
+            installed.validate(case)
+            for node in (case['source'], case['requester']):
+                self.rail_locks(node)
+            return self.run_case(index, case, lambda node, role, kind, root, readiness=None:
+                                 installed.command(self.profile, case, node, role, root, readiness))
         if self.profile.get('runner') == 'orbitte-multirail':
             return self.multirail_case(index, case)
         source, requester = case['source'], case['requester']
@@ -418,8 +426,15 @@ class Controller:
                 break
             time.sleep(0.3)
         passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
+        validation_error = None
+        if passed and self.profile.get('runner') == 'orbitte-installed-host':
+            try:
+                installed.verify(self.profile, case, evidence)
+            except (ValueError, KeyError, TypeError) as error:
+                passed = False
+                validation_error = str(error)
         # Preserve every successful/failed run verbatim, including supervisors.
-        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'restart_ready_forwarded': sorted(forwarded), 'evidence': evidence}, indent=2) + '\n')
+        (self.output / f'case-{index:02}.json').write_text(json.dumps({'case': case, 'status': 'passed' if passed else 'failed', 'remote_root': self.remote, 'restart_ready_forwarded': sorted(forwarded), 'validation_error': validation_error, 'evidence': evidence}, indent=2) + '\n')
         if not passed:
             raise RuntimeError(f'case {index} failed; retained evidence in {self.output}')
         print(json.dumps({'case': index, 'status': 'passed', **case}), flush=True)
@@ -430,12 +445,29 @@ def main():
     parser.add_argument('--profile', required=True, type=Path)
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--installation', type=Path, help='build_installed.py manifest for the installed-host runner')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     profile = json.loads(args.profile.read_text())
     controller = Controller(profile, args.binary.resolve(), args.output.resolve())
     manifest = {'profile': profile, 'binary_sha256': controller.sha256, 'remote_root': controller.remote, 'started_unix': time.time(), 'status': 'running', 'performance_measurement': False}
     try:
+        if profile.get('runner') == 'orbitte-installed-host':
+            if args.installation is None:
+                raise ValueError('installed host requires its frozen installation manifest')
+            installation = json.loads(args.installation.read_text())
+            if (installation.get('status') != 'passed' or installation.get('dirty')
+                    or installation.get('binary_sha256') != controller.sha256
+                    or installation.get('protocol') != installed.PROTOCOL):
+                raise ValueError('installation is dirty, incomplete or belongs to another binary')
+            manifest['installation'] = installation
+            manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
+            if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:
+                raise ValueError('unexpected installed binary protocol')
+            for case in profile['cases']:
+                installed.validate(case)
+        elif args.installation is not None:
+            raise ValueError('--installation is reserved for the installed-host runner')
         native_test = native_peer_test(profile)
         if native_test is not None:
             listing = controller.command([str(args.binary.resolve()), native_test, '--exact', '--list'])
