@@ -170,6 +170,7 @@ The reference is the frozen TENT commit
 | Context/PD and registered buffers outlive individual endpoints | Public registration publishes context-owned persistent MRs; they survive peer process replacement in the live engine |
 | `RdmaEndPoint` checks peer identity/QP arrays, retires a stale bootstrap and reconnects | Endpoint arrays and connection generations fence cached QPs before replacement; data uses the fresh peer authority |
 | Transport `Workers` progress and monitor reclaim | The surviving worker pool keeps servicing the same contexts while new endpoints are admitted |
+| `Workers::asyncPollCq`, `handleCompletion` and timeout sweep | Exact WR completion drives grants; missing observation fences shared QPs and releases unresolved ownership only after native drain |
 
 Frozen TENT's `endpoint.cpp` distinguishes duplicate peer QP arrays from a new
 connection on the same NIC path, retiring the latter for reconnection. OrbitTE
@@ -178,25 +179,30 @@ segment contract. The old segment must fail rather than silently adopt the
 new process's authority. This gate checks that Rust contract and owner
 separation; it is not a TENT wire/API interoperability or native restart oracle.
 
+TENT polls each context's worker-assigned CQ, dispatches completions to slices
+and sweeps software timeouts. OrbitTE follows those ownership boundaries while
+retaining its explicit Rust DMA loans and WRITE `Unknown` outcome. The native
+loss tool tests those contracts without changing the production worker design.
+
 The main fixture owns public requests, rendezvous and byte checks.
 `rdma_host/resources.rs` owns context selection, registration and drain;
 `rdma_host/restart.rs` owns the peer replacement sequence;
 `rdma_host/interruption.rs` owns public pending-batch and drain assertions;
-`rdma_host/gate.rs` owns the bounded test control relay. No test-only route
-bypasses the production handshake or native resource lifecycle. TCP carries
+`rdma_host/gate.rs` owns the bounded test control relay.
+`rdma_host/completion.rs` controls the separate native loss tool;
+`installed_completion.py` joins native WR/CQE/destruction identities.
+No test-only route bypasses the production handshake or native resource lifecycle. TCP carries
 test coordination; payload requests remain explicit RDMA.
 
-The installed gate covers healthy host traffic, idle-resource process restart
-and posted-RQ interruption before payload authorization. Mid-payload death,
-lost SQ completions, native teardown failures and poisoned-engine recovery
-still need installed-artifact
-gates. Physical port/device faults, per-rail bandwidth/fairness and
-InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
+The installed gate covers healthy host traffic, idle-resource process restart,
+posted-RQ interruption before payload authorization and lost payload CQEs.
+Mid-flight DMA death, native teardown failures and poisoned-engine recovery
+still need installed-artifact gates. Physical port/device faults, per-rail
+bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
 for executed artifact/profile results and
 [P4's final acceptance queue](completion-plan.md#p4-remaining-delivery) for the
 remaining hardware and independent-review gates.
-
 
 ## Lost payload completions
 
