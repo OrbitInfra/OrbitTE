@@ -13,14 +13,59 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
-Wire v14 implements fixed-width cold construction. The negotiated endpoint
-array bounds both builders and connected/native-retained QPs. Concurrent grants
-keep independent authority, and passive publication precedes GRANT. Source
-contracts and reproduction are in [fixed-width cold bootstrap](rdma-cuda.md#fixed-width-cold-bootstrap).
+Wire v14 implements fixed-width cold construction. Both peers negotiate the
+smaller `num_lanes` width before preparing a grant. A canonical endpoint owns
+unbound, handshaking, connected and native-retained slots; concurrent grants
+share published pairs. The source publishes before GRANT, and each construction
+token protects its slot from cancellation by an older guard. Staged/device paths
+continue using non-reusable per-grant connections.
 
-This delivery's frozen validation is recorded after its gates complete. Older
-results below qualify only their named commits. Independent P4 acceptance,
-periodic recovery and final installed host qualification remain open.
+Source [`2d44743`](https://github.com/OrbitInfra/OrbitTE/commit/2d44743dd80dd2c37d9d15680258d6eed7d2c6f3)
+passes 23 local gates on stable 1.99.1 and Rust 1.85.0, including four feature
+combinations, 218 all-feature unit tests per compiler, twelve runner controls
+and the frozen TENT geometry comparison. CPU controls force cold contention,
+check timeout/cancellation/retry and failed ACCEPT rollback, and preserve slot
+charges on failed native cleanup. Unequal lane counts and simultaneous
+bidirectional first contact pass with role-specific arrays.
+
+The two frozen release binaries pass **212 public two-host/two-RNIC
+configurations**, including **32 forced cold-construction cases**. In each cold case,
+all eight parents reach either construction or slot waiting before the gate
+opens; native QP creation is still zero at that barrier. READ/WRITE,
+polling/events, both directions and widths 1/3 are covered. Forty grants fit
+two physical QPs in the single-lane/two-RNIC profile. Every observed array
+stays within its negotiated width, and warm rounds preserve physical QPs.
+Existing grant/RQ pressure, folded tails, QP ERR, missing successful CQEs,
+MR/MW syscall errors, CQ/PD EBUSY, live reconnect and process-restart profiles
+pass with those width assertions. Another 32 internal shared-QP configurations
+cover reversed receipts and lost-CQE drain on each RNIC and both compilers.
+
+All **536 supervised children** are reaped: 512 completed libtests and
+24 deliberate kills. Postflight verifies the original node/provider identities,
+both RNIC locks available and no GPU compute. The frozen native TENT CPU oracle
+passes 25 observations and six negative controls, with its exact CI source
+tree, input hashes and native/Rust binaries checked.
+
+Removing the fixed slot limit in an external source copy makes the atomic
+concurrency test fail (32 admissions into a width-one array). A deterministic
+Unix-stream control also reproduces the pre-fix monitor-close EPIPE: after
+source detach, the worker may close its wake reader before the stop write.
+Close now waits for exit publication and joins the worker; live event sources
+still prevent closing. This is a shutdown fix, not periodic port recovery.
+
+Raw manifests, binaries, controls and failed development runs remain outside
+Git at `/root/orbitte-artifacts/rdma-cold-connections-20261026`.
+`native-raw-audit.json` checks physical width and builder/waiter counts;
+`shared-native-audit.json` checks independent receipt/drain controls.
+`final-delivery.json` pins the implementation, documentation-only delivery,
+CI checks and evidence hashes. See [the bootstrap contract](rdma-cuda.md#fixed-width-cold-bootstrap)
+and [resource ownership](architecture.md#fixed-width-cold-construction).
+
+These are scoped, same-agent source/native gates. Independent acceptance,
+periodic monitor recovery and final installed host qualification remain open.
+Physical port/device loss, InfiniBand, GPUDirect RDMA, NVLink and native TENT
+wire interoperability are not qualified by this delivery. OrbitKV integration
+remains deferred until P4 is accepted.
 
 ## Previous public concurrent-grant delivery
 
