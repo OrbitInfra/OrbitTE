@@ -431,7 +431,11 @@ return value is not native qualification.
 Outstanding coverage includes physical link/device loss and provider teardown;
 spontaneous MR/MW cleanup errors beyond syscall controls; broader
 source/requester death and live reconnect; poisoned-live-engine recovery;
-and failure profiles through the installed consumer. Existing QP ERR,
+and remaining failure profiles through the installed consumer. The
+[installed restart gate](installed-host.md#peer-restart-with-a-surviving-engine)
+is implemented for idle cached QPs/MRs: one peer dies repeatedly while the
+other keeps its engine and registration. Outstanding-DMA death and native
+cleanup failure in that installed path remain separate gates. Existing QP ERR,
 lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
 remain scoped evidence. For every
 verbs operation, the source/requester proof must prevent stale rkeys, connections
