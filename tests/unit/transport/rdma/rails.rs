@@ -1276,3 +1276,89 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
         }
     }
 }
+
+#[test]
+fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sliced_payload() {
+    for (event, operation, length) in [
+        (false, TransferOp::Read, 1),
+        (true, TransferOp::Write, 12),
+        (false, TransferOp::Write, 12),
+        (true, TransferOp::Read, 1),
+    ] {
+        let make = || {
+            let mut runtime = sliced_runtime(1, 16, 4, RdmaHostMemory::Direct, event);
+            runtime.config.num_lanes = 3;
+            single_handler(runtime)
+        };
+        let source = make();
+        let requester = make();
+        let local = requester
+            .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 16].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+            .unwrap();
+        let transfer = |length| {
+            local.write(0, &[0x63; 16]).unwrap();
+            remote.write(0, &[0x29; 16]).unwrap();
+            let report = requester
+                .submit_and_wait(
+                    operation,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address() + 2,
+                        remote_address: remote.base_address() + 2,
+                        length,
+                    }],
+                    TIMEOUT,
+                )
+                .unwrap();
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            let (target, payload, guard) = if operation == TransferOp::Read {
+                (&local, 0x29, 0x63)
+            } else {
+                (&remote, 0x63, 0x29)
+            };
+            let mut actual = [0; 16];
+            target.read(0, &mut actual).unwrap();
+            let mut expected = [guard; 16];
+            expected[2..2 + length].fill(payload);
+            assert_eq!(actual, expected);
+        };
+        transfer(12);
+        assert_eq!(requester.stats().unwrap().rdma.unwrap().active_endpoints, 3);
+        let runtime = source_runtime(&source);
+        let owner = runtime.device_at(0).unwrap();
+        let domain = owner.domain().unwrap();
+        let mrs = runtime.stats().unwrap().opened_persistent_mrs;
+        owner.asynchronous.fence_route();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while runtime.stats().unwrap().route_recoveries == 0 {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(runtime.stats().unwrap().active_endpoints, 0);
+        transfer(length);
+        assert_eq!(
+            requester.stats().unwrap().rdma.unwrap().closed_connections,
+            3
+        );
+        assert_eq!(owner.domain().unwrap(), domain);
+        assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, mrs);
+        let opened = requester.stats().unwrap().rdma.unwrap().opened_connections;
+        transfer(length);
+        assert_eq!(
+            requester.stats().unwrap().rdma.unwrap().opened_connections,
+            opened
+        );
+        requester.close(TIMEOUT).unwrap();
+        source.close(TIMEOUT).unwrap();
+    }
+}

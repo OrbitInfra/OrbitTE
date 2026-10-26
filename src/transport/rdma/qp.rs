@@ -86,6 +86,10 @@ impl RdmaQp {
         })
     }
 
+    pub(super) fn is_closed(&self) -> bool {
+        self.state.try_lock().is_ok_and(|state| state.closed)
+    }
+
     pub(super) fn require_live(&self) -> Result<()> {
         if self.terminal.load(Ordering::Acquire) {
             return Err(Error::Unavailable("RDMA physical QP is terminal"));

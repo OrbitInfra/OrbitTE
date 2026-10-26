@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{RdmaStats, events, sys};
 use crate::engine::remaining;
@@ -18,6 +18,7 @@ pub(super) enum Source {
     Async {
         context: NonNull<c_void>,
         fd: i32,
+        port: u8,
         verbs: sys::AsyncVerbs,
     },
     Completion {
@@ -66,11 +67,18 @@ impl Source {
         // A busy source cannot starve other devices, shutdown or new registrations.
         for _ in 0..64 {
             let code = match self {
-                Self::Async { context, verbs, .. } => {
+                Self::Async {
+                    context,
+                    port,
+                    verbs,
+                    ..
+                } => {
                     let mut event = sys::AsyncEvent::default();
                     let code = unsafe { (verbs.get)(context.as_ptr(), &mut event) };
                     if code == 0 {
-                        state.event(event.kind);
+                        if !events::port_event(event.kind) || event.port == *port {
+                            state.event(event.kind);
+                        }
                         unsafe { (verbs.ack)(context.as_ptr(), &mut event) };
                         counters
                             .acknowledged_async_events
@@ -140,7 +148,13 @@ struct Running {
     failure: Option<(&'static str, i32)>,
 }
 
+type ContextWatch = (
+    Weak<Mutex<super::context_set::ContextSet>>,
+    Weak<Mutex<RdmaStats>>,
+);
+
 struct Shared {
+    contexts: Mutex<Option<ContextWatch>>,
     watches: Mutex<Vec<Weak<Watch>>>,
     wake: Mutex<UnixStream>,
     stopping: AtomicBool,
@@ -174,7 +188,20 @@ impl Shared {
         active
     }
 
+    fn reclaim(&self) {
+        // This guard also serializes transport Drop with the temporary upgrades.
+        let contexts = self.contexts.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((contexts, usage)) = contexts.as_ref() {
+            if let (Some(contexts), Some(usage)) = (contexts.upgrade(), usage.upgrade()) {
+                if let Ok(mut contexts) = contexts.try_lock() {
+                    contexts.reclaim(&usage);
+                }
+            }
+        }
+    }
+
     fn run(&self, mut wake: UnixStream) {
+        let mut next_reclaim = Instant::now() + Duration::from_secs(1);
         while !self.stopping.load(Ordering::Acquire) {
             let watches = self.snapshot();
             let mut fds = Vec::with_capacity(watches.len() + 1);
@@ -191,7 +218,9 @@ impl Shared {
                     revents: 0,
                 });
             }
-            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, -1) };
+            let timeout = next_reclaim.saturating_duration_since(Instant::now());
+            let milliseconds = timeout.as_millis().saturating_add(1).min(1000) as i32;
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, milliseconds) };
             if ready < 0 {
                 if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                     continue;
@@ -230,6 +259,10 @@ impl Shared {
                 if let Some(code) = error {
                     watch.remove(&mut source, Some(code));
                 }
+            }
+            if Instant::now() >= next_reclaim && !self.stopping.load(Ordering::Acquire) {
+                self.reclaim();
+                next_reclaim = Instant::now() + Duration::from_secs(1);
             }
         }
     }
@@ -270,6 +303,11 @@ impl Monitor {
         if source.fd() < 0 {
             return Err(Error::Internal("missing RDMA monitor fd"));
         }
+        let shared = self.start()?;
+        self.register_source(shared, source, state, counters)
+    }
+
+    fn start(&self) -> Result<Arc<Shared>> {
         let mut running = self
             .running
             .lock()
@@ -279,6 +317,7 @@ impl Monitor {
             wake.set_nonblocking(true)?;
             receiver.set_nonblocking(true)?;
             let shared = Arc::new(Shared {
+                contexts: Mutex::default(),
                 watches: Mutex::default(),
                 wake: Mutex::new(wake),
                 stopping: AtomicBool::new(false),
@@ -312,6 +351,43 @@ impl Monitor {
                 code: libc::EIO,
             });
         }
+        Ok(Arc::clone(&live.shared))
+    }
+
+    pub(super) fn watch_contexts(
+        &self,
+        contexts: &Arc<Mutex<super::context_set::ContextSet>>,
+        usage: &Arc<Mutex<RdmaStats>>,
+    ) -> Result<()> {
+        let shared = self.start()?;
+        *shared.contexts.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((Arc::downgrade(contexts), Arc::downgrade(usage)));
+        shared.wake()
+    }
+
+    pub(super) fn unwatch_contexts(&self) {
+        let shared = self
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|live| Arc::clone(&live.shared));
+        if let Some(shared) = shared {
+            shared
+                .contexts
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+        }
+    }
+
+    fn register_source(
+        self: &Arc<Self>,
+        shared: Arc<Shared>,
+        source: Source,
+        state: Arc<events::State>,
+        counters: Arc<events::Counters>,
+    ) -> Result<Registration> {
         source.charge(&self.counters, true);
         let watch = Arc::new(Watch {
             source: Mutex::new(Some(source)),
@@ -320,12 +396,8 @@ impl Monitor {
             monitor_counters: Arc::clone(&self.counters),
         });
         {
-            let mut watches = live
-                .shared
-                .watches
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if live.shared.stopping.load(Ordering::Acquire) {
+            let mut watches = shared.watches.lock().unwrap_or_else(|p| p.into_inner());
+            if shared.stopping.load(Ordering::Acquire) {
                 watch.remove(
                     &mut watch.source.lock().unwrap_or_else(|p| p.into_inner()),
                     Some(libc::EIO),
@@ -341,7 +413,7 @@ impl Monitor {
             monitor: Arc::clone(self),
             watch,
         };
-        if let Err(error) = live.shared.wake() {
+        if let Err(error) = shared.wake() {
             let mut source = registration
                 .watch
                 .source

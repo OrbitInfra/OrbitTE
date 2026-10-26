@@ -112,12 +112,7 @@ impl RdmaEndpoint {
     fn reclaim(qps: &mut [Option<Qp>]) -> Result<()> {
         for entry in qps {
             if let Some(qp) = entry {
-                let closed = qp
-                    .record
-                    .as_ref()
-                    .map(|r| r.connection.lock().map(|c| c.closed))
-                    .transpose()?
-                    .unwrap_or(false);
+                let closed = qp.record.as_ref().is_some_and(|r| r.connection.is_closed());
                 if closed {
                     *entry = None;
                 }
@@ -256,10 +251,7 @@ impl Drop for Construction {
         if let Some(qp) = &qps[self.index] {
             if Arc::ptr_eq(&qp.token, &self.token)
                 && qp.peer.is_none()
-                && qp
-                    .record
-                    .as_ref()
-                    .is_none_or(|r| r.connection.lock().is_ok_and(|c| c.closed))
+                && qp.record.as_ref().is_none_or(|r| r.connection.is_closed())
             {
                 qps[self.index] = None;
             }

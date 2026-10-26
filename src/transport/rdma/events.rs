@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Weak};
 
 use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
@@ -16,7 +16,8 @@ pub(super) struct Counters {
 pub(super) struct State {
     // Positive: event type + 1; negative: the consumer can no longer ACK.
     fault: AtomicI32,
-    route_fault: AtomicBool,
+    route_generation: AtomicU64,
+    resumed_generation: AtomicU64,
     completion_fault: AtomicI32,
     progress: Mutex<Vec<Weak<cq_lane::ProgressState>>>,
 }
@@ -32,7 +33,7 @@ impl State {
             });
         }
         match asynchronous {
-            0 if self.route_fault.load(Ordering::Acquire) => Err(Error::Backend {
+            0 if self.paused() => Err(Error::Backend {
                 operation: "RDMA route changed",
                 code: libc::ESTALE,
             }),
@@ -58,7 +59,39 @@ impl State {
     }
 
     pub(super) fn fence_route(&self) {
-        self.route_fault.store(true, Ordering::Release);
+        self.advance_route();
+        self.notify();
+    }
+
+    fn advance_route(&self) {
+        if self
+            .route_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_add(1))
+            .is_err()
+        {
+            self.fault.store(-libc::EOVERFLOW, Ordering::Release);
+        }
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.route_generation.load(Ordering::Acquire)
+    }
+
+    pub(super) fn paused(&self) -> bool {
+        self.generation() != self.resumed_generation.load(Ordering::Acquire)
+    }
+
+    pub(super) fn recoverable(&self) -> bool {
+        self.fault.load(Ordering::Acquire) == 0
+            && self.completion_fault.load(Ordering::Acquire) == 0
+    }
+
+    pub(super) fn resume(&self, generation: u64) -> bool {
+        if !self.recoverable() || self.generation() != generation {
+            return false;
+        }
+        self.resumed_generation.store(generation, Ordering::Release);
+        self.check().is_ok()
     }
 
     pub(super) fn notify(&self) {
@@ -89,15 +122,25 @@ impl State {
     }
 
     pub(super) fn event(&self, kind: u32) {
-        // Only transport-independent informational events keep this fixed route
-        // healthy. Unknown, port, topology and device changes fence the lane.
-        if !matches!(kind, IBV_EVENT_COMM_EST | IBV_EVENT_SQ_DRAINED) {
+        if port_event(kind) {
+            self.advance_route();
+        } else if !matches!(kind, IBV_EVENT_COMM_EST | IBV_EVENT_SQ_DRAINED) {
             let code = kind.min(i32::MAX as u32 - 1) as i32 + 1;
             let _ = self
                 .fault
                 .compare_exchange(0, code, Ordering::AcqRel, Ordering::Acquire);
         }
     }
+}
+
+pub(super) fn port_event(kind: u32) -> bool {
+    matches!(
+        kind,
+        ibverbs_sys::IBV_EVENT_PORT_ERR
+            | ibverbs_sys::IBV_EVENT_PORT_ACTIVE
+            | ibverbs_sys::IBV_EVENT_GID_CHANGE
+            | ibverbs_sys::IBV_EVENT_LID_CHANGE
+    )
 }
 
 #[cfg(test)]

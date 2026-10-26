@@ -31,11 +31,11 @@ impl CqQuota {
 /// TENT's DeviceSelector boundary: stable NIC IDs, topology tiers and byte charges.
 pub(super) struct DeviceSelector {
     topology: Topology,
-    available: u64,
     state: Mutex<State>,
 }
 
 struct State {
+    available: u64,
     inflight: Vec<usize>,
     cursor: usize,
 }
@@ -72,12 +72,21 @@ impl DeviceSelector {
         let count = topology.nic_list.len();
         Arc::new(Self {
             topology,
-            available,
             state: Mutex::new(State {
+                available,
                 inflight: vec![0; count],
                 cursor: 0,
             }),
         })
+    }
+
+    pub(super) fn set_available(&self, id: usize, available: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if available {
+            state.available |= 1u64 << id;
+        } else {
+            state.available &= !(1u64 << id);
+        }
     }
 
     pub(super) fn allocate(
@@ -108,7 +117,7 @@ impl DeviceSelector {
                     .find(|entry| entry.name == "*")
             });
         let chosen = (0..count)
-            .filter(|id| mask & self.available & (1u64 << id) != 0)
+            .filter(|id| mask & state.available & (1u64 << id) != 0)
             .min_by_key(|id| {
                 let rank = memory
                     .and_then(|entry| entry.device_list.iter().position(|tier| tier.contains(id)))

@@ -478,11 +478,11 @@ impl CqLane {
     }
 
     pub(super) fn recoverable(&self) -> Result<bool> {
-        let control = self
-            .shared
-            .control
-            .lock()
-            .map_err(|_| Error::Internal("RDMA progress lock poisoned"))?;
+        let control = match self.shared.control.try_lock() {
+            Ok(control) => control,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(_) => return Err(Error::Internal("RDMA progress lock poisoned")),
+        };
         Ok(control.fault.is_some()
             && control.finished
             && control.detached

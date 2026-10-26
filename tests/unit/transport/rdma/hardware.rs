@@ -248,7 +248,7 @@ fn shared_cq_peer() {
         workers: Arc::default(),
         cq_quota: Arc::default(),
         verbs: &VERBS,
-        context_set: Mutex::default(),
+        context_set: Arc::default(),
         drained: Arc::default(),
     };
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);

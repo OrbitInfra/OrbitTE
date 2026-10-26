@@ -375,15 +375,15 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
 ### P4 remaining delivery
 
-The host READ/WRITE path is implemented. P4 is still open because periodic
-monitor recovery remains and the complete hardware/independent acceptance has not
-passed. The historical entries below record delivered code and scoped evidence;
+The host READ/WRITE path, fixed-width connection arrays and periodic monitor
+recovery are implemented. P4 is still open because complete installed hardware
+qualification and independent acceptance have not passed. The historical entries below record delivered code and scoped evidence;
 they are not a queue of features to implement again.
 
 | Order | Work | Completion condition |
 | --- | --- | --- |
 | 1 | Fixed-width peer QP arrays with concurrent grants — implemented | Bound the peer's QP count by the configured `num_lanes` width; give concurrent grants independent WR/message owners and shared QP-depth admission. Preparing an entire parent must not deadlock when slices exceed QP count. QP failure drains every affiliated grant exactly once; stale generations and cancellation cannot affect a newer or sibling grant. |
-| 2 | Periodic monitor recovery | Reclaim retired endpoint/orphan owners without new submissions; re-query paused ports and address/link changes, invalidate stale connections and resume selection only with safe native evidence. Missing events must not leave a recovered port permanently unselectable. |
+| 2 | Periodic monitor recovery — implemented | Reclaim retired endpoint/orphan owners without new submissions; re-query paused ports and address/link changes, invalidate stale connections and resume selection only with safe native evidence. Missing events must not leave a recovered port permanently unselectable. |
 | 3 | Complete P4 qualification and independent acceptance | Freeze the final host support envelope and run the outstanding gates below against the installed artifact. An independent reviewer checks the diff, reruns relevant gates and accepts the remaining limits. Missing hardware stays unqualified. |
 
 The first row is implemented; qualification and acceptance are tracked separately: QP-owned send depth and exact outstanding-WR
@@ -403,6 +403,17 @@ creation, negotiates a common width, publishes the passive pair before GRANT
 and retains failed native cleanup in its slot. Waiter deadlines and reservation
 tokens isolate cancellation from other builders and replacement generations. [Qualification](qualification.md) pins each delivered scope.
 No new P4 milestone is added for this prerequisite.
+
+The second row uses the transport monitor's one-second tick to reclaim fully
+drained lanes/endpoints, query selected native port/GID addresses, fence changed
+routes and resume selection only after old QPs/CQs drain. Event generations
+prevent stale recovery; native cleanup retention and lost consumers stay fenced.
+The same PD/key domain and persistent MRs survive recovery. A source-side array
+reset can require multiple explicit cache misses before payload admission;
+bootstrap is bounded by QP width and the original deadline. See
+[the contract](rdma-cuda.md#periodic-monitor-recovery) and
+[current qualification](qualification.md); physical loss is not inferred from
+query-failure injection.
 
 The final host gate must cover physical two-host/multi-RNIC traffic; IB and
 RoCE profiles separately; full READ/WRITE bytes and sentinels; geometry and
@@ -1258,19 +1269,18 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Proceed to periodic monitor recovery, the second row of
-[P4 remaining delivery](#p4-remaining-delivery), after reviewing the fixed-width
-construction delivery. Cold builders, concurrent grants, whole-parent grant/RQ
-admission and native-drain-aware rollback now have explicit owners. Do not add
-another P4 milestone for these delivered prerequisites.
+Proceed to the final host qualification and independent acceptance, the third
+row of [P4 remaining delivery](#p4-remaining-delivery). Fixed-width construction
+and periodic monitor recovery now have reachable implementations and focused
+controls; do not add another implementation milestone for these prerequisites.
 
-The next change must reclaim retired endpoint/orphan owners without new
-submissions, periodically re-query paused ports and address/link changes, and
-resume selection only after stale connections drain and native evidence permits
-it. Then run the final host qualification and independent acceptance in the
-same queue. Keep frozen TENT comparison, CPU controls and scoped native manifests
-with each behavior change. The [architecture reading order](architecture.md#source-reading-order)
-points to the current resource owners.
+Freeze the declared host envelope, installed artifacts and outstanding fault
+controls before running that gate. Physical link/device loss and InfiniBand
+remain unqualified. Link-bandwidth scheduling, new-device/GID migration and
+general retry policy are not implied by selected-port recovery. Keep frozen
+TENT comparisons, native manifests and failed controls outside Git. The
+[architecture reading order](architecture.md#source-reading-order) identifies
+the current resource owners.
 
 OrbitKV dependency migration, whole-engine shutdown consumption and installed
 Manager/serving qualification resume under P11 after the accepted P4 boundary.

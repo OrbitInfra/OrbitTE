@@ -154,6 +154,7 @@ pub(super) struct PostResult {
 
 pub(super) struct AsyncEvent {
     pub kind: u32,
+    pub port: u8,
     native: std::mem::MaybeUninit<ffi::ibv_async_event>,
 }
 
@@ -161,6 +162,7 @@ impl Default for AsyncEvent {
     fn default() -> Self {
         Self {
             kind: 0,
+            port: 0,
             native: std::mem::MaybeUninit::uninit(),
         }
     }

@@ -39,6 +39,10 @@ pub struct RdmaStats {
     /// One transport-wide thread consumes all device and CQ-channel events.
     pub monitor_workers: usize,
     pub opened_monitor_workers: u64,
+    /// Completed periodic context/endpoint scans, independent of new requests.
+    pub monitor_ticks: u64,
+    pub route_queries: u64,
+    pub route_recoveries: u64,
     /// Successful native gets, each acknowledged before notifying progress.
     pub completion_events: u64,
     pub cq_notification_arms: u64,

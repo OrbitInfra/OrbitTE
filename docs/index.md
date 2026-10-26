@@ -47,7 +47,8 @@ registration, transfer and completion ownership.
 Complete OrbitTE's native host-RDMA stage before resuming OrbitKV integration.
 Persistent MR/QP resources, multirail dispatch, worker/CQ lanes, NUMA binding
 and unified event consumption have scoped native evidence. Periodic monitor
-recovery and complete physical fault/independent acceptance remain open.
+reclaim and selected-port recovery are implemented; complete physical fault,
+installed-artifact qualification and independent acceptance remain open.
 QP-owned SQ/RQ accounting, independent
 runtime grant records and exact completion dispatch are implemented. The public
 handshake shares physical QPs across independent grants. Fixed-width cold

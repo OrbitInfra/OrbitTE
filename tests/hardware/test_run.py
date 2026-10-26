@@ -230,14 +230,14 @@ class ResourceSelection(unittest.TestCase):
                          'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                          'large-quota', 'large-close', 'large-cq-error',
                          'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
-                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error']:
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error', 'monitor-recovery']:
                 def concurrent_start(*args):
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MODE'], mode)
                     self.assertEqual(args[-1]['ORBITTE_RAIL_MASK'], '3')
                     raise CapturedStart()
 
                 controller.start = concurrent_start
-                for fault_role in (['source', 'requester'] if mode in ('large-cq-busy', 'large-pd-busy', 'mr-cleanup-error') else ['source'] if mode == 'mw-cleanup-error' else ['requester'] if mode == 'live-reconnect' else [None]):
+                for fault_role in (['source', 'requester'] if mode in ('large-cq-busy', 'large-pd-busy', 'mr-cleanup-error', 'monitor-recovery') else ['source'] if mode == 'mw-cleanup-error' else ['requester'] if mode == 'live-reconnect' else [None]):
                     extra = {'fault_role': fault_role} if fault_role else {}
                     with self.subTest(mode=mode, fault_role=fault_role), self.assertRaises(CapturedStart):
                         controller.case(0, {**case, 'mode': mode, 'mask': 3, **extra})
@@ -250,6 +250,7 @@ class ResourceSelection(unittest.TestCase):
                             {'mode': 'large-cq-busy', 'mask': 3},
                             {'mode': 'large-pd-busy', 'mask': 3, 'fault_role': 'both'},
                             {'mode': 'mr-cleanup-error', 'mask': 3},
+                            {'mode': 'monitor-recovery', 'mask': 3},
                             {'mode': 'mw-cleanup-error', 'mask': 3, 'fault_role': 'requester'},
                             {'mode': 'live-reconnect', 'mask': 3, 'fault_role': 'source'},
                             {'fault_role': 'source'}]:

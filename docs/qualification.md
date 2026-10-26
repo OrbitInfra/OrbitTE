@@ -11,7 +11,22 @@ OrbitTE distinguishes three states:
 A successful build or CPU fixture does not qualify physical DMA, a new fabric,
 GPU direct transfer or performance.
 
-## Current source delivery
+## Current source delivery: periodic monitor recovery
+
+Periodic context/endpoint reclaim and selected-port recovery are implemented.
+The monitor queries native addresses every second, filters port events, preserves
+newer fault generations and resumes selection only after old native owners drain.
+PDs and persistent MRs survive; failed cleanup and event-consumer loss remain
+quarantined. Recovery never replays an ambiguous payload.
+
+CPU and native qualification for this source are being collected in
+`/root/orbitte-artifacts/rdma-monitor-recovery-20261026`. The native fixture uses
+real verbs and injects a process-private query failure, followed by native
+revalidation without an injected recovery event. This is not a physical link
+flap. Installed host qualification, physical fault/IB profiles and independent
+acceptance remain open. OrbitKV integration remains deferred until P4 acceptance.
+
+## Previous fixed-width cold construction delivery
 
 Wire v14 implements fixed-width cold construction. Both peers negotiate the
 smaller `num_lanes` width before preparing a grant. A canonical endpoint owns
