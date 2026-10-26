@@ -12,6 +12,7 @@ import subprocess
 import time
 import uuid
 
+import cleanup
 import installed
 
 
@@ -433,6 +434,12 @@ class Controller:
             try:
                 installed.verify(self.profile, case, evidence)
             except (ValueError, KeyError, TypeError) as error:
+                passed = False
+                validation_error = str(error)
+        if passed and case.get('mode') in cleanup.MODES:
+            try:
+                cleanup.verify(case, evidence)
+            except (KeyError, TypeError, ValueError) as error:
                 passed = False
                 validation_error = str(error)
         # Preserve every successful/failed run verbatim, including supervisors.
