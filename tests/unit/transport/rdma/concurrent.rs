@@ -153,7 +153,12 @@ fn deadline_fault(mode: &str) -> bool {
         || mode.ends_with("requester-exit")
         || matches!(
             mode,
-            "large-peer-restart" | "large-requester-restart" | "large-cq-busy" | "large-pd-busy"
+            "large-peer-restart"
+                | "large-requester-restart"
+                | "large-cq-busy"
+                | "large-pd-busy"
+                | "large-qp-cleanup-error"
+                | "large-channel-busy"
         )
 }
 
