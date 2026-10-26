@@ -47,3 +47,18 @@ jobs:
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
         run: cargo publish --dry-run --locked --features "$ORBITTE_FEATURES"
+      - name: Install public host consumer from packaged crate
+        if: matrix.features == 'rdma'
+        run: python3 tests/hardware/build_installed.py --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-host-$RUSTUP_TOOLCHAIN"
+      - name: Preserve installed host artifact
+        if: always() && matrix.features == 'rdma'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: installed-host-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/manifest.json
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.stdout
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.stderr
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.crate
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/consumer/Cargo.lock
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/installed/bin/orbitte-rdma-host
