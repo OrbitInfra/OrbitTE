@@ -17,6 +17,8 @@ pub(super) fn generation(mode: &str) -> Option<usize> {
             | "large-requester-restart"
             | "large-cq-busy"
             | "large-pd-busy"
+            | "large-qp-cleanup-error"
+            | "large-channel-busy"
     ) {
         return None;
     }
@@ -60,6 +62,8 @@ pub(super) fn cleanup(mode: &str, generation: Option<usize>) -> Option<&'static 
     match mode {
         "large-cq-busy" => Some("cq"),
         "large-pd-busy" => Some("pd"),
+        "large-qp-cleanup-error" => Some("qp"),
+        "large-channel-busy" => Some("channel"),
         _ => None,
     }
 }
@@ -69,10 +73,12 @@ pub(super) fn mode(mode: &str, generation: Option<usize>) -> &str {
         return "large-quota";
     }
     match mode {
-        "large-cq-busy" if env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("source") => {
+        "large-cq-busy" | "large-qp-cleanup-error" | "large-channel-busy"
+            if env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("source") =>
+        {
             "large-lost-recv-cqe"
         }
-        "large-cq-busy" => "large-lost-send-cqe",
+        "large-cq-busy" | "large-qp-cleanup-error" | "large-channel-busy" => "large-lost-send-cqe",
         "large-pd-busy" => "large-quota",
         "large-peer-restart" => "large-peer-exit",
         "large-requester-restart" => "large-requester-exit",

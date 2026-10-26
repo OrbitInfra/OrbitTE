@@ -269,6 +269,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let generation = restart::generation(mode);
     let interrupted = restart::interrupted(mode, generation);
     let cleanup = restart::cleanup(mode, generation);
+    let cleanup_debt = matches!(cleanup, Some("qp" | "cq" | "channel"));
     let dying = restart::dying(source, generation);
     let mode = restart::mode(mode, generation);
     let shape = Shape::new(mode);
@@ -361,7 +362,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             bind_addr: restart::bind(generation),
             handler_threads: shape.parents + 1,
             handler_timeout: if mode.ends_with("lost-recv-cqe")
-                || cleanup == Some("cq")
+                || cleanup_debt
                 || (interrupted
                     && env::var("ORBITTE_RESTART_KILL_ROLE").as_deref() == Ok("requester"))
             {
@@ -612,7 +613,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 .into_iter()
                 .map(|task| task.join().unwrap())
                 .collect::<Vec<_>>();
-            let retaining = cleanup == Some("cq") && dying;
+            let retaining = cleanup_debt && dying;
             if retaining {
                 assert!(
                     reports.iter().any(|report| !report.locally_drained),
@@ -676,11 +677,17 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             accepted = native::accepted();
             if !interrupted {
                 write_outcome(&mut stream, &successful, &accepted);
-                if cleanup == Some("cq") {
+                if cleanup_debt {
                     token(&mut stream, 0x42);
                     if dying {
-                        let stats = native::retained(engine, memory, backing, weak, "cq");
-                        restart::terminate(source, generation.unwrap(), "retained-cq", &stats);
+                        let stats =
+                            native::retained(engine, memory, backing, weak, cleanup.unwrap());
+                        restart::terminate(
+                            source,
+                            generation.unwrap(),
+                            "retained-native-debt",
+                            &stats,
+                        );
                     }
                     restart::peer_exited(&mut stream);
                 }
@@ -766,11 +773,11 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 );
             }
             read_outcome(&mut stream, &mut successful, &mut accepted);
-            if interrupted || cleanup == Some("cq") {
+            if interrupted || cleanup_debt {
                 stream.write_all(&[0x42]).unwrap();
                 if dying {
-                    let stats = native::retained(engine, memory, backing, weak, "cq");
-                    restart::terminate(source, generation.unwrap(), "retained-cq", &stats);
+                    let stats = native::retained(engine, memory, backing, weak, cleanup.unwrap());
+                    restart::terminate(source, generation.unwrap(), "retained-native-debt", &stats);
                 }
                 restart::peer_exited(&mut stream);
             }
@@ -778,7 +785,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 engine.close_source(TIMEOUT).unwrap();
             }
         }
-        if !interrupted && cleanup != Some("cq") {
+        if !interrupted && !cleanup_debt {
             super::super::connected::barrier(&mut stream, 0x32);
         }
         verify_bytes(
@@ -834,7 +841,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             "ORBITTE_CONCURRENT_PARENTS {{\"round\":{round},\"successful\":{:?},\"accepted\":{:?}}}",
             successful, accepted
         );
-        if !interrupted && cleanup != Some("cq") {
+        if !interrupted && !cleanup_debt {
             super::super::connected::barrier(&mut stream, 0x33);
         }
     }

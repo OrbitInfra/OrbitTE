@@ -10,6 +10,9 @@ mod native;
 #[path = "concurrent.rs"]
 mod concurrent;
 
+#[path = "uverbs_fault.rs"]
+mod uverbs_fault;
+
 #[path = "lifecycle.rs"]
 mod lifecycle;
 
@@ -215,6 +218,8 @@ fn multirail_peer() {
             | "large-requester-restart"
             | "large-cq-busy"
             | "large-pd-busy"
+            | "large-qp-cleanup-error"
+            | "large-channel-busy"
     ) {
         concurrent::run(&mode, source, &rails);
         return;

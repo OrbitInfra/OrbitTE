@@ -17,7 +17,7 @@ import installed
 
 def restart_plan(case):
     mode = case.get('mode')
-    if mode in ('large-cq-busy', 'large-pd-busy'):
+    if mode in ('large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy'):
         role = case.get('fault_role')
         if role not in ('source', 'requester'):
             raise ValueError('native cleanup faults require an explicit source/requester fault_role')
@@ -324,7 +324,7 @@ class Controller:
                                            'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                                            'large-quota', 'large-cold', 'large-close', 'large-cq-error',
                                            'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',
-                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error', 'monitor-recovery']
+                         'large-qp-error', 'folded-qp-error', 'large-lost-send-cqe', 'folded-lost-send-cqe', 'large-lost-recv-cqe', 'folded-lost-recv-cqe', 'large-peer-exit', 'large-peer-restart', 'large-requester-exit', 'large-requester-restart', 'large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy', 'live-reconnect', 'mr-cleanup-error', 'mw-cleanup-error', 'monitor-recovery']
                 or case.get('operation') not in ['read', 'write']
                 or type(case.get('fault_rail')) is not int or case['fault_rail'] not in [0, 1]
                 or type(case.get('mask')) is not int or case['mask'] not in [1, 2, 3]):
@@ -339,6 +339,8 @@ class Controller:
         if case.get('mode') in ('cq-error', 'partial-post', 'paused-close') and workers < 2:
             raise ValueError('native blocking sibling-post controls require at least two workers')
         restart = restart_plan(case)
+        if case['mode'] == 'large-channel-busy' and not case['rdma_events']:
+            raise ValueError('completion-channel cleanup requires event-driven progress')
 
         shared_qp = case.get("shared_qp")
         if shared_qp is not None and (self.profile.get("runner") != "orbitte-shared-cq"

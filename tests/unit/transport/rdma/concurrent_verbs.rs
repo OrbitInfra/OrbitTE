@@ -15,6 +15,7 @@ struct Owner {
     qpn: u32,
     cq: usize,
     receive_cq: usize,
+    channel: usize,
     record: Arc<Record>,
 }
 
@@ -156,6 +157,7 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 qpn,
                 cq,
                 receive_cq,
+                channel: unsafe { (*(receive_cq as *const ffi::ibv_cq)).channel } as usize,
                 record,
             }
         })
@@ -607,7 +609,16 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
 
 unsafe extern "C" fn destroy_qp(h: *mut sys::ConnectionHandles) -> c_int {
     let qp = unsafe { (*h).qp } as usize;
-    let code = unsafe { (sys::REAL.destroy_qp)(h) };
+    let code = {
+        let mut trace = TRACE.get().unwrap().lock().unwrap();
+        let mut retirement = trace.retirement.take();
+        let code = retirement
+            .as_mut()
+            .and_then(|r| unsafe { r.destroy_qp(&trace, h) })
+            .unwrap_or_else(|| unsafe { (sys::REAL.destroy_qp)(h) });
+        trace.retirement = retirement;
+        code
+    };
     if code == 0 && qp != 0 {
         TRACE
             .get()
@@ -919,7 +930,25 @@ unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
     code
 }
 
+unsafe extern "C" fn close_channel(h: *mut sys::ChannelHandles) -> c_int {
+    let mut trace = TRACE.get().unwrap().lock().unwrap();
+    let mut retirement = trace.retirement.take();
+    let code = retirement
+        .as_mut()
+        .and_then(|r| unsafe { r.close_channel(&trace, h) })
+        .unwrap_or_else(|| unsafe { (sys::REAL.completion.unwrap().close)(h) });
+    trace.retirement = retirement;
+    code
+}
+
 pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    completion: match sys::REAL.completion {
+        Some(verbs) => Some(sys::CqEventVerbs {
+            close: close_channel,
+            ..verbs
+        }),
+        None => None,
+    },
     open_device,
     register_memory: register,
     post,
