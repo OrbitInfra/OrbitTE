@@ -104,7 +104,12 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
         max_transfer_bytes: case.payload,
         max_inflight_bytes: case.parents * case.payload,
         handler_threads: case.parents + 2,
-        handler_timeout: TIMEOUT,
+        handler_timeout: if env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-interruption")
+        {
+            Duration::from_secs(8)
+        } else {
+            TIMEOUT
+        },
         rdma: Some(RdmaConfig {
             rdma_whitelist: case.rails.clone(),
             port: Some(1),

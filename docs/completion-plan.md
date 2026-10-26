@@ -1292,8 +1292,11 @@ passes 72 installed configurations on two compilers, with 12/16/32 parents
 and requests up to 9 MiB. A further 40-configuration installed matrix covers
 32 repeated-peer-restart cases with one live engine, plus eight healthy
 regressions. The kill point retains idle QPs/MRs with zero SQ/RQ debt.
-Next cover outstanding-DMA death, lost completions and native cleanup failures
-through installed consumers, alongside physical link/device loss and provider
+The next installed profile holds GRANT after native source RQ posting, then
+restarts either peer while preserving the surviving engine. Its implementation
+and CPU controls are present; hardware qualification is pending. This separates
+posted-RQ drain from later mid-payload interruption, lost SQ completions and
+native cleanup failures through installed consumers, alongside physical link/device loss and provider
 teardown. InfiniBand and independent acceptance still require their own gates.
 Freeze those remaining fault profiles before running them; idle-resource death
 does not establish physical DMA drain after an interrupted transfer. Link-bandwidth scheduling, new-device/GID migration and

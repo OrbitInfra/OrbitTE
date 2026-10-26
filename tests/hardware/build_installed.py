@@ -100,12 +100,13 @@ def build(root, output, toolchain, allow_dirty=False):
             raise ValueError('installed dependency graph changed the packaged lockfile')
         run('format', ['cargo', 'fmt', '--check'], cwd=consumer)
         run('clippy', ['cargo', 'clippy', '--locked', '--offline', '--all-targets', '--', '-D', 'warnings'], cwd=consumer)
+        run('test-relay', ['cargo', 'test', '--locked', '--offline'], cwd=consumer)
         prefix = output / 'installed'
         run('install', ['cargo', 'install', '--path', str(consumer), '--root', str(prefix),
                         '--locked', '--offline'], cwd=consumer)
         binary = prefix / 'bin/orbitte-rdma-host'
         probe = run('protocol', [str(binary), '--protocol'], cwd=output).strip()
-        if probe != 'orbitte-installed-host-v2':
+        if probe != 'orbitte-installed-host-v3':
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
         if 'not found' in linkage or 'libibverbs' not in linkage or 'libcuda' in linkage:
