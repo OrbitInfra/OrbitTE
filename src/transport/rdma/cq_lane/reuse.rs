@@ -225,6 +225,7 @@ impl CqLane {
             released: false,
             cached_peer: Some(peer),
             endpoint: None,
+            construction: None,
         }))
     }
 
@@ -267,6 +268,7 @@ impl CqLane {
             released: false,
             cached_peer: Some(peer),
             endpoint: None,
+            construction: None,
         })
     }
 
@@ -310,7 +312,11 @@ impl CqLane {
         Ok(true)
     }
 
-    pub(in crate::transport::rdma) fn evict_idle(&self, deadline: Instant) -> Result<bool> {
+    pub(in crate::transport::rdma) fn evict_idle(
+        &self,
+        matches: impl Fn(&Peer) -> bool,
+        deadline: Instant,
+    ) -> Result<bool> {
         let record = {
             let mut control = self
                 .shared
@@ -320,7 +326,7 @@ impl CqLane {
             if control.fault.is_some() {
                 return Ok(false);
             }
-            let record = control.qps.evict();
+            let record = control.qps.evict(matches);
             if record.is_some() {
                 let mut usage = self.shared.usage.lock().unwrap_or_else(|p| p.into_inner());
                 usage.idle_endpoints -= 1;

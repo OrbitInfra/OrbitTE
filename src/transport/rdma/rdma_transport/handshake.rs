@@ -3,12 +3,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::RdmaTransport;
+use super::{RdmaTransport, connections::Connection};
 use crate::engine::{PreparedTransfer, remaining};
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request, u64_at};
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, RdmaHostMemory,
-    endpoint::Peer,
+    endpoint::{EndpointKey, Peer},
     grant::{Buffer, GrantLease, GrantResources, RdmaGrant, Staging, admission::GrantCredits},
     path::NicPath,
     protocol::{
@@ -30,9 +30,13 @@ impl RdmaTransport {
         range: std::ops::Range<usize>,
         permission: u32,
         deadline: Instant,
-        reuse: Option<RdmaGrant>,
+        connection: Connection,
     ) -> Result<RdmaGrant> {
         remaining(deadline)?;
+        let (reuse, construction) = match connection {
+            Connection::Reuse(grant) => (Some(*grant), None),
+            Connection::Fresh(slot) => (None, slot),
+        };
         let offset = range.start;
         let length = range.end.checked_sub(offset).ok_or(Error::InvalidRange)?;
         if length != grant_lease.length {
@@ -186,10 +190,15 @@ impl RdmaTransport {
                 released: false,
                 cached_peer: None,
                 endpoint: None,
+                construction: None,
             }
         };
+        if let Some(slot) = construction {
+            slot.attach(&mut endpoint)?;
+            endpoint.construction = Some(slot);
+        }
         #[cfg(test)]
-        crate::transport::rdma::tests::before_reused_open(self, &endpoint);
+        crate::transport::rdma::tests::before_grant_open(self, &endpoint);
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         if let Err(error) = endpoint.open(permission, psn) {
@@ -270,7 +279,7 @@ impl RdmaTransport {
         request: &PreparedTransfer,
         grant_lease: GrantLease,
         remote_path: &NicPath,
-        reuse_pair: bool,
+        width: usize,
     ) -> Result<RdmaGrant> {
         let route = channel.stream.peer_addr()?;
         let operation = if wire.operation == Operation::RdmaRead {
@@ -281,41 +290,31 @@ impl RdmaTransport {
         let direct = self.host_direct(&request.local);
         let device = self.device_at(grant_lease._selection.device_id())?;
         device.check_address()?;
-        let mut reuse = if direct && reuse_pair {
-            self.claim(
+        let connection = if direct && width != 0 {
+            self.connection(
                 device,
-                |peer| {
-                    !peer.source
-                        && peer.route == Some(route)
-                        && peer.epoch == wire.epoch
-                        && peer.operation == operation
-                        && peer.source_nic_id == remote_path.nic_id
+                EndpointKey {
+                    route: Some(route),
+                    epoch: wire.epoch,
+                    domain: remote_path.domain,
+                    operation,
+                    source: false,
+                    source_nic_id: remote_path.nic_id,
                 },
-                self.config.num_lanes,
+                width,
+                None,
                 channel.deadline,
             )?
         } else {
-            None
+            Connection::Fresh(None)
         };
-        if reuse
-            .as_ref()
-            .and_then(|endpoint| endpoint.cached_peer)
-            .is_some_and(|peer| peer.connection.domain != remote_path.domain)
-        {
-            if let Some(endpoint) = &mut reuse {
-                endpoint.close()?;
-            }
-            return Err(Error::Protocol(
-                "RDMA path table replaced a cached protection domain",
-            ));
-        }
         let endpoint = self.prepare_grant(
             grant_lease,
             &request.local,
             request.local_offset..request.local_offset + request.length,
             0,
             channel.deadline,
-            reuse,
+            connection,
         )?;
         Ok(endpoint)
     }
@@ -349,6 +348,10 @@ impl RdmaTransport {
                 }),
                 expected_domain: remote_path.domain,
                 direct,
+                qp_width: endpoint
+                    .endpoint
+                    .as_ref()
+                    .map_or(Ok(0), |owner| owner.width())?,
                 previous_grant: cached.map_or(0, |peer| peer.generation),
             }
             .write(channel)?;
@@ -372,8 +375,8 @@ impl RdmaTransport {
                 return Err(Error::Protocol("RDMA source changed cached connection"));
             }
             let cacheable = match offer[OFFER_SIZE - 1] {
-                0 if cached.is_none() => false,
-                1 if direct => true,
+                0 if endpoint.endpoint.is_none() => false,
+                1 if direct && endpoint.endpoint.is_some() => true,
                 _ => return Err(Error::Protocol("RDMA release profile mismatch")),
             };
             let grant = u64_at(&offer, IDENTITY_SIZE);
@@ -420,7 +423,9 @@ impl RdmaTransport {
                 source: false,
                 generation: grant,
             };
-            self.adopt_peer(&mut endpoint, peer)?;
+            if cacheable {
+                endpoint.publish_peer(peer)?;
+            }
             Ok(Some((binding, remote, peer)))
         })();
         match prepared {
@@ -492,6 +497,9 @@ impl RdmaTransport {
             return Err(Error::Protocol("RDMA slice rendezvous changed planned PD"));
         }
         let cacheable = hello.direct && self.host_direct(memory);
+        if cacheable != (hello.qp_width != 0) || hello.qp_width > self.config.num_lanes {
+            return Err(Error::Protocol("RDMA bootstrap QP width/profile mismatch"));
+        }
         let mask = paths
             .iter()
             .filter(|path| path.domain == hello.expected_domain)
@@ -506,7 +514,7 @@ impl RdmaTransport {
         let grant_lease = self.reserve_grant(selection, memory, &admission.grants)?;
         let device = self.device_at(source_nic_id)?;
         device.check_address()?;
-        let reuse = if let Some(source) = hello.source {
+        let connection = if let Some(source) = hello.source {
             if !cacheable {
                 channel.reply(epoch, CACHE_MISS, 0)?;
                 return Ok(None);
@@ -521,16 +529,38 @@ impl RdmaTransport {
                         && peer.operation == operation
                         && peer.generation >= hello.previous_grant
                 },
-                1,
                 channel.deadline,
             )?;
-            if reuse.is_none() {
+            let Some(reuse) = reuse else {
                 channel.reply(epoch, CACHE_MISS, 0)?;
                 return Ok(None);
+            };
+            if reuse
+                .endpoint
+                .as_ref()
+                .map_or(Ok(0), |owner| owner.width())?
+                != hello.qp_width
+            {
+                return Err(Error::Protocol("RDMA reused pair changed QP width"));
             }
-            reuse
+            Connection::Reuse(Box::new(reuse))
+        } else if cacheable {
+            self.connection(
+                device,
+                EndpointKey {
+                    route: None,
+                    epoch: hello.requester.epoch,
+                    domain: hello.requester.connection.domain,
+                    operation,
+                    source: true,
+                    source_nic_id,
+                },
+                hello.qp_width,
+                Some(hello.requester.connection),
+                channel.deadline,
+            )?
         } else {
-            None
+            Connection::Fresh(None)
         };
         let mut endpoint = self.prepare_grant(
             grant_lease,
@@ -538,7 +568,7 @@ impl RdmaTransport {
             offset..offset + length,
             if writing { 2 } else { 1 },
             channel.deadline,
-            reuse,
+            connection,
         )?;
         let prepared = (|| {
             if !writing {
@@ -567,9 +597,6 @@ impl RdmaTransport {
             endpoint.connect(&remote)?;
             endpoint.bind_window()?;
             endpoint.post_receive(&binding.0, admission.receive.take()?)?;
-            channel.reply(epoch, 9, 0)?;
-            binding.write(channel, GRANT)?;
-            channel.write_all(&endpoint.grant()?.encode())?;
             let peer = Peer {
                 route: None,
                 source_nic_id,
@@ -580,7 +607,12 @@ impl RdmaTransport {
                 source: true,
                 generation: grant,
             };
-            self.adopt_peer(&mut endpoint, peer)?;
+            if cacheable {
+                endpoint.publish_peer(peer)?;
+            }
+            channel.reply(epoch, 9, 0)?;
+            binding.write(channel, GRANT)?;
+            channel.write_all(&endpoint.grant()?.encode())?;
             Ok((binding, remote, peer))
         })();
         match prepared {

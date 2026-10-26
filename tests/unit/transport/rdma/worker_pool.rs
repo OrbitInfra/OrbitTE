@@ -187,9 +187,14 @@ fn endpoint_arrays(runtime: &RdmaTransport, expected: usize) {
                 busy += grants;
                 max_grants = max_grants.max(grants);
             }
+            let width = endpoint.width().unwrap();
+            assert!(
+                counts.iter().sum::<usize>() <= width && width <= count(),
+                "cold requests exceeded the negotiated physical QP width"
+            );
             active += busy;
             println!(
-                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"max_grants_per_qp\":{max_grants},\"lanes\":{counts:?}}}",
+                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"max_grants_per_qp\":{max_grants},\"width\":{width},\"lanes\":{counts:?}}}",
                 Arc::as_ptr(&endpoint) as usize,
                 counts.iter().sum::<usize>()
             );

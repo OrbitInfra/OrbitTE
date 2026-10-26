@@ -167,6 +167,7 @@ fn attach(
         released: false,
         cached_peer: None,
         endpoint: None,
+        construction: None,
     };
     runtime
         .endpoint(memory, offset, length, permission, end, Some(placeholder))
@@ -404,6 +405,37 @@ pub(super) fn run() {
                     COMPLETION_MESSAGE_SIZE - 9,
                 ),
             };
+            if grants[slot].endpoint.is_none() {
+                let device = grants[slot]
+                    .record
+                    .connection
+                    .lock()
+                    .unwrap()
+                    .device
+                    .clone();
+                let owner = runtime
+                    .context_set
+                    .lock()
+                    .unwrap()
+                    .slots
+                    .iter_mut()
+                    .find(|entry| {
+                        entry
+                            .owner
+                            .as_ref()
+                            .is_some_and(|d| Arc::ptr_eq(d, &device))
+                    })
+                    .unwrap()
+                    .endpoints
+                    .get_or_insert(pair.into(), 1)
+                    .unwrap();
+                if let Some(construction) = owner.reserve(Some(pair.connection)).unwrap() {
+                    construction.attach(&mut grants[slot]).unwrap();
+                    grants[slot].construction = Some(construction);
+                } else {
+                    grants[slot].endpoint = Some(owner);
+                }
+            }
             if source {
                 let done = bindings[slot].done(&mut channel).unwrap();
                 grants[slot].receive_completion().unwrap();
@@ -415,7 +447,7 @@ pub(super) fn run() {
                 }
                 let mut released = vec![0; payload];
                 memory.read(slot * stride + GUARD, &mut released).unwrap();
-                runtime.adopt_peer(&mut grants[slot], pair).unwrap();
+                grants[slot].publish_peer(pair).unwrap();
                 grants[slot].cache(pair).unwrap();
                 if slot + 1 < COUNT {
                     let stale = &grants[COUNT - 1];
@@ -436,7 +468,7 @@ pub(super) fn run() {
                 let mut acknowledgement = [0];
                 channel.read_exact(&mut acknowledgement).unwrap();
                 assert_eq!(acknowledgement, [1]);
-                runtime.adopt_peer(&mut grants[slot], pair).unwrap();
+                grants[slot].publish_peer(pair).unwrap();
                 grants[slot].cache(pair).unwrap();
             }
         }

@@ -381,7 +381,9 @@ impl Monitor {
             }
         }
         live.shared.stopping.store(true, Ordering::Release);
-        live.shared.wake()?;
+        // With no registered sources, the worker may exit before this write.
+        // Wake is advisory here; exit publication and join are the close proof.
+        let _ = live.shared.wake();
         let mut exited = live.shared.exited.lock().unwrap_or_else(|p| p.into_inner());
         while !*exited {
             exited = live

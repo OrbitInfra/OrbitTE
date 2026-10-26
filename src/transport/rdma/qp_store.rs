@@ -177,11 +177,11 @@ impl QpStore {
         Some(self.is_idle(record))
     }
 
-    pub(super) fn evict(&mut self) -> Option<Arc<Record>> {
+    pub(super) fn evict(&mut self, matches: impl Fn(&Peer) -> bool) -> Option<Arc<Record>> {
         let idle = self
             .idle
             .iter()
-            .find(|entry| self.is_idle(&entry.endpoint))?;
+            .find(|entry| matches(&entry.peer) && self.is_idle(&entry.endpoint))?;
         let record = Arc::clone(&idle.endpoint);
         self.detach(&record);
         Some(record)

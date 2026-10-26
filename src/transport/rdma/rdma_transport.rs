@@ -198,10 +198,10 @@ impl RdmaTransport {
                 GrantCredits::acquire(Arc::clone(&self.usage), self.config.max_grants, 1)?;
             let wire = data_request(operation, peer, request);
             let mut pinned = None;
-            for attempt in 0..2 {
+            for _ in 0..2 {
                 let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
                 channel.write_all(&wire.encode())?;
-                let mut remote_paths = path::read_paths(&mut channel, peer.epoch)?;
+                let (mut remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
                 let mut paths = local_paths.clone();
                 if let Some((local, remote)) = pinned {
                     paths.retain(|path| path.domain == local);
@@ -223,7 +223,7 @@ impl RdmaTransport {
                     request,
                     self.reserve_grant(selection, &request.local, &credits)?,
                     remote,
-                    attempt == 0,
+                    remote_width.min(self.config.num_lanes),
                 )?;
                 let Some(mut slice) =
                     self.requester_slice(&mut channel, &wire, request, epoch, remote, endpoint)?
@@ -262,7 +262,7 @@ impl RdmaTransport {
         };
         let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
         channel.write_all(&wire.encode())?;
-        let remote_paths = path::read_paths(&mut channel, peer.epoch)?;
+        let (remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
         let mut remote_limit = [0];
         channel.read_exact(&mut remote_limit)?;
         if !(1..=64).contains(&remote_limit[0]) {
@@ -338,7 +338,7 @@ impl RdmaTransport {
                 let child_wire = data_request(operation, peer, &child);
                 let mut selection = Some(selection);
                 let mut prepared = None;
-                for attempt in 0..2 {
+                for _ in 0..2 {
                     let lease = match selection.take() {
                         Some(lease) => lease,
                         None => self.allocate(range.length, 1u64 << local_id)?,
@@ -349,7 +349,7 @@ impl RdmaTransport {
                         &child,
                         self.reserve_grant(lease, &child.local, &credits)?,
                         remote,
-                        attempt == 0,
+                        remote_width.min(self.config.num_lanes),
                     )?;
                     if let Some(slice) = self.requester_slice(
                         &mut channel,
@@ -409,8 +409,13 @@ impl RdmaTransport {
             request.operation,
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
+        let qp_width = if self.host_direct(memory) {
+            self.config.num_lanes
+        } else {
+            0
+        };
         let plan = if multi {
-            path::write_paths(channel, epoch, &paths)?;
+            path::write_paths(channel, epoch, &paths, qp_width)?;
             let grants = if self.host_direct(memory) {
                 self.config.max_grants
             } else {
@@ -426,7 +431,7 @@ impl RdmaTransport {
         if multi {
             channel.reply(epoch, 9, 0)?;
         } else {
-            path::write_paths(channel, epoch, &paths)?;
+            path::write_paths(channel, epoch, &paths, qp_width)?;
         }
         let mut slices = Vec::new();
         let result = (|| {
@@ -478,6 +483,7 @@ impl RdmaTransport {
     }
 }
 
+pub(super) mod connections;
 mod handshake;
 
 #[cfg(test)]

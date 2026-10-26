@@ -196,6 +196,7 @@ fn multirail_peer() {
             | "rq-close"
             | "rq-cq-error"
             | "large-quota"
+            | "large-cold"
             | "large-close"
             | "large-cq-error"
             | "folded-quota"

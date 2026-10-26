@@ -1807,9 +1807,22 @@ pub(super) fn deliver_completion(
         .push_back(completion);
 }
 
-pub(crate) fn before_reused_open(runtime: &RdmaTransport, endpoint: &RdmaGrant) {
-    if endpoint.cached_peer.is_some()
-        && runtime.config.device.as_deref() == Some("async_copy_reuse_open_pause")
+pub(crate) fn before_grant_open(runtime: &RdmaTransport, endpoint: &RdmaGrant) {
+    if endpoint.cached_peer.is_none() {
+        let (lock, changed) = COLD_OPEN.get_or_init(Default::default);
+        let mut state = lock.lock().unwrap();
+        if state.runtime == runtime as *const _ as usize && !state.released {
+            state.entered += 1;
+            changed.notify_all();
+            while !state.released {
+                state = changed.wait(state).unwrap();
+            }
+        }
+    }
+    if (endpoint.cached_peer.is_some()
+        && runtime.config.device.as_deref() == Some("async_copy_reuse_open_pause"))
+        || (endpoint.cached_peer.is_none()
+            && runtime.config.device.as_deref() == Some("async_copy_cold_open_pause"))
     {
         let pause = pause(runtime);
         let (lock, changed) = &*pause;
@@ -1854,7 +1867,10 @@ impl RdmaTransport {
             offset..offset.checked_add(length).ok_or(Error::InvalidRange)?,
             permission,
             deadline,
-            reuse,
+            reuse.map_or(
+                super::rdma_transport::connections::Connection::Fresh(None),
+                |grant| super::rdma_transport::connections::Connection::Reuse(Box::new(grant)),
+            ),
         )
     }
 }
@@ -1889,4 +1905,46 @@ pub(super) fn cq_lane_owner(cq: usize) -> usize {
         .unwrap()
         .get(&cq)
         .expect("actual CQ has no assigned lane")
+}
+
+#[derive(Default)]
+struct ColdOpen {
+    runtime: usize,
+    released: bool,
+    entered: usize,
+    waiters: Vec<std::thread::ThreadId>,
+}
+static COLD_OPEN: std::sync::OnceLock<(Mutex<ColdOpen>, std::sync::Condvar)> =
+    std::sync::OnceLock::new();
+
+pub(super) fn hold_cold_open(runtime: &RdmaTransport) {
+    *COLD_OPEN.get_or_init(Default::default).0.lock().unwrap() = ColdOpen {
+        runtime: runtime as *const _ as usize,
+        ..Default::default()
+    };
+}
+
+pub(super) fn release_cold_open() -> usize {
+    let (lock, changed) = COLD_OPEN.get().unwrap();
+    let mut state = lock.lock().unwrap();
+    state.released = true;
+    changed.notify_all();
+    state.entered
+}
+
+pub(super) fn cold_connection_wait(runtime: &RdmaTransport) {
+    let (lock, changed) = COLD_OPEN.get_or_init(Default::default);
+    let mut state = lock.lock().unwrap();
+    if state.runtime == runtime as *const _ as usize && !state.released {
+        let thread = std::thread::current().id();
+        if !state.waiters.contains(&thread) {
+            state.waiters.push(thread);
+        }
+        changed.notify_all();
+    }
+}
+
+pub(super) fn cold_contention() -> (usize, usize) {
+    let state = COLD_OPEN.get().unwrap().0.lock().unwrap();
+    (state.entered, state.waiters.len())
 }

@@ -364,7 +364,7 @@ impl CqLane {
             .lock()
             .map_err(|_| Error::Internal("RDMA endpoint store poisoned"))?
             .accepting = false;
-        while self.evict_idle(deadline)? {}
+        while self.evict_idle(|_| true, deadline)? {}
         Ok(())
     }
 

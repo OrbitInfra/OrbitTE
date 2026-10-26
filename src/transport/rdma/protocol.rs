@@ -1,4 +1,4 @@
-//! OrbitTE v13 rendezvous and exact-grant receipts carried by the control service.
+//! OrbitTE v14 rendezvous and exact-grant receipts carried by the control service.
 //! These messages are distinct from TENT's native metadata and wire formats.
 
 use super::DESCRIPTOR_SIZE;
@@ -9,7 +9,7 @@ use crate::runtime::control_plane::{ControlChannel, REQUEST_SIZE, Request, u64_a
 use crate::{Error, Result, SourceEpoch};
 
 pub(super) const IDENTITY_SIZE: usize = 40;
-pub(super) const HELLO_SIZE: usize = 1 + 2 * IDENTITY_SIZE + 16 + 8;
+pub(super) const HELLO_SIZE: usize = 2 + 2 * IDENTITY_SIZE + 16 + 8;
 pub(super) const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE + 1;
 pub(super) const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8 + 1;
 const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
@@ -63,6 +63,7 @@ pub(super) struct Hello {
     pub(super) source: Option<Identity>,
     pub(super) expected_domain: [u8; 16],
     pub(super) direct: bool,
+    pub(super) qp_width: usize,
     /// Last observed grant on this pair; it is a lower bound, not an exclusive claim.
     pub(super) previous_grant: u64,
 }
@@ -75,6 +76,8 @@ impl Hello {
         if let Some(source) = self.source {
             bytes[1 + IDENTITY_SIZE..1 + 2 * IDENTITY_SIZE].copy_from_slice(&source.encode());
         }
+        bytes[1 + 2 * IDENTITY_SIZE] =
+            u8::try_from(self.qp_width).map_err(|_| Error::Protocol("RDMA bootstrap QP width"))?;
         bytes[HELLO_SIZE - 24..HELLO_SIZE - 8].copy_from_slice(&self.expected_domain);
         bytes[HELLO_SIZE - 8..].copy_from_slice(&self.previous_grant.to_be_bytes());
         channel.write_all(&bytes)
@@ -85,6 +88,10 @@ impl Hello {
         channel.read_exact(&mut bytes)?;
         if bytes[0] & !3 != 0 {
             return Err(Error::Protocol("RDMA rendezvous flags"));
+        }
+        let qp_width = bytes[1 + 2 * IDENTITY_SIZE] as usize;
+        if qp_width > 64 || (bytes[0] & 1 == 0 && qp_width != 0) {
+            return Err(Error::Protocol("RDMA bootstrap QP width"));
         }
         let requester = Identity::decode(&bytes[1..1 + IDENTITY_SIZE])?;
         let source_bytes = &bytes[1 + IDENTITY_SIZE..1 + 2 * IDENTITY_SIZE];
@@ -119,6 +126,7 @@ impl Hello {
             source,
             expected_domain,
             direct: bytes[0] & 1 != 0,
+            qp_width,
             previous_grant,
         })
     }

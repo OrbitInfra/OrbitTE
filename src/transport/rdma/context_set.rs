@@ -3,11 +3,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::endpoint::Peer;
 use super::path::NicPath;
 use super::quota::{DeviceLease, DeviceSelector};
 use super::rdma_transport::RdmaTransport;
-use super::{RdmaContext, RdmaGrant, cq_lane, quota};
+use super::{RdmaContext, cq_lane, quota};
 use crate::engine::remaining;
 use crate::{Error, Result};
 
@@ -201,117 +200,6 @@ impl RdmaTransport {
         Ok(slot.cq_list.iter().flatten().cloned().collect())
     }
 
-    pub(super) fn claim(
-        &self,
-        device: Arc<RdmaContext>,
-        matches: impl Fn(&Peer) -> bool,
-        width: usize,
-        deadline: Instant,
-    ) -> Result<Option<RdmaGrant>> {
-        let mut lanes = self.cq_list(Arc::clone(&device))?;
-        self.workers.order(&mut lanes)?;
-        let endpoints = {
-            let mut contexts = self
-                .context_set
-                .lock()
-                .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-            let slot = contexts
-                .slots
-                .iter_mut()
-                .find(|slot| {
-                    slot.owner
-                        .as_ref()
-                        .is_some_and(|owner| Arc::ptr_eq(owner, &device))
-                })
-                .ok_or(Error::Internal("RDMA peer endpoint context missing"))?;
-            slot.endpoints.snapshot()?
-        };
-        let mut candidates = Vec::new();
-        for endpoint in endpoints {
-            for (lane, record, peer) in endpoint.candidates(&matches)? {
-                candidates.push((Arc::clone(&endpoint), lane, record, peer));
-            }
-        }
-        for lane in &lanes {
-            for (owner, candidate, _, peer) in &candidates {
-                if !Arc::ptr_eq(lane, candidate) {
-                    continue;
-                }
-                if let Some(mut grant) =
-                    lane.claim(|entry| matches(entry) && entry.same_pair(peer), deadline)?
-                {
-                    grant.cached_peer = Some(*peer);
-                    grant.endpoint = Some(Arc::clone(owner));
-                    return Ok(Some(grant));
-                }
-            }
-        }
-        // Grow across lanes before multiplexing. Concurrent cold construction
-        // still needs the fixed-width endpoint reservation owner.
-        let full = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-            .active_endpoints
-            >= self.config.max_endpoints;
-        if candidates.len() >= width || full {
-            for lane in &lanes {
-                for (owner, candidate, record, peer) in &candidates {
-                    if Arc::ptr_eq(lane, candidate) {
-                        let mut grant = lane.share(record, *peer, deadline)?;
-                        grant.endpoint = Some(Arc::clone(owner));
-                        return Ok(Some(grant));
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    pub(super) fn adopt_peer(&self, grant: &mut RdmaGrant, peer: Peer) -> Result<()> {
-        let device = grant
-            .record
-            .lock()?
-            .resources
-            .as_ref()
-            .map(|resources| {
-                resources
-                    .connection
-                    .lock()
-                    .map(|connection| Arc::clone(&connection.device))
-            })
-            .transpose()?
-            .ok_or(Error::Internal("RDMA peer endpoint has no physical QP"))?;
-        let mut contexts = self
-            .context_set
-            .lock()
-            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
-        if contexts.closed {
-            return Err(Error::Unavailable("RDMA peer endpoint admission closed"));
-        }
-        let slot = contexts
-            .slots
-            .iter_mut()
-            .find(|slot| {
-                slot.owner
-                    .as_ref()
-                    .is_some_and(|owner| Arc::ptr_eq(owner, &device))
-            })
-            .ok_or(Error::Internal("RDMA peer endpoint context missing"))?;
-        let owner = slot.endpoints.adopt(grant, peer)?;
-        if grant
-            .endpoint
-            .as_ref()
-            .is_some_and(|old| !Arc::ptr_eq(old, &owner))
-        {
-            return Err(Error::Protocol(
-                "RDMA reused QP moved to another peer endpoint",
-            ));
-        }
-        grant.endpoint = Some(owner);
-        Ok(())
-    }
-
     pub(crate) fn recover_progress(&self) -> Result<()> {
         let mut contexts = self
             .context_set
@@ -359,7 +247,7 @@ impl RdmaTransport {
             .flat_map(|slot| slot.cq_list.iter().flatten().cloned())
             .collect();
         for progress in workers {
-            if progress.evict_idle(deadline)? {
+            if progress.evict_idle(|_| true, deadline)? {
                 return Ok(true);
             }
         }

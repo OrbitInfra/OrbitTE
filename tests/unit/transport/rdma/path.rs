@@ -83,7 +83,7 @@ fn path_table_bounds_and_duplicate_identities_are_rejected_before_selection() {
         };
         (sender, receiver)
     };
-    for length in [0, 186, 188, 65 * PATH_SIZE as u64, u64::MAX] {
+    for length in [0, 1, 187, 189, 65 * PATH_SIZE as u64, u64::MAX] {
         let (mut sender, mut receiver) = channels();
         sender.reply(epoch, 0, length).unwrap();
         assert!(matches!(
@@ -101,10 +101,11 @@ fn path_table_bounds_and_duplicate_identities_are_rejected_before_selection() {
             _ => {}
         }
         let (mut sender, mut receiver) = channels();
-        write_paths(&mut sender, epoch, &[first, second]).unwrap();
+        write_paths(&mut sender, epoch, &[first, second], 3).unwrap();
         let result = read_paths(&mut receiver, epoch);
         assert_eq!(result.is_ok(), duplicate == "none", "{duplicate}");
-        if let Ok(paths) = result {
+        if let Ok((paths, width)) = result {
+            assert_eq!(width, 3);
             assert_eq!(paths.iter().map(|p| p.nic_id).collect::<Vec<_>>(), [2, 63]);
         }
     }

@@ -130,7 +130,7 @@ lease or stable staging and its one-use source MW. P4.7e parent MRs outlive
 grants. P4.7f retains the real connected QP/PSN/incarnation when both peers
 negotiate host Direct and finish the complete operation-drain protocol below.
 The original profile fixed role and READ/WRITE capability with one active
-grant per QP; the current v13 path keeps those fixed capabilities while
+grant per QP; the current v14 path keeps those fixed capabilities while
 sharing connected QPs across independent concurrent grants. Staged or device-backed peers still use per-request QPs and both
 physical close barriers. Parent MRs have LOCAL_WRITE|MW_BIND only; requester
 MRs have LOCAL_WRITE only. Neither parent key is exported. The shared PD is
@@ -212,7 +212,7 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v13 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
+Protocol v14 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
 Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
@@ -252,10 +252,11 @@ capacity and the shared CQ budget.
 SQ depth shared by all grants on that QP. RQ depth uses `max_cqes`; receipt
 capacity uses `max_grants`. SQ and RQ keep separate outstanding-WR accounts.
 Receive-buffer identity and grant receipt identity are separated as described
-in [QP receive ownership](architecture.md#qp-receive-ownership). Public v13
+in [QP receive ownership](architecture.md#qp-receive-ownership). Public v14
 handshakes share a physical `RdmaQp` across independent grant records;
-`cq_lane/completion.rs` resolves CQEs to their exact owners. Fixed-width cold
-construction remains open.
+`cq_lane/completion.rs` resolves CQEs to their exact owners.
+[Fixed-width cold bootstrap](#fixed-width-cold-bootstrap) bounds concurrent
+construction before native QP creation.
 `max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
@@ -303,7 +304,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v13 explicitly rejects v1-v12; it is OrbitTE-only. A WRITE attempt is marked
+Wire v14 explicitly rejects v1-v13; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -1029,7 +1030,7 @@ OrbitTE grant receipt or wire format.
 `GrantResources` owns the SEND `MessageBuffer`; the QP receive queue owns RQ
 buffers and their local-only MRs. No Rust slice accesses posted receive memory
 before its validated CQE. Requester SEND bytes cannot alias a mutable READ
-destination. Current v13 control storage is bounded by
+destination. Current v14 control storage is bounded by
 `(max_grants + max_cqes) * 141` bytes across SEND and RQ messages, separately
 from payload staging/direct quotas; allocation charges precede native
 registration. Partial registration and uncertain WR posts retain that actual
@@ -3519,14 +3520,14 @@ both connection identities, operation and previous grant generation. A reused
 QP cannot move to another endpoint, PD or CQ lane. Lookup detachment does not
 erase an unfinished or retained QP; only Closed records leave the array.
 
-The current v13 protocol prepares independent slice grants before payload
+The current v14 protocol prepares independent slice grants before payload
 admission. Connected arrays serve concurrent grants while `max_endpoints`
 counts only physical QPs. Whole-parent reservations use `max_grants` and the
-source RQ budget separately. They are **not yet TENT's fixed-width QP pool**:
-concurrent cold handshakes can still grow beyond the peer's `num_lanes` target.
-Construction reservations and bilateral bootstrap arbitration remain in the
-completion plan. Read/write capabilities stay per physical QP; a peer array
-may own both kinds.
+source RQ budget separately. Cold slots are bounded by the negotiated width,
+including builders and native-retained QPs. Each array is scoped by requester/
+source role and READ/WRITE capability; each physical QP retains its fixed
+capability. See [fixed-width cold bootstrap](#fixed-width-cold-bootstrap) for
+the source ownership and differences from TENT's eager bidirectional QP pool.
 
 NUMA discovery intersects sysfs node cpulists with the creator's actual
 `sched_getaffinity` mask. Empty nodes are excluded and sparse node IDs preserved.
@@ -3575,20 +3576,23 @@ TENT's monitor also performs periodic endpoint/orphan reclaim and paused-port
 recovery. OrbitTE's data-lane owners already drive timed QP drain; this change
 keeps those responsibilities there. Physical port recovery and periodic
 route-bandwidth refresh are not established by event-thread consolidation.
-Native provider calls remain non-preemptible. Independent P4 acceptance,
-fixed-width concurrent QP multiplexing and physical device recovery remain open;
-this substage makes no performance or native wire interoperability claim.
+Native provider calls remain non-preemptible. For the frozen `5ea3a35`
+delivery, fixed-width concurrent QP construction and periodic device recovery
+were still open. Later construction support is described in
+[fixed-width cold bootstrap](#fixed-width-cold-bootstrap). Independent P4
+acceptance and physical device recovery remain open; this substage makes no
+performance or native wire interoperability claim.
 
 
 ## Public concurrent QP grants
 
-Wire v13 lets the public RDMA handshake attach a fresh grant record to a live
+Wire v14 lets the public RDMA handshake attach a fresh grant record to a live
 physical QP. Both process/connection identities, remote PD, role and operation
 still match exactly. `Hello.previous_grant` is the requester's observed lower
 bound; a source may already know a later grant due to another concurrent
 request. A fresh offer must exceed that lower bound. Per-QP observations take
 the maximum generation, while ACCEPT/GRANT/DONE/ACK/READY and native completion
-still validate the exact 141-byte grant binding. v12 peers are rejected.
+still validate the exact 141-byte grant binding. v13 and older peers are rejected.
 
 `max_endpoints` bounds aggregate physical QPs; `max_grants` (default 64,
 range 1–4096) bounds whole-parent grant reservations. A parent obtains all its
@@ -3624,5 +3628,49 @@ grant namespace before CQ destruction. The `concurrent-grants` mode tests the
 independent grant budget; old `concurrent-endpoints` result sets remain
 historical evidence. The existing large/folded/RQ and failure profiles use the
 public protocol. See [qualification](qualification.md) for exact artifacts.
-Fixed-width cold construction, periodic recovery and final P4 acceptance remain
-open; the data path still selects host staging for NVIDIA device pointers.
+Fixed-width cold construction is described below. Periodic recovery and final
+P4 acceptance remain open; NVIDIA device pointers still select host staging.
+
+
+## Fixed-width cold bootstrap
+
+Wire v14 adds the source's reusable QP width to the path table and echoes the
+negotiated width in HELLO. Zero means per-grant non-reusable connections. Host
+Direct pairs use the smaller `num_lanes` value; older wire versions are rejected
+before dispatch. Exact grant binding size remains 141 bytes. A reused pair
+cannot change its width or either connection identity.
+
+`endpoint.rs` owns a fixed array and the `Construction` guard. A slot counts
+while unbound, handshaking, connected or awaiting native destruction. Only the
+native `closed` barrier frees an attached slot. `endpoint_store.rs` preserves a
+canonical empty array while a caller holds it. `rdma_transport/connections.rs`
+selects completed records, reserves cold slots, shares busy QPs and waits with
+an absolute deadline. Native create, bootstrap I/O and cleanup run outside the
+endpoint/store mutexes. `handshake.rs` publishes the source pair before GRANT,
+so concurrent first requests cannot mistake a newly connected pair for a miss.
+
+Arrays are scoped to a local context, remote process/PD/NIC, role and capability.
+READ and WRITE, and the two requester/source roles, retain separate arrays;
+`max_endpoints` still bounds their aggregate physical QPs. TENT's frozen
+`getOrInsert`, fixed `qp_list_`, `construct`, `connect` and `accept` are the
+reference boundaries. TENT eagerly creates its complete list and handles
+simultaneous active/passive open on that shared endpoint; OrbitTE lazily fills
+reserved slots and keeps its explicit grant authority protocol. Neither native
+wire interoperability nor eager bidirectional-array parity is claimed.
+
+CPU controls force cold builders to pause before opening a QP while eight
+parents contend, then check exact width, READ/WRITE bytes and warm reuse. They
+also cover duplicate reservations, unbound cancellation, waiter timeout/retry,
+failed ACCEPT rollback, retained native cleanup, old guard isolation, unequal
+lane counts and simultaneous bidirectional first contact.
+
+The native `large-cold` mode extends the supervised two-RNIC concurrent profile.
+Eight parents compete before the cold-open gate is released; the fixture checks
+the construction count before any native QP opens. The resulting forty grants
+must fit each negotiated array, preserve bytes/sentinels and use the same
+physical QPs in the next round. Every existing concurrent profile now checks
+its array width too. Include `mode: "large-cold"`, `num_lanes: 1` or `3`,
+READ/WRITE and polling/event variants in the external hardware profile consumed
+by `tests/hardware/run.py`. Raw `ORBITTE_COLD_CONSTRUCTION` and
+`ORBITTE_ENDPOINT_ARRAY` records identify builders, slots and physical QPs.
+See [qualification](qualification.md) for the frozen artifact and evidence.
