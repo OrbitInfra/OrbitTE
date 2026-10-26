@@ -1,11 +1,11 @@
 """Validate the installed host consumer's profile and independent result ledger."""
 import json
 
-PROTOCOL = 'orbitte-installed-host-v1'
+PROTOCOL = 'orbitte-installed-host-v2'
 
 
 def validate(case):
-    if (case.get('mode') != 'installed-host' or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-restart') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -15,12 +15,19 @@ def validate(case):
                             ('block', 64 << 10, 4 << 20), ('num_lanes', 1, 3), ('mask', 1, 3)]:
         if type(case.get(name)) is not int or not low <= case[name] <= high:
             raise ValueError('invalid installed host ' + name)
+    if case['mode'] == 'installed-restart':
+        if (case.get('fault_role') not in ('source', 'requester')
+                or type(case.get('generations')) is not int or case['generations'] not in (2, 3)):
+            raise ValueError('restart requires an explicit target and two or three generations')
+    elif 'fault_role' in case or 'generations' in case:
+        raise ValueError('restart controls require the installed-restart mode')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
 
 def command(profile, case, node, role, root, readiness=None):
     environment = {
+        'ORBITTE_HOST_MODE': case['mode'],
         'ORBITTE_SHARED_ROLE': role,
         'ORBITTE_SHARED_BIND': profile['nodes'][node]['bind'],
         'ORBITTE_SHARED_RAILS': ','.join(profile['rails']),
@@ -35,6 +42,9 @@ def command(profile, case, node, role, root, readiness=None):
         'ORBITTE_HOST_BLOCK': str(case['block']),
         'CUDA_VISIBLE_DEVICES': '',
     }
+    if case['mode'] == 'installed-restart':
+        environment.update(ORBITTE_RESTART_GENERATIONS=str(case['generations']),
+                           ORBITTE_RESTART_KILL_ROLE=case['fault_role'])
     if readiness is not None:
         if len(readiness) != 1:
             raise ValueError('invalid installed host readiness')
@@ -44,6 +54,9 @@ def command(profile, case, node, role, root, readiness=None):
 
 def verify(profile, case, evidence):
     validate(case)
+    if case['mode'] == 'installed-restart':
+        from installed_restart import verify as verify_restart
+        return verify_restart(profile, case, evidence)
     for role in ('source', 'requester'):
         record = evidence[role]
         supervisor = json.loads(record['result.json'])
@@ -63,11 +76,12 @@ def verify(profile, case, evidence):
                 or len({n['pci'] for n in nics}) != 2):
             raise ValueError('installed peer did not publish the two locked RNICs')
         rounds = records('ORBITTE_INSTALLED_ROUND ')
-        if len(rounds) != 3 or [r['round'] for r in rounds] != [0, 1, 2]:
+        if len(rounds) != 3 or [(r['phase'], r['round']) for r in rounds] != [(0, i) for i in range(3)]:
             raise ValueError('installed peer omitted or duplicated a round')
         for index, row in enumerate(rounds):
             bound = case['mask'].bit_count() * case['num_lanes']
-            if not 1 <= row['opened_qps'] <= bound or row['opened_mrs'] != 4:
+            if (not 1 <= row['opened_qps'] <= bound or row['opened_mrs'] != 4
+                    or row['closed_qps'] != 0):
                 raise ValueError('installed QP/MR bound was violated')
             if row['completed_grants'] <= (rounds[index - 1]['completed_grants'] if index else 0):
                 raise ValueError('installed peer made no native grant progress')
