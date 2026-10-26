@@ -2,7 +2,8 @@
 
 This gate consumes a packaged `orbit-te` crate as a normal Rust dependency.
 It runs the public `TransferEngine` API with the `rdma` feature only. Private
-libtests, injected verbs tables and CUDA are absent from the installed binary.
+libtests and CUDA are absent from the installed binary. The explicit lost-completion
+profile adds a separate process-local native qualification library described below.
 The published alpha on crates.io remains a name reservation; this workflow
 packages the selected source without publishing it.
 
@@ -26,7 +27,7 @@ Cargo fetches the packaged lockfile dependencies first, then resolves OrbitTE
 from that extracted package offline, preserves locked dependency versions, checks formatting/Clippy and installs a release executable
 under `installed/bin/orbitte-rdma-host`. The manifest pins the source commit,
 archive, every fixture module, consumer lockfile, binary, features and local
-native libraries. `orbitte-installed-host-v3` identifies this test protocol;
+native libraries. `orbitte-installed-host-v4` identifies this test protocol;
 the production public API and wire v14 are unchanged.
 The consumer is an acceptance fixture, not a new production CLI/API.
 
@@ -123,7 +124,7 @@ processes; their evidence must not be interpreted as a surviving-engine run.
 
 `installed-interruption` uses the same restart roles and two/three-generation
 supervisor policy. Set `payload <= block` (one slice per parent), with 1–32
-concurrent parents. The test protocol is `orbitte-installed-host-v3`; the
+concurrent parents. The test protocol is `orbitte-installed-host-v4`; the
 production protocol remains v14.
 
 Before each nonfinal restart, complete three healthy byte/guard rounds, then
@@ -195,3 +196,45 @@ their separate internal ownership evidence. See [qualification](qualification.md
 for executed artifact/profile results and
 [P4's final acceptance queue](completion-plan.md#p4-remaining-delivery) for the
 remaining hardware and independent-review gates.
+
+
+## Lost payload completions
+
+Select `mode: "installed-lost-completion"` with the same restart role and
+2–3 generations. Freeze `payload <= block` (one native payload WR per parent),
+8 parents with one lane or 16 with three lanes, a 1 MiB payload, both rails,
+both directions, READ/WRITE, and polling/event-driven progress before running.
+Regressions include healthy single-rail and posted-RQ interruption cases.
+
+`build_installed.py` also compiles the packaged `tests/hardware/cq_fault/`
+qualification tool against the system verbs headers. Its CPU control checks
+real-callback pass-through, selective loss and error preservation. The manifest
+pins the tool sources, compiler and shared-library hash. The controller copies
+that immutable library beside the installed consumer; the supervisor checks
+its hash before each requester generation and sets `LD_PRELOAD` only for that
+fault profile. The production crate and dependency features remain unchanged.
+
+After healthy warmup, both peers replace their buffers with a new input pattern
+and destination sentinels. The tool arms only on the requester. It calls the
+original provider `post_send` and `poll_cq`; it records accepted payload WRs and
+removes their actual successful READ/WRITE CQEs from the returned completion
+array. Nonmatching and error completions pass through. Separate bounded JSONL
+receipts identify the native process, context, CQ, QP, WR and addresses. No
+payload or successful completion is fabricated. The controller joins exact WR
+identities and parent ranges, independently of public fixture counters.
+
+At the kill point, all payload CQEs have been observed by the tool, while the
+engine still owns SQ debt, source RQ/MW authorization, DMA loans and busy public
+batches. The supervisor kills its exact configured child. The surviving
+requester must fail and drain its batches, retain zero reported payload bytes,
+and classify WRITE effects as `Unknown` (READ has no remote write effect).
+Actual successful `ibv_destroy_qp` receipts must cover every affected native QP
+before the public drain receipt. On either surviving role, full new payload
+bytes and guards must match, temporary owners must drain, the original four
+persistent MRs remain registered, and CPU access becomes available. Subsequent
+generations reject stale authority and resume healthy native transfers.
+
+This profile establishes **lost engine observation after real payload
+completion**. It does not establish a physical link failure or termination of
+DMA interrupted mid-flight. Native cleanup failures and physical faults keep
+separate qualification gates; this is correctness evidence, not performance.

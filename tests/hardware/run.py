@@ -18,7 +18,7 @@ import installed
 
 def restart_plan(case):
     mode = case.get('mode')
-    if mode in ('installed-restart', 'installed-interruption'):
+    if mode in ('installed-restart', 'installed-interruption', 'installed-lost-completion'):
         installed.validate(case)
         return case['fault_role'], case['generations']
     if mode in ('large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy'):
@@ -74,6 +74,7 @@ class Controller:
         self.commands = []
         self.started = []
         self.connections = []
+        self.fault_library = None
 
     def command(self, command, *, allow_failure=False):
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
@@ -97,6 +98,8 @@ class Controller:
         if json.loads(identity) != [expected['hostname'], expected['boot_id']]:
             raise RuntimeError('host/boot identity changed before deployment')
         self.ssh(node, ['mkdir', '-m', '700', '-p', self.remote])
+        if self.fault_library is not None:
+            self.copy(node, self.fault_library, self.remote + '/liborbitte_cq_fault.so')
         self.copy(node, self.binary, self.remote + '/hardware_peer')
         self.copy(node, Path(__file__).with_name('supervise.py'), self.remote + '/supervise.py')
         self.ssh(node, ['chmod', '700', self.remote + '/hardware_peer'])
@@ -104,6 +107,7 @@ class Controller:
 
     def collect(self, node, root):
         names = ['running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
+        names += ['cq-fault-' + str(g) + '.jsonl' for g in range(3)]
         names += ['maps-' + str(g) + '.txt' for g in range(3)]
         names += ['restart-' + kind + '-' + str(g) + '.txt'
                   for kind in ('state', 'request', 'peer-state', 'peer', 'gate') for g in range(3)]
@@ -127,7 +131,13 @@ class Controller:
             config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
-                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption'))
+                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion'))
+        if (environment.get('ORBITTE_HOST_MODE') == 'installed-lost-completion'
+                and environment['ORBITTE_SHARED_ROLE'] == 'requester'):
+            if self.fault_library is None:
+                raise ValueError('lost completion requires the pinned native fault library')
+            environment['LD_PRELOAD'] = self.remote + '/liborbitte_cq_fault.so'
+            config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
         local = self.output / (Path(root).name + '.json')
         local.write_text(json.dumps(config, indent=2) + '\n')
         self.ssh(node, ['mkdir', '-m', '700', '-p', root])
@@ -422,7 +432,7 @@ class Controller:
                 running = json.loads(evidence['source']['running.json'] or '{}')
                 ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
                          if line.startswith('ORBITTE_READY ')]
-                generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption')
+                generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption', 'installed-lost-completion')
                               else running.get('generation'))
                 if (type(generation) is int and 0 < generation < restart[1]
                         and generation not in forwarded and len(ready) > generation):
@@ -474,6 +484,10 @@ def main():
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != installed.PROTOCOL):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
+            if any(case.get('mode') == 'installed-lost-completion' for case in profile['cases']):
+                controller.fault_library = Path(installation['fault_library'])
+                if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
+                    raise ValueError('native fault library differs from the packaged artifact')
             manifest['installation'] = installation
             manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
             if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:

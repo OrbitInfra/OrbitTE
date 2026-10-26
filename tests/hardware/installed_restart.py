@@ -10,7 +10,8 @@ def records(record, prefix):
 
 
 def verify(profile, case, evidence):
-    interrupted = case['mode'] == 'installed-interruption'
+    lost = case['mode'] == 'installed-lost-completion'
+    interrupted = case['mode'] in ('installed-interruption', 'installed-lost-completion')
     count, killed = case['generations'], case['fault_role']
     peer_phases = {}
     for role in ('source', 'requester'):
@@ -94,7 +95,7 @@ def verify(profile, case, evidence):
         for phase, row in enumerate(kills):
             if (row['phase'] != phase or row['pid'] != phases[phase]['native_pid']
                     or not 1 <= row['cached_qps'] <= 2 * case['num_lanes']
-                    or row['persistent_mrs'] != 4 or row['sq_debt'] != 0 or row['rq_debt'] != (case['parents'] if interrupted and role == 'source' else 0)
+                    or row['persistent_mrs'] != 4 or row['sq_debt'] != (case['parents'] if lost and role == 'requester' else 0) or row['rq_debt'] != (case['parents'] if interrupted and role == 'source' else 0)
                     or row['orderly_close'] is not False):
                 raise ValueError('kill point did not retain idle native resources')
         exits = records(record, 'ORBITTE_INSTALLED_PEER_EXIT ')
@@ -125,3 +126,7 @@ def verify(profile, case, evidence):
     if interrupted:
         from installed_interruption import verify as verify_interruption
         verify_interruption(case, evidence)
+
+    if lost:
+        from installed_completion import verify as verify_completion
+        verify_completion(case, evidence)

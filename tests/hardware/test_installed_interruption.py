@@ -39,7 +39,7 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                                      failed_batches=0 if source else case['parents'], sq_debt=0, rq_debt=0,
                                      grants=0, windows=0, batches=0, persistent_mrs=4,
                                      read_bytes=baseline['read_bytes'], write_bytes=baseline['write_bytes'],
-                                     locally_drained=True, bytes_unchanged=True, memory_writable=True,
+                                     locally_drained=True, bytes_verified=True, payload_completed=False, memory_writable=True,
                                      progress_failures=4, progress_recoveries=4)))
                 record['stdout.log'] = '\n'.join(p + ' ' + json.dumps(r) for p, r in rows)
             installed.verify(fixture.profile, case, evidence)
@@ -51,7 +51,7 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                 ('requester', 'PENDING', 'batch_busy', False), ('requester', 'PENDING', 'pid', -1),
                 ('requester', 'PENDING', 'read_bytes', -1), (survivor, 'DRAIN', 'batches', 1),
                 (survivor, 'DRAIN', 'persistent_mrs', 0), (survivor, 'DRAIN', 'locally_drained', False),
-                (survivor, 'DRAIN', 'bytes_unchanged', False), (survivor, 'DRAIN', 'memory_writable', False),
+                (survivor, 'DRAIN', 'bytes_verified', False), (survivor, 'DRAIN', 'memory_writable', False),
                 (survivor, 'DRAIN', 'progress_recoveries', 0), (survivor, 'DRAIN', 'read_bytes', -1), (survivor, 'DRAIN', 'phase', 99),
             ]
             for role, kind, key, value in controls:

@@ -1,9 +1,10 @@
-//! Public batches held before payload authorization, then exact-child death.
+//! Public batches interrupted before authorization or after native CQE loss.
 
 use std::sync::Arc;
 
 use orbit_te::{Batch, BatchState, Error, RemoteEffect, TaskState};
 
+use super::completion::CompletionFault;
 use super::gate::GrantGate;
 use super::*;
 
@@ -13,11 +14,19 @@ pub(super) fn pending(
     memory: &RegisteredMemory,
     peer: &RemoteSegment,
     stream: &mut TcpStream,
-    gate: Option<&GrantGate>,
+    controls: (Option<&GrantGate>, Option<&CompletionFault>),
     phase: usize,
 ) -> Result<Vec<Batch>> {
+    let (gate, fault) = controls;
+    let lost = env::var("ORBITTE_HOST_MODE")? == "installed-lost-completion";
     if let Some(gate) = gate {
         gate.arm()?;
+    }
+    if lost {
+        memory.write(0, &case.bytes(case.source, phase * ROUNDS + ROUNDS))?;
+    }
+    if let Some(fault) = fault {
+        fault.arm(case, phase)?;
     }
     let baseline = idle(engine)?;
     barrier(stream, "interruption-armed")?;
@@ -45,7 +54,11 @@ pub(super) fn pending(
                     length: case.payload,
                 }],
                 None,
-                TIMEOUT,
+                if lost {
+                    Duration::from_secs(8)
+                } else {
+                    TIMEOUT
+                },
             )?;
             batch.seal()?;
             batches.push(batch);
@@ -66,6 +79,7 @@ pub(super) fn pending(
             thread::sleep(Duration::from_millis(1));
         }
     }
+    let receipt = fault.map(|fault| fault.pending(case, phase)).transpose()?;
     barrier(stream, "interruption-held")?;
     let stats = engine.stats()?;
     let rdma = stats.rdma.ok_or("missing RDMA counters")?;
@@ -76,7 +90,7 @@ pub(super) fn pending(
         || rdma.completed_read_bytes != baseline.completed_read_bytes
         || rdma.completed_write_bytes != baseline.completed_write_bytes
         || rdma.progress_failures != rdma.progress_recoveries
-        || rdma.work_requests != 0
+        || rdma.work_requests != if lost && !case.source { count } else { 0 }
         || (case.source
             && (stats.active_source_operations != count
                 || rdma.receive_work_requests != count
@@ -122,6 +136,16 @@ pub(super) fn pending(
         rdma.progress_failures,
         rdma.progress_recoveries
     );
+    if let Some(receipt) = receipt {
+        println!(
+            "ORBITTE_INSTALLED_CQE_PENDING {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{}}}",
+            std::process::id(),
+            receipt.posts,
+            receipt.lost,
+            receipt.sequence,
+            receipt.destroyed_qps
+        );
+    }
     barrier(stream, "interruption-verified")?;
     Ok(batches)
 }
@@ -131,9 +155,11 @@ pub(super) fn drained(
     engine: &TransferEngine,
     memory: &RegisteredMemory,
     mut batches: Vec<Batch>,
-    gate: Option<&GrantGate>,
+    controls: (Option<&GrantGate>, Option<&CompletionFault>),
     phase: usize,
 ) -> Result<()> {
+    let (gate, fault) = controls;
+    let lost = env::var("ORBITTE_HOST_MODE")? == "installed-lost-completion";
     if let Some(gate) = gate {
         gate.abort()?;
     }
@@ -146,13 +172,17 @@ pub(super) fn drained(
             || result.transferred_bytes != 0
             || task.state != TaskState::Failed
             || !task.locally_drained
-            || task
-                .failure
-                .as_ref()
-                .is_none_or(|failure| failure.remote_effect != RemoteEffect::None)
+            || task.failure.as_ref().is_none_or(|failure| {
+                failure.remote_effect
+                    != if lost && !case.read {
+                        RemoteEffect::Unknown
+                    } else {
+                        RemoteEffect::None
+                    }
+            })
         {
             return Err(format!(
-                "interrupted batch did not drain with no effect: {result:?} {task:?}"
+                "interrupted batch has incorrect drain/effect outcome: {result:?} {task:?}"
             )
             .into());
         }
@@ -181,23 +211,39 @@ pub(super) fn drained(
     {
         return Err(format!("interruption lost or retained owners: {stats:?}").into());
     }
-    let mut expected = case.bytes(case.source, phase * ROUNDS + ROUNDS - 1);
+    if let Some(fault) = fault {
+        let receipt = fault.disarm()?;
+        if receipt.destroyed_qps == 0 {
+            return Err("lost native CQE did not retire any QP".into());
+        }
+        println!(
+            "ORBITTE_INSTALLED_CQE_DRAIN {{\"phase\":{phase},\"pid\":{},\"posts\":{},\"lost\":{},\"sequence\":{},\"destroyed_qps\":{},\"write_effect_unknown\":{}}}",
+            std::process::id(),
+            receipt.posts,
+            receipt.lost,
+            receipt.sequence,
+            receipt.destroyed_qps,
+            !case.read
+        );
+    }
+    let round = phase * ROUNDS + ROUNDS - usize::from(!lost);
+    let mut expected = case.bytes(case.source, round);
     if case.source != case.read {
         for parent in 0..case.parents {
             for index in 0..case.payload {
                 expected[parent * case.bank() + case.destination() + index] =
-                    pattern(!case.source, phase * ROUNDS + ROUNDS - 1, parent, index);
+                    pattern(!case.source, round, parent, index);
             }
         }
     }
     let mut actual = vec![0; case.length()];
     memory.read(0, &mut actual)?;
     if actual != expected {
-        return Err("interrupted payload changed backing bytes".into());
+        return Err("interrupted payload/guard bytes disagree with native outcome".into());
     }
     memory.write(0, &expected)?;
     println!(
-        "ORBITTE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_unchanged\":true,\"memory_writable\":true,\"progress_failures\":{},\"progress_recoveries\":{}}}",
+        "ORBITTE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_verified\":true,\"payload_completed\":{},\"memory_writable\":true,\"progress_failures\":{},\"progress_recoveries\":{}}}",
         std::process::id(),
         rdma.work_requests,
         rdma.receive_work_requests,
@@ -207,6 +253,7 @@ pub(super) fn drained(
         rdma.persistent_mrs,
         rdma.completed_read_bytes,
         rdma.completed_write_bytes,
+        lost,
         rdma.progress_failures,
         rdma.progress_recoveries
     );
