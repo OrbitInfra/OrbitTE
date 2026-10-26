@@ -240,6 +240,9 @@ fn rounds(
 ) -> Result<()> {
     let remote = segment.regions()[0].base_address();
     let baseline = idle(engine)?;
+    if baseline.progress_failures != baseline.progress_recoveries {
+        return Err("healthy rounds started before progress recovery".into());
+    }
     let mut last_reused = baseline.reused_connections;
     let mut last_completed = baseline.completed_reusable_grants;
     for round in 0..ROUNDS {
@@ -320,6 +323,8 @@ fn rounds(
             || stats.retained_grants != 0
             || stats.progress_failures != baseline.progress_failures
             || stats.progress_recoveries != baseline.progress_recoveries
+            || stats.progress_lanes != case.mask.count_ones() as usize * case.lanes
+            || stats.active_cqs != 2 * stats.progress_lanes
             || stats.staging_bytes != 0
         {
             return Err(format!("persistent MR/QP contract failed: {stats:?}").into());

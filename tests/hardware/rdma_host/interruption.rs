@@ -162,8 +162,8 @@ pub(super) fn drained(
     let rdma = loop {
         let rdma = idle(engine)?;
         if rdma.progress_failures == rdma.progress_recoveries
-            && rdma.progress_lanes == 2 * case.lanes
-            && rdma.active_cqs == 4 * case.lanes
+            && rdma.progress_lanes <= 2 * case.lanes
+            && rdma.active_cqs == 2 * rdma.progress_lanes
         {
             break rdma;
         }

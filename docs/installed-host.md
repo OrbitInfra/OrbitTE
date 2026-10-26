@@ -145,7 +145,10 @@ dies, the surviving requester must report failed, locally drained batches
 with zero bytes and `RemoteEffect::None`. The survivor verifies all backing
 bytes, regains CPU write access, releases temporary grants/MWs/batches, and
 keeps its process, engine, context/PD and four persistent MRs across recovery.
-Fresh-epoch transfers and all old-epoch refusals then repeat as above.
+Failed CQ lanes must be fully reclaimed (`progress_failures == progress_recoveries`);
+replacements are created on demand by the next connection. Fresh-epoch rounds
+require all selected lanes, unchanged failure/recovery counters and correct bytes.
+All old-epoch refusals then repeat as above.
 
 This is a deterministic pre-payload authorization interruption with native RQ
 debt. No failed request has permission to post payload yet. It does not prove
