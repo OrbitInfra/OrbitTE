@@ -12,6 +12,7 @@ contracts.
 | Async batches and notifications | Implemented | CPU ownership, cancellation, detached handle and receipt controls |
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
 | Installed Rust host consumer | Scoped tests | Packaged crate and independent public-API executable pass 72 two-host/two-RNIC configurations on stable/MSRV, including 12/16/32 parents, up to 9 MiB per request, QP/MR reuse and orderly close; fault qualification stays separate |
+| Native cleanup failure retention | Implemented; scoped tests | QP/MR/MW syscall faults and real CQ/channel/PD EBUSY retain unresolved owners across close/drop; device-close errors are CPU ABI controls only. See [cleanup scope](native-cleanup.md) |
 | Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
 | Transport-level RDMA Workers pool | Implemented | Scoped 1/2/3-worker two-RNIC host Direct tests verify CQ/thread routing, retained pool lifetime and fault recovery without new threads; 1/2/3/6 CQ lanes and load-based dispatch pass the 180-case native profile; broader TENT scheduling parity remains open |
 | Peer endpoint QP arrays | Implemented | Fixed negotiated width includes cold builders and native-retained QPs; concurrent grants share published pairs |

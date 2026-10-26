@@ -32,64 +32,6 @@ fn matches(context: *mut ffi::ibv_context, trace: &Trace) -> bool {
     unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap() == trace.rail
 }
 
-fn deny_commands(fd: c_int) {
-    // Linux seccomp_data: nr at 0, args[0] at 16. This filter affects only
-    // this calling thread and only write/ioctl on the selected uverbs FD.
-    let mut instructions = [
-        libc::sock_filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            k: 0,
-        },
-        libc::sock_filter {
-            code: 0x15,
-            jt: 1,
-            jf: 0,
-            k: libc::SYS_write as u32,
-        },
-        libc::sock_filter {
-            code: 0x15,
-            jt: 0,
-            jf: 3,
-            k: libc::SYS_ioctl as u32,
-        },
-        libc::sock_filter {
-            code: 0x20,
-            jt: 0,
-            jf: 0,
-            k: 16,
-        },
-        libc::sock_filter {
-            code: 0x15,
-            jt: 0,
-            jf: 1,
-            k: fd.try_into().unwrap(),
-        },
-        libc::sock_filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            k: 0x0005_0000 | libc::EIO as u32,
-        },
-        libc::sock_filter {
-            code: 0x06,
-            jt: 0,
-            jf: 0,
-            k: 0x7fff_0000,
-        },
-    ];
-    let program = libc::sock_fprog {
-        len: instructions.len().try_into().unwrap(),
-        filter: instructions.as_mut_ptr(),
-    };
-    assert_eq!(
-        unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
-        0
-    );
-    assert_eq!(unsafe { libc::prctl(libc::PR_SET_SECCOMP, 2, &program) }, 0);
-}
-
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     let mr = unsafe { (*h).mr.cast::<ffi::ibv_mr>() };
@@ -111,7 +53,7 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     trace.mr = mr as usize;
     trace.pd = native.pd as usize;
     trace.context = native.context as usize;
-    deny_commands(unsafe { (*native.context).cmd_fd });
+    uverbs_fault::deny_commands(unsafe { (*native.context).cmd_fd });
     trace.injections += 1;
     trace.attempts += 1;
     trace.error = unsafe { (sys::REAL.deregister)(h) };
@@ -142,7 +84,7 @@ unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
     trace.mw = mw as usize;
     trace.pd = native.pd as usize;
     trace.context = native.context as usize;
-    deny_commands(unsafe { (*native.context).cmd_fd });
+    uverbs_fault::deny_commands(unsafe { (*native.context).cmd_fd });
     trace.injections += 1;
     trace.attempts += 1;
     trace.error = unsafe { (sys::REAL.dealloc_window)(h) };

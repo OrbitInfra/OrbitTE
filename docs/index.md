@@ -109,6 +109,7 @@ troubleshooting
 contributing
 qualification
 installed-host
+native-cleanup
 cpu-oracle
 completion-plan
 :::

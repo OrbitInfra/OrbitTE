@@ -13,6 +13,51 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Production host-RDMA owners and the public protocol are unchanged in this
+qualification stage. Source [`d5514d4`](https://github.com/OrbitInfra/OrbitTE/commit/d5514d4630797e07baead3f8a1ddf08d24ca7487)
+adds native QP destruction EIO and completion-channel EBUSY profiles. The QP
+case filters uverbs command syscalls on one test-owned thread/descriptor; the
+channel case creates a real dependent CQ. Both invoke the actual verbs destructor.
+
+Stable 1.99.1 and Rust 1.85.0 pass **44 two-host/two-RNIC configurations**:
+**32 new cleanup cases** plus 12 CQ/PD and MR/MW regression cases. New cases
+cover source/requester failures, READ/WRITE, both node directions, either RNIC
+and widths 1/3; QP errors cover polling and events, while channel errors require
+events. Each restart fixture uses eight 5 MiB parents with five slices per
+parent. This is the declared matrix, not every Cartesian combination.
+
+The fixture verifies exactly one failing native destruction, retained SQ/RQ
+work and DMA backing after observer/engine drop, denied conflicting memory
+writes, and no revival through progress recovery. QP failure retains its CQs;
+channel failure keeps the channel and unresolved grants while already destroyed
+QPs stay released. Fresh processes reuse the RPC address, reject old epochs
+before QP creation, complete two byte/guard rounds and drain. All **168 children**
+are reaped, including **40 intentional supervisor-owned kills**. Postflight
+confirms unchanged node/provider identities, released RNIC locks and no GPU compute.
+
+Both compiler gates pass Clippy and 234 CPU/integration/doc tests each; hardware
+peers run separately through the supervisor. Fifteen controller tests include
+missing/wrong failure receipts, retries, lost backing/debt,
+false drain and incomplete child cleanup. The initial native development run
+exposed a missing fixture deadline mapping; its failure is preserved with the
+corrected runs.
+
+Raw profiles, source archives, binaries, failed runs and audit evidence remain
+outside Git at `/root/orbitte-artifacts/rdma-native-cleanup-20261026`.
+`native-audit.json` reconciles the receipts and all children. The two nodes'
+actual imported `IBVERBS_1.1` device-close implementation calls its provider
+and returns zero; its nonzero error branch is covered only by the existing
+CPU ABI control. No native device-close error result is claimed.
+
+See [native cleanup methodology and TENT mapping](native-cleanup.md).
+These are instrumented native libtests; installed consumers retain their
+previous healthy-only qualification. Physical port/device faults, spontaneous
+provider failures beyond these controls, InfiniBand, fairness/physical rail
+pressure and independent P4 acceptance remain open. OrbitKV integration stays
+after that acceptance.
+
+## Previous installed host delivery
+
 The packaged host RDMA consumer now has scoped two-host/two-RNIC qualification.
 Source [`ba09b1f`](https://github.com/OrbitInfra/OrbitTE/commit/ba09b1f2ec2200f733493612270b477787e3a65d)
 produces two archived crates and installed release consumers, built with stable
