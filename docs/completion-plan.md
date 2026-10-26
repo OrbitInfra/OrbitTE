@@ -433,8 +433,10 @@ spontaneous MR/MW cleanup errors beyond syscall controls; broader
 source/requester death and live reconnect; poisoned-live-engine recovery;
 and remaining failure profiles through the installed consumer. The
 [installed restart gate](installed-host.md#peer-restart-with-a-surviving-engine)
-is implemented for idle cached QPs/MRs: one peer dies repeatedly while the
-other keeps its engine and registration. Outstanding-DMA death and native
+now passes 32 installed restart configurations across two compilers for idle
+cached QPs/MRs: one peer dies repeatedly while the other keeps its engine and
+registration. Eight healthy regressions also pass; the exact profiles are in
+[qualification](qualification.md). Outstanding-DMA death and native
 cleanup failure in that installed path remain separate gates. Existing QP ERR,
 lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
 remain scoped evidence. For every
@@ -1287,11 +1289,14 @@ controls; do not add another implementation milestone for these prerequisites.
 Use the [installed host gate](installed-host.md) to freeze packaged crates and
 independent public-API consumers. The declared healthy RoCEv2 profile now
 passes 72 installed configurations on two compilers, with 12/16/32 parents
-and requests up to 9 MiB. Physical faults, remaining native-cleanup failure
-profiles, InfiniBand and independent acceptance still require their own gates.
-Freeze those remaining fault profiles before running them; the installed
-healthy gate does not substitute for their native ownership evidence. Physical link/device loss and InfiniBand
-remain unqualified. Link-bandwidth scheduling, new-device/GID migration and
+and requests up to 9 MiB. A further 40-configuration installed matrix covers
+32 repeated-peer-restart cases with one live engine, plus eight healthy
+regressions. The kill point retains idle QPs/MRs with zero SQ/RQ debt.
+Next cover outstanding-DMA death, lost completions and native cleanup failures
+through installed consumers, alongside physical link/device loss and provider
+teardown. InfiniBand and independent acceptance still require their own gates.
+Freeze those remaining fault profiles before running them; idle-resource death
+does not establish physical DMA drain after an interrupted transfer. Link-bandwidth scheduling, new-device/GID migration and
 general retry policy are not implied by selected-port recovery. Keep frozen
 TENT comparisons, native manifests and failed controls outside Git. The
 [architecture reading order](architecture.md#source-reading-order) identifies
