@@ -26,7 +26,7 @@ Cargo fetches the packaged lockfile dependencies first, then resolves OrbitTE
 from that extracted package offline, preserves locked dependency versions, checks formatting/Clippy and installs a release executable
 under `installed/bin/orbitte-rdma-host`. The manifest pins the source commit,
 archive, every fixture module, consumer lockfile, binary, features and local
-native libraries. `orbitte-installed-host-v2` identifies this test protocol;
+native libraries. `orbitte-installed-host-v3` identifies this test protocol;
 the production public API and wire v14 are unchanged.
 The consumer is an acceptance fixture, not a new production CLI/API.
 
@@ -119,6 +119,45 @@ controls reject incomplete or contradictory evidence. The same supervisor
 continues to support the separate native cleanup fixtures that replace both
 processes; their evidence must not be interpreted as a surviving-engine run.
 
+## Interrupt a posted completion RQ
+
+`installed-interruption` uses the same restart roles and two/three-generation
+supervisor policy. Set `payload <= block` (one slice per parent), with 1–32
+concurrent parents. The test protocol is `orbitte-installed-host-v3`; the
+production protocol remains v14.
+
+Before each nonfinal restart, complete three healthy byte/guard rounds, then
+arm a source-side control relay. It forwards Describe and the v14 single-slice
+RDMA handshake unchanged, but holds READY/GRANT after the source has bound its
+MW and posted its real completion receive. It rejects TCP payload and sliced
+opcodes. All native payload traffic still travels directly over RDMA.
+
+Both peers must have all grants pending, unchanged payload-byte counters and
+no newly opened QPs. Source receipts require one posted RQ, bound MW and
+receive credit per parent. The requester must expose Running, undrained public
+batches: short waits time out and `free()` returns `BatchBusy`. Conflicting CPU
+writes fail on both peers. Only after both receipts agree may the supervisor
+SIGKILL the exact source or requester child.
+
+When the requester dies, the surviving source relay closes its held control
+sockets; native source teardown must drain the outstanding RQ. When the source
+dies, the surviving requester must report failed, locally drained batches
+with zero bytes and `RemoteEffect::None`. The survivor verifies all backing
+bytes, regains CPU write access, releases temporary grants/MWs/batches, and
+keeps its process, engine, context/PD and four persistent MRs across recovery.
+Failed CQ lanes must be fully reclaimed (`progress_failures == progress_recoveries`);
+replacements are created on demand by the next connection. Fresh-epoch rounds
+require all selected lanes, unchanged failure/recovery counters and correct bytes.
+All old-epoch refusals then repeat as above.
+
+This is a deterministic pre-payload authorization interruption with native RQ
+debt. No failed request has permission to post payload yet. It does not prove
+mid-payload DMA interruption, lost SQ CQEs, physical link/device loss or native
+cleanup-failure retention. The relay is a test boundary, not a transport or
+production proxy. CPU relay controls execute in every packaged-consumer build;
+`installed_interruption.py` independently reconciles pending/drain receipts
+with the restart ledger. Actual execution status is in [qualification](qualification.md).
+
 ## TENT correspondence and limits
 
 The reference is the frozen TENT commit
@@ -140,13 +179,16 @@ separation; it is not a TENT wire/API interoperability or native restart oracle.
 
 The main fixture owns public requests, rendezvous and byte checks.
 `rdma_host/resources.rs` owns context selection, registration and drain;
-`rdma_host/restart.rs` owns the peer replacement sequence. No test-only route
+`rdma_host/restart.rs` owns the peer replacement sequence;
+`rdma_host/interruption.rs` owns public pending-batch and drain assertions;
+`rdma_host/gate.rs` owns the bounded test control relay. No test-only route
 bypasses the production handshake or native resource lifecycle. TCP carries
 test coordination; payload requests remain explicit RDMA.
 
-The installed gate covers healthy host traffic and the declared idle-resource
-process-restart profile. Outstanding-DMA death, lost completions, native
-teardown failures and poisoned-engine recovery still need installed-artifact
+The installed gate covers healthy host traffic, idle-resource process restart
+and posted-RQ interruption before payload authorization. Mid-payload death,
+lost SQ completions, native teardown failures and poisoned-engine recovery
+still need installed-artifact
 gates. Physical port/device faults, per-rail bandwidth/fairness and
 InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)

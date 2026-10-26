@@ -18,7 +18,7 @@ import installed
 
 def restart_plan(case):
     mode = case.get('mode')
-    if mode == 'installed-restart':
+    if mode in ('installed-restart', 'installed-interruption'):
         installed.validate(case)
         return case['fault_role'], case['generations']
     if mode in ('large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy'):
@@ -106,7 +106,7 @@ class Controller:
         names = ['running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
         names += ['maps-' + str(g) + '.txt' for g in range(3)]
         names += ['restart-' + kind + '-' + str(g) + '.txt'
-                  for kind in ('state', 'request', 'peer-state', 'peer') for g in range(3)]
+                  for kind in ('state', 'request', 'peer-state', 'peer', 'gate') for g in range(3)]
         script = "import json;from pathlib import Path;p=Path(" + repr(root) + ");print(json.dumps({n:(p/n).read_text() if (p/n).exists() else None for n in " + repr(names) + "}))"
         return json.loads(self.ssh(node, ['python3', '-c', script]))
 
@@ -127,7 +127,7 @@ class Controller:
             config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
-                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') == 'installed-restart')
+                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption'))
         local = self.output / (Path(root).name + '.json')
         local.write_text(json.dumps(config, indent=2) + '\n')
         self.ssh(node, ['mkdir', '-m', '700', '-p', root])
@@ -422,7 +422,7 @@ class Controller:
                 running = json.loads(evidence['source']['running.json'] or '{}')
                 ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
                          if line.startswith('ORBITTE_READY ')]
-                generation = (len(ready) - 1 if case.get('mode') == 'installed-restart'
+                generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption')
                               else running.get('generation'))
                 if (type(generation) is int and 0 < generation < restart[1]
                         and generation not in forwarded and len(ready) > generation):

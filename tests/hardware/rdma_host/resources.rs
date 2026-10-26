@@ -89,7 +89,9 @@ fn clean(engine: &TransferEngine) -> Result<()> {
     .iter()
     .any(|n| *n != 0)
         || rdma.opened_connections != rdma.closed_connections
-        || rdma.progress_failures != 0
+        || rdma.progress_failures != rdma.progress_recoveries
+        || (env::var("ORBITTE_HOST_MODE").as_deref() != Ok("installed-interruption")
+            && rdma.progress_failures != 0)
         || rdma.completion_errors != 0
     {
         return Err(format!("close retained resources: {stats:?}").into());
@@ -104,7 +106,12 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
         max_transfer_bytes: case.payload,
         max_inflight_bytes: case.parents * case.payload,
         handler_threads: case.parents + 2,
-        handler_timeout: TIMEOUT,
+        handler_timeout: if env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-interruption")
+        {
+            Duration::from_secs(8)
+        } else {
+            TIMEOUT
+        },
         rdma: Some(RdmaConfig {
             rdma_whitelist: case.rails.clone(),
             port: Some(1),

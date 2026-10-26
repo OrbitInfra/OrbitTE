@@ -13,6 +13,70 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Source [`c27029c`](https://github.com/OrbitInfra/OrbitTE/commit/c27029c37f9fcc918fab7378767a60ba475dbc06)
+adds an installed public-consumer gate for process exit with a posted source
+completion RQ. Production owners, public API, dependencies and wire v14 are
+unchanged. The fixture protocol advances to `orbitte-installed-host-v3`.
+Stable 1.99.1 and Rust 1.85.0 each produce a separately archived crate and
+installed release executable, including hashed fixture modules and lockfiles.
+Later documentation changes preserve those runtime, fixture and controller inputs.
+
+The two binaries pass **40 two-host/two-RNIC configurations**: **32 interrupted
+three-generation restart cases**, four healthy single-rail regressions and four
+idle-resource two-generation restart regressions. Interruption cases cross
+source/requester kill role, READ/WRITE, both directions and polling/events.
+Polling uses width 1 with eight parents; events use width 3 with sixteen parents.
+Each interrupted parent is one 1 MiB slice. Width and parent count are coupled
+to progress mode in this declared matrix, not additional Cartesian dimensions.
+
+Before each kill, a bounded test relay holds READY/GRANT after native MW bind
+and completion-RQ posting. The **768 pending parent requests** retain **768 real
+source RQ slots**, source MWs, both peers' DMA loans and requester public batches.
+Short waits time out, `free()` returns `BatchBusy`, and conflicting CPU writes
+are denied. Native payload counters stay unchanged; no failed request has yet
+received payload authorization. The relay rejects TCP payload and sliced
+opcodes; actual payload traffic uses the RNIC path directly.
+
+All **4,032 healthy parent transfers** pass full payload and guard checks.
+The supervisor reaps **148 children**, including **68 intentional SIGKILLs**.
+Survivors keep their PID, epoch, registration ID/address and four opened
+persistent MRs, drain temporary grants/MWs/RQ/batches, and regain CPU write
+access with every backing byte unchanged. Requester survivors report failed,
+locally drained public batches with zero bytes and `RemoteEffect::None`.
+Source survivors fully reclaim failed CQ lanes; replacements are created on
+demand at the next connection. Subsequent healthy rounds use all selected
+lanes without new progress failures. **100 stale submissions**, each paired
+with a stale metadata lookup, reject all previous authority generations before
+opening a QP or posting a WR. Final close releases every counted owner.
+
+Both compiler gates pass Clippy and **234 CPU/integration/doc tests** each;
+each packaged consumer also passes two CPU relay controls. Eighteen controller
+tests cover exact-child supervision, stale authority, pending native debt,
+conflicting ownership, unchanged bytes and balanced recovery counters.
+Two final pilot cases pass and are excluded from the formal counts. Earlier
+pilots exposed fixture assumptions that cumulative progress failures must stay
+zero and that reclaimed CQs are immediately recreated. The maintained runtime
+reclaims failed lanes and creates replacements on demand; the fixture now
+checks full recovery before reconnect and stable counters during healthy rounds.
+Those failed runs and their exact binaries remain archived.
+
+All artifacts remain outside Git at
+`/root/orbitte-artifacts/rdma-installed-interruption-20261026`.
+`native-audit.json` reconciles cases, byte ledgers, native RQ debt, child
+identities, provider mappings and locked RNIC identities. Postflight confirms
+unchanged nodes/providers, released locks and no GPU compute. See the
+[installed interruption contract](installed-host.md#interrupt-a-posted-completion-rq)
+and [TENT correspondence](installed-host.md#tent-correspondence-and-limits).
+
+This qualifies process death before payload authorization with real outstanding
+RQ debt. Mid-payload DMA interruption, missing SQ CQEs and native cleanup
+failure through installed consumers remain open, alongside physical link/device
+loss, InfiniBand, physical rail pressure/fairness and independent P4 acceptance.
+OrbitKV integration remains after acceptance. This is qualification of the
+existing P4 implementation, not a new implementation milestone or full TENT parity.
+
+## Previous installed peer-restart delivery
+
 Source [`0b6229c`](https://github.com/OrbitInfra/OrbitTE/commit/0b6229c0f72fe0bd32604043a6f3d8c11f194a6b)
 adds a public-API installed-consumer gate for repeated peer death with a
 surviving engine. Production owners, public API, dependencies and wire v14

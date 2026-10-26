@@ -256,9 +256,15 @@ The installed host fixture in `tests/hardware/rdma_host.rs` crosses these owners
 through the public engine API. `build_installed.py` builds it as a separate
 consumer of an extracted `.crate`. `rdma_host/resources.rs` owns registration
 and drain; `rdma_host/restart.rs` owns repeated peer death while the other
-engine stays live. `run.py`/`supervise.py` own exact-child supervision;
-`installed.py`/`installed_restart.py` independently validate the native result
-ledger. No production owner or transport layer is added.
+engine stays live. `rdma_host/interruption.rs` owns pending public batches and
+drain assertions; `rdma_host/gate.rs` owns the bounded test control relay that
+holds GRANT after source RQ posting and rejects TCP payload opcodes.
+`run.py`/`supervise.py` own exact-child supervision; `installed.py`,
+`installed_restart.py` and `installed_interruption.py` independently reconcile
+native resource, byte and process receipts. Failed lanes are reclaimed before
+replacement CQs are created on demand; subsequent healthy rounds must preserve
+all persistent MRs and have no new progress failures. No production owner or
+transport layer is added.
 
 Private tests remain under `tests/unit/`; moving methods preserves the existing
 transport and hardware test selectors. `BoundDone` can still be constructed

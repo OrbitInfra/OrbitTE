@@ -12,6 +12,10 @@ use orbit_te::{
     Transport,
 };
 
+#[path = "rdma_host/gate.rs"]
+mod gate;
+#[path = "rdma_host/interruption.rs"]
+mod interruption;
 #[path = "rdma_host/resources.rs"]
 mod resources;
 #[path = "rdma_host/restart.rs"]
@@ -23,7 +27,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 const GUARD: usize = 64;
 const ROUNDS: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(20);
-const PROTOCOL: &str = "orbitte-installed-host-v2";
+const PROTOCOL: &str = "orbitte-installed-host-v3";
 
 fn number(name: &str) -> Result<usize> {
     Ok(env::var(name)?.parse()?)
@@ -190,6 +194,7 @@ fn open_peer(
     engine: &TransferEngine,
     memory: &RegisteredMemory,
     stream: &mut TcpStream,
+    advertised: SocketAddr,
 ) -> Result<RemoteSegment> {
     let peer = exchange(
         stream,
@@ -197,7 +202,7 @@ fn open_peer(
             "{} {} {} {} {} {}",
             PROTOCOL,
             case.signature(),
-            engine.endpoint(),
+            advertised,
             engine.source_epoch(),
             memory.base_address(),
             memory.len()
@@ -235,6 +240,9 @@ fn rounds(
 ) -> Result<()> {
     let remote = segment.regions()[0].base_address();
     let baseline = idle(engine)?;
+    if baseline.progress_failures != baseline.progress_recoveries {
+        return Err("healthy rounds started before progress recovery".into());
+    }
     let mut last_reused = baseline.reused_connections;
     let mut last_completed = baseline.completed_reusable_grants;
     for round in 0..ROUNDS {
@@ -313,7 +321,10 @@ fn rounds(
             || stats.completed_reusable_grants <= last_completed
             || (round > 0 && stats.reused_connections <= last_reused)
             || stats.retained_grants != 0
-            || stats.progress_failures != 0
+            || stats.progress_failures != baseline.progress_failures
+            || stats.progress_recoveries != baseline.progress_recoveries
+            || stats.progress_lanes != case.mask.count_ones() as usize * case.lanes
+            || stats.active_cqs != 2 * stats.progress_lanes
             || stats.staging_bytes != 0
         {
             return Err(format!("persistent MR/QP contract failed: {stats:?}").into());
@@ -365,12 +376,12 @@ fn main() -> Result<()> {
     }
     let case = Case::load()?;
     match env::var("ORBITTE_HOST_MODE")?.as_str() {
-        "installed-restart" => restart::run(&case),
+        "installed-restart" | "installed-interruption" => restart::run(&case),
         "installed-host" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
             let mut stream = control(case.source, bind, None)?;
-            let peer = open_peer(&case, &engine, &memory, &mut stream)?;
+            let peer = open_peer(&case, &engine, &memory, &mut stream, engine.endpoint())?;
             rounds(&case, &engine, &memory, &peer, &mut stream, 0)?;
             maps()?;
             close(&engine, memory)?;

@@ -436,8 +436,11 @@ and remaining failure profiles through the installed consumer. The
 now passes 32 installed restart configurations across two compilers for idle
 cached QPs/MRs: one peer dies repeatedly while the other keeps its engine and
 registration. Eight healthy regressions also pass; the exact profiles are in
-[qualification](qualification.md). Outstanding-DMA death and native
-cleanup failure in that installed path remain separate gates. Existing QP ERR,
+[qualification](qualification.md). A further 40-case installed matrix includes 32
+posted-RQ interruption cases: source MWs/RQ and public requester batches remain
+live when either peer exits, then temporary owners drain while persistent MRs
+survive. Mid-payload death, lost SQ CQEs and native cleanup failure in that
+installed path remain separate gates. Existing QP ERR,
 lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
 remain scoped evidence. For every
 verbs operation, the source/requester proof must prevent stale rkeys, connections
@@ -1292,11 +1295,16 @@ passes 72 installed configurations on two compilers, with 12/16/32 parents
 and requests up to 9 MiB. A further 40-configuration installed matrix covers
 32 repeated-peer-restart cases with one live engine, plus eight healthy
 regressions. The kill point retains idle QPs/MRs with zero SQ/RQ debt.
-Next cover outstanding-DMA death, lost completions and native cleanup failures
-through installed consumers, alongside physical link/device loss and provider
-teardown. InfiniBand and independent acceptance still require their own gates.
-Freeze those remaining fault profiles before running them; idle-resource death
-does not establish physical DMA drain after an interrupted transfer. Link-bandwidth scheduling, new-device/GID migration and
+The posted-RQ interruption profile now passes another 40-case installed matrix:
+32 three-generation interrupted sequences and eight healthy/idle-restart
+regressions. It holds GRANT after native RQ posting and validates 768 pending
+parents, temporary-owner drain and persistent-MR reuse.
+Next cover mid-payload interruption, lost SQ completions and native cleanup
+failures through installed consumers, alongside physical link/device loss and
+provider teardown. InfiniBand and independent acceptance still require their
+own gates. Freeze those remaining fault profiles before running them;
+idle-resource death and pre-payload RQ interruption do not establish physical
+DMA drain after payload submission. Link-bandwidth scheduling, new-device/GID migration and
 general retry policy are not implied by selected-port recovery. Keep frozen
 TENT comparisons, native manifests and failed controls outside Git. The
 [architecture reading order](architecture.md#source-reading-order) identifies
