@@ -1077,3 +1077,65 @@ fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd
         }
     }
 }
+
+#[test]
+fn unattached_shared_claim_cannot_evict_or_fence_a_live_sibling() {
+    for attached in [false, true] {
+        let source = rdma_fixture("direct:copy");
+        let requester = rdma_fixture("direct:copy");
+        let local = requester
+            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 8].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+        let runtime = source_runtime(&requester);
+        let end = deadline(TIMEOUT).unwrap();
+        let mut active = if attached {
+            let cached = runtime
+                .claim(runtime.device().unwrap(), |peer| !peer.source, 1, end)
+                .unwrap()
+                .unwrap();
+            Some(
+                runtime
+                    .endpoint(&local, 0, 8, 0, end, Some(cached))
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let owner = runtime.context_set.lock().unwrap().slots[0]
+            .endpoints
+            .snapshot()
+            .unwrap()
+            .remove(0);
+        let (lane, record, peer) = owner.candidates(&|_| true).unwrap().remove(0);
+        let placeholder = lane.share(&record, peer, end).unwrap();
+        assert_eq!(runtime.stats().unwrap().idle_endpoints, 0);
+        assert!(
+            !lane.evict_idle(end).unwrap(),
+            "a shared active claim makes the physical QP busy"
+        );
+        drop(placeholder);
+        let stats = runtime.stats().unwrap();
+        assert_eq!(
+            (
+                stats.active_endpoints,
+                stats.closed_connections,
+                stats.idle_endpoints
+            ),
+            (1, 0, usize::from(!attached))
+        );
+        assert!(record.connection.require_live().is_ok());
+        if let Some(grant) = &mut active {
+            grant.close().unwrap();
+        }
+        drop(active);
+        requester.close(TIMEOUT).unwrap();
+        source.close(TIMEOUT).unwrap();
+    }
+}

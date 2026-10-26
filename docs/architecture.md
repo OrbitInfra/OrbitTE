@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v12 messages; moving them into their own module does not make this
+OrbitTE v13 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -40,7 +40,7 @@ protocol compatible with TENT's native RPC or metadata.
 | `CqLane` | SQ/RQ CQ pair, registered grant records, submission, drain and recovery | Per-context CQs consumed by workers |
 | `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
 | `Monitor` | One transport thread consuming context and CQ events | Event-consumption portion of `Workers::monitorThread` |
-| `DeviceSelector`, `CqQuota`, `ReceiveCredits` | NIC byte load, aggregate SQ/RQ wakes and whole-parent receive admission | Device selection and bounded slice admission; OrbitTE's receive-credit protocol is additional |
+| `DeviceSelector`, `CqQuota`, `GrantCredits`, `ReceiveCredits` | NIC byte load, aggregate SQ/RQ wakes and whole-parent grant/receive admission | Device selection and bounded slice admission; OrbitTE's receive-credit protocol is additional |
 
 Each context slot owns its PD/context, CQ lanes and peer endpoint registry.
 `RdmaQp` serializes one physical connection; each CQ-lane `Record` owns one
@@ -77,9 +77,11 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v12 handshake still claims a QP exclusively.
-Its all-slices-first preparation and fixed-width construction remain in the
-first P4 exit item; the internal concurrent path does not activate that protocol.
+QP creation lock. The public v13 handshake can attach independent grants to a
+connected QP. The observed previous grant is a lower bound, while both process
+and connection identities still match exactly. Endpoint observations only move
+forward when concurrent handshakes arrive out of order. Fixed-width cold QP
+construction remains in the first P4 exit item.
 
 ## QP receive ownership
 
@@ -97,8 +99,10 @@ stale or mismatched messages cannot complete another receipt. Ambiguous posts
 retain buffer/MR/credit ownership; cancellation requires QP/CQ destruction.
 Failed message-MR cleanup retains the actual queue along with its connection.
 
-Native SQ and RQ depths are both provisioned from `max_send_wr`; each queue
-has a separate aggregate CQ budget. TENT likewise owns WRs at the physical
+Native SQ depth uses `max_send_wr`; RQ depth uses `max_cqes` so an entire
+parent can prepare receives even when its grants exceed the physical SQ width.
+Each queue has a separate aggregate CQ budget. Receive credits remain charged
+until the consumed buffer's MR is reaped, including native cleanup failure. TENT likewise owns WRs at the physical
 endpoint/QP and dispatches CQEs to work identities. This full-binding source
 receipt protocol is an OrbitTE authority extension, not TENT wire parity.
 The lane locates the physical RQ by slot identity, releases its lock, then
@@ -111,8 +115,8 @@ affiliated record and drains the connection once; unresolved work still requires
 all QPs and both CQs to close. Retention counts each physical QP/SQ/RQ once and
 each grant/loan separately. A stale claim or replaced idle record has no authority
 to retire a sibling or later grant. The native shared-QP fixture exercises these
-owners directly; public v12 multiplexing and fixed-width peer activation remain
-open. See [qualification](qualification.md) for the exact tested scope.
+owners directly. The public handshake now uses the same owners; fixed-width
+cold peer construction remains open. See [qualification](qualification.md) for the exact tested scope.
 
 ## Follow one transfer
 
@@ -123,8 +127,11 @@ open. See [qualification](qualification.md) for the exact tested scope.
 2. **Plan.** The transport partitions large parents with TENT's bounded,
    short-tail-folding geometry. Static `path` metadata checks compatible peers;
    `DeviceSelector` applies device masks, topology ranks and byte charges.
-3. **Authorize.** The source reserves all receive credits for the parent before
-   creating grants. Rendezvous verifies both process/connection identities,
+3. **Authorize.** Both peers reserve the whole parent's `max_grants` budget;
+   the source also reserves all RQ credits before exposing the first grant.
+   Each grant owns a reservation slot; the parent's reservation survives until
+   all its actual children drain. Failed source RQ admission rolls back its
+   grant reservation before any QP or authority is created. Rendezvous verifies both process/connection identities,
    source NIC/PD and grant generation. A fresh one-use MW authorizes only the
    requested range. All slices are prepared before payload submission.
 4. **Progress.** `num_lanes` sets both transport worker count and each context's
@@ -137,7 +144,9 @@ open. See [qualification](qualification.md) for the exact tested scope.
    Staged output is copied only after the required proof. Ambiguous WRITEs
    are not replayed automatically.
 
-All contexts share aggregate byte, QP and SQ/RQ limits. Quota return wakes
+All contexts share aggregate byte, physical QP, grant and SQ/RQ limits. A QP
+is idle and evictable only when every affiliated grant is finished. Cancelling
+an unattached claim discards that record without fencing an active sibling. Quota return wakes
 waiting lanes even when they have no local CQE to wake them. Completely drained
 faulted lanes can be replaced while the PD, persistent MRs and worker pool stay
 alive. Workers bind before admission to NUMA CPU sets intersected with the

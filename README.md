@@ -32,7 +32,7 @@ connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
 unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
-The host RDMA stage still needs fixed-width concurrent QP multiplexing,
+The host RDMA stage still needs fixed-width cold QP construction,
 periodic monitor recovery and complete physical-fault/independent acceptance.
 GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
 compatibility are later-stage work. See the
@@ -62,9 +62,9 @@ checkout for the implementation described here.
   and completion messages; grant work handles cannot release unresolved debt.
   QP-owned receive buffers dispatch by exact binding/key, independently of
   which grant supplied the buffer. Independent runtime grant records share a
-  physical QP; public concurrent handshake admission remains in progress.
-  Source admission reserves every slice's receive credit together before
-  granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
+  physical QP through the public v13 handshake. `max_endpoints` bounds physical
+  QPs; `max_grants` independently bounds parent grant reservations. The source
+  reserves every slice's grant and receive credit before granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
 - **Explicit drain.** Timeouts and logical failures do not release memory still
   owned by native work. Failed cleanup retains its resources and charges.
   Completely drained progress owners can be replaced for later requests while

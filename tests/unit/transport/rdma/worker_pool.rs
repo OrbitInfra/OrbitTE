@@ -142,44 +142,67 @@ fn endpoint_arrays(runtime: &RdmaTransport, expected: usize) {
     let mut seen = std::collections::BTreeSet::new();
     let mut active = 0;
     for (context, slot) in contexts.slots.iter().enumerate() {
+        let mut records = Vec::new();
+        for progress in slot.cq_list.iter().flatten() {
+            progress
+                .shared
+                .control
+                .lock()
+                .unwrap()
+                .qps
+                .snapshot(&mut records);
+        }
         for endpoint in slot.endpoints.native_endpoints() {
             let mut counts = vec![0; count()];
             let mut busy = 0;
+            let mut max_grants = 0;
             for (record, lane, peer) in endpoint.native_qps() {
                 assert!(
-                    seen.insert(Arc::as_ptr(&record) as usize),
+                    seen.insert(Arc::as_ptr(&record.connection) as usize),
                     "one physical QP belongs to two peer endpoints"
                 );
-                let state = record.lock().unwrap();
-                let Some(resources) = &state.resources else {
-                    assert!(state.phase == Phase::Closed);
-                    continue;
-                };
-                if resources.connection.lock().unwrap().closed {
+                let connection = record.connection.lock().unwrap();
+                if connection.closed {
                     continue;
                 }
+                assert_eq!(connection.incarnation, Some(peer.local));
                 assert_eq!(
-                    resources.connection.lock().unwrap().incarnation,
-                    Some(peer.local)
-                );
-                assert_eq!(
-                    crate::transport::rdma::tests::cq_lane_owner(
-                        resources.connection.lock().unwrap().handles.cq as usize
-                    ),
+                    crate::transport::rdma::tests::cq_lane_owner(connection.handles.cq as usize),
                     lane
                 );
+                drop(connection);
                 counts[lane] += 1;
-                if resources.grant.is_some() {
-                    busy += 1;
-                }
+                let grants = records
+                    .iter()
+                    .filter(|entry| Arc::ptr_eq(&entry.connection, &record.connection))
+                    .filter(|entry| {
+                        entry
+                            .lock()
+                            .unwrap()
+                            .resources
+                            .as_ref()
+                            .is_some_and(|resources| resources.grant.is_some())
+                    })
+                    .count();
+                busy += grants;
+                max_grants = max_grants.max(grants);
             }
             active += busy;
             println!(
-                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"lanes\":{counts:?}}}",
+                "ORBITTE_ENDPOINT_ARRAY {{\"context\":{context},\"endpoint\":{},\"qps\":{},\"active\":{busy},\"max_grants_per_qp\":{max_grants},\"lanes\":{counts:?}}}",
                 Arc::as_ptr(&endpoint) as usize,
                 counts.iter().sum::<usize>()
             );
         }
+        assert!(records.iter().all(|record| {
+            record
+                .lock()
+                .unwrap()
+                .resources
+                .as_ref()
+                .is_none_or(|r| r.grant.is_none())
+                || seen.contains(&(Arc::as_ptr(&record.connection) as usize))
+        }));
     }
     assert_eq!(
         active, expected,

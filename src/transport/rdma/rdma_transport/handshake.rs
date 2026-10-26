@@ -9,7 +9,7 @@ use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request, u
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, RdmaHostMemory,
     endpoint::Peer,
-    grant::{Buffer, GrantLease, GrantResources, RdmaGrant, Staging},
+    grant::{Buffer, GrantLease, GrantResources, RdmaGrant, Staging, admission::GrantCredits},
     path::NicPath,
     protocol::{
         ACCEPT, ACK, BINDING_SIZE, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE,
@@ -25,7 +25,7 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 impl RdmaTransport {
     pub(in crate::transport::rdma) fn prepare_grant(
         &self,
-        selection: DeviceLease,
+        grant_lease: GrantLease,
         memory: &RegisteredMemory,
         range: std::ops::Range<usize>,
         permission: u32,
@@ -35,7 +35,7 @@ impl RdmaTransport {
         remaining(deadline)?;
         let offset = range.start;
         let length = range.end.checked_sub(offset).ok_or(Error::InvalidRange)?;
-        if length != selection.length() {
+        if length != grant_lease.length {
             return Err(Error::Internal("RDMA selection length mismatch"));
         }
         if length == 0 || length > u32::MAX as usize {
@@ -53,48 +53,9 @@ impl RdmaTransport {
                 "RDMA reuse requires host Direct on both peers",
             ));
         }
-        let grant_lease = {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-            let (charged, limit) = if is_direct {
-                (usage.direct_bytes, self.config.max_direct_bytes)
-            } else {
-                (usage.staging_bytes, self.config.max_staging_bytes)
-            };
-            let bytes = charged
-                .checked_add(length)
-                .ok_or(Error::ResourceExhausted)?;
-            if usage.retained_endpoints != 0
-                || usage.retained_grants != 0
-                || usage.retained_devices != 0
-                || usage.retained_cqs != 0
-                || usage.retained_completion_channels != 0
-                || usage.retained_persistent_mrs != 0
-                || usage.progress_failures != usage.progress_recoveries
-            {
-                return Err(Error::Unavailable(
-                    "RDMA admission is poisoned by retained native resources",
-                ));
-            }
-            if bytes > limit {
-                return Err(Error::ResourceExhausted);
-            }
-            usage.active_grants += 1;
-            if is_direct {
-                usage.direct_bytes = bytes;
-            } else {
-                usage.staging_bytes = bytes;
-            }
-            GrantLease {
-                usage: Arc::clone(&self.usage),
-                length,
-                is_direct,
-                drained: Arc::clone(&self.drained),
-                _selection: selection,
-            }
-        };
+        if is_direct != grant_lease.is_direct {
+            return Err(Error::Internal("RDMA grant memory admission mismatch"));
+        }
         let buffer = match direct {
             Some(loan) => Buffer::Direct {
                 address: loan.address(),
@@ -194,7 +155,8 @@ impl RdmaTransport {
             let record = progress.register(Box::new(Resources {
                 connection: super::super::qp::RdmaQp::new(ConnectionResources {
                     receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
-                        self.config.max_send_wr,
+                        self.config.max_cqes,
+                        self.config.max_grants,
                         Arc::clone(&self.usage),
                     )?,
                     device,
@@ -243,7 +205,61 @@ impl RdmaTransport {
         Ok(endpoint)
     }
 
-    fn host_direct(&self, memory: &RegisteredMemory) -> bool {
+    pub(in crate::transport::rdma) fn reserve_grant(
+        &self,
+        selection: DeviceLease,
+        memory: &RegisteredMemory,
+        credits: &Arc<GrantCredits>,
+    ) -> Result<GrantLease> {
+        let length = selection.length();
+        let is_direct = self.host_direct(memory);
+        {
+            let mut usage = self
+                .usage
+                .lock()
+                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+            let (charged, limit) = if is_direct {
+                (usage.direct_bytes, self.config.max_direct_bytes)
+            } else {
+                (usage.staging_bytes, self.config.max_staging_bytes)
+            };
+            let bytes = charged
+                .checked_add(length)
+                .ok_or(Error::ResourceExhausted)?;
+            if usage.retained_endpoints != 0
+                || usage.retained_grants != 0
+                || usage.retained_devices != 0
+                || usage.retained_cqs != 0
+                || usage.retained_completion_channels != 0
+                || usage.retained_persistent_mrs != 0
+                || usage.progress_failures != usage.progress_recoveries
+            {
+                return Err(Error::Unavailable(
+                    "RDMA admission is poisoned by retained native resources",
+                ));
+            }
+            if bytes > limit || usage.active_grants >= self.config.max_grants {
+                return Err(Error::ResourceExhausted);
+            }
+            let credit = credits.take()?;
+            usage.active_grants += 1;
+            if is_direct {
+                usage.direct_bytes = bytes;
+            } else {
+                usage.staging_bytes = bytes;
+            }
+            Ok(GrantLease {
+                _credit: credit,
+                usage: Arc::clone(&self.usage),
+                length,
+                is_direct,
+                drained: Arc::clone(&self.drained),
+                _selection: selection,
+            })
+        }
+    }
+
+    pub(super) fn host_direct(&self, memory: &RegisteredMemory) -> bool {
         self.config.host_memory == RdmaHostMemory::Direct && !memory.is_cuda()
     }
 
@@ -252,7 +268,7 @@ impl RdmaTransport {
         channel: &ControlChannel<'_>,
         wire: &Request,
         request: &PreparedTransfer,
-        selection: DeviceLease,
+        grant_lease: GrantLease,
         remote_path: &NicPath,
         reuse_pair: bool,
     ) -> Result<RdmaGrant> {
@@ -263,7 +279,7 @@ impl RdmaTransport {
             TransferOp::Write
         };
         let direct = self.host_direct(&request.local);
-        let device = self.device_at(selection.device_id())?;
+        let device = self.device_at(grant_lease._selection.device_id())?;
         device.check_address()?;
         let mut reuse = if direct && reuse_pair {
             self.claim(
@@ -275,6 +291,7 @@ impl RdmaTransport {
                         && peer.operation == operation
                         && peer.source_nic_id == remote_path.nic_id
                 },
+                self.config.num_lanes,
                 channel.deadline,
             )?
         } else {
@@ -293,7 +310,7 @@ impl RdmaTransport {
             ));
         }
         let endpoint = self.prepare_grant(
-            selection,
+            grant_lease,
             &request.local,
             request.local_offset..request.local_offset + request.length,
             0,
@@ -459,7 +476,7 @@ impl RdmaTransport {
         memory: &RegisteredMemory,
         paths: &[NicPath],
         expected: Option<[u8; 16]>,
-        credits: &mut crate::transport::rdma::receive::ReceiveCredits,
+        admission: &mut super::ParentAdmission,
     ) -> Result<Option<RdmaSlice>> {
         let epoch = request.epoch;
         let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
@@ -486,6 +503,7 @@ impl RdmaTransport {
         }
         let selection = self.allocate(length, mask)?;
         let source_nic_id = selection.device_id();
+        let grant_lease = self.reserve_grant(selection, memory, &admission.grants)?;
         let device = self.device_at(source_nic_id)?;
         device.check_address()?;
         let reuse = if let Some(source) = hello.source {
@@ -501,8 +519,9 @@ impl RdmaTransport {
                         && peer.epoch == hello.requester.epoch
                         && peer.connection == hello.requester.connection
                         && peer.operation == operation
-                        && peer.generation == hello.previous_grant
+                        && peer.generation >= hello.previous_grant
                 },
+                1,
                 channel.deadline,
             )?;
             if reuse.is_none() {
@@ -514,7 +533,7 @@ impl RdmaTransport {
             None
         };
         let mut endpoint = self.prepare_grant(
-            selection,
+            grant_lease,
             memory,
             offset..offset + length,
             if writing { 2 } else { 1 },
@@ -547,7 +566,7 @@ impl RdmaTransport {
             let remote = Descriptor::decode_connection(&bytes)?;
             endpoint.connect(&remote)?;
             endpoint.bind_window()?;
-            endpoint.post_receive(&binding.0, credits.take()?)?;
+            endpoint.post_receive(&binding.0, admission.receive.take()?)?;
             channel.reply(epoch, 9, 0)?;
             binding.write(channel, GRANT)?;
             channel.write_all(&endpoint.grant()?.encode())?;

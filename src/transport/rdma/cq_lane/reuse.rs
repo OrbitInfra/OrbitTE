@@ -1,4 +1,4 @@
-//! Grant-drain barriers and exclusive claims on cached physical QPs.
+//! Grant-drain barriers, completed-record reuse and live physical-QP sharing.
 
 use super::*;
 
@@ -162,7 +162,7 @@ impl CqLane {
                 return Err(Error::Unavailable("RDMA claims are fenced"));
             }
             let claimed = control.qps.claim(matches);
-            if claimed.is_some() {
+            if claimed.as_ref().is_some_and(|(_, _, was_idle)| *was_idle) {
                 self.shared
                     .usage
                     .lock()
@@ -171,7 +171,7 @@ impl CqLane {
             }
             claimed
         };
-        let Some((record, peer)) = claimed else {
+        let Some((record, peer, _)) = claimed else {
             return Ok(None);
         };
         let (local, incarnation, claim) = {
@@ -226,6 +226,48 @@ impl CqLane {
             cached_peer: Some(peer),
             endpoint: None,
         }))
+    }
+
+    pub(in crate::transport::rdma) fn share(
+        self: &Arc<Self>,
+        record: &Arc<Record>,
+        peer: Peer,
+        deadline: Instant,
+    ) -> Result<RdmaGrant> {
+        remaining(deadline)?;
+        let (local, incarnation) = {
+            let connection = record.connection.lock()?;
+            record.connection.require_live()?;
+            if connection.closed
+                || connection.incarnation != Some(peer.local)
+                || connection.remote.is_none()
+            {
+                return Err(Error::Unavailable("RDMA shared connection is not ready"));
+            }
+            (connection.local, connection.incarnation)
+        };
+        let record = self.register(Box::new(Resources {
+            connection: Arc::clone(&record.connection),
+            grant: None,
+        }))?;
+        self.shared
+            .usage
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .reused_connections += 1;
+        Ok(RdmaGrant {
+            record,
+            progress: Arc::clone(self),
+            local,
+            incarnation,
+            config: self.shared.config.clone(),
+            deadline,
+            output: None,
+            claim: 1,
+            released: false,
+            cached_peer: Some(peer),
+            endpoint: None,
+        })
     }
 
     pub(in crate::transport::rdma) fn cache(

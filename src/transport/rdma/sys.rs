@@ -210,6 +210,7 @@ pub(super) struct Verbs {
         u32,
         u32,
         u32,
+        u32,
         *mut Descriptor,
     ) -> c_int,
     pub connect: unsafe extern "C" fn(

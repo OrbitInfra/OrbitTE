@@ -130,7 +130,7 @@ impl CqLane {
         }
         grant.message = Some(MessageBuffer::new(
             Arc::clone(&self.shared.usage),
-            self.shared.config.max_endpoints,
+            self.shared.config.max_grants + self.shared.config.max_cqes,
         )?);
         let message = grant
             .message
@@ -186,7 +186,7 @@ impl CqLane {
                 Arc::clone(&receive),
                 credits,
                 &device,
-                self.shared.config.max_endpoints,
+                self.shared.config.max_grants + self.shared.config.max_cqes,
             )?;
             drop(connection);
             request.receive = Some(receive);

@@ -88,7 +88,7 @@ grants reuse a separate MW-bind parent for the full view and bind only the exact
 requested range. The source cache has scoped independent source/CPU/native acceptance. Set it to `Staged`
 for private host copies. `max_direct_bytes` and `max_staging_bytes` separately
 bound each engine's charged native bytes (64 MiB each by default); both share
-`max_endpoints`. A failed host MR registration is an error, never a staging
+the physical `max_endpoints` and independent `max_grants` limits. A failed host MR registration is an error, never a staging
 fallback. This policy selects host backing only: `CudaMemory` is explicitly
 staged in either mode, because direct GPU MR/GDR is not implemented. An
 Ethernet GID must be nonzero; select a routable GID/type from the real device.
@@ -129,8 +129,9 @@ and RQ CQs, polled by one post/poll worker. Each grant owns an exact direct rang
 lease or stable staging and its one-use source MW. P4.7e parent MRs outlive
 grants. P4.7f retains the real connected QP/PSN/incarnation when both peers
 negotiate host Direct and finish the complete operation-drain protocol below.
-The first profile fixes role and READ/WRITE capability, with one active grant
-per QP. Staged or device-backed peers still use per-request QPs and both
+The original profile fixed role and READ/WRITE capability with one active
+grant per QP; the current v13 path keeps those fixed capabilities while
+sharing connected QPs across independent concurrent grants. Staged or device-backed peers still use per-request QPs and both
 physical close barriers. Parent MRs have LOCAL_WRITE|MW_BIND only; requester
 MRs have LOCAL_WRITE only. Neither parent key is exported. The shared PD is
 not a source-grant authorization boundary. Port state, MTU, LID and selected GID
@@ -211,7 +212,7 @@ checked before bootstrap. With staging, READ snapshots source bytes and WRITE
 preloads requester staging. With direct host MRs, the RNIC accesses the actual
 leased application range without those copies. Either peer can independently
 select host direct or staging. Device pointers always use declared staging.
-Protocol v12 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
+Protocol v13 retains the bounded NIC/PD path table; rendezvous then precedes the QP-only descriptors with zero memory address/key, plus
 identities owned by each process, actual PD and connection. Every phase binds
 the exact request, both identities and an independent source grant generation.
 Both RC QPs connect; the source posts BIND_MW and consumes its exact successful
@@ -244,21 +245,22 @@ P4.4 follows frozen TENT `slice.h::planRdmaSlices`,
 for host-local READ or 32 for WRITE/device-local READ; CUDA-pinned host memory
 counts as host. A final tail shorter than one quarter of the chosen block folds
 into the preceding slice. The entire requested range remains leased even after
-a window's CQEs have arrived. Each request keeps an exclusive QP window within
-the shared CQ.
+a window's CQEs have arrived. Each request borrows its physical QP's send
+capacity and the shared CQ budget.
 
-`max_send_wr` defaults to 16 and accepts 1..64 per QP. It provisions both
-native SQ and RQ depths; the physical receive owner also bounds its slots and
-receipt table to this width. SQ and RQ keep separate outstanding-WR accounts.
+`max_send_wr` defaults to 16 and accepts 1..64 per QP. It provisions native
+SQ depth shared by all grants on that QP. RQ depth uses `max_cqes`; receipt
+capacity uses `max_grants`. SQ and RQ keep separate outstanding-WR accounts.
 Receive-buffer identity and grant receipt identity are separated as described
-in [QP receive ownership](architecture.md#qp-receive-ownership). Public wire
-grants remain exclusive while handshake admission and fixed-width construction
-+are being connected. Runtime records already share one `RdmaQp`;
-+`cq_lane/completion.rs` resolves CQEs to their exact grant owners.
+in [QP receive ownership](architecture.md#qp-receive-ownership). Public v13
+handshakes share a physical `RdmaQp` across independent grant records;
+`cq_lane/completion.rs` resolves CQEs to their exact owners. Fixed-width cold
+construction remains open.
 `max_cqes` defaults to
 1024 and accepts 1..4096 separately for each shared SQ and RQ CQ across all
 attached request QPs; `max_endpoints` accepts
-1..4096. The provider must return the requested CQ and QP capacities. The worker
+1..4096, independently of `max_grants` (default 64, range 1..4096). The
+provider must return the requested CQ and QP capacities. The worker
 reserves the minimum of remaining slices, QP window and currently free CQ
 slots before dispatch. A full CQ backpressures other requests without losing
 owners; completing one window allows the next. Round-robin dispatch avoids a
@@ -301,7 +303,7 @@ batch completion/bytes still require the whole request and final source receipt;
 physical CQ progress alone cannot publish or roll back application data.
 Running cancellation remains logical and does not interrupt accepted windows.
 
-Wire v12 explicitly rejects v1-v11; it is OrbitTE-only. A WRITE attempt is marked
+Wire v13 explicitly rejects v1-v12; it is OrbitTE-only. A WRITE attempt is marked
 `RemoteEffect::Unknown` before posting regardless of requester memory policy:
 the peer may expose direct host memory. DONE/ACK are completion receipts, not
 an atomic commit boundary for direct transfers. Failed direct WRITE may have
@@ -1027,11 +1029,12 @@ OrbitTE grant receipt or wire format.
 `GrantResources` owns the SEND `MessageBuffer`; the QP receive queue owns RQ
 buffers and their local-only MRs. No Rust slice accesses posted receive memory
 before its validated CQE. Requester SEND bytes cannot alias a mutable READ
-destination. Current v12 control storage has a `max_endpoints * 141` byte limit,
-separate from payload staging/direct quotas; allocation charges precede native
+destination. Current v13 control storage is bounded by
+`(max_grants + max_cqes) * 141` bytes across SEND and RQ messages, separately
+from payload staging/direct quotas; allocation charges precede native
 registration. Partial registration and uncertain WR posts retain that actual
 owner. Completed buffers are reaped before payload output handoff in the
-exclusive public path. Queue-owned buffers that still await a CQE or native
+public path. Queue-owned buffers that still await a CQE or native
 drain survive a different grant's completion; prepared slots survive reaping.
 See [the current RQ contract](architecture.md#qp-receive-ownership).
 
@@ -1473,10 +1476,11 @@ OFFERs must keep the old source identity/routing and increase the grant number.
 Every ACCEPT/GRANT/DONE/ACK/READY and native completion message binds Request52,
 source Identity40, requester Identity40, grant8 and profile1: 141 bytes, plus
 one phase byte on control frames. ACCEPT/GRANT additionally carry Descriptor40.
-The source must match both cached identities, role, operation and previous
-grant before creating authority. QP addresses/keys in bootstrap remain zero.
+The source must match both cached identities, role and operation, and its
+latest observed grant must be at least the requester's lower bound before
+creating authority. QP addresses/keys in bootstrap remain zero.
 
-An unavailable/busy/stale source pair returns explicit status `12` before any
+An unavailable or stale source pair returns explicit status `12` before any
 BIND, GRANT or data. Only this response permits one fresh-pair retry after
 physical retirement of the stale requester half, under the original deadline,
 process epoch and PD domain. EOF, malformed or missing ACK/READY, native faults,
@@ -1495,7 +1499,7 @@ retire under their existing deadlines. Directional close stays independent.
 
 `opened_connections` and `closed_connections` count actual native QPs,
 `idle_endpoints` remains part of `active_endpoints`, `reused_connections` counts
-successful idle claims and `completed_reusable_grants` counts sealed native
+successful idle claims or active shared attachments; `completed_reusable_grants` counts sealed native
 grant cleanup. Claim/creation failures do not return physical quota early.
 
 ### Verification and remaining scope
@@ -2607,7 +2611,7 @@ Reproduce with the source/build commands above and `tests/hardware/run.py`,
 using an explicitly authorized external `combined-profile.json`, the frozen
 binary and a fresh output directory. The existing `orbitte-multirail` runner
 uses the same exact ignored native selector; new modes are `concurrent-quota`,
-`concurrent-endpoints`, `concurrent-close` and `concurrent-cq-error`, all with
+`concurrent-grants` (formerly `concurrent-endpoints`), `concurrent-close` and `concurrent-cq-error`, all with
 mask 3. The supervisor retains both NIC locks until actual child reaping.
 
 Raw profiles, archives, binaries, provider maps, source gates, failed exploratory
@@ -3515,16 +3519,14 @@ both connection identities, operation and previous grant generation. A reused
 QP cannot move to another endpoint, PD or CQ lane. Lookup detachment does not
 erase an unfinished or retained QP; only Closed records leave the array.
 
-The current Rust wire protocol prepares all exclusive slice grants before
-payload admission. Arrays therefore grow on demand under `max_endpoints`,
-which still counts physical QPs. They are **not yet TENT's fixed-width QP pool**:
-QP-owned SQ debt and RQ buffers/receipt dispatch are now implemented, but
-runtime records and multi-namespace CQ lookup now share one physical `RdmaQp`.
-Public handshake multiplexing and whole-parent/RQ admission remain open.
-Capping this array at `num_lanes` before completing concurrent admission
-could deadlock an admitted parent. This remaining multiplexing
-contract stays explicit in the completion plan. Read/write capabilities stay
-per physical QP; a peer array may own both kinds.
+The current v13 protocol prepares independent slice grants before payload
+admission. Connected arrays serve concurrent grants while `max_endpoints`
+counts only physical QPs. Whole-parent reservations use `max_grants` and the
+source RQ budget separately. They are **not yet TENT's fixed-width QP pool**:
+concurrent cold handshakes can still grow beyond the peer's `num_lanes` target.
+Construction reservations and bilateral bootstrap arbitration remain in the
+completion plan. Read/write capabilities stay per physical QP; a peer array
+may own both kinds.
 
 NUMA discovery intersects sysfs node cpulists with the creator's actual
 `sched_getaffinity` mask. Empty nodes are excluded and sparse node IDs preserved.
@@ -3576,3 +3578,51 @@ route-bandwidth refresh are not established by event-thread consolidation.
 Native provider calls remain non-preemptible. Independent P4 acceptance,
 fixed-width concurrent QP multiplexing and physical device recovery remain open;
 this substage makes no performance or native wire interoperability claim.
+
+
+## Public concurrent QP grants
+
+Wire v13 lets the public RDMA handshake attach a fresh grant record to a live
+physical QP. Both process/connection identities, remote PD, role and operation
+still match exactly. `Hello.previous_grant` is the requester's observed lower
+bound; a source may already know a later grant due to another concurrent
+request. A fresh offer must exceed that lower bound. Per-QP observations take
+the maximum generation, while ACCEPT/GRANT/DONE/ACK/READY and native completion
+still validate the exact 141-byte grant binding. v12 peers are rejected.
+
+`max_endpoints` bounds aggregate physical QPs; `max_grants` (default 64,
+range 1–4096) bounds whole-parent grant reservations. A parent obtains all its
+slots before publishing any authority. A slot follows the actual `GrantLease`,
+and the parent reservation lasts until every child is released, including
+retained native owners. Source admission also obtains the entire RQ budget;
+failure rolls back the grant reservation without creating QPs or MWs. Retries
+after an explicit cache miss reuse the parent's reserved slot.
+
+SQ depth remains `max_send_wr`; native RQ depth and buffer admission use
+`max_cqes`. Logical receipt capacity uses `max_grants`. Thus forty grants may
+prepare through two physical QPs with two SQ entries each. CQEs repay native
+RQ debt, while RQ admission stays charged until the actual message MR is
+reaped. A failed deregistration cannot fund a new buffer. SEND plus RQ message
+storage is bounded separately from payload and persistent-MR bytes.
+
+A completed record is reusable while siblings are active, but the physical
+QP becomes idle/evictable only after every affiliated record finishes. An
+unattached shared claim has no DMA authority and can be discarded without
+fencing its siblings. Native QP failure still fences and drains all affiliated
+records; exact grant receipts permit independent successful cleanup.
+
+Frozen TENT `RdmaEndPoint::qp_list_`, `wr_depth_list_`, `slice_queue_` and
+`submitSlices` provide the resource boundary: a persistent endpoint/QP owns
+queues while many slices borrow capacity. `Workers::asyncPollCq` associates
+completions with work owners. OrbitTE uses checked WR namespaces, exact-range
+MWs and source receipts to express those lifetimes in Rust. Its grant/RQ
+handshake is an explicit extension; this is not native TENT wire compatibility.
+
+Native concurrent fixtures now reconcile actual QP handles separately from
+grant counts, test whole-parent rejection, and match unresolved WRs to the
+grant namespace before CQ destruction. The `concurrent-grants` mode tests the
+independent grant budget; old `concurrent-endpoints` result sets remain
+historical evidence. The existing large/folded/RQ and failure profiles use the
+public protocol. See [qualification](qualification.md) for exact artifacts.
+Fixed-width cold construction, periodic recovery and final P4 acceptance remain
+open; the data path still selects host staging for NVIDIA device pointers.

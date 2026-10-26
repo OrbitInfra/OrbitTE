@@ -50,6 +50,20 @@ fn peer_qp_arrays_keep_lane_owners_and_retire_only_after_native_drain() {
     wrong = peers[0];
     wrong.connection.generation += 100;
     assert!(endpoint.adopt(&grants[0], wrong).is_err());
+    let mut newer = peers[0];
+    newer.generation = 7;
+    endpoint.adopt(&grants[0], newer).unwrap();
+    newer.generation = 3;
+    endpoint.adopt(&grants[0], newer).unwrap();
+    assert_eq!(
+        endpoint
+            .candidates(&|peer| peer.local == peers[0].local)
+            .unwrap()[0]
+            .2
+            .generation,
+        7,
+        "out-of-order grants cannot roll back the connection's observed lower bound"
+    );
     // Lookup detachment alone cannot erase a physical QP owner.
     grants[0]
         .record

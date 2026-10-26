@@ -133,7 +133,8 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
     let resources = Box::new(Resources {
         connection: super::super::qp::RdmaQp::new(ConnectionResources {
             receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
-                runtime.config.max_send_wr,
+                runtime.config.max_cqes,
+                runtime.config.max_grants,
                 Arc::clone(&runtime.usage),
             )
             .unwrap(),
@@ -165,6 +166,14 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
             cached_mr: None,
             buffer: Buffer::Staged(Staging::new(8).unwrap()),
             _lease: GrantLease {
+                _credit: super::super::grant::admission::GrantCredits::acquire(
+                    Arc::clone(&runtime.usage),
+                    runtime.config.max_grants,
+                    1,
+                )
+                .unwrap()
+                .take()
+                .unwrap(),
                 _selection: runtime.allocate(8, u64::MAX).unwrap(),
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),

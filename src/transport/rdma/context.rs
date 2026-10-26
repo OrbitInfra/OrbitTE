@@ -351,6 +351,7 @@ impl RdmaContext {
                     permission,
                     psn,
                     config.max_send_wr as u32,
+                    config.max_cqes as u32,
                     local,
                 )
             }

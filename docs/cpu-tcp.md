@@ -246,7 +246,7 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 12**, not TENT's YLT RPC framing or HP-TCP.
+This is **OrbitTE protocol version 13**, not TENT's YLT RPC framing or HP-TCP.
 It makes this first Rust CPU slice executable while TENT wire compatibility
 remains an explicit P0/P9 gate. Future wire changes require a version change
 and corresponding decoder rejection tests.
@@ -272,7 +272,7 @@ explicitly rejected.
 There is no legacy-protocol fallback.
 
 Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`12`), a
+Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`13`), a
 one-byte operation/status and one zero reserved byte.
 
 | Frame | Remaining fields |

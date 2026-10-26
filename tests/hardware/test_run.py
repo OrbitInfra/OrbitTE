@@ -226,7 +226,7 @@ class ResourceSelection(unittest.TestCase):
                     controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_lanes': 2})
                 with self.assertRaises(ValueError):
                     controller.case(0, {**case, 'mode': mode, 'mask': 3, 'num_lanes': 1})
-            for mode in ['concurrent-quota', 'concurrent-endpoints', 'concurrent-close',
+            for mode in ['concurrent-quota', 'concurrent-grants', 'concurrent-close',
                          'concurrent-cq-error', 'rq-pressure', 'rq-close', 'rq-cq-error',
                          'large-quota', 'large-close', 'large-cq-error',
                          'folded-quota', 'folded-close', 'folded-cq-error', 'quarter-quota',

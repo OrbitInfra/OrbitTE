@@ -41,13 +41,16 @@ pub struct RdmaConfig {
     pub num_lanes: usize,
     pub traffic_class: u8,
     pub hop_limit: u8,
+    /// Aggregate physical QP limit, independent of grant concurrency.
     pub max_endpoints: usize,
+    /// Whole-parent grant slots, retained until every child drains (1..=4096).
+    pub max_grants: usize,
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
     pub max_direct_bytes: usize,
     /// TENT's base slice size. Large requests adapt to a bounded slice count.
     pub block_size: usize,
-    /// Maximum unresolved signaled sends per QP (1..=64); also provisions RQ depth.
+    /// Maximum unresolved signaled sends per QP (1..=64). RQ depth uses max_cqes.
     pub max_send_wr: usize,
     /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
     pub max_cqes: usize,
@@ -75,6 +78,7 @@ impl Default for RdmaConfig {
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
+            max_grants: 64,
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             max_direct_bytes: 64 << 20,
@@ -125,6 +129,7 @@ impl RdmaConfig {
             || !(1..=1 << 24).contains(&self.max_window_key_indices)
             || !(1..=4096).contains(&self.max_cqes)
             || !(1..=4096).contains(&self.max_endpoints)
+            || !(1..=4096).contains(&self.max_grants)
             || self.max_staging_bytes == 0
             || self.max_direct_bytes == 0
             || !(1..=64 << 20).contains(&self.block_size)

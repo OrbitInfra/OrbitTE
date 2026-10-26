@@ -15,6 +15,7 @@ pub(super) unsafe extern "C" fn open(
     permission: u32,
     psn: u32,
     max_send_wr: u32,
+    max_recv_wr: u32,
     local: *mut Descriptor,
 ) -> c_int {
     // SAFETY: the context owns a frozen route; query before constructing children.
@@ -47,7 +48,7 @@ pub(super) unsafe extern "C" fn open(
         init.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
         init.sq_sig_all = 1;
         init.cap.max_send_wr = max_send_wr;
-        init.cap.max_recv_wr = max_send_wr;
+        init.cap.max_recv_wr = max_recv_wr;
         init.cap.max_send_sge = 1;
         init.cap.max_recv_sge = 1;
         h.qp = ffi::ibv_create_qp(device.pd.cast(), &mut init).cast();
@@ -56,7 +57,7 @@ pub(super) unsafe extern "C" fn open(
         }
         if init.cap.max_send_wr < max_send_wr
             || init.cap.max_send_sge < 1
-            || init.cap.max_recv_wr < max_send_wr
+            || init.cap.max_recv_wr < max_recv_wr
             || init.cap.max_recv_sge < 1
         {
             return libc::EOPNOTSUPP;

@@ -205,6 +205,7 @@ impl RdmaTransport {
         &self,
         device: Arc<RdmaContext>,
         matches: impl Fn(&Peer) -> bool,
+        width: usize,
         deadline: Instant,
     ) -> Result<Option<RdmaGrant>> {
         let mut lanes = self.cq_list(Arc::clone(&device))?;
@@ -227,25 +228,40 @@ impl RdmaTransport {
         };
         let mut candidates = Vec::new();
         for endpoint in endpoints {
-            for (lane, peer) in endpoint.candidates(&matches)? {
-                candidates.push((Arc::clone(&endpoint), lane, peer));
+            for (lane, record, peer) in endpoint.candidates(&matches)? {
+                candidates.push((Arc::clone(&endpoint), lane, record, peer));
             }
         }
-        for lane in lanes {
-            for (owner, candidate, peer) in &candidates {
-                if !Arc::ptr_eq(&lane, candidate) {
+        for lane in &lanes {
+            for (owner, candidate, _, peer) in &candidates {
+                if !Arc::ptr_eq(lane, candidate) {
                     continue;
                 }
-                if let Some(mut grant) = lane.claim(
-                    |entry| {
-                        matches(entry)
-                            && entry.same_pair(peer)
-                            && entry.generation == peer.generation
-                    },
-                    deadline,
-                )? {
+                if let Some(mut grant) =
+                    lane.claim(|entry| matches(entry) && entry.same_pair(peer), deadline)?
+                {
+                    grant.cached_peer = Some(*peer);
                     grant.endpoint = Some(Arc::clone(owner));
                     return Ok(Some(grant));
+                }
+            }
+        }
+        // Grow across lanes before multiplexing. Concurrent cold construction
+        // still needs the fixed-width endpoint reservation owner.
+        let full = self
+            .usage
+            .lock()
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
+            .active_endpoints
+            >= self.config.max_endpoints;
+        if candidates.len() >= width || full {
+            for lane in &lanes {
+                for (owner, candidate, record, peer) in &candidates {
+                    if Arc::ptr_eq(lane, candidate) {
+                        let mut grant = lane.share(record, *peer, deadline)?;
+                        grant.endpoint = Some(Arc::clone(owner));
+                        return Ok(Some(grant));
+                    }
                 }
             }
         }
