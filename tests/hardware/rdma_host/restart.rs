@@ -127,7 +127,9 @@ fn terminate(engine: &TransferEngine, phase: usize, state: &str, pending: bool) 
 }
 
 pub(super) fn run(case: &Case) -> Result<()> {
-    let interrupted = env::var("ORBITTE_HOST_MODE")? == "installed-interruption";
+    let mode = env::var("ORBITTE_HOST_MODE")?;
+    let lost_completion = mode == "installed-lost-completion";
+    let interrupted = mode == "installed-interruption" || lost_completion;
     if interrupted && case.payload > case.block {
         return Err("interruption relay requires one slice per parent".into());
     }
@@ -155,7 +157,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
     };
     let (engine, memory) = create(case, bind)?;
     let engine = Arc::new(engine);
-    let gate = if interrupted && case.source {
+    let gate = if interrupted && !lost_completion && case.source {
         let gate_bind = if generation == 0 {
             bind
         } else {
@@ -164,6 +166,11 @@ pub(super) fn run(case: &Case) -> Result<()> {
         let gate = gate::GrantGate::new(gate_bind, engine.endpoint())?;
         std::fs::write(file("gate", generation)?, gate.address().to_string())?;
         Some(gate)
+    } else {
+        None
+    };
+    let fault = if lost_completion && !case.source {
+        Some(completion::CompletionFault::load()?)
     } else {
         None
     };
@@ -250,7 +257,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
                     &memory,
                     &peer,
                     &mut stream,
-                    gate.as_ref(),
+                    (gate.as_ref(), fault.as_ref()),
                     phase,
                 )?
             } else {
@@ -265,7 +272,14 @@ pub(super) fn run(case: &Case) -> Result<()> {
             }
             peer_exited(&mut stream)?;
             if interrupted {
-                interruption::drained(case, &engine, &memory, pending, gate.as_ref(), phase)?;
+                interruption::drained(
+                    case,
+                    &engine,
+                    &memory,
+                    pending,
+                    (gate.as_ref(), fault.as_ref()),
+                    phase,
+                )?;
             }
             idle(&engine)?;
             println!(

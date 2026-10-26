@@ -261,8 +261,12 @@ drain assertions; `rdma_host/gate.rs` owns the bounded test control relay that
 holds GRANT after source RQ posting and rejects TCP payload opcodes.
 `run.py`/`supervise.py` own exact-child supervision; `installed.py`,
 `installed_restart.py` and `installed_interruption.py` independently reconcile
-native resource, byte and process receipts. Failed lanes are reclaimed before
-replacement CQs are created on demand; subsequent healthy rounds must preserve
+native resource, byte and process receipts. `rdma_host/completion.rs` controls
+the separate packaged native CQ-loss tool. `installed_completion.py` joins
+accepted WRs, actual successful CQEs and real QP destruction before accepting
+the public drain result. This explicit test profile intercepts provider calls
+in the requester only; normal package consumers do not load the tool.
+Failed lanes are reclaimed before replacement CQs are created on demand; subsequent healthy rounds must preserve
 all persistent MRs and have no new progress failures. No production owner or
 transport layer is added.
 

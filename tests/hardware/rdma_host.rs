@@ -12,6 +12,8 @@ use orbit_te::{
     Transport,
 };
 
+#[path = "rdma_host/completion.rs"]
+mod completion;
 #[path = "rdma_host/gate.rs"]
 mod gate;
 #[path = "rdma_host/interruption.rs"]
@@ -27,7 +29,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 const GUARD: usize = 64;
 const ROUNDS: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(20);
-const PROTOCOL: &str = "orbitte-installed-host-v3";
+const PROTOCOL: &str = "orbitte-installed-host-v4";
 
 fn number(name: &str) -> Result<usize> {
     Ok(env::var(name)?.parse()?)
@@ -376,7 +378,9 @@ fn main() -> Result<()> {
     }
     let case = Case::load()?;
     match env::var("ORBITTE_HOST_MODE")?.as_str() {
-        "installed-restart" | "installed-interruption" => restart::run(&case),
+        "installed-restart" | "installed-interruption" | "installed-lost-completion" => {
+            restart::run(&case)
+        }
         "installed-host" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;

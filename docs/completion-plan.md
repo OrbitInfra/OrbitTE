@@ -439,8 +439,11 @@ registration. Eight healthy regressions also pass; the exact profiles are in
 [qualification](qualification.md). A further 40-case installed matrix includes 32
 posted-RQ interruption cases: source MWs/RQ and public requester batches remain
 live when either peer exits, then temporary owners drain while persistent MRs
-survive. Mid-payload death, lost SQ CQEs and native cleanup failure in that
-installed path remain separate gates. Existing QP ERR,
+survive. Another 40-case installed matrix includes 32 lost-payload-completion
+sequences: real successful CQEs are withheld from the engine, exact native WR
+identities and QP destruction are reconciled, and one live engine recovers.
+Mid-flight DMA death and installed native cleanup failure remain separate gates.
+Existing QP ERR,
 lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
 remain scoped evidence. For every
 verbs operation, the source/requester proof must prevent stale rkeys, connections
@@ -1299,13 +1302,16 @@ The posted-RQ interruption profile now passes another 40-case installed matrix:
 32 three-generation interrupted sequences and eight healthy/idle-restart
 regressions. It holds GRANT after native RQ posting and validates 768 pending
 parents, temporary-owner drain and persistent-MR reuse.
-Next cover mid-payload interruption, lost SQ completions and native cleanup
-failures through installed consumers, alongside physical link/device loss and
+The lost-payload-CQE profile now passes 40 installed configurations, including
+32 three-generation loss sequences and eight regressions; 768 actual successful
+CQEs are withheld while native WR identity, public debt and teardown agree.
+Next cover mid-flight DMA interruption and native cleanup failures through
+installed consumers, alongside physical link/device loss and
 provider teardown. InfiniBand and independent acceptance still require their
 own gates. Freeze those remaining fault profiles before running them;
-idle-resource death and pre-payload RQ interruption do not establish physical
-DMA drain after payload submission. Link-bandwidth scheduling, new-device/GID migration and
-general retry policy are not implied by selected-port recovery. Keep frozen
+idle-resource death, pre-payload RQ interruption and loss of already-successful
+CQEs do not establish termination of physically interrupted DMA.
+Link-bandwidth scheduling, new-device/GID migration and general retry policy are not implied by selected-port recovery. Keep frozen
 TENT comparisons, native manifests and failed controls outside Git. The
 [architecture reading order](architecture.md#source-reading-order) identifies
 the current resource owners.

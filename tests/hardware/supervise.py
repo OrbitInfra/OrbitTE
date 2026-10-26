@@ -56,6 +56,17 @@ def supervise(config_path):
             if restart:
                 environment['ORBITTE_RESTART_GENERATION'] = str(generation)
                 environment['ORBITTE_RESTART_ROOT'] = str(root)
+            fault_hash = config.get('fault_library_sha256')
+            if fault_hash:
+                library = root.parent / 'liborbitte_cq_fault.so'
+                if (hashlib.sha256(library.read_bytes()).hexdigest() != fault_hash
+                        or environment.get('LD_PRELOAD') != str(library)
+                        or environment.get('ORBITTE_SHARED_ROLE') != 'requester'
+                        or environment.get('ORBITTE_HOST_MODE') != 'installed-lost-completion'):
+                    raise RuntimeError('fault library scope or immutable hash mismatch')
+                result['fault_library_sha256'] = fault_hash
+            elif environment.get('LD_PRELOAD'):
+                raise RuntimeError('unexpected unpinned preload library')
             mode = 'ab' if restart else 'wb'
             with (root / 'stdout.log').open(mode) as stdout, (root / 'stderr.log').open(mode) as stderr:
                 process = subprocess.Popen(result['command'], stdout=stdout, stderr=stderr, env=environment)

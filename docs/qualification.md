@@ -13,6 +13,68 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Source [`02c15bd`](https://github.com/OrbitInfra/OrbitTE/commit/02c15bda4de913b367ee881bd39ffb3d70b3c63c)
+adds installed lost-payload-completion qualification. Production owners,
+public API, dependencies and wire v14 are unchanged. Fixture protocol v4
+separates pre-authorization interruption from payloads that completed natively
+but whose CQEs were not delivered to the engine. Stable 1.99.1 and Rust 1.85.0
+each build an archived crate, independent public consumer and separately hashed
+native fault library. Subsequent documentation preserves those tested inputs.
+
+Both packages pass **40 two-host/two-RNIC configurations**: **32 lost-completion
+three-generation restart cases**, four posted-RQ interruption regressions and
+four healthy single-rail regressions. Fault cases cross source/requester kill
+role, READ/WRITE, both directions and polling/events. Polling uses width 1 and
+eight parents; events use width 3 and sixteen parents. Each fault parent is
+one 1 MiB slice. Width/count are coupled to progress mode in this matrix.
+
+The process-local tool calls the real mlx5 provider, records accepted WRs and
+consumes **768 actual successful payload CQEs** without returning them to OrbitTE.
+Its log joins context/CQ/QPN/WR identities, exact parent addresses and lengths.
+At the kill point, the engine still owns corresponding SQ debt, busy batches,
+source RQ/MWs and DMA loans. New input patterns distinguish these payloads from
+healthy warmup. The supervisor kills only its direct configured child, holding
+both RNIC leases through `waitpid`; only the requester loads the pinned tool.
+
+Requester survivors fail their public batches with zero reported bytes and
+proven local drain. READ retains `RemoteEffect::None`; WRITE retains
+`RemoteEffect::Unknown`, even when the actual write completed. Native receipts
+prove **128 successful QP destructions** before those requester drain reports.
+Both surviving roles validate the complete backing and guards, regain CPU
+access, release temporary owners and preserve their engine/registration and
+four persistent MRs. Fresh connections reject every prior authority epoch and
+resume healthy traffic without new progress failures.
+
+Across the formal matrix, **3,936 healthy parent transfers** pass; **816 pending
+source RQ slots** include the completion-loss and pre-authorization regressions.
+All **148 children** are reaped, including **68 intentional SIGKILLs**;
+**100 stale submissions** and their metadata opens are rejected before new
+QP creation or payload WR posting. Final close releases all counted owners.
+
+Both compiler gates pass Clippy and **234 CPU/integration/doc tests** each.
+Each packaged consumer passes two relay tests and the native tool's selective
+loss/pass-through CPU control. Nineteen controller tests include negative
+controls for mismatched native identities, wrong addresses, failed teardown,
+unmapped tools and false process/drain receipts. Two pilot cases pass and are
+excluded from formal totals. CI covers all eight feature/toolchain variants.
+
+Artifacts stay outside Git at
+`/root/orbitte-artifacts/rdma-installed-completion-20261026`.
+`native-audit.json` reconciles packages, library hashes, native receipts, public
+ledgers, child identities, providers and locked RNICs. Postflight verifies
+unchanged nodes/providers, free RNIC leases and no GPU compute. See
+[the loss contract](installed-host.md#lost-payload-completions) and
+[TENT correspondence](installed-host.md#tent-correspondence-and-limits).
+
+This qualifies **lost engine observation after real native completion**.
+Mid-flight DMA interruption and native cleanup failures through installed
+consumers remain open, alongside physical link/device loss, InfiniBand,
+physical rail pressure/fairness and independent P4 acceptance. OrbitKV
+integration remains after acceptance. This closes one qualification gap in
+the existing P4 implementation, not an additional implementation milestone.
+
+## Previous installed posted-RQ interruption delivery
+
 Source [`c27029c`](https://github.com/OrbitInfra/OrbitTE/commit/c27029c37f9fcc918fab7378767a60ba475dbc06)
 adds an installed public-consumer gate for process exit with a posted source
 completion RQ. Production owners, public API, dependencies and wire v14 are

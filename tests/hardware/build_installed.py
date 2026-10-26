@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tarfile
 import time
@@ -74,6 +75,27 @@ def build(root, output, toolchain, allow_dirty=False):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
+        fault_sources = library / 'tests/hardware/cq_fault'
+        for path in sorted(fault_sources.glob('*.c')):
+            relative = path.relative_to(library)
+            if path.read_bytes() != (root / relative).read_bytes():
+                raise ValueError('packaged CQ fault tool differs from source')
+            fixture_hashes[str(relative)] = digest(path)
+        compiler = shlex.split(environment.get('CC', 'cc'))
+        manifest['fault_compiler'] = run('fault-compiler', [*compiler, '--version'])
+        flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread']
+        fault_library = output / 'liborbitte_cq_fault.so'
+        run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
+                             str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
+        control = output / 'test_cq_fault'
+        run('fault-control-build', [*compiler, *flags, str(fault_sources / 'test_cq_fault.c'),
+                                   '-ldl', '-o', str(control)])
+        fault_root = output / 'fault-control'
+        fault_root.mkdir()
+        environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
+        run('fault-control', [str(control)], cwd=output)
+        del environment['ORBITTE_RESTART_ROOT'], environment['ORBITTE_RESTART_GENERATION']
+        manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
         run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)
@@ -106,7 +128,7 @@ def build(root, output, toolchain, allow_dirty=False):
                         '--locked', '--offline'], cwd=consumer)
         binary = prefix / 'bin/orbitte-rdma-host'
         probe = run('protocol', [str(binary), '--protocol'], cwd=output).strip()
-        if probe != 'orbitte-installed-host-v3':
+        if probe != 'orbitte-installed-host-v4':
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
         if 'not found' in linkage or 'libibverbs' not in linkage or 'libcuda' in linkage:

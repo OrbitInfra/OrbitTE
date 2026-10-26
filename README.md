@@ -35,8 +35,9 @@ NVIDIA device transfers currently use synchronized host staging.
 Periodic monitor reclaim and selected-port recovery are implemented. The host
 RDMA stage has scoped installed-consumer validation for healthy traffic and
 repeated peer restart while one engine keeps its persistent MRs, including
-process death with a posted completion RQ before payload authorization.
-Mid-payload interruption, physical faults and independent acceptance remain open.
+process death with a posted completion RQ and loss of actual successful payload
+CQEs. Mid-flight DMA interruption, installed native-cleanup failures, physical
+faults and independent acceptance remain open.
 GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
 compatibility are later-stage work. See the
 [P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
