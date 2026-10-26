@@ -202,7 +202,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Public request | `engine.rs`, `batch.rs`, `memory.rs` | Engine, tasks and actual backing |
 | Transport entry | `transport/rdma/rdma_transport.rs` | Registration, parent dispatch and source serving |
 | Context selection | `context_set.rs`, `context.rs`, `discovery.rs`, `quota.rs` | Stable slots, PDs, devices and NIC admission |
-| Peer rendezvous | `rdma_transport/handshake.rs` | Existing transport's grant preparation and bilateral handshake |
+| Peer rendezvous | `rdma_transport/connections.rs`, `rdma_transport/handshake.rs` | Fixed-width connection claims, grant preparation and bilateral publication |
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
 | QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |

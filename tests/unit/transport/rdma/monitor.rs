@@ -248,3 +248,43 @@ pub(super) fn observe(source: &Source) {
         );
     }
 }
+
+#[test]
+fn close_joins_a_stopped_monitor_even_when_its_wake_reader_has_already_exited() {
+    let monitor = Arc::new(Monitor::default());
+    let mut source = attach(&monitor, None);
+    source.registration.stop().unwrap();
+    let shared = Arc::clone(&monitor.running.lock().unwrap().as_ref().unwrap().shared);
+    shared.stopping.store(true, Ordering::Release);
+    let _ = shared.wake();
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut exited = shared.exited.lock().unwrap();
+    while !*exited {
+        exited = shared
+            .changed
+            .wait_timeout(exited, remaining(until).unwrap())
+            .unwrap()
+            .0;
+    }
+    drop(exited);
+    assert!(matches!(
+        shared.wake(),
+        Err(Error::Unquiesced {
+            code: libc::EPIPE,
+            ..
+        })
+    ));
+    monitor.close(until).unwrap();
+    assert!(
+        monitor
+            .running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .worker
+            .is_none()
+    );
+    assert_eq!(stats(&monitor).monitor_workers, 0);
+    monitor.close(Instant::now()).unwrap();
+}
