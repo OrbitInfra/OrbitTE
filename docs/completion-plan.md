@@ -121,7 +121,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host path, concurrent QP grants and fixed-width cold construction implemented; scoped RoCE profiles qualified; periodic recovery and complete acceptance open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host path, concurrent QP grants, fixed-width cold construction and periodic monitor recovery implemented; scoped RoCE profiles qualified; final installed qualification and independent acceptance open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
