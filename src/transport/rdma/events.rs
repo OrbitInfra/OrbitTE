@@ -64,12 +64,21 @@ impl State {
     }
 
     fn advance_route(&self) {
-        if self
-            .route_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_add(1))
-            .is_err()
-        {
-            self.fault.store(-libc::EOVERFLOW, Ordering::Release);
+        let mut generation = self.route_generation.load(Ordering::Acquire);
+        loop {
+            let Some(next) = generation.checked_add(1) else {
+                self.fault.store(-libc::EOVERFLOW, Ordering::Release);
+                return;
+            };
+            match self.route_generation.compare_exchange_weak(
+                generation,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(observed) => generation = observed,
+            }
         }
     }
 

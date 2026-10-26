@@ -211,6 +211,19 @@ fn route_generations_preserve_new_faults_and_lost_consumer_precedence() {
             code: libc::EIO
         })
     ));
+    let exhausted = State::default();
+    exhausted
+        .route_generation
+        .store(u64::MAX, Ordering::Release);
+    exhausted.fence_route();
+    assert!(!exhausted.resume(u64::MAX));
+    assert!(matches!(
+        exhausted.check(),
+        Err(Error::Unquiesced {
+            code: libc::EOVERFLOW,
+            ..
+        })
+    ));
 }
 
 #[test]
