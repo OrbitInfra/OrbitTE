@@ -318,7 +318,8 @@ fn rounds(
             || stats.completed_reusable_grants <= last_completed
             || (round > 0 && stats.reused_connections <= last_reused)
             || stats.retained_grants != 0
-            || stats.progress_failures != 0
+            || stats.progress_failures != baseline.progress_failures
+            || stats.progress_recoveries != baseline.progress_recoveries
             || stats.staging_bytes != 0
         {
             return Err(format!("persistent MR/QP contract failed: {stats:?}").into());

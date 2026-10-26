@@ -89,7 +89,9 @@ fn clean(engine: &TransferEngine) -> Result<()> {
     .iter()
     .any(|n| *n != 0)
         || rdma.opened_connections != rdma.closed_connections
-        || rdma.progress_failures != 0
+        || rdma.progress_failures != rdma.progress_recoveries
+        || (env::var("ORBITTE_HOST_MODE").as_deref() != Ok("installed-interruption")
+            && rdma.progress_failures != 0)
         || rdma.completion_errors != 0
     {
         return Err(format!("close retained resources: {stats:?}").into());

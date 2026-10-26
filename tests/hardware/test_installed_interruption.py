@@ -31,7 +31,7 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                     pending = dict(phase=phase, pid=start['pid'], held_grants=case['parents'], active_grants=case['parents'],
                                    sq_debt=0, rq_debt=case['parents'] if source else 0,
                                    windows=case['parents'] if source else 0, batches=0 if source else case['parents'],
-                                   memory_busy=True, batch_busy=not source,
+                                   memory_busy=True, batch_busy=not source, progress_failures=0, progress_recoveries=0,
                                    **{k: baseline[k] for k in ('opened_qps', 'read_bytes', 'write_bytes')})
                     rows.append(('ORBITTE_INSTALLED_PENDING', pending))
                     if role != killed:
@@ -39,7 +39,8 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                                      failed_batches=0 if source else case['parents'], sq_debt=0, rq_debt=0,
                                      grants=0, windows=0, batches=0, persistent_mrs=4,
                                      read_bytes=baseline['read_bytes'], write_bytes=baseline['write_bytes'],
-                                     locally_drained=True, bytes_unchanged=True, memory_writable=True)))
+                                     locally_drained=True, bytes_unchanged=True, memory_writable=True,
+                                     progress_failures=4, progress_recoveries=4)))
                 record['stdout.log'] = '\n'.join(p + ' ' + json.dumps(r) for p, r in rows)
             installed.verify(fixture.profile, case, evidence)
             self.assertEqual(run.restart_plan(case), (killed, 3))
@@ -51,7 +52,7 @@ class InstalledInterruptionEvidence(unittest.TestCase):
                 ('requester', 'PENDING', 'read_bytes', -1), (survivor, 'DRAIN', 'batches', 1),
                 (survivor, 'DRAIN', 'persistent_mrs', 0), (survivor, 'DRAIN', 'locally_drained', False),
                 (survivor, 'DRAIN', 'bytes_unchanged', False), (survivor, 'DRAIN', 'memory_writable', False),
-                (survivor, 'DRAIN', 'read_bytes', -1), (survivor, 'DRAIN', 'phase', 99),
+                (survivor, 'DRAIN', 'progress_recoveries', 0), (survivor, 'DRAIN', 'read_bytes', -1), (survivor, 'DRAIN', 'phase', 99),
             ]
             for role, kind, key, value in controls:
                 broken = copy.deepcopy(evidence)

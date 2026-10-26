@@ -23,11 +23,14 @@ def verify(case, evidence):
                     or row['rq_debt'] != (count if source else 0)
                     or row['windows'] != (count if source else 0)
                     or row['batches'] != (0 if source else count)
+                    or row['progress_failures'] != row['progress_recoveries']
                     or row['memory_busy'] is not True or row['batch_busy'] is not (not source)
                     or any(row[key] != baseline[key] for key in ('opened_qps', 'read_bytes', 'write_bytes'))):
                 raise ValueError('interruption did not hold real RQ and memory/batch owners before payload')
         for phase, row in enumerate(drains):
             if (row['pid'] != history[phase]['pid'] or row['persistent_mrs'] != 4
+                    or row['progress_failures'] != row['progress_recoveries']
+                    or row['progress_failures'] < pending[phase]['progress_failures']
                     or row['failed_batches'] != (0 if source else count)
                     or any(row[key] != 0 for key in ('sq_debt', 'rq_debt', 'grants', 'windows', 'batches'))
                     or any(row[key] is not True for key in ('locally_drained', 'bytes_unchanged', 'memory_writable'))

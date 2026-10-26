@@ -75,6 +75,7 @@ pub(super) fn pending(
         || rdma.opened_connections != baseline.opened_connections
         || rdma.completed_read_bytes != baseline.completed_read_bytes
         || rdma.completed_write_bytes != baseline.completed_write_bytes
+        || rdma.progress_failures != rdma.progress_recoveries
         || rdma.work_requests != 0
         || (case.source
             && (stats.active_source_operations != count
@@ -107,7 +108,7 @@ pub(super) fn pending(
         return Err("pending DMA loan did not exclude CPU writes".into());
     }
     println!(
-        "ORBITTE_INSTALLED_PENDING {{\"phase\":{phase},\"pid\":{},\"held_grants\":{count},\"active_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"windows\":{},\"batches\":{},\"opened_qps\":{},\"read_bytes\":{},\"write_bytes\":{},\"memory_busy\":true,\"batch_busy\":{}}}",
+        "ORBITTE_INSTALLED_PENDING {{\"phase\":{phase},\"pid\":{},\"held_grants\":{count},\"active_grants\":{},\"sq_debt\":{},\"rq_debt\":{},\"windows\":{},\"batches\":{},\"opened_qps\":{},\"read_bytes\":{},\"write_bytes\":{},\"memory_busy\":true,\"batch_busy\":{},\"progress_failures\":{},\"progress_recoveries\":{}}}",
         std::process::id(),
         rdma.active_grants,
         rdma.work_requests,
@@ -117,7 +118,9 @@ pub(super) fn pending(
         rdma.opened_connections,
         rdma.completed_read_bytes,
         rdma.completed_write_bytes,
-        !case.source
+        !case.source,
+        rdma.progress_failures,
+        rdma.progress_recoveries
     );
     barrier(stream, "interruption-verified")?;
     Ok(batches)
@@ -155,7 +158,20 @@ pub(super) fn drained(
         }
         batch.free()?;
     }
-    let rdma = idle(engine)?;
+    let deadline = Instant::now() + TIMEOUT;
+    let rdma = loop {
+        let rdma = idle(engine)?;
+        if rdma.progress_failures == rdma.progress_recoveries
+            && rdma.progress_lanes == 2 * case.lanes
+            && rdma.active_cqs == 4 * case.lanes
+        {
+            break rdma;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("surviving CQ lanes did not recover: {rdma:?}").into());
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
     let stats = engine.stats()?;
     if rdma.persistent_mrs != 4
         || rdma.opened_persistent_mrs != 4
@@ -181,7 +197,7 @@ pub(super) fn drained(
     }
     memory.write(0, &expected)?;
     println!(
-        "ORBITTE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_unchanged\":true,\"memory_writable\":true}}",
+        "ORBITTE_INSTALLED_DRAIN {{\"phase\":{phase},\"pid\":{},\"failed_batches\":{failed},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"persistent_mrs\":{},\"read_bytes\":{},\"write_bytes\":{},\"locally_drained\":true,\"bytes_unchanged\":true,\"memory_writable\":true,\"progress_failures\":{},\"progress_recoveries\":{}}}",
         std::process::id(),
         rdma.work_requests,
         rdma.receive_work_requests,
@@ -190,7 +206,9 @@ pub(super) fn drained(
         stats.allocated_batches,
         rdma.persistent_mrs,
         rdma.completed_read_bytes,
-        rdma.completed_write_bytes
+        rdma.completed_write_bytes,
+        rdma.progress_failures,
+        rdma.progress_recoveries
     );
     Ok(())
 }
