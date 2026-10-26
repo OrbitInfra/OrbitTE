@@ -26,7 +26,7 @@ Cargo fetches the packaged lockfile dependencies first, then resolves OrbitTE
 from that extracted package offline, preserves locked dependency versions, checks formatting/Clippy and installs a release executable
 under `installed/bin/orbitte-rdma-host`. The manifest pins the source commit,
 archive, every fixture module, consumer lockfile, binary, features and local
-native libraries. `orbitte-installed-host-v2` identifies this test protocol;
+native libraries. `orbitte-installed-host-v3` identifies this test protocol;
 the production public API and wire v14 are unchanged.
 The consumer is an acceptance fixture, not a new production CLI/API.
 
@@ -185,9 +185,10 @@ The main fixture owns public requests, rendezvous and byte checks.
 bypasses the production handshake or native resource lifecycle. TCP carries
 test coordination; payload requests remain explicit RDMA.
 
-The installed gate covers healthy host traffic and the declared idle-resource
-process-restart profile. Outstanding-DMA death, lost completions, native
-teardown failures and poisoned-engine recovery still need installed-artifact
+The installed gate covers healthy host traffic, idle-resource process restart
+and posted-RQ interruption before payload authorization. Mid-payload death,
+lost SQ completions, native teardown failures and poisoned-engine recovery
+still need installed-artifact
 gates. Physical port/device faults, per-rail bandwidth/fairness and
 InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
