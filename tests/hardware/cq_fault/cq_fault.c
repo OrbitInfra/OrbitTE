@@ -123,7 +123,9 @@ static int poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
     int kept = 0;
     for (int i = 0; i < count; ++i) {
         inflight_completion(cq, &wc[i]);
-        unsigned op = wc[i].opcode == IBV_WC_RDMA_READ ? 1 : wc[i].opcode == IBV_WC_RDMA_WRITE ? 2 : 0;
+        unsigned op = 0;
+        if (wc[i].status == IBV_WC_SUCCESS)
+            op = wc[i].opcode == IBV_WC_RDMA_READ ? 1 : wc[i].opcode == IBV_WC_RDMA_WRITE ? 2 : 0;
         if (state.armed && wc[i].status == IBV_WC_SUCCESS && op == selected_operation) {
             if (state.lost >= expected) ++state.errors;
             ++state.lost;

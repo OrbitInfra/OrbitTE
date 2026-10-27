@@ -68,7 +68,11 @@ impl InflightFault {
         }
         println!(
             "ORBITTE_INSTALLED_DMA_NATIVE {{\"pid\":{},\"qpn\":{},\"wr_id\":{},\"sequence\":{},\"posts\":1,\"modifications\":1,\"failed\":1,\"completed\":0,\"destroyed\":1,\"write_effect_unknown\":{}}}",
-            std::process::id(), native.qpn, native.wr_id, native.sequence, !case.read
+            std::process::id(),
+            native.qpn,
+            native.wr_id,
+            native.sequence,
+            !case.read
         );
         Ok(())
     }
@@ -211,10 +215,19 @@ pub(super) fn run(case: &Case) -> Result<()> {
     }
     println!(
         "ORBITTE_INSTALLED_DMA_DRAIN {{\"pid\":{},\"sq_debt\":{},\"rq_debt\":{},\"grants\":{},\"windows\":{},\"batches\":{},\"direct_bytes\":{},\"inflight_bytes\":{},\"persistent_mrs\":{},\"closed_qps\":{},\"completion_errors\":{},\"progress_failures\":{},\"progress_recoveries\":{},\"locally_drained\":true}}",
-        std::process::id(), rdma.work_requests, rdma.receive_work_requests,
-        rdma.active_grants, rdma.active_windows, stats.allocated_batches,
-        rdma.direct_bytes, stats.inflight_bytes, rdma.persistent_mrs, rdma.closed_connections,
-        rdma.completion_errors, rdma.progress_failures, rdma.progress_recoveries
+        std::process::id(),
+        rdma.work_requests,
+        rdma.receive_work_requests,
+        rdma.active_grants,
+        rdma.active_windows,
+        stats.allocated_batches,
+        rdma.direct_bytes,
+        stats.inflight_bytes,
+        rdma.persistent_mrs,
+        rdma.closed_connections,
+        rdma.completion_errors,
+        rdma.progress_failures,
+        rdma.progress_recoveries
     );
     barrier(&mut stream, "dma-drained")?;
     bytes(case, &memory)?;
