@@ -18,7 +18,10 @@ pub(super) fn pending(
     phase: usize,
 ) -> Result<Vec<Batch>> {
     let (gate, fault) = controls;
-    let lost = env::var("ORBITTE_HOST_MODE")? == "installed-lost-completion";
+    let lost = matches!(
+        env::var("ORBITTE_HOST_MODE")?.as_str(),
+        "installed-lost-completion" | "installed-cleanup-failure"
+    );
     if let Some(gate) = gate {
         gate.arm()?;
     }
@@ -159,7 +162,10 @@ pub(super) fn drained(
     phase: usize,
 ) -> Result<()> {
     let (gate, fault) = controls;
-    let lost = env::var("ORBITTE_HOST_MODE")? == "installed-lost-completion";
+    let lost = matches!(
+        env::var("ORBITTE_HOST_MODE")?.as_str(),
+        "installed-lost-completion" | "installed-cleanup-failure"
+    );
     if let Some(gate) = gate {
         gate.abort()?;
     }

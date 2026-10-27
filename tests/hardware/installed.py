@@ -5,7 +5,7 @@ PROTOCOL = 'orbitte-installed-host-v4'
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -15,14 +15,18 @@ def validate(case):
                             ('block', 64 << 10, 4 << 20), ('num_lanes', 1, 3), ('mask', 1, 3)]:
         if type(case.get(name)) is not int or not low <= case[name] <= high:
             raise ValueError('invalid installed host ' + name)
-    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion'):
+    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         if (case.get('fault_role') not in ('source', 'requester')
                 or type(case.get('generations')) is not int or case['generations'] not in (2, 3)):
             raise ValueError('restart requires an explicit target and two or three generations')
     elif 'fault_role' in case or 'generations' in case:
         raise ValueError('restart controls require the installed-restart mode')
-    if case['mode'] in ('installed-interruption', 'installed-lost-completion') and case['payload'] > case['block']:
+    if case['mode'] in ('installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure') and case['payload'] > case['block']:
         raise ValueError('interruption profiles require one slice per parent')
+    if case['mode'] == 'installed-cleanup-failure' and (case['fault_role'] != 'requester'
+            or case['generations'] != 2 or case['parents'] != 1 or case['num_lanes'] != 1
+            or case['mask'] not in (1, 2)):
+        raise ValueError('cleanup failure requires one requester QP and two generations')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -44,7 +48,7 @@ def command(profile, case, node, role, root, readiness=None):
         'ORBITTE_HOST_BLOCK': str(case['block']),
         'CUDA_VISIBLE_DEVICES': '',
     }
-    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion'):
+    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         environment.update(ORBITTE_RESTART_GENERATIONS=str(case['generations']),
                            ORBITTE_RESTART_KILL_ROLE=case['fault_role'])
     if readiness is not None:
@@ -56,7 +60,7 @@ def command(profile, case, node, role, root, readiness=None):
 
 def verify(profile, case, evidence):
     validate(case)
-    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion'):
+    if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         from installed_restart import verify as verify_restart
         return verify_restart(profile, case, evidence)
     for role in ('source', 'requester'):

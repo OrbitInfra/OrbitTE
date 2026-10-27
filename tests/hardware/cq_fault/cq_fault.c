@@ -12,6 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <stddef.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
 
 struct snapshot {
     uint64_t version, armed, phase, posts, lost, errors, contexts, sequence, destroyed_qps;
@@ -29,6 +34,10 @@ static int log_fd = -1;
 static struct ibv_context *(*native_open)(struct ibv_device *);
 static int (*native_close)(struct ibv_context *);
 static int (*native_destroy_qp)(struct ibv_qp *);
+struct cleanup_snapshot { uint64_t version, armed, attempts, code, qpn, live, sequence; };
+static struct cleanup_snapshot cleanup = {.version = 1};
+static struct ibv_qp *payload_qp;
+static int (*native_query_qp)(struct ibv_qp *, struct ibv_qp_attr *, int, struct ibv_qp_init_attr *);
 static pthread_once_t symbols = PTHREAD_ONCE_INIT;
 
 static void fail(void) { _exit(125); }
@@ -51,7 +60,8 @@ static void resolve(void) {
     *(void **)(&native_open) = dlsym(RTLD_NEXT, "ibv_open_device");
     *(void **)(&native_close) = dlsym(RTLD_NEXT, "ibv_close_device");
     *(void **)(&native_destroy_qp) = dlsym(RTLD_NEXT, "ibv_destroy_qp");
-    if (!native_open || !native_close || !native_destroy_qp) fail();
+    *(void **)(&native_query_qp) = dlsym(RTLD_NEXT, "ibv_query_qp");
+    if (!native_open || !native_close || !native_destroy_qp || !native_query_qp) fail();
 }
 
 static unsigned find(struct ibv_context *context) {
@@ -83,6 +93,7 @@ static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **
             ++state.errors;
         } else {
             ++state.posts;
+            if (expected == 1) payload_qp = qp;
         }
         receipt("\"kind\":\"post\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"wr_id\":%" PRIu64 ",\"operation\":%u,\"code\":%d,\"length\":%u,\"local\":%" PRIu64 ",\"remote\":%" PRIu64,
                 index, (uintptr_t)qp->send_cq, qp->qp_num, entry->wr_id, op, code,
@@ -168,16 +179,51 @@ int ibv_close_device(struct ibv_context *context) {
     return code;
 }
 
+/* The filter lives only in this joined helper, never in an engine worker.
+ * It denies command writes/ioctls on exactly this test-owned uverbs FD. */
+struct destruction { struct ibv_qp *qp; int code; };
+static void *deny_destroy(void *argument) {
+    struct destruction *call = argument;
+    unsigned fd = (unsigned)call->qp->context->cmd_fd;
+    struct sock_filter filter[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_write, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ioctl, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, fd, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EIO),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = {sizeof(filter) / sizeof(filter[0]), filter};
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program)) fail();
+    call->code = native_destroy_qp(call->qp);
+    return NULL;
+}
+
 int ibv_destroy_qp(struct ibv_qp *qp) {
     pthread_once(&symbols, resolve);
     pthread_mutex_lock(&lock);
     unsigned index = find(qp->context), qpn = qp->qp_num;
     uintptr_t cq = (uintptr_t)qp->send_cq;
+    int inject = cleanup.armed && qp == payload_qp;
+    if (inject && ++cleanup.attempts != 1) fail();
     pthread_mutex_unlock(&lock);
-    int code = native_destroy_qp(qp);
+    int code;
+    if (inject) {
+        pthread_t thread;
+        struct destruction call = {qp, 0};
+        if (pthread_create(&thread, NULL, deny_destroy, &call) || pthread_join(thread, NULL)) fail();
+        code = call.code;
+    } else code = native_destroy_qp(qp);
     pthread_mutex_lock(&lock);
     receipt("\"kind\":\"destroy_qp\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"code\":%d", index, cq, qpn, code);
-    if (code == 0) ++state.destroyed_qps; else ++state.errors;
+    if (inject) {
+        cleanup.code = (uint64_t)code;
+        if (code != EIO) ++state.errors;
+        receipt("\"kind\":\"cleanup_error\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"code\":%d,\"attempts\":%" PRIu64 ",\"syscall_fault\":true",
+                index, cq, qpn, code, cleanup.attempts);
+    } else if (code != 0) ++state.errors;
+    if (code == 0) ++state.destroyed_qps;
     pthread_mutex_unlock(&lock);
     return code;
 }
@@ -199,6 +245,34 @@ int orbitte_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned lim
         else { state.armed = 0; receipt("\"kind\":\"disarm\""); }
     } else if (command != 0) error = EINVAL;
     *output = state;
+    pthread_mutex_unlock(&lock);
+    return error;
+}
+
+/* Raw QP pointers here are witnesses, never additional resource owners. */
+int orbitte_cleanup_fault(unsigned command, struct cleanup_snapshot *output) {
+    if (!output) return EINVAL;
+    pthread_mutex_lock(&lock);
+    int error = 0;
+    if (command == 1) {
+        if (cleanup.armed || !state.armed || expected != 1 || state.posts != 1 || state.lost != 1 || !payload_qp || state.errors) error = EINVAL;
+        else {
+            cleanup.armed = 1; cleanup.qpn = payload_qp->qp_num;
+            receipt("\"kind\":\"arm_cleanup\",\"qpn\":%" PRIu64, cleanup.qpn);
+        }
+    } else if (command == 2) {
+        if (cleanup.attempts != 1 || cleanup.code != EIO) error = EINVAL;
+        else {
+            struct ibv_qp_attr attr = {0};
+            struct ibv_qp_init_attr init = {0};
+            int code = native_query_qp(payload_qp, &attr, IBV_QP_STATE, &init);
+            cleanup.live = code == 0 && payload_qp->qp_num == cleanup.qpn;
+            receipt("\"kind\":\"query_cleanup\",\"qpn\":%" PRIu64 ",\"code\":%d,\"state\":%u", cleanup.qpn, code, (unsigned)attr.qp_state);
+            if (!cleanup.live) error = EINVAL;
+        }
+    } else if (command != 0) error = EINVAL;
+    cleanup.sequence = state.sequence;
+    *output = cleanup;
     pthread_mutex_unlock(&lock);
     return error;
 }

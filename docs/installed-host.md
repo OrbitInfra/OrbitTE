@@ -244,3 +244,38 @@ This profile establishes **lost engine observation after real payload
 completion**. It does not establish a physical link failure or termination of
 DMA interrupted mid-flight. Native cleanup failures and physical faults keep
 separate qualification gates; this is correctness evidence, not performance.
+
+
+## Native cleanup failure
+
+`mode: "installed-cleanup-failure"` exercises the packaged public consumer's
+quarantine contract. Freeze `fault_role: "requester"`, two generations, one
+parent, `payload <= block`, one lane and rail mask 1 or 2. It uses the same
+identity-pinned two-peer controller and immutable fault library as completion
+loss. The fixture is implemented; native execution of this installed profile
+is still unqualified.
+
+After the healthy rounds, the observer records one accepted payload WR and
+withholds its actual successful CQE. It arms cleanup failure on that exact
+QP. When the engine retires the timed-out connection, a joined helper thread
+calls the real `ibv_destroy_qp` under a thread-local seccomp filter. The filter
+rejects write/ioctl only on that context's uverbs command descriptor. The
+provider must return `EIO`; the calling engine worker remains unfiltered.
+This is syscall fault injection, not a spontaneous hardware failure.
+
+The public batch must fail with `Unquiesced` and `locally_drained = false`;
+`free` stays busy, CPU writes remain excluded, and SQ, direct-byte, batch and
+inflight-byte charges remain held. Unregister removes lookup ownership, while
+two close attempts cannot report drain or retry native destruction. After all
+fixture-owned strong handles drop, an external allocation's weak owner and a
+real QP query must still prove retained backing and the same ERR QP. Separate
+native receipts join the submitted WR, one destructor failure and both QP
+queries to the public ownership proof. The supervisor then reaps that exact
+process; its replacement runs the existing stale-authority and healthy-transfer
+checks against the surviving source.
+
+CPU controls verify FD/thread isolation and reject wrong QP identities,
+retries, missing backing and false drain evidence. They do not qualify native
+retention. This profile also does not prove interrupted in-flight DMA, MR/MW
+or channel cleanup failure through the installed API, physical link loss or
+provider teardown; those boundaries retain their separate gates.

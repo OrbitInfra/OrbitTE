@@ -53,6 +53,14 @@ with real PD/MR/QP/CQ operations and GID queries. It sends no payload,
 changes no physical link, and does not establish two-host or InfiniBand
 qualification. Independent acceptance remains open.
 
+### Installed cleanup fixture
+
+The [packaged requester QP cleanup fixture](installed-host.md#native-cleanup-failure)
+is implemented with separate native and public-owner receipts. Its native
+execution is **unqualified**. Package builds and CPU syscall/ledger controls
+do not establish native retention or interrupted in-flight DMA. The earlier
+libtest cleanup record below remains scoped to its own artifact.
+
 ## Recorded host RDMA evidence
 
 The table links immutable delivery records. Paths below are external artifact

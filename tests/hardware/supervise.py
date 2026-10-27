@@ -62,7 +62,7 @@ def supervise(config_path):
                 if (hashlib.sha256(library.read_bytes()).hexdigest() != fault_hash
                         or environment.get('LD_PRELOAD') != str(library)
                         or environment.get('ORBITTE_SHARED_ROLE') != 'requester'
-                        or environment.get('ORBITTE_HOST_MODE') != 'installed-lost-completion'):
+                        or environment.get('ORBITTE_HOST_MODE') not in ('installed-lost-completion', 'installed-cleanup-failure')):
                     raise RuntimeError('fault library scope or immutable hash mismatch')
                 result['fault_library_sha256'] = fault_hash
             elif environment.get('LD_PRELOAD'):

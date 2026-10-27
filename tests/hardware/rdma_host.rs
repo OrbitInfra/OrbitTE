@@ -12,6 +12,8 @@ use orbit_te::{
     Transport,
 };
 
+#[path = "rdma_host/cleanup.rs"]
+mod cleanup;
 #[path = "rdma_host/completion.rs"]
 mod completion;
 #[path = "rdma_host/gate.rs"]
@@ -378,9 +380,10 @@ fn main() -> Result<()> {
     }
     let case = Case::load()?;
     match env::var("ORBITTE_HOST_MODE")?.as_str() {
-        "installed-restart" | "installed-interruption" | "installed-lost-completion" => {
-            restart::run(&case)
-        }
+        "installed-restart"
+        | "installed-interruption"
+        | "installed-lost-completion"
+        | "installed-cleanup-failure" => restart::run(&case),
         "installed-host" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
