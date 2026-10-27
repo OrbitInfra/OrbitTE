@@ -26,7 +26,8 @@ qualification and complete acceptance remain in the existing P4 queue.
 ## GPUDirect RDMA
 
 Source [`cda0fdf`](https://github.com/OrbitInfra/OrbitTE/commit/cda0fdf16aec7b128e21c60fa860c340c164cf03)
-qualifies the explicit GPU Direct path on two physical H20 hosts, using one
+qualifies explicit Direct RDMA for owned `CudaMemory` on two physical H20 hosts,
+using one
 selected GPU and two locked mlx5 RoCEv2 RNICs per host. Both stable 1.99.1 and
 Rust 1.85 build independent installed consumers from the packaged crate. The
 source passes 243 unit tests, eight integration tests, one doctest, Clippy and
@@ -73,7 +74,8 @@ Failure retention has integrated CPU ABI controls for partial construction,
 payload/RQ MR and private-PD cleanup, and CUDA restoration/visibility failures.
 Actual GPU teardown
 faults, physical faults, InfiniBand, other GPUs/providers, performance, mixed
-staged/direct workloads, IPC/NVLink and external producer stream handoff remain
+staged/direct workloads, external/managed/IPC allocations, NVLink and external
+producer stream handoff remain
 unqualified or later P5 work. GPU source MR/QP reuse is deliberately absent.
 See the [ownership and reproduction contract](rdma-cuda.md#gpudirect-rdma-ownership).
 
