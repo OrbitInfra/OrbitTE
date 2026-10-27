@@ -321,5 +321,12 @@ more healthy rounds using bounded replacement QPs, then close all resources.
 the process-local native trigger/observer; `installed_inflight.py` joins the
 independent native and public ledgers. CPU controls reject completed/no-op
 copies, wrong WR/address/process identities, missing destruction and unpaid
-debt. A single-host diagnostic cannot qualify the declared two-host profile,
+debt. The trigger corresponds to the frozen TENT endpoint's
+[`beginDestroyNoLock`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp)
+ERR transition. OrbitTE keeps PD/MRs in `RdmaContext`, QPs in `RdmaEndpoint`,
+WR completion ownership in CQ lanes, and shared progress in transport Workers.
+The fixture verifies those existing owners through the installed API.
+
+The focused [single-host diagnostic](qualification.md#installed-in-flight-dma-fixture)
+passes both compiler profiles. It cannot qualify the declared two-host profile,
 physical link/device loss, InfiniBand or throughput.
