@@ -274,6 +274,37 @@ These APIs do not infer framework readiness. Failed copy synchronization,
 context restore or unpin retains the actual owner and is observable through
 `cuda::retained_resources`.
 
+### Copy completion and reuse
+
+Each `CudaMemory` lazily owns one nonblocking CUDA stream and completion event.
+READ/WRITE staging uses async Driver copies, records the event after the copy,
+and waits for that event before exposing host bytes or releasing staging. The
+allocation mutex serializes aliases and event reuse. Other streams are not part
+of that completion receipt; caller producer handoff remains explicit.
+
+Failed copy submission or event recording attempts to drain this same stream.
+If drain cannot be proven, the operation returns `Unquiesced` and retains its
+actual allocation, pinned staging and stream/event owners. Later access cannot
+reuse them. `cuda::retained_resources` includes `streams` and `events`; cleanup
+failure preserves the corresponding context and unresolved handles. Initial
+allocation zeroing still uses context synchronization.
+
+This follows CUDA's [event capture and completion semantics](https://docs.nvidia.com/cuda/archive/13.0.2/cuda-driver-api/group__CUDA__EVENT.html):
+only an event successfully recorded after the copy proves its completion.
+Destroying an event or stream is cleanup, not a DMA completion receipt.
+
+Run the explicit byte/guard gate only on allocated, locked GPUs:
+
+```sh
+cargo build --locked --release --features cuda --example cuda_copy
+# Ordinals refer to the selected process-visible devices.
+target/release/examples/cuda_copy 0 1
+```
+
+The runner checks three unaligned sizes, eight concurrent callers and four
+rounds per caller, then releases all owners. It qualifies local staging only;
+GPUDirect, interprocess GPU sharing and NVLink require their own future gates.
+
 ## Run a native profile
 
 Resolve the current platform attempt and collect fresh host/provider/device

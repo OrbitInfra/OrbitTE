@@ -38,7 +38,7 @@ selection, persistent resources, completion and shutdown.
 ## Development status
 
 CPU/TCP, persistent host RDMA, multirail slicing and synchronized NVIDIA host
-staging are implemented. Native qualification applies to the exact profiles
+staging with owned copy streams/events are implemented. Native qualification applies to the exact profiles
 in [qualification](qualification.md). The published alpha reserves the crate
 name; the source implementation remains under development.
 
@@ -48,7 +48,9 @@ verifies concurrent parents, shared QP limits and exact native payload bytes.
 [Automatic discovery](qualification.md#installed-automatic-discovery) now passes
 two-host READ/WRITE against a separately captured PCI, NUMA and route inventory.
 The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
-fabric and independent-review acceptance before OrbitKV integration.
+fabric and independent live repetition before full acceptance. The source and
+recorded RoCE evidence passed independent review; P5 CUDA work now proceeds
+with available hardware. OrbitKV integration remains deferred.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
 including GPUDirect RDMA, CUDA IPC/NVLink and full TENT compatibility. For code
 navigation, use the [architecture reading order](architecture.md#source-reading-order).

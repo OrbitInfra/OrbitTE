@@ -19,7 +19,32 @@ The latest installed delivery qualifies [automatic discovery](#installed-automat
 against a separately captured host inventory, retaining the full
 [physical rail accounting](#installed-physical-rail-accounting) contract.
 The production host RDMA implementation is complete; physical/fabric
-qualification and independent acceptance remain in the existing P4 queue.
+qualification and complete acceptance remain in the existing P4 queue.
+
+## P4 independent review
+
+An independent reviewer inspected exact main
+[`121ab95`](https://github.com/OrbitInfra/OrbitTE/commit/121ab95a77f94a80286617c4a2032654e692f9b4)
+against frozen TENT `e2d6e8e` on 2026-10-27. The accepted scope is the reviewed
+source and recorded bounded RoCE evidence. No blocking production-code finding
+was reported. One stale architecture statement about installed-consumer
+qualification was corrected.
+
+The reviewer independently reran source and packaged-consumer gates on stable
+and Rust 1.85, all-feature Clippy, 34 controller controls, five native C controls
+and the strict 19-page documentation build. Ten package manifests and 47 native
+recovery files passed hash verification; the archived validators accepted 44
+recorded two-host cases. This revalidation does not itself rerun physical DMA.
+The original Forge job had terminated, so fresh independent live repetition
+remained pending in the initial report.
+
+Review source archive SHA256:
+`e3230e5c58cd562390e10df910bd8ea2aa7bb6dbd46d4a88ec6f14c50ad39246`.
+The report, commands, logs and evidence indexes are outside Git at
+`/root/orbitte-artifacts/p4-final-acceptance-20261027/reviewer/` (`review.json`
+and `review.md`). Full P4 is not accepted: physical link/device loss, provider
+removal and InfiniBand remain unqualified. The user's 2026-10-27 decision allows
+P5 work with available hardware while keeping these gaps explicit.
 
 ## Installed automatic discovery
 

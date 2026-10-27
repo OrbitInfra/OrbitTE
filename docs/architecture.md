@@ -325,8 +325,9 @@ remain distinct:
 | Automatic GID reselection on port recovery | `RdmaContext::refreshAddress` reruns `getBestGidIndex` for automatic configuration | Refresh queried the existing index only | Paused refresh reranks valid GIDs on the selected device/port; explicit pins stay strict; native drain precedes publication |
 
 CPU transitions and the [focused native recovery gate](qualification.md#focused-native-recovery)
-cover these paths. Physical-fault, fabric and installed-consumer evidence remain
-qualification gaps; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
+cover these paths. [Installed RoCE profiles](qualification.md#installed-automatic-discovery)
+have bounded qualification. Independent live repetition and physical/fabric
+qualification remain open; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
 keeps them separate. Selected-port address refresh, periodic reclaim and
 fixed-width QP reuse already exist. Broader bandwidth/QoS/retry policy remains
 in P6; GPU direct paths and native wire compatibility remain separate stages.
@@ -355,3 +356,24 @@ behavioral, ABI, wire or performance parity.
 [endpoint]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp
 [context]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp
 [workers]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/workers.cpp
+
+## CUDA copy stream ownership
+
+`cuda::CudaMemory` owns the allocation lock; `cuda::stream::CopyStream` owns its
+lazy nonblocking stream, reusable completion event and pending-work state.
+`cuda::driver` supplies fallibly loaded Driver API functions. Each copy holds
+private pinned staging until its event completes. An enqueue/record failure
+requires a successful stream drain; an ambiguous wait retains the allocation,
+staging, stream/event and context. Native destroy success alone never proves
+DMA complete. Handle cleanup failures retain the unresolved handles/context.
+
+This follows the frozen TENT
+[CUDAStreamPool](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/platform/cuda/cuda_stream_pool.cpp)
+pattern of lazy nonblocking streams and owning handles, and
+[NVLinkTransport](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
+records an event after async copy work. OrbitTE currently reuses one stream/event
+per serialized allocation, rather than implementing TENT's device-wide pool or
+NVLink transport here. External producers still synchronize before handing over
+memory. Public read/write completion remains synchronous; initial allocation
+zeroing still synchronizes its context. Transport-level scheduling and caller
+stream readiness remain P5 work.

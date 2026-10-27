@@ -43,3 +43,8 @@ required-features = ["rdma", "cuda"]
 name = "rdma_host"
 path = "tests/hardware/rdma_host.rs"
 required-features = ["rdma"]
+
+[[example]]
+name = "cuda_copy"
+path = "tests/hardware/cuda_copy.rs"
+required-features = ["cuda"]

@@ -300,6 +300,8 @@ fn finish(
     if retained.device_allocations != 0
         || retained.pinned_allocations != 0
         || retained.contexts != 0
+        || retained.streams != 0
+        || retained.events != 0
     {
         return Err(Error::Internal("CUDA resources were retained"));
     }

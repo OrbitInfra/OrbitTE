@@ -13,10 +13,14 @@ use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
 mod driver;
+mod stream;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
+use stream::CopyStream;
 
 static RETAINED_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_PINNED: AtomicUsize = AtomicUsize::new(0);
+static RETAINED_STREAM: AtomicUsize = AtomicUsize::new(0);
+static RETAINED_EVENT: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_CONTEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +28,8 @@ pub struct RetainedResources {
     pub device_allocations: usize,
     pub pinned_allocations: usize,
     pub contexts: usize,
+    pub streams: usize,
+    pub events: usize,
 }
 
 /// Failed frees/restoration are retained, not reported as released memory.
@@ -32,6 +38,8 @@ pub fn retained_resources() -> RetainedResources {
         device_allocations: RETAINED_DEVICE.load(Ordering::Acquire),
         pinned_allocations: RETAINED_PINNED.load(Ordering::Acquire),
         contexts: RETAINED_CONTEXT.load(Ordering::Acquire),
+        streams: RETAINED_STREAM.load(Ordering::Acquire),
+        events: RETAINED_EVENT.load(Ordering::Acquire),
     }
 }
 
@@ -121,6 +129,7 @@ struct DeviceAllocation {
     owned: bool,
     owner: Option<Arc<dyn Send + Sync>>,
     uncertain: bool,
+    copy_stream: Option<CopyStream>,
 }
 
 impl Drop for DeviceAllocation {
@@ -262,6 +271,7 @@ impl CudaMemory {
             owned: true,
             owner: None,
             uncertain: false,
+            copy_stream: None,
         };
         context.current(|| {
             // SAFETY: the owner is installed before allocation/init can fail.
@@ -377,6 +387,7 @@ impl CudaMemory {
                 owned: false,
                 owner: Some(owner),
                 uncertain: false,
+                copy_stream: None,
             }),
         })
     }
@@ -420,35 +431,24 @@ impl CudaMemory {
         if let Some(bytes) = source {
             staging.bytes_mut().copy_from_slice(bytes);
         }
-        let result = context.current(|| {
-            // SAFETY: GPU and pinned bytes remain owned across copy, synchronize,
-            // restoration and any retained error. Caller host slices are never
-            // handed to CUDA, so an ambiguous copy cannot outlive their borrow.
-            let code = unsafe {
-                if source.is_some() {
-                    (context.driver.to_device)(
-                        self.address + offset as u64,
-                        staging.address.as_ptr().cast(),
-                        length,
-                    )
-                } else {
-                    (context.driver.to_host)(
-                        staging.address.as_ptr().cast(),
-                        self.address + offset as u64,
-                        length,
-                    )
-                }
-            };
-            let synced = unsafe { (context.driver.synchronize)() };
-            allocation.uncertain = synced != SUCCESS;
-            if synced != SUCCESS {
-                return Err(Error::Unquiesced {
-                    operation: "cuCtxSynchronize copy",
-                    code: synced as i32,
-                });
-            }
-            check("CUDA staged copy", code)
-        });
+        if allocation.copy_stream.is_none() {
+            allocation.copy_stream = Some(CopyStream::new(&context)?);
+        }
+        let stream = allocation
+            .copy_stream
+            .as_mut()
+            .ok_or(Error::Internal("CUDA copy stream missing"))?;
+        // SAFETY: GPU and private pinned staging remain owned until the event
+        // completes, or are retained below with the stream on ambiguous errors.
+        let result = unsafe {
+            stream.copy(
+                self.address + offset as u64,
+                staging.address,
+                length,
+                source.is_some(),
+            )
+        };
+        allocation.uncertain = !stream.quiescent();
         if allocation.uncertain || context.poisoned.load(Ordering::Acquire) {
             RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(staging);
