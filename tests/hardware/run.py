@@ -135,7 +135,7 @@ class Controller:
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
                           restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
-        if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma')
+        if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-rail-accounting')
                 and environment['ORBITTE_SHARED_ROLE'] == 'requester') or (
                 environment.get('ORBITTE_HOST_MODE') == 'installed-memory-cleanup'
                 and environment['ORBITTE_SHARED_ROLE'] == environment['ORBITTE_CLEANUP_ROLE']):
@@ -490,7 +490,7 @@ def main():
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != installed.PROTOCOL):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
-            if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') for case in profile['cases']):
+            if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup', 'installed-rail-accounting') for case in profile['cases']):
                 controller.fault_library = Path(installation['fault_library'])
                 if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
                     raise ValueError('native fault library differs from the packaged artifact')

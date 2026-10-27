@@ -97,6 +97,7 @@ static void deny_commands(int descriptor) {
 #include "inflight.c"
 #include "memory.c"
 #include "dependency.c"
+#include "accounting.c"
 
 static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     pthread_mutex_lock(&lock);
@@ -112,6 +113,11 @@ static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **
     }
     if (inflight.armed && operation(wr->opcode)) {
         int code = inflight_post(&context, qp, wr, bad);
+        pthread_mutex_unlock(&lock);
+        return code;
+    }
+    if (accounting.active) {
+        int code = accounting_post(&context, index, qp, wr, bad);
         pthread_mutex_unlock(&lock);
         return code;
     }
@@ -157,6 +163,7 @@ static int poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
     int kept = 0;
     for (int i = 0; i < count; ++i) {
         inflight_completion(cq, &wc[i]);
+        accounting_complete(cq, &wc[i]);
         unsigned op = 0;
         if (wc[i].status == IBV_WC_SUCCESS)
             op = wc[i].opcode == IBV_WC_RDMA_READ ? 1 : wc[i].opcode == IBV_WC_RDMA_WRITE ? 2 : 0;
@@ -194,7 +201,8 @@ static void attach(struct ibv_context *context) {
     if (!dladdr((void *)context->ops.poll_cq, &provider) || !provider.dli_fname) fail();
     char provider_path[4096];
     if (!realpath(provider.dli_fname, provider_path)) fail();
-    receipt("\"kind\":\"context\",\"context\":%u,\"provider\":\"%s\"", index, provider_path);
+    receipt("\"kind\":\"context\",\"context\":%u,\"provider\":\"%s\",\"device\":\"%s\"", index, provider_path,
+            context->device ? context->device->name : "");
     ++state.contexts;
     context->ops.poll_cq = poll;
     context->ops.post_send = post;
@@ -273,7 +281,7 @@ int orbitte_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned lim
     pthread_mutex_lock(&lock);
     int error = 0;
     if (command == 1) {
-        if (inflight.armed || state.armed || state.errors || state.contexts != 2 || !(op == 1 || op == 2) || !limit || limit > 32) error = EINVAL;
+        if (accounting.active || inflight.armed || state.armed || state.errors || state.contexts != 2 || !(op == 1 || op == 2) || !limit || limit > 32) error = EINVAL;
         else {
             state.armed = 1; state.phase = phase; state.posts = 0; state.lost = 0; state.destroyed_qps = 0;
             expected = limit; selected_operation = op;
