@@ -202,7 +202,7 @@ test coordination; payload requests remain explicit RDMA.
 The installed gate covers healthy host traffic, idle-resource process restart,
 posted-RQ interruption before payload authorization, lost payload CQEs,
 requester QP cleanup failure and in-flight QP interruption. The last two
-fixtures require qualification of their declared two-host profiles; broader
+fixtures have [selected two-host qualification](qualification.md#installed-two-host-fault-qualification); broader
 native teardown failures retain separate installed-artifact gates. Physical port/device faults, per-rail
 bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
@@ -258,9 +258,10 @@ separate qualification gates; this is correctness evidence, not performance.
 quarantine contract. Freeze `fault_role: "requester"`, two generations, one
 parent, `payload <= block`, one lane and rail mask 1 or 2. It uses the same
 identity-pinned two-peer controller and immutable fault library as completion
-loss. The fixture is implemented and has passed the focused
-[single-host diagnostic](qualification.md#installed-cleanup-fixture). The declared
-two-host profile is still unqualified.
+loss. The fixture passes the focused
+[single-host diagnostic](qualification.md#installed-cleanup-fixture) and the
+[declared two-host cases](qualification.md#installed-two-host-fault-qualification).
+Broader native cleanup failures retain their separate gates.
 
 After the healthy rounds, the observer records one accepted payload WR and
 withholds its actual successful CQE. It arms cleanup failure on that exact
@@ -332,6 +333,8 @@ ERR transition. OrbitTE keeps PD/MRs in `RdmaContext`, QPs in `RdmaEndpoint`,
 WR completion ownership in CQ lanes, and shared progress in transport Workers.
 The fixture verifies those existing owners through the installed API.
 
-The focused [single-host diagnostic](qualification.md#installed-in-flight-dma-fixture)
-passes both compiler profiles. It cannot qualify the declared two-host profile,
-physical link/device loss, InfiniBand or throughput.
+Both compiler profiles pass the focused
+[single-host diagnostic](qualification.md#installed-in-flight-dma-fixture) and
+[declared two-host cases](qualification.md#installed-two-host-fault-qualification).
+These process-local QP faults do not qualify physical link/device loss,
+InfiniBand or throughput.

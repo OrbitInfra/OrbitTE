@@ -72,10 +72,11 @@ is retained. A separate failed audit incorrectly required ERR, although close
 fences admission and calls destruction directly. The corrected verifier records
 the actual retained QP state and preserves the original receipts.
 
-This is **single-host diagnostic evidence**, not acceptance of the declared
-two-host profile, interrupted in-flight DMA or physical loss. The two Forge
-replicas currently share a physical host. Earlier libtest cleanup evidence
-remains scoped to its own artifact; independent acceptance is still open.
+These original runs are **single-host diagnostic evidence**: their two Forge
+replicas shared a physical host. The subsequent
+[two-host qualification](#installed-two-host-fault-qualification) uses a separately
+inventoried allocation and package. Earlier libtest cleanup evidence remains
+scoped to its own artifact; independent acceptance is still open.
 
 ### Installed in-flight DMA fixture
 
@@ -97,11 +98,43 @@ original resource locks and unchanged device resource counts are recorded in
 `/root/orbitte-artifacts/installed-inflight-20261027/native-audit.json`.
 
 This closes the missing fixture for actual in-flight DMA interruption. It is
-**single-host diagnostic evidence**, because both Forge replicas share one
-physical host. It does not qualify the declared two-host profile, physical
-link/device loss, broader cleanup failures or InfiniBand. Independent acceptance
-and the fixed remaining P4 queue stay open. Production runtime, dependencies,
-public API and wire v14 are unchanged.
+**single-host diagnostic evidence**, because those Forge replicas shared one
+physical host. The subsequent two-host run is recorded below. Physical
+link/device loss, broader cleanup failures, InfiniBand and independent acceptance
+remain open. Production runtime, dependencies, public API and wire v14 are unchanged.
+
+### Installed two-host fault qualification
+
+Four frozen cases pass on **two distinct physical hosts**, each with eight H20
+GPUs and two selected 400G mlx5 RoCE RNICs. The tests use host memory only.
+Both installed artifacts were built from `56edccc`; their runtime and native
+fixtures are identical to controller source
+[`9a6c270`](https://github.com/OrbitInfra/OrbitTE/commit/9a6c27056ea4a68855b296cfa03ead1607dc7e86).
+Stable 1.99.1 runs READ/polling on rail mask 1; Rust 1.85 runs WRITE/events in
+the opposite direction on mask 2. Each artifact runs one 64 KiB requester QP
+cleanup-failure case and one in-flight DMA case (4 MiB READ or 16 MiB WRITE).
+Both contexts retain persistent MR copies throughout each surviving engine's
+recovery.
+
+The controller reconciles actual destructor EIO with retained backing, keys and
+charges, exact requester reaping and replacement against the surviving source.
+The DMA cases join an accepted WR, QP ERR, its actual failed WC and successful
+QP destruction to copied and untouched post-drain bytes, intact guards and
+three recovered rounds in the original processes. Every supervised child is
+reaped, original RNIC locks are released, provider hashes stay fixed, and selected
+device PD/CQ/QP/MR/context counts return to the preflight values.
+
+The scenarios, package/binary hashes, host/boot inventories, native receipts and
+resource audit are retained outside Git in
+`/root/orbitte-artifacts/p4-closeout-20261027/two-host-native-audit.json`.
+Rejected same-host replacement allocations remain in that directory's placement
+record and contribute no two-host qualification. Earlier failed native controls
+remain in their original diagnostic archives.
+
+This qualifies only these four installed RoCE fault cases. It does not qualify
+physical link/device loss, broader installed cleanup failures, physical rail
+contention, InfiniBand, GPU/NVLink payloads or performance. Independent acceptance
+and the remaining [P4 gates](completion-plan.md#p4-remaining-delivery) stay open.
 
 ## Recorded host RDMA evidence
 
