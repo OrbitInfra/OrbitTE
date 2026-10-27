@@ -67,8 +67,9 @@ The [installed cleanup fixture](installed-host.md#native-cleanup-failure) now
 exercises the requester QP boundary through the ordinary packaged crate. Its
 [selected two-host cases](qualification.md#installed-two-host-fault-qualification)
 pass on both compiler artifacts. The [installed MR/MW fixture](installed-host.md#mrmw-cleanup-and-engine-replacement)
-now checks registration and grant ownership through same-process engine
-replacement. Broader installed teardown failures remain open;
+passes its [six selected two-host cases](qualification.md#installed-memory-cleanup-and-replacement),
+checking registration/grant ownership through same-process engine replacement.
+Installed CQ/channel/PD dependency failures remain open;
 the libtest results above cannot substitute for those installed gates.
 
 ## Native TENT correspondence

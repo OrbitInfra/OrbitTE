@@ -201,9 +201,11 @@ test coordination; payload requests remain explicit RDMA.
 
 The installed gate covers healthy host traffic, idle-resource process restart,
 posted-RQ interruption before payload authorization, lost payload CQEs,
-requester QP cleanup failure and in-flight QP interruption. The last two
-fixtures have [selected two-host qualification](qualification.md#installed-two-host-fault-qualification); broader
-native teardown failures retain separate installed-artifact gates. Physical port/device faults, per-rail
+requester QP cleanup failure, in-flight QP interruption and MR/MW cleanup with
+same-process engine replacement. The [QP cases](qualification.md#installed-two-host-fault-qualification)
+and [memory cases](qualification.md#installed-memory-cleanup-and-replacement)
+have selected two-host qualification; CQ/channel/PD dependency failures retain
+separate installed-artifact gates. Physical port/device faults, per-rail
 bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
 for executed artifact/profile results and
@@ -376,5 +378,6 @@ engine drained or recover its quarantined owners.
 `installed_memory.py` independently joins both ledgers to supervisor PIDs,
 provider mappings and released locks. CPU controls reject wrong identities,
 missing native errors, retries, early backing/quota release, false drain,
-stale epochs and unreaped children. Hardware results belong in
-[qualification](qualification.md), separately from fixture implementation.
+stale epochs and unreaped children. The [six frozen two-host cases](qualification.md#installed-memory-cleanup-and-replacement)
+pass on stable and Rust 1.85; that qualification is separate from physical
+device loss, other teardown owners and independent acceptance.
