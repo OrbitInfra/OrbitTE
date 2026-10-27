@@ -203,9 +203,9 @@ The installed gate covers healthy host traffic, idle-resource process restart,
 posted-RQ interruption before payload authorization, lost payload CQEs,
 requester QP cleanup failure, in-flight QP interruption and MR/MW cleanup with
 same-process engine replacement. The [QP cases](qualification.md#installed-two-host-fault-qualification)
-and [memory cases](qualification.md#installed-memory-cleanup-and-replacement)
-have selected two-host qualification; CQ/channel/PD dependency failures retain
-separate installed-artifact gates. Physical port/device faults, per-rail
+and [memory cases](qualification.md#installed-memory-cleanup-and-replacement),
+along with [CQ/channel/PD dependency cases](qualification.md#installed-dependency-cleanup),
+have selected two-host qualification. Physical port/device faults, per-rail
 bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
 for executed artifact/profile results and
@@ -263,7 +263,9 @@ identity-pinned two-peer controller and immutable fault library as completion
 loss. The fixture passes the focused
 [single-host diagnostic](qualification.md#installed-cleanup-fixture) and the
 [declared two-host cases](qualification.md#installed-two-host-fault-qualification).
-Broader native cleanup failures retain their separate gates.
+The `qp` selector below is the default. The
+[CQ/channel/PD selectors](#cq-completion-channel-and-pd-dependency-failures)
+reuse this supervisor with their own dependency and memory-lifetime checks.
 
 After the healthy rounds, the observer records one accepted payload WR and
 withholds its actual successful CQE. It arms cleanup failure on that exact
@@ -289,8 +291,8 @@ checks against the surviving source.
 CPU controls verify FD/thread isolation and reject wrong QP identities,
 retries, missing backing and false drain evidence. They do not qualify native
 retention. This profile also does not prove interrupted in-flight DMA, MR/MW
-or channel cleanup failure through the installed API, physical link loss or
-provider teardown; those boundaries retain their separate gates.
+or channel cleanup failure through the installed API; those have their own
+profiles below. Physical link loss and provider teardown remain separate gates.
 
 ## In-flight DMA interruption
 
@@ -381,3 +383,37 @@ missing native errors, retries, early backing/quota release, false drain,
 stale epochs and unreaped children. The [six frozen two-host cases](qualification.md#installed-memory-cleanup-and-replacement)
 pass on stable and Rust 1.85; that qualification is separate from physical
 device loss, other teardown owners and independent acceptance.
+
+## CQ, completion-channel and PD dependency failures
+
+Use the existing `installed-cleanup-failure` mode with `cleanup_kind` set to
+`cq`, `channel` or `pd`. Omitting the selector keeps the original `qp` case.
+The scope remains one requester, one parent, one QP/active rail, two registered
+contexts and two process generations. Channel failure requires event progress.
+This extends the existing restart fixture; it does not introduce a transport or
+production failure-injection API.
+
+| Owner | Native failure | Required lifetime after dropping fixture owners |
+| --- | --- | --- |
+| CQ | A real dependent RESET QP prevents CQ destruction after the payload QP closes | CQ/PD and unresolved grant, SQ, batch and actual allocation remain retained |
+| Completion channel | A real extra CQ prevents channel destruction after both engine CQs close | Channel/context and unresolved grant/actual allocation remain retained; QPs and engine CQs stay released |
+| PD | A real Type-2 MW prevents PD destruction during idle teardown | PD/device remain retained; all payload MRs, grants, batches and actual business allocation are released |
+
+Each real destructor returns `EBUSY` once. The observer rejects engine retries
+and premature parent-device close. It queries the native dependency before and
+after all fixture owners are dropped: QP query for CQ, empty-CQ poll plus channel
+identity/open FD for the completion channel, and a real PD busy probe for the
+MW dependency. The extra blocker has no application allocation or DMA loan;
+it remains until the supervisor reaps that exact process.
+
+CQ/channel cases reuse a withheld successful payload CQE and require failed,
+unquiesced public batches and unchanged memory/byte/SQ charges. The idle PD
+case has no lost CQE or pending request. All three refuse repeated successful
+close, then reuse the existing live-peer restart checks: fresh epoch at the
+same endpoint, stale authority refused before QP/WR creation, three healthy
+full-byte/guard rounds and final release of resource locks. Native receipts,
+public ownership and the supervisor ledger must agree.
+
+The selected profile and executed artifact status are recorded in
+[qualification](qualification.md). Process-local dependency failures do not
+qualify physical link loss, provider removal or an InfiniBand fabric.

@@ -16,6 +16,8 @@ use orbit_te::{
 mod cleanup;
 #[path = "rdma_host/completion.rs"]
 mod completion;
+#[path = "rdma_host/dependency.rs"]
+mod dependency;
 #[path = "rdma_host/gate.rs"]
 mod gate;
 #[path = "rdma_host/inflight.rs"]

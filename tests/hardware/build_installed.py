@@ -87,7 +87,7 @@ def build(root, output, toolchain, allow_dirty=False):
         fault_library = output / 'liborbitte_cq_fault.so'
         run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
                              str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
-        for name in ('cq_fault', 'inflight', 'memory'):
+        for name in ('cq_fault', 'inflight', 'memory', 'dependency'):
             control = output / ('test_' + name)
             run(name + '-control-build', [*compiler, *flags, str(fault_sources / ('test_' + name + '.c')),
                                          '-ldl', '-o', str(control)])

@@ -15,7 +15,8 @@ Grant records retain memory authority, DMA loans and completion waiters.
 | --- | --- | --- |
 | `ibv_destroy_qp` | Thread-local seccomp rejects write/ioctl on the selected test-owned uverbs command FD; the real verbs call returns EIO | QP, its CQs/PD, outstanding grants, MR/backing and SQ/RQ charges |
 | `ibv_destroy_comp_channel` | Create a real extra CQ attached to the channel before calling the real destructor; libibverbs returns EBUSY | Channel/context and grants whose cancellation receipt is incomplete; already destroyed QPs stay released |
-| `ibv_destroy_cq` / `ibv_dealloc_pd` | Existing real dependent QP/MW controls | The failing resource and remaining dependencies |
+| `ibv_destroy_cq` | A real dependent RESET QP prevents CQ destruction | CQs/PD and unresolved grant, MR/backing and completion debt; the payload QP stays released |
+| `ibv_dealloc_pd` | A real Type-2 MW prevents idle PD destruction | PD/device; already drained business allocations, MRs and request charges are released |
 | `ibv_close_device` | Existing CPU ABI failure control | Device owner retained; close/drop never retry an ambiguous failure |
 
 The QP syscall filter is confined to one child thread and one descriptor. It
@@ -69,8 +70,10 @@ exercises the requester QP boundary through the ordinary packaged crate. Its
 pass on both compiler artifacts. The [installed MR/MW fixture](installed-host.md#mrmw-cleanup-and-engine-replacement)
 passes its [six selected two-host cases](qualification.md#installed-memory-cleanup-and-replacement),
 checking registration/grant ownership through same-process engine replacement.
-Installed CQ/channel/PD dependency failures remain open;
-the libtest results above cannot substitute for those installed gates.
+The [installed dependency gate](installed-host.md#cq-completion-channel-and-pd-dependency-failures)
+now passes [six selected CQ/channel/PD cases](qualification.md#installed-dependency-cleanup),
+including actual backing retention for unresolved debt and release after idle
+PD failure. Each result remains scoped to its installed or libtest artifact.
 
 ## Native TENT correspondence
 
