@@ -1,6 +1,7 @@
 //! Interrupt an accepted payload, then inspect bytes only after native drain.
 
 use std::ffi::{c_char, c_void};
+use std::sync::Arc;
 
 use orbit_te::{BatchState, RemoteEffect, TaskState};
 
@@ -126,6 +127,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
     }
     let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
     let (engine, memory) = create(case, bind)?;
+    let engine = Arc::new(engine);
     let mut stream = control(case.source, bind, None)?;
     let peer = open_peer(case, &engine, &memory, &mut stream, engine.endpoint())?;
     println!(
