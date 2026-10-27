@@ -133,10 +133,13 @@ pub(super) fn request_kill(phase: usize, state: &str) -> Result<()> {
 
 pub(super) fn run(case: &Case) -> Result<()> {
     let mode = env::var("ORBITTE_HOST_MODE")?;
-    let lost_completion = matches!(
-        mode.as_str(),
-        "installed-lost-completion" | "installed-cleanup-failure"
-    );
+    let pd_cleanup = mode == "installed-cleanup-failure"
+        && env::var("ORBITTE_CLEANUP_KIND").as_deref() == Ok("pd");
+    let lost_completion = !pd_cleanup
+        && matches!(
+            mode.as_str(),
+            "installed-lost-completion" | "installed-cleanup-failure"
+        );
     let interrupted = mode == "installed-interruption" || lost_completion;
     if interrupted && case.payload > case.block {
         return Err("interruption relay requires one slice per parent".into());
@@ -288,7 +291,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
                 Vec::new()
             };
             let cleanup = if cleanup_failure && target {
-                Some(cleanup::CleanupFault::arm()?)
+                Some(cleanup::CleanupFault::arm(case)?)
             } else {
                 None
             };

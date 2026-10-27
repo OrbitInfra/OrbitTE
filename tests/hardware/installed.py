@@ -57,8 +57,12 @@ def validate(case):
     if case['mode'] == 'installed-inflight-dma' and (case['parents'] != 1 or case['num_lanes'] != 1
             or case['mask'] not in (1, 2) or case['payload'] != case['block']):
         raise ValueError('in-flight DMA requires one parent, QP and payload WR')
-    if 'cleanup_kind' in case and case['mode'] != 'installed-memory-cleanup':
-        raise ValueError('memory fault selector escaped its mode')
+    if case['mode'] == 'installed-cleanup-failure':
+        kind = case.get('cleanup_kind', 'qp')
+        if kind not in ('qp', 'cq', 'channel', 'pd') or (kind == 'channel' and not case['rdma_events']):
+            raise ValueError('cleanup requires a supported native owner and progress mode')
+    if 'cleanup_kind' in case and case['mode'] not in ('installed-memory-cleanup', 'installed-cleanup-failure'):
+        raise ValueError('native fault selector escaped its mode')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -83,6 +87,8 @@ def command(profile, case, node, role, root, readiness=None):
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         environment.update(ORBITTE_RESTART_GENERATIONS=str(case['generations']),
                            ORBITTE_RESTART_KILL_ROLE=case['fault_role'])
+    if case['mode'] == 'installed-cleanup-failure':
+        environment['ORBITTE_CLEANUP_KIND'] = case.get('cleanup_kind', 'qp')
     if case['mode'] == 'installed-memory-cleanup':
         environment.update(ORBITTE_CLEANUP_KIND=case['cleanup_kind'], ORBITTE_CLEANUP_ROLE=case['fault_role'])
     if readiness is not None:

@@ -18,6 +18,9 @@ def fault_scope(environment):
         owner = environment.get('ORBITTE_CLEANUP_KIND')
         return (role in ('source', 'requester') and role == environment.get('ORBITTE_CLEANUP_ROLE')
                 and owner in ('mr', 'mw') and (owner != 'mw' or role == 'source'))
+    if mode == 'installed-cleanup-failure':
+        return (role == 'requester' and environment.get('ORBITTE_CLEANUP_KIND', 'qp') in ('qp', 'cq', 'channel', 'pd')
+                and (environment.get('ORBITTE_CLEANUP_KIND') != 'channel' or environment.get('ORBITTE_RDMA_EVENTS') == '1'))
     return (role == 'requester'
             and mode in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma'))
 

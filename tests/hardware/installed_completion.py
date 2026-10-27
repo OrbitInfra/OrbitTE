@@ -4,11 +4,11 @@ import json
 from installed_restart import records
 
 
-def verify(case, evidence):
+def native_logs(case, evidence):
     cleanup = case.get('mode') == 'installed-cleanup-failure'
     requester = evidence['requester']
     source = evidence['source']
-    target = case['fault_role'] == 'requester'
+    dependency = cleanup and case.get('cleanup_kind', 'qp') != 'qp'
     processes = json.loads(requester['result.json'])['phases']
     fault_hash = json.loads(requester['result.json']).get('fault_library_sha256', '')
     if len(fault_hash) != 64 or any(c not in '0123456789abcdef' for c in fault_hash):
@@ -44,7 +44,9 @@ def verify(case, evidence):
             elif kind in ('post', 'lost', 'destroy_qp'):
                 if row['context'] not in active or (kind == 'destroy_qp' and row['code'] not in ((0, 5) if cleanup and generation == 0 else (0,))):
                     raise ValueError('native operation escaped its context or failed cleanup')
-            elif cleanup and generation == 0 and kind in ('arm_cleanup', 'cleanup_error', 'query_cleanup'):
+            elif cleanup and generation == 0 and kind in (
+                    ('arm_dependency', 'dependency_error', 'dependency_query', 'dependency_release')
+                    if dependency else ('arm_cleanup', 'cleanup_error', 'query_cleanup')):
                 pass
             elif kind != 'disarm':
                 raise ValueError('unknown native receipt')
@@ -53,6 +55,18 @@ def verify(case, evidence):
         logs.append(rows)
     if any(requester.get('cq-fault-' + str(g) + '.jsonl') for g in range(len(processes), 3)):
         raise ValueError('unexpected extra native process log')
+    return logs
+
+
+def verify(case, evidence):
+    cleanup = case.get('mode') == 'installed-cleanup-failure'
+    kind = case.get('cleanup_kind', 'qp') if cleanup else None
+    logs = native_logs(case, evidence)
+    if kind == 'pd':
+        from installed_dependency import verify as verify_dependency
+        return verify_dependency(case, evidence, logs)
+    requester, source = evidence['requester'], evidence['source']
+    target = case['fault_role'] == 'requester'
     pending = records(requester, 'ORBITTE_INSTALLED_CQE_PENDING ')
     drains = records(requester, 'ORBITTE_INSTALLED_CQE_DRAIN ')
     phases = list(range(case['generations'] - 1))
@@ -110,5 +124,8 @@ def verify(case, evidence):
         raise ValueError('payload receipts escaped the declared fault windows')
 
     if cleanup:
-        from installed_cleanup import verify as verify_cleanup
+        if kind == 'qp':
+            from installed_cleanup import verify as verify_cleanup
+        else:
+            from installed_dependency import verify as verify_cleanup
         verify_cleanup(case, evidence, logs)

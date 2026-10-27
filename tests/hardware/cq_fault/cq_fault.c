@@ -27,6 +27,7 @@ struct context {
     int (*post)(struct ibv_qp *, struct ibv_send_wr *, struct ibv_send_wr **);
     int (*dealloc_mw)(struct ibv_mw *);
     struct ibv_mr *bound_mr;
+    struct ibv_qp *last_qp;
     uint32_t data_lkey;
 };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -95,6 +96,7 @@ static void deny_commands(int descriptor) {
 
 #include "inflight.c"
 #include "memory.c"
+#include "dependency.c"
 
 static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     pthread_mutex_lock(&lock);
@@ -117,6 +119,11 @@ static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **
     int armed = state.armed;
     pthread_mutex_unlock(&lock);
     int code = context.post(qp, wr, bad);
+    if (!code && (operation(wr->opcode) || wr->opcode == IBV_WR_BIND_MW)) {
+        pthread_mutex_lock(&lock);
+        contexts[index].last_qp = qp;
+        pthread_mutex_unlock(&lock);
+    }
     if (!armed) return code;
     pthread_mutex_lock(&lock);
     if (!state.armed || phase != state.phase) fail();
@@ -206,6 +213,7 @@ int ibv_close_device(struct ibv_context *context) {
     pthread_once(&symbols, resolve);
     pthread_mutex_lock(&lock);
     unsigned index = find(context);
+    if (dependency.attempts && context == dependency_context) fail();
     context->ops.poll_cq = contexts[index].poll;
     context->ops.post_send = contexts[index].post;
     context->ops.dealloc_mw = contexts[index].dealloc_mw;
@@ -253,7 +261,10 @@ int ibv_destroy_qp(struct ibv_qp *qp) {
                 index, cq, qpn, code, cleanup.attempts);
     } else if (code != 0) ++state.errors;
     inflight_destroyed((struct ibv_cq *)cq, qpn, code);
-    if (code == 0) ++state.destroyed_qps;
+    if (code == 0) {
+        ++state.destroyed_qps;
+        if (contexts[index].last_qp == qp) contexts[index].last_qp = NULL;
+    }
     pthread_mutex_unlock(&lock);
     return code;
 }
