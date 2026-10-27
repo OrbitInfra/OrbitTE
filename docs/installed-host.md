@@ -107,6 +107,30 @@ separate performance profiles. CPU controls exercise pass-through behavior and
 reject plausible but corrupted native ledgers; they do not establish physical
 contention. Exact qualifying artifacts belong in [qualification](qualification.md).
 
+## Automatic discovery against an independent inventory
+
+Add `"discovery": "auto"` to the frozen physical-rail accounting cases.
+Device, port and GID pins are unset, while the whitelist contains exactly the
+two locked RNICs. An identical blacklist checks the documented whitelist
+precedence. An absent strict GID 255 must return `Unavailable` before the
+normal automatic engine is constructed; it must not fall back to another GID.
+
+The supervisor runs the packaged, hash-pinned `discovery_inventory.py` under
+the original RNIC locks before and after each child. This read-only tool imports
+no OrbitTE discovery code. It records raw sysfs PCI, NUMA, port, GID/type,
+network-interface/index and NUMA-node information. The verifier requires an
+unchanged inventory on the correct host and compares the public topology to it.
+The frozen profile requires one active Ethernet port and one physical,
+non-link-local RoCEv2 candidate per RNIC; ambiguous inventories fail rather than
+being ranked by a second copy of the implementation. Public NIC IDs, memory
+priority tiers and strict-pin rejection are checked alongside the existing
+native WR/CQE and full-payload ledger.
+
+This qualifies installed automatic selection on the declared RoCE inventory.
+It does not qualify down-port transitions, physical link loss, InfiniBand,
+page placement, hotplug or independent reviewer acceptance. Results and exact
+artifacts belong in [qualification](qualification.md).
+
 ## Peer restart with a surviving engine
 
 Select `mode: "installed-restart"` with `fault_role: "source"` or

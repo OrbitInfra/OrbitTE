@@ -107,7 +107,8 @@ fn clean(engine: &TransferEngine) -> Result<()> {
 }
 
 pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
-    let engine = TransferEngine::new(EngineConfig {
+    let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
+    let config = EngineConfig {
         bind_addr: bind,
         max_registered_bytes: case.length(),
         max_transfer_bytes: case.payload,
@@ -127,8 +128,17 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
         },
         rdma: Some(RdmaConfig {
             rdma_whitelist: case.rails.clone(),
-            port: Some(1),
-            gid_index: Some(env::var("ORBITTE_SHARED_GID")?.parse()?),
+            rdma_blacklist: if automatic {
+                case.rails.clone()
+            } else {
+                Vec::new()
+            },
+            port: if automatic { None } else { Some(1) },
+            gid_index: if automatic {
+                None
+            } else {
+                Some(env::var("ORBITTE_SHARED_GID")?.parse()?)
+            },
             device_mask: case.mask,
             hop_limit: 64,
             num_lanes: case.lanes,
@@ -148,7 +158,28 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             ..Default::default()
         }),
         ..Default::default()
-    })?;
+    };
+    if automatic {
+        let mut pinned = config.clone();
+        pinned
+            .rdma
+            .as_mut()
+            .ok_or("missing RDMA configuration")?
+            .gid_index = Some(255);
+        match TransferEngine::new(pinned) {
+            Err(orbit_te::Error::Unavailable(_)) => {
+                println!(
+                    "ORBITTE_INSTALLED_DISCOVERY_PIN {{\"gid_index\":255,\"unavailable\":true}}"
+                );
+            }
+            Err(error) => return Err(error.into()),
+            Ok(engine) => {
+                engine.close(TIMEOUT)?;
+                return Err("absent strict GID unexpectedly fell back".into());
+            }
+        }
+    }
+    let engine = TransferEngine::new(config)?;
     Ok(engine)
 }
 
@@ -158,6 +189,33 @@ pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
         || topology.nic_list[0].pci_bus_id == topology.nic_list[1].pci_bus_id
     {
         return Err("two distinct physical RNIC contexts are required".into());
+    }
+    let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
+    if automatic {
+        println!(
+            "ORBITTE_INSTALLED_DISCOVERY_CONFIG {{\"device\":null,\"port\":null,\"gid_index\":null,\"whitelist\":{:?},\"blacklist\":{:?}}}",
+            case.rails, case.rails
+        );
+        for (id, nic) in topology.nic_list.iter().enumerate() {
+            println!(
+                "ORBITTE_INSTALLED_TOPOLOGY_NIC {{\"id\":{id},\"name\":{:?},\"pci\":{:?},\"numa\":{},\"attrs\":{:?}}}",
+                nic.name,
+                nic.pci_bus_id.as_deref().ok_or("missing PCI identity")?,
+                nic.numa_node
+                    .map_or_else(|| "null".into(), |n| n.to_string()),
+                nic.device_attrs
+            );
+        }
+        for memory in &topology.mem_list {
+            println!(
+                "ORBITTE_INSTALLED_TOPOLOGY_MEMORY {{\"name\":{:?},\"numa\":{},\"ranks\":{:?}}}",
+                memory.name,
+                memory
+                    .numa_node
+                    .map_or_else(|| "null".into(), |n| n.to_string()),
+                memory.device_list
+            );
+        }
     }
     for nic in &topology.nic_list {
         if !case.rails.contains(&nic.name) || !nic.device_attrs.contains_key("rdma.selected") {

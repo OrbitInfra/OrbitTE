@@ -75,6 +75,13 @@ def build(root, output, toolchain, allow_dirty=False):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
+        inventory_tool = output / 'discovery_inventory.py'
+        inventory_source = library / 'tests/hardware/discovery_inventory.py'
+        if inventory_source.read_bytes() != (root / 'tests/hardware/discovery_inventory.py').read_bytes():
+            raise ValueError('packaged discovery inventory differs from source')
+        shutil.copy2(inventory_source, inventory_tool)
+        manifest.update(inventory_tool=str(inventory_tool), inventory_tool_sha256=digest(inventory_tool))
+        fixture_hashes['tests/hardware/discovery_inventory.py'] = digest(inventory_tool)
         fault_sources = library / 'tests/hardware/cq_fault'
         for path in sorted(fault_sources.glob('*.c')):
             relative = path.relative_to(library)
