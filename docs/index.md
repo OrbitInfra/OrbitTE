@@ -13,56 +13,40 @@
 </p>
 :::
 
-OrbitTE provides owned, batched data movement across CPU memory, NVIDIA host
-staging and network transports. Its design follows Mooncake TENT's resource
-and runtime boundaries, implemented in Rust.
-
 ## Overview
 
-The engine owns registration, batches and completion. TCP and RDMA move payloads
-through separate transports, with a shared control service for peer discovery,
-grants and receipts. Native resources retain their allocation owners until
-physical work has drained.
+OrbitTE provides owned, batched data movement across CPU memory, NVIDIA host
+staging and network transports. Its design follows Mooncake TENT's resource
+and runtime boundaries, implemented in Rust without a Mooncake C++ dependency.
+
+The engine owns registration, batches and completion. TCP and RDMA are separate
+payload transports, with a shared control service for peer discovery, grants
+and receipts. Allocations remain owned until native work has drained.
 
 :::{image} _static/architecture.svg
 :alt: OrbitTE engine and sibling TCP/RDMA transports; dashed paths are planned
 :class: dark-light
 :::
 
-The source implements CPU/TCP, persistent host RDMA resources, cross-rail
-request slicing, eager multi-context MR publication and synchronized NVIDIA
-host staging. Qualification is scoped
-to the profiles recorded in the [capability matrix](capabilities.md). The
-published alpha reserves the crate name; the source implementation remains
-under development.
-
 ## Getting started
 
 Run the [CPU example](getting-started.md), select optional providers with the
-[build guide](build.md), or read the [architecture](architecture.md) to understand
-registration, transfer and completion ownership.
+[build guide](build.md), and use the [Rust API guide](rust-api.md) to register
+memory and submit transfers. The [RDMA/CUDA guide](rdma-cuda.md) explains device
+selection, persistent resources, completion and shutdown.
 
-## Current focus
+## Development status
 
-Complete OrbitTE's native host-RDMA stage before resuming OrbitKV integration.
-Persistent MR/QP resources, multirail dispatch, worker/CQ lanes, NUMA binding
-and unified event consumption have scoped native evidence. Periodic monitor
-reclaim, initially paused contexts and automatic GID reselection on recovery are
-implemented with CPU coverage; their focused native repeat remains unqualified.
-Packaged host consumers
-have scoped RoCEv2 evidence; remaining fault profiles and independent
-acceptance remain open.
-QP-owned SQ/RQ accounting, independent
-runtime grant records and exact completion dispatch are implemented. The public
-handshake shares physical QPs across independent grants. Fixed-width cold
-construction reserves slots before native creation; both peers negotiate the
-array width and reuse published connections.
+CPU/TCP, persistent host RDMA, multirail slicing and synchronized NVIDIA host
+staging are implemented. Native qualification applies to the exact profiles
+in [qualification](qualification.md). The published alpha reserves the crate
+name; the source implementation remains under development.
 
-The [architecture](architecture.md#source-reading-order) provides a reading
-path through transport, context, peer, grant and progress owners. The
-[completion plan](completion-plan.md#p4-remaining-delivery) separates remaining
-implementation from qualification and preserves the historical delivery record.
-See [qualification](qualification.md) for exact artifacts and limits.
+The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks the remaining
+host-RDMA hardware and independent-review gates before OrbitKV integration.
+[Capabilities](capabilities.md) distinguishes current paths from later work,
+including GPUDirect RDMA, CUDA IPC/NVLink and full TENT compatibility. For code
+navigation, use the [architecture reading order](architecture.md#source-reading-order).
 
 :::{toctree}
 :caption: Getting Started
@@ -105,7 +89,7 @@ troubleshooting
 :::
 
 :::{toctree}
-:caption: Development
+:caption: Development and Validation
 :maxdepth: 1
 
 contributing

@@ -136,7 +136,7 @@ This probe executes only the isolated native function. It does not execute
 native TENT RDMA transport, establish invalid-input parity, qualify hardware or
 measure throughput. The separate two-RNIC libtest profile and its ownership
 controls are recorded in the
-[geometry evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
+[frozen geometry evidence](https://github.com/OrbitInfra/OrbitTE/blob/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578/docs/rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
 
 ## Qualification limits
 

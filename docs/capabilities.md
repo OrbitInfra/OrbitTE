@@ -1,64 +1,47 @@
 # Capabilities
 
-The matrix describes the current source checkout. The published
-`0.1.0-alpha.1` crate remains the original package reservation. Qualification
-applies to the specific code, binaries, devices and profiles in the maintained
-contracts.
+This matrix describes the current source. The published `0.1.0-alpha.1` crate
+remains the original package reservation. **Implemented**, **qualified** and
+**independently accepted** are separate states; see [Qualification](qualification.md)
+for the exact artifacts and profiles behind each result.
 
 | Path or capability | Current source | Qualification boundary |
 | --- | --- | --- |
-| CPU DRAM over TCP | Implemented | Loopback, independent-process, byte, restart and lifetime controls |
-| Owned/external host registration | Implemented | Duplicate references, aliases, batch admission and retained allocation owners |
-| Async batches and notifications | Implemented | CPU ownership, cancellation, detached handle and receipt controls |
-| Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 native profiles |
-| Installed Rust host consumer | Scoped tests | Separate packaged-artifact matrices cover healthy traffic, idle-resource restart, posted-RQ interruption and lost payload CQEs. The latest 40 configurations include 32 native-completion-loss cases with one live engine and persistent MRs. Mid-flight DMA/native-cleanup faults remain open. See [installed scope](installed-host.md) |
-| Native cleanup failure retention | Implemented; scoped tests | QP/MR/MW syscall faults and real CQ/channel/PD EBUSY retain unresolved owners across close/drop; device-close errors are CPU ABI controls only. See [cleanup scope](native-cleanup.md) |
-| Persistent local/source MRs and eager multi-context publication | Implemented | Atomic visibility/rollback and retirement controls, including actual two-RNIC publication and rollback in the declared host Direct profile |
-| Transport-level RDMA Workers pool | Implemented | Scoped 1/2/3-worker two-RNIC host Direct tests verify CQ/thread routing, retained pool lifetime and fault recovery without new threads; 1/2/3/6 CQ lanes and load-based dispatch pass the 180-case native profile; broader TENT scheduling parity remains open |
-| Peer endpoint QP arrays | Implemented | Fixed negotiated width includes cold builders and native-retained QPs; concurrent grants share published pairs |
-| Worker NUMA binding and unified event monitor | Implemented | Declared CPU DRAM/RoCEv2 profile verifies actual CPU masks and native get/ACK ownership; periodic reclaim and selected-port recovery are implemented; physical port faults remain unqualified |
-| QP-owned send depth and WR debt | Implemented | Shared-owner CPU concurrency controls and the existing 180-case native regression with QP-debt assertions; public v14 grants share physical depth; fixed-width construction is implemented, see qualification for its artifact |
-| QP-owned RQ buffers and receipt dispatch | Implemented | CPU contracts route reversed grant messages and preserve pending/prepared sibling buffers; the 180-case native profile checks RQ debt/credits, cleanup and reuse on the new owner. Public v14 grants share the physical RQ; receive buffers retain credits through MR cleanup |
-| Concurrent runtime grant records | Implemented | One physical QP shares SQ/RQ across independent grant state and namespaces; native fixture covers reverse receipts and lost CQE drain. Public v14 handshake multiplexing is implemented; see qualification for the frozen artifact |
-| Connected QP reuse and shared progress | Implemented | Fixed role/operation, independent concurrent grants and exact completion proof |
-| Concurrent multirail parents and aggregate quotas | Implemented | Scoped eight-parent MiB/folded/exact-quarter-tail profiles and retained two-/four-parent cases; shared SQ/RQ pressure, 32/40 active slice grants and connected reuse and two-WR fault/drain. Wider concurrency/QoS remains open |
-| Whole-parent grant and source RQ admission | Implemented | Wire v14; `max_grants` reservations are independent of physical QPs; residual-capacity rejection before QPs, caller retry, uncertain-post ownership and native receive-credit drain in declared four-/eight-parent profiles |
-| RDMA endpoint destruction | Implemented | One independent shared 30 s parent destruction window; data failure is preserved and actual unproven teardown retains owners |
-| Native fault and restart profile | Scoped tests | Actual QP ERR, dropped successful SQ/RQ CQEs, source/requester death and two/three fresh process generations over two RNICs; all earlier source epochs rejected before QPs. Physical port/device loss remains unqualified |
-| Native CQ/PD cleanup failure | Scoped tests | Actual dependent-QP/MW EBUSY on either peer/rail, post-Drop owner retention, and drained-backing release for PD-only failures; spontaneous QP/MR/MW, completion-channel and device-close cleanup errors remain unqualified |
-| Periodic RDMA port recovery | Implemented | One-second queries detect missed events and resume the selected port after old QP/CQ drain, preserving PDs/MRs. Paused recovery repeats automatic GID ranking; explicit pins remain strict. New reselection coverage is CPU-only; physical port/device loss is unqualified |
-| Live-process RDMA recovery | Scoped tests | Two QP ERR/reconnect cycles preserve engine/PD/MR identity; failed MR/MW owners stay quarantined while same-process fresh engines use new epochs/PDs and reject old authority |
-| MR/MW command failures | Scoped tests | Thread-local uverbs syscall injection produces actual EIO from libibverbs; backing/MW loans survive repeated close and observer-free Drop; spontaneous hardware failures and in-place healing remain unqualified |
-| Device/port/GID discovery | Implemented | Initially down contexts with valid device/GID metadata retain PDs/MRs without admitting routes. CPU controls cover automatic reselection and strict pins; the focused native gate and independent discovery repeat remain open |
-| Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
-| NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |
-| Single-request cross-rail slicing | Implemented | CPU controls and scoped two-RNIC host Direct READ/WRITE, reuse, either-rail CQ/partial-post faults and drain; broader physical faults remain open |
-| Direct GPU registration / GPUDirect RDMA | Planned | Requires actual GPU/RNIC path and drain qualification |
-| CUDA IPC / NVLink transfer | Planned | Separate from NVIDIA allocation support |
-| Local SSD through io_uring / cuFile GDS | Planned, optional | Independent storage transports and native direct-path gates |
-| TENT C/Python/C++ API and mixed-peer wire compatibility | Open | Separate API/ABI/wire gates; current protocol is OrbitTE-only |
+| CPU DRAM over TCP | Implemented | Loopback and independent-process byte, restart and lifetime controls |
+| Owned/external host registration | Implemented | Transactional batches, duplicate references, allocation aliases and retained backing |
+| Async batches and notifications | Implemented | CPU cancellation, detached handles, bounded admission and receipt controls |
+| Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 READ/WRITE profiles; InfiniBand remains unqualified |
+| Persistent host MRs and multi-context publication | Implemented | Scoped two-RNIC atomic publication, rollback and retirement; paused-context MR preparation and recovery pass the focused native PD/MR/QP gate |
+| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, public v14 multiplexing, exact WR/receipt dispatch and shared physical SQ/RQ limits |
+| Multirail slices and shared quotas | Implemented | Selected folded-tail and concurrent-parent profiles verify bytes, whole-parent admission and native drain; physical contention/fairness remains open |
+| Transport workers, CQ lanes and NUMA binding | Implemented | Scoped native worker/lane routing, CPU-mask and polling/event profiles; broader scheduling policy remains later work |
+| Discovery and periodic recovery | Implemented | Scoped process-local query-failure recovery; initially paused contexts and automatic/strict GID recovery pass the focused one-RNIC native gate. Independent discovery, physical loss and acceptance remain open |
+| Native failure retention and live reconnect | Implemented | Scoped QP ERR, lost CQEs, QP/MR/MW syscall faults and CQ/channel/PD EBUSY. Failed owners remain retained; device-close errors have CPU ABI coverage only |
+| Packaged public host consumer | Scoped tests | Separate healthy, idle-restart, posted-RQ and lost-completion profiles. Actual in-flight DMA interruption and native-cleanup failures through the installed artifact remain open |
+| NVIDIA allocation, pinned host memory and synchronized staging | Implemented | Declared CUDA/host-staging profiles only; device pointers use host staging |
+| Direct GPU registration / GPUDirect RDMA | Planned | Requires actual GPU/RNIC transfer and drain qualification |
+| CUDA IPC / NVLink | Planned | Separate from NVIDIA allocation support |
+| Local SSD through io_uring / cuFile GDS | Planned, optional | Separate storage transports and direct-path qualification |
+| TENT C/Python/C++ API and mixed-peer wire compatibility | Open | Separate API/ABI/wire gates; the current protocol is OrbitTE-only |
 
 ## Provider selection
 
 CPU/TCP is the default. `rdma` and `cuda` are independent Cargo features.
-Enabling a build feature makes that provider's code available; runtime use
-also requires its actual device, driver and resources.
+Enabling a feature makes its provider code available; runtime use requires the
+actual device, driver and resources.
 
-`RdmaConfig::new("mlx5_0")` is an explicit device/port 1/GID 0 pin.
-`RdmaConfig::default()` enables automatic discovery, with whitelist/blacklist
-filters and strict optional pins. `device_mask` restricts dispatch using stable
-topology NIC IDs. No mask match fails before creating memory authority.
+`RdmaConfig::new("mlx5_0")` strictly pins that device, port 1 and GID index 0.
+`RdmaConfig::default()` enables automatic discovery with optional strict pins
+and whitelist/blacklist filters. `device_mask` limits dispatch by stable NIC
+IDs. See [RDMA configuration](rdma-cuda.md#device-port-gid-and-host-topology-discovery)
+for selection and resource ownership.
 
 ## Scope of support
 
-The implementation target is CPU DRAM and NVIDIA GPUs. Local file/SSD movement
-is optional. Other accelerator platforms are outside the selected scope.
+The target is CPU DRAM and NVIDIA GPUs; local file/SSD movement is optional.
+Other accelerators are outside the selected scope. Architectural correspondence
+with frozen TENT does not establish full behavior or wire compatibility.
 
-Implemented, qualified and independently accepted are different states.
-See [qualification](qualification.md) for the latest declared evidence and
-[the completion plan](completion-plan.md) for outstanding acceptance gates.
-
-
-See [the P4 exit queue](completion-plan.md#p4-remaining-delivery) for the final host hardware
-qualification and independent acceptance boundary. P4 acceptance alone
-does not complete the full TENT core.
+The [P4 exit queue](completion-plan.md#p4-remaining-delivery) contains the remaining
+host-RDMA hardware and independent-review gates. Complete that boundary before
+renewing OrbitKV integration; the other parity rows remain in their own stages.

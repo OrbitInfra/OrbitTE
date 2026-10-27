@@ -20,75 +20,30 @@
 
 OrbitTE moves bytes between CPU memory and NVIDIA GPU allocations, within and
 across machines. It follows Mooncake TENT's engine, topology, context, buffer,
-endpoint and worker architecture, with resource ownership and transport state
-machines implemented in Rust.
+endpoint and worker architecture, with resource ownership and transfer state
+machines implemented in Rust. The runtime has no Mooncake C++ dependency.
 
-The runtime has no Mooncake C++ dependency. TCP and RDMA are separate payload
-transports; a shared control service handles discovery, grants and receipts.
-Applications retain cache identity, recovery policy and replica ownership.
-
-**Under development.** CPU TCP, host RDMA READ/WRITE, persistent MRs,
-connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
-unified event monitoring are implemented with scoped native validation.
-NVIDIA device transfers currently use synchronized host staging.
-
-Periodic monitor reclaim, initially paused contexts and automatic GID reselection
-on recovery are implemented. The new discovery/recovery paths have CPU coverage;
-their focused native gate remains unqualified. The host RDMA stage has scoped
-installed-consumer validation for healthy traffic and
-repeated peer restart while one engine keeps its persistent MRs, including
-process death with a posted completion RQ and loss of actual successful payload
-CQEs. Mid-flight DMA interruption, installed native-cleanup failures, physical
-faults and independent acceptance remain open.
-GPUDirect RDMA, NVLink, the remaining runtime policies and native TENT API/wire
-compatibility are later-stage work. See the
-[P4 exit queue](docs/completion-plan.md#p4-remaining-delivery) and
-[capability matrix](docs/capabilities.md); full TENT parity is not complete.
-The published `orbit-te` alpha reserves the package identity; use the source
-checkout for the implementation described here.
-
-## Highlights
-
-- **Owned memory.** CPU and NVIDIA allocations retain their actual owners;
-  direct host DMA leases exclude conflicting access across aliases.
-- **Batched transfers.** READ/WRITE, asynchronous batches, cancellation and
-  notifications share bounded admission and explicit completion contracts.
-- **Persistent RDMA resources.** Context-specific MRs, connected QP reuse,
-  per-context CQ lanes and a transport-level worker pool keep resources with
-  their physical owners. `num_lanes` aligns workers and CQ parallelism; new
-  slices use worker load while cached QPs retain their CQ lane. Host Direct
-  registration prepares all usable contexts, including paused ports, before
-  exposing a range. Direct peers negotiate a fixed QP width; cold
-  builders reserve slots before native creation and concurrent requests share
-  published connections. Peer endpoint arrays, physical QPs and per-slice
-  grants have separate owners; data workers bind to allowed NUMA CPU sets and
-  one transport monitor consumes device/CQ events and scans contexts each second.
-  A recovered port becomes selectable only after old QPs/CQs drain and the
-  selected native address is revalidated; PDs and persistent MRs remain owned.
-- **Topology-aware device selection.** Stable NIC IDs, device masks, NUMA
-  priorities and in-flight byte charges select compatible paths per RDMA slice.
-  Parent completion requires every slice and its source receipt.
-- **Shared quotas.** Concurrent parents share SQ/RQ, byte and connection limits.
-  Physical QPs own send depth and exact outstanding WRs across payload, bind
-  and completion messages; grant work handles cannot release unresolved debt.
-  QP-owned receive buffers dispatch by exact binding/key, independently of
-  which grant supplied the buffer. Independent runtime grant records share a
-  physical QP through the public v14 handshake. `max_endpoints` bounds physical
-  QPs; `max_grants` independently bounds parent grant reservations. The source
-  reserves every slice's grant and receive credit before granting authority. Returning completion capacity wakes the worker assigned to each waiting CQ lane.
-- **Explicit drain.** Timeouts and logical failures do not release memory still
-  owned by native work. Failed cleanup retains its resources and charges.
-  Completely drained progress owners can be replaced for later requests while
-  preserving the context's PD and persistent MRs. Scoped live-process recovery
-  and QP/MR/MW syscall-failure and CQ/channel/PD EBUSY retention checks have
-  [scoped evidence](docs/native-cleanup.md); full P4 acceptance remains open.
+TCP and RDMA are separate payload transports. A shared control service handles
+peer discovery, memory grants and receipts. Applications own cache identity,
+recovery policy and replica placement.
 
 <div align="center">
   <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE engine, control service and sibling TCP/RDMA transports; planned paths are dashed">
 </div>
 
-See [capabilities](docs/capabilities.md) for current behavior and
-[qualification](docs/qualification.md) for the evidence and its limits.
+## Highlights
+
+- **Owned memory and explicit completion.** Registrations retain their actual
+  allocations; asynchronous READ/WRITE batches, cancellation and notifications
+  share bounded admission. Failed native cleanup retains unresolved memory.
+- **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
+  lanes and a transport worker pool serve concurrent requests. A periodic
+  monitor fences failed routes and resumes drained contexts.
+- **Topology-aware multirail transfers.** Device masks, NUMA priorities and
+  in-flight byte accounting select paths for bounded request slices. Parent
+  completion requires every slice and its source receipt.
+- **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
+  Driver API. Current device transfers use synchronized host staging.
 
 ## Quick Start
 
@@ -106,41 +61,42 @@ Expected output:
 18 bytes: hello from OrbitTE
 ```
 
-The CPU/TCP example needs no CUDA or RDMA SDK. Optional `rdma` and `cuda`
-features enable the native providers; device transfers currently use declared
-host staging. See the [build guide](docs/build.md) and
-[RDMA/CUDA guide](docs/rdma-cuda.md).
+The CPU/TCP example needs no CUDA or RDMA SDK. Select optional `rdma` and `cuda`
+features with the [build guide](docs/build.md), then follow the
+[Rust API guide](docs/rust-api.md) and [RDMA/CUDA guide](docs/rdma-cuda.md).
+
+## Project Status
+
+**Under development.** The host RDMA data path is implemented, with scoped
+native and installed-consumer RoCE validation. P4 remains open for the exact
+hardware and independent-review gates in the
+[completion plan](docs/completion-plan.md#p4-remaining-delivery).
+GPUDirect RDMA, CUDA IPC/NVLink, optional SSD transports and full TENT API/wire
+parity remain later work. See [capabilities](docs/capabilities.md) for the current
+support boundary and [qualification](docs/qualification.md) for recorded evidence.
+
+The published `orbit-te` alpha reserves the package identity. Use the source
+checkout for the implementation described here.
 
 ## Documentation
 
-| Start here | Reference and development |
+| Topic | Guides |
 | --- | --- |
-| [Quick Start](docs/getting-started.md) | [Rust API guide](docs/rust-api.md) |
-| [Build Guide](docs/build.md) | [TCP and ownership contracts](docs/cpu-tcp.md) |
-| [Architecture](docs/architecture.md) | [Asynchronous batches](docs/async-batches.md) |
-| [Capabilities](docs/capabilities.md) | [RDMA and CUDA](docs/rdma-cuda.md) |
-| [Troubleshooting](docs/troubleshooting.md) | [Qualification](docs/qualification.md) |
-| [Contributing](docs/contributing.md) | [Frozen TENT parity contract](docs/tent-parity.md) |
+| Getting started | [Quick Start](docs/getting-started.md), [Build](docs/build.md), [Capabilities](docs/capabilities.md) |
+| Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md) |
+| Design and API | [Architecture](docs/architecture.md), [Rust API](docs/rust-api.md), [Frozen TENT reference](docs/tent-parity.md) |
+| Development | [Contributing](docs/contributing.md), [Qualification](docs/qualification.md), [Completion plan](docs/completion-plan.md) |
+| Operations | [Troubleshooting](docs/troubleshooting.md), [Installed host validation](docs/installed-host.md), [Native cleanup](docs/native-cleanup.md) |
 
-The [completion plan](docs/completion-plan.md) is the only execution queue.
-OrbitTE's native P4 stage comes before renewed OrbitKV integration. Historical
-implementation details remain in the [RDMA contract](docs/rdma-cuda.md) and the
-[earlier README](https://github.com/OrbitInfra/OrbitTE/blob/0ec2a88ba01511f40445d498249e947486034aa4/README.md#status).
+Technical documentation lives in `docs/`. The website uses Mooncake's Sphinx
+Book Theme with Orbit branding and deploys automatically from `main` through
+GitHub Pages. See [building the website](docs/contributing.md#documentation-site).
 
-See the [installed host RDMA gate](docs/installed-host.md) for packaged-crate
-consumption, native peer supervision and evidence requirements.
+## Contributing
 
-## Development
-
-```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-```
-
-The documentation site uses the same Sphinx Book Theme as Mooncake, with Orbit
-branding. Its pages render directly from `docs/`; see
-[building the website](docs/contributing.md#documentation-site).
+Start with the [contributor guide](docs/contributing.md) and the
+[source reading order](docs/architecture.md#source-reading-order). The completion
+plan is the only execution queue; complete P4 before renewing OrbitKV integration.
 
 ## License and Provenance
 
