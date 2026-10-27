@@ -21,12 +21,50 @@ against a separately captured host inventory, retaining the full
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## CUDA copy streams and completion events
+
+Source [`ce86269`](https://github.com/OrbitInfra/OrbitTE/commit/ce86269d38ce766d4aadd79c7dc245c7ce013699)
+adds owned, serialized copy streams/events. Both stable 1.99.1 and Rust 1.85
+pass 233 unit tests, eight integration tests, one doctest and all-feature Clippy.
+The CUDA controls delay actual shim copies until completion, reject premature
+staging release and cover stale events, partial submit/record, context restore
+and cleanup failures. An independent reviewer inspected the exact production
+files and reran the eight CUDA ownership controls in a separate source archive;
+no blocking finding was reported. CI's eight feature/toolchain combinations,
+frozen TENT CPU comparison and strict documentation build also pass.
+
+The packaged crate SHA256 is
+`64b0ea10219675c77ca5f56058b72e9e599b0aa241f62a672d0b0aeb0b510f62`.
+Two standalone consumers import that extracted package and build with stable
+and Rust 1.85. Their hashes, lockfile, commands and logs are recorded outside Git
+at `/root/orbitte-artifacts/cuda-streams-20261027/` (`package-manifest.json`
+and `validation.json`). Earlier Clang/CMake environment failures remain archived;
+the successful stable build uses the project's GCC configuration in a fresh
+target directory.
+
+The new installed consumers also pass on two physical H20 hosts, using two
+GPUs per host: three unaligned payload lengths (17, 4,133 and 1,048,595 bytes),
+eight concurrent callers and four rounds per caller, on both toolchains. All
+24 GPU/size/toolchain combinations pass full-byte and guard comparisons with
+zero retained resources. All four supervised processes are reaped, GPU locks
+are released and selected-GPU memory returns to its initial zero usage. Driver
+inventory and native loader logs identify `libcuda.so.590.48.01`, reporting
+Driver API 13.1, on the R535 hosts. This is a real local-copy result using the
+compatibility library, not a CUDA toolkit/kernel compilation test.
+
+`gpu-audit.json` pins the logs, supervisor results, fresh host/boot/GPU identities
+and before/after memory inventory. Native failure cases retain their separate
+CPU-shim evidence. The explicit `cuda_copy` gate is described in
+[RDMA/CUDA](rdma-cuda.md#copy-completion-and-reuse). These results qualify local
+CUDA staging only. GDR, IPC/NVLink, a shared device-wide stream pool and external
+producer integration remain P5 work.
+
 ## P4 independent review
 
 An independent reviewer inspected exact main
 [`121ab95`](https://github.com/OrbitInfra/OrbitTE/commit/121ab95a77f94a80286617c4a2032654e692f9b4)
 against frozen TENT `e2d6e8e` on 2026-10-27. The accepted scope is the reviewed
-source and recorded bounded RoCE evidence. No blocking production-code finding
+source and bounded RoCE evidence, including fresh independent live repetition. No blocking production-code finding
 was reported. One stale architecture statement about installed-consumer
 qualification was corrected.
 
@@ -34,9 +72,14 @@ The reviewer independently reran source and packaged-consumer gates on stable
 and Rust 1.85, all-feature Clippy, 34 controller controls, five native C controls
 and the strict 19-page documentation build. Ten package manifests and 47 native
 recovery files passed hash verification; the archived validators accepted 44
-recorded two-host cases. This revalidation does not itself rerun physical DMA.
-The original Forge job had terminated, so fresh independent live repetition
-remained pending in the initial report.
+recorded two-host cases. The reviewer additionally ran four fresh two-host
+cases from the frozen installed packages: stable A-to-B READ/WRITE and Rust 1.85
+B-to-A READ/WRITE, with automatic discovery, two rails, 16 parents and
+4 MiB + 1 byte requests. Full payload/guards, independent inventories and native
+WR/CQE accounting all pass. Every child was reaped, RNIC locks were released,
+provider hashes stayed unchanged and native resource counts returned to their
+before-run values. These are selected RoCE cases; no physical-loss or
+InfiniBand coverage is inferred.
 
 Review source archive SHA256:
 `e3230e5c58cd562390e10df910bd8ea2aa7bb6dbd46d4a88ec6f14c50ad39246`.

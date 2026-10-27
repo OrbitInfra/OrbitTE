@@ -48,8 +48,8 @@ verifies concurrent parents, shared QP limits and exact native payload bytes.
 [Automatic discovery](qualification.md#installed-automatic-discovery) now passes
 two-host READ/WRITE against a separately captured PCI, NUMA and route inventory.
 The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
-fabric and independent live repetition before full acceptance. The source and
-recorded RoCE evidence passed independent review; P5 CUDA work now proceeds
+fabric qualification before full acceptance. Source and the bounded RoCE profile
+passed independent review with four fresh live repeats; P5 CUDA work now proceeds
 with available hardware. OrbitKV integration remains deferred.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
 including GPUDirect RDMA, CUDA IPC/NVLink and full TENT compatibility. For code

@@ -64,8 +64,8 @@ contracts stay in scope; accepting P4 does not establish full TENT parity.
 On 2026-10-27 the user authorized proceeding to P5 with the available RoCE/GPU
 resources. Physical link/device loss, provider teardown and InfiniBand remain
 unqualified until suitable hardware is available. The independent review accepts
-P4 source and recorded bounded RoCE evidence at `121ab95`; live repetition is
-tracked separately in [qualification](qualification.md#p4-independent-review).
+P4 source and bounded RoCE evidence at `121ab95`, including four fresh live
+repeats recorded in [qualification](qualification.md#p4-independent-review).
 This sequencing decision permits P5 implementation without claiming full P4
 acceptance or resuming OrbitKV integration.
 
@@ -117,7 +117,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and recorded bounded RoCE evidence independently reviewed; physical/fabric gates deferred and unqualified; live repetition tracked separately |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/staging and P5.2 owned copy streams/events implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -378,9 +378,9 @@ TENT owners and deliberate differences.
 
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
-| 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Source and recorded evidence independently reviewed at `121ab95`; this observed-state override does not qualify physical link loss. |
+| 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Source and bounded evidence independently accepted at `121ab95`; this observed-state override does not qualify physical link loss. |
 | 2 | Close the declared installed RoCE fault profile | **Qualified for the frozen installed profiles:** healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs; [QP cleanup and in-flight DMA](qualification.md#installed-two-host-fault-qualification); [MR/MW cleanup and engine replacement](qualification.md#installed-memory-cleanup-and-replacement); and [CQ/channel/PD dependency cleanup](qualification.md#installed-dependency-cleanup). The last group passes six two-host cases on stable and Rust 1.85, plus ten affected regressions. Physical failures retain the separate acceptance conditions below. |
-| 3 | Finish physical/fabric qualification and review | **Unqualified:** physical link/device loss and provider teardown, the separate InfiniBand profile, and complete P4 acceptance. The [installed automatic-discovery profile](qualification.md#installed-automatic-discovery) now passes against a separately collected physical inventory on both toolchains. The independent reviewer accepted source, CPU/package gates and recorded evidence at `121ab95`; a fresh live discovery/topology repeat is tracked separately. Missing hardware does not pass this row. |
+| 3 | Finish physical/fabric qualification | **Unqualified:** physical link/device loss and provider teardown, the separate InfiniBand profile, and complete P4 acceptance. The [installed automatic-discovery profile](qualification.md#installed-automatic-discovery) now passes against a separately collected physical inventory on both toolchains. The independent reviewer accepted source, CPU/package gates and bounded RoCE evidence at `121ab95`, including four fresh live discovery/topology cases. Missing hardware does not pass this row. |
 
 **Physical rail contention/accounting is qualified for the bounded installed
 profile:** source `cc6ab0f` passes four two-host configurations on stable and
@@ -394,8 +394,8 @@ source `36890c8` passes four two-host automatic cases and two fixed-GID controls
 The packaged collector independently reads PCI, NUMA, port, GID and network
 interface data before/after the process under the same resource locks. Public
 route selection, strict-pin rejection and memory priority tiers agree with it.
-This closes the implementation-side inventory comparison; reviewer repetition,
-physical transitions and InfiniBand remain open.
+Independent reviewer repetition also passes four fresh two-host cases. Physical
+transitions and InfiniBand remain open.
 
 The first row closes the two source gaps found in the frozen-source audit.
 Discovery now keeps an otherwise valid down-port context paused, as TENT's
@@ -471,7 +471,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   The binding maintenance substage reuses generated `cudarc` Driver API types
   and signatures with fallible, selective `libloading` lookup. The pinned
   dependency keeps Rust 1.85 and the existing quiescence/retention contract.
-- [x] **P5.2 — Owned copy streams and completion events (Implemented).** Each
+- [x] **P5.2 — Owned copy streams and completion events (Implemented; local-copy
+  profile Qualified).** Each
   `CudaMemory` lazily reuses a nonblocking stream and blocking completion event
   under its allocation lock. Private pinned staging stays owned until that event
   completes; failed submit/record drains the same stream, while an unproven wait
@@ -479,8 +480,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   receipt. Public read/write still wait; external producers must be ready before
   handoff. CPU controls cover concurrent reuse, delayed completion, partial
   construction/submission, record/wait/destroy failures and budget retention.
-  The explicit `cuda_copy` GPU gate checks concurrent byte/guard correctness;
-  hardware results are recorded separately, never inferred from the shim.
+  The explicit `cuda_copy` GPU gate passes 24 GPU/size/toolchain combinations
+  on two H20 hosts, with full-byte/guard checks and final owner release. See
+  [exact artifacts and limits](qualification.md#cuda-copy-streams-and-completion-events);
+  native error injection remains a separate qualification requirement.
 - [ ] Implement CUDA location/pointer classification, allocation, exact context
   restoration and retained streams/events/export/import mappings. Unexpected
   driver errors cannot select an ordinary CPU copy path.
@@ -738,8 +741,8 @@ Installed automatic discovery now passes four two-host cases against separately
 collected host inventories, plus two fixed-GID regressions.
 
 P4 implementation and its declared installed fault fixtures are complete.
-The independent review accepts source and recorded bounded RoCE evidence at
-`121ab95`. Under the user's 2026-10-27 sequencing decision, continue P5 CUDA
+The independent review accepts source and bounded RoCE evidence at `121ab95`,
+including four fresh live repeats. Under the user's 2026-10-27 sequencing decision, continue P5 CUDA
 owners and available GPU tests. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
