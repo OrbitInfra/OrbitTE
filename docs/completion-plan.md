@@ -109,7 +109,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host data path and discovery/recovery correspondence implemented; focused native recovery, final fault qualification and independent acceptance open; earlier scoped RoCE profiles retain their qualification |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host data path and discovery/recovery correspondence implemented; focused native recovery passed; final fault qualification and independent acceptance open; earlier scoped RoCE profiles retain their qualification |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -370,7 +370,7 @@ TENT owners and deliberate differences.
 
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
-| 1 | Complete discovery/recovery correspondence | **Implemented; native gate open:** retain usable initially down contexts and repeat automatic GID selection on recovery. CPU transitions verify strict pins, old-QP/CQ drain, unchanged context/PD/MRs and healthy-sibling dispatch. The opt-in [native recovery gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection) is compiled but unqualified. Run it on an authorized RNIC with two valid GIDs before accepting this row. |
+| 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Independent review remains open; this observed-state override does not qualify physical link loss. |
 | 2 | Close the declared installed RoCE fault profile | **Gate implementation and qualification open:** the installed runner covers healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs. It still needs fixtures for actual in-flight DMA interruption and native cleanup failure through the packaged public consumer, plus physical link/device loss and provider teardown evidence. Freeze each scenario, native proof and negative control before adding its fixture. Keep the qualified cases as regressions. |
 | 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
@@ -692,9 +692,11 @@ and independent acceptance remain separate states.
 ## Immediate next delivery
 
 The two discovery/recovery source gaps are implemented in `9e1fdea`
-(PR #57); do not reopen them as missing code. Run the focused native gate
-in the first row of [P4 remaining delivery](#p4-remaining-delivery), then
-close the remaining declared fault/fabric gates and independent review.
+(PR #57), and the focused native gate now passes on both toolchains.
+Continue with the missing installed fault fixtures in the second row of
+[P4 remaining delivery](#p4-remaining-delivery), followed by the declared
+physical/fabric gates and independent review. Do not reopen completed
+source work or repeat unaffected matrices.
 Freeze each missing scenario and its proof before implementing any needed
 fixture; use the existing native and installed consumers. Add a case only
 for an uncovered contract or a demonstrated bug. Keep source checks,

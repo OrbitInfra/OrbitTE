@@ -226,10 +226,13 @@ This follows frozen TENT's `RdmaContext::enable` and `refreshAddress`.
 OrbitTE's ranking also includes real IPv6 RoCEv2. New-device hotplug and general
 cross-rail retry policy remain outside this behavior.
 
-CPU controls cover these transitions. The focused native gate is **compiled
-but unqualified** on source `9e1fdea`. It uses real PD/MR/QP/CQ operations and
-GID queries with a process-local override of the observed port state. It sends
-no payload and does not change a physical port.
+CPU controls cover these transitions. The focused native gate passes with
+stable 1.99.1 and Rust 1.85.0 on one mlx5 RoCE RNIC: automatic recovery
+selects GID 3 from initial GID 0, while the explicit pin stays at 0. It uses
+real PD/MR/QP/CQ operations and native GID queries with a process-local
+override of the observed port state. It sends no payload and does not
+change a physical port. See [the frozen evidence](qualification.md#focused-native-recovery)
+for source equivalence, provider maps, supervision and remaining acceptance.
 
 On an authorized RNIC, inspect its GID table and choose a valid
 `ORBITTE_INITIAL_GID` different from the automatically preferred index. Supply

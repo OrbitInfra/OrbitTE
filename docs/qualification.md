@@ -31,10 +31,27 @@ and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40
 pass for that delivery. Local manifests and logs are in
 `/root/orbitte-artifacts/rdma-context-recovery-20261027/delivery.json`.
 
-The [focused native recovery gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection)
-is compiled but **unqualified**. Its native PD/MR/QP/CQ and GID checks use an
-observed-port-state override; they do not test physical link loss or payload
-transfer. No native result is inferred from the CPU transitions.
+### Focused native recovery
+
+The [native context/GID gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection)
+now passes on one physical mlx5 RoCE RNIC with stable 1.99.1 and Rust
+1.85.0. Execution source is [`bde9284`](https://github.com/OrbitInfra/OrbitTE/commit/bde9284a950dd93bfa4069061ddb54943af0cc61);
+its runtime, fixtures and Cargo inputs are identical to `9e1fdea`. Each
+binary runs automatic and strict-pin cases: GID 0 changes to 3 only in
+automatic mode, both cases complete two pause/drain/resume cycles with
+unchanged PD and two persistent MRs, and final native owner counts reach zero.
+
+Actual child maps contain the frozen libibverbs/mlx5 providers. Both
+supervised children are reaped, locks are released and device resource
+counts return to preflight values. The first native run also passed, but
+its controller missed a libtest-prefixed receipt; that failed audit is
+preserved alongside the corrected, fully observed repeat. The reconciled
+manifest is `/root/orbitte-artifacts/p4-closeout-20261027/native-recovery-audit.json`.
+
+This qualifies the declared process-local observed-port-state override
+with real PD/MR/QP/CQ operations and GID queries. It sends no payload,
+changes no physical link, and does not establish two-host or InfiniBand
+qualification. Independent acceptance remains open.
 
 ## Recorded host RDMA evidence
 
