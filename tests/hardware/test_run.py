@@ -12,6 +12,31 @@ spec.loader.exec_module(runner)
 
 
 class ResourceSelection(unittest.TestCase):
+    def test_installed_entrypoint_rejects_shared_boot_before_remote_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fixture'
+            binary.write_bytes(b'not-executed')
+            profile = root / 'profile.json'
+            profile.write_text(json.dumps(dict(
+                runner='orbitte-installed-host',
+                nodes={name: dict(hostname='host-' + name, boot_id='same-boot')
+                       for name in ('a', 'b')},
+                cases=[dict(mode='installed-host', transport='rdma', source_kind='cpu',
+                            requester_kind='cpu', source='a', requester='b', operation='read',
+                            rdma_events=False, parents=1, payload=65536, block=65536,
+                            num_lanes=1, mask=1)])))
+            output = root / 'output'
+            arguments = ['run.py', '--profile', str(profile), '--binary', str(binary),
+                         '--output', str(output)]
+            with patch('sys.argv', arguments), patch.object(runner.Controller, 'command') as command:
+                with self.assertRaisesRegex(ValueError, 'distinct physical hosts'):
+                    runner.main()
+                command.assert_not_called()
+            manifest = json.loads((output / 'manifest.json').read_text())
+            self.assertEqual(manifest['status'], 'failed')
+            self.assertTrue(manifest['all_supervised_children_reaped'])
+
     def test_host_rdma_test_filter_uses_the_nic_lease_without_a_gpu(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

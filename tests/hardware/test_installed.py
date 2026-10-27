@@ -57,6 +57,25 @@ class InstalledHostEvidence(unittest.TestCase):
             with self.subTest(profile=invalid), self.assertRaises(ValueError):
                 installed.validate({**self.case, **invalid})
 
+    def test_two_host_profile_rejects_same_machine_aliases_and_missing_identity(self):
+        profile = dict(cases=[self.case], nodes={
+            'a': dict(hostname='host-a', boot_id='boot-a'),
+            'b': dict(hostname='host-b', boot_id='boot-b'),
+        })
+        installed.validate_nodes(profile)
+        for name, change in [
+            ('same-host', lambda p: p['nodes']['b'].update(hostname='host-a')),
+            ('same-boot', lambda p: p['nodes']['b'].update(boot_id='boot-a')),
+            ('missing-boot', lambda p: p['nodes']['b'].pop('boot_id')),
+            ('empty-host', lambda p: p['nodes']['a'].update(hostname=' ')),
+            ('missing-node', lambda p: p['nodes'].pop('b')),
+            ('empty-cases', lambda p: p.update(cases=[])),
+        ]:
+            candidate = copy.deepcopy(profile)
+            change(candidate)
+            with self.subTest(control=name), self.assertRaises(ValueError):
+                installed.validate_nodes(candidate)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -42,7 +42,12 @@ Use the existing identity-pinned SSH profile and supervisor described in
 [the native RDMA guide](rdma-cuda.md). Select `runner: "orbitte-installed-host"`,
 two explicit `rails`, a `gid_index`, distinct source/requester nodes, and one
 absolute resource lock per RNIC on each node. No GPU is requested. Each case
-has these explicit fields:
+must name hosts with different inventoried hostnames and kernel boot IDs;
+two executor aliases on one machine cannot qualify the two-host profile.
+The controller rejects that placement before remote access, then rechecks each
+host/boot identity during deployment and inside the resource-lock supervisor.
+
+Each case has these explicit fields:
 
 ```json
 {
