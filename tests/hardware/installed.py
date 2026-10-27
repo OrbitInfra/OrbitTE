@@ -25,7 +25,7 @@ def validate_nodes(profile):
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -63,6 +63,8 @@ def validate(case):
             raise ValueError('cleanup requires a supported native owner and progress mode')
     if 'cleanup_kind' in case and case['mode'] not in ('installed-memory-cleanup', 'installed-cleanup-failure'):
         raise ValueError('native fault selector escaped its mode')
+    if case['mode'] == 'installed-rail-accounting' and (case['parents'], case['payload'], case['block'], case['num_lanes'], case['mask']) != (16, (4 << 20) + 1, 1 << 20, 1, 3):
+        raise ValueError('rail accounting requires the frozen folded-tail profile')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -150,3 +152,7 @@ def verify(profile, case, evidence):
                             payload=case['payload'], rounds=3,
                             full_bytes_and_guards=True, locally_drained=True)]:
             raise ValueError('installed peer has no exact complete result')
+
+    if case['mode'] == 'installed-rail-accounting':
+        from installed_accounting import verify as verify_accounting
+        verify_accounting(profile, case, evidence)

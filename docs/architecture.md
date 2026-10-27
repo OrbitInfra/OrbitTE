@@ -58,6 +58,14 @@ preserves the original data failure unless cleanup reports unquiesced work.
 The [native cleanup gate](native-cleanup.md) checks these owners after failed
 destruction and explains the difference from TENT's retry policy.
 
+The [installed physical rail gate](installed-host.md#physical-rail-accounting)
+checks these boundaries outside the crate: native context identity selects the
+physical RNIC, accepted WRs consume the shared QP, and successful CQEs account
+for exact slice bytes. TENT's `Workers::markPosted` and `releaseSliceQuota`
+similarly associate completion with posted work. OrbitTE additionally keeps
+its grant and backing charges through the source receipt; a payload CQE alone
+does not retire that ownership.
+
 ## Fixed-width cold construction
 
 `EndpointStore::get_or_insert` gives every caller the same `RdmaEndpoint`, even

@@ -15,10 +15,44 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery adds [CQ/channel/PD dependency cleanup](#installed-dependency-cleanup)
-to the qualified host RoCE profiles. The production host RDMA implementation
+The latest installed delivery adds [physical rail accounting](#installed-physical-rail-accounting)
+to the qualified host RoCE profiles, following [CQ/channel/PD dependency cleanup](#installed-dependency-cleanup). The production host RDMA implementation
 is complete; physical/fabric qualification and independent acceptance remain
 in the existing P4 queue.
+
+## Installed physical rail accounting
+
+Source [`cc6ab0f`](https://github.com/OrbitInfra/OrbitTE/commit/cc6ab0fe0092c0d1d06792bb7190f48832f0eae9)
+passes four frozen two-host configurations: READ/polling and WRITE/events with
+stable 1.99.1, then both cases in the reverse physical direction with Rust
+1.85.0. Both peers use two distinct mlx5 PCI RNICs on RoCEv2. The ordinary
+installed consumer uses 16 concurrent parents, 4 MiB + 1 byte per request,
+1 MiB blocks and one shared QP per rail, for three full-byte/guard-checked rounds.
+
+The requester-only passive observer joins every accepted native payload WR to
+its successful CQE by context, CQ, QPN and WR ID. Device names join native
+contexts to the published PCI identities. Every round accounts for exactly
+64 slices and 67,108,880 bytes, including folded tails. Both rails have multiple
+parents outstanding on their QP; measured payload debt peaks range from four
+to eight per QP and stay within the configured limit of eight. Native bytes
+match public completion counters, QPs are reused, and all counted owners drain.
+
+The source changes only qualification tools and documentation. Production
+owners, API, Cargo dependencies and wire v14 are unchanged. The shared observer's
+lost-CQE and completion-channel cleanup paths receive four affected two-host
+regressions. Stable and MSRV independent-consumer builds pass formatting,
+Clippy, consumer tests and all five C controls; 32 Python controller tests
+include wrong-device, wrong-range/CQE, lost-byte and false-concurrency controls.
+
+Artifacts, frozen profiles, manifests, child/provider logs and resource
+inventories are outside Git at
+`/root/orbitte-artifacts/installed-rail-accounting-20261027/`.
+`native-audit.json` joins the two immutable packages and eight hardware cases.
+The [reproduction guide](installed-host.md#physical-rail-accounting) defines the
+receipt and concurrency checks. The observer forwards CQEs unchanged, but its
+bookkeeping serializes native submission receipts. These are bounded admission
+and accounting results, not throughput, fairness or fabric-saturation results.
+Physical link/device loss, InfiniBand and independent acceptance remain open.
 
 ## Current source delivery
 

@@ -43,6 +43,8 @@ in [qualification](qualification.md). The published alpha reserves the crate
 name; the source implementation remains under development.
 
 The host RDMA implementation and declared installed cleanup fixtures are complete.
+[Physical rail accounting](qualification.md#installed-physical-rail-accounting)
+now verifies concurrent parents, shared QP limits and exact native payload bytes.
 The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
 fabric and independent-review acceptance before OrbitKV integration.
 [Capabilities](capabilities.md) distinguishes current paths from later work,

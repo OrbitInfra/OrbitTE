@@ -2,8 +2,8 @@
 
 This gate consumes a packaged `orbit-te` crate as a normal Rust dependency.
 It runs the public `TransferEngine` API with the `rdma` feature only. Private
-libtests and CUDA are absent from the installed binary. The explicit native fault profiles add a separate process-local qualification
-library described below.
+libtests and CUDA are absent from the installed binary. Native fault and rail
+accounting profiles add a separate process-local qualification library.
 The published alpha on crates.io remains a name reservation; this workflow
 packages the selected source without publishing it.
 
@@ -80,6 +80,32 @@ select `Transport::Rdma`; native byte counters and mapped providers must prove
 that path. The controller independently checks the complete round/result
 ledger, provider mappings, native-child exit and released resource locks.
 Missing, duplicate, mismatched or partially drained results fail the run.
+
+## Physical rail accounting
+
+Select `mode: "installed-rail-accounting"` with the existing healthy consumer.
+The frozen case uses 16 parents, `payload: 4194305`, `block: 1048576`,
+`num_lanes: 1` and `mask: 3`. Run READ/polling and WRITE/events, reversing
+physical source/requester hosts for the second compiler artifact. Each request
+has three 1 MiB slices and one folded 1 MiB + 1 byte tail. Every round therefore
+has exactly 64 payload WRs and 67,108,880 payload bytes.
+
+The hash-pinned observer runs only in the requester. `accounting.c` forwards
+native calls and CQEs unchanged; it never withholds completions or injects a
+fault. It joins each accepted payload WR to its actual successful CQE using
+context, CQ, QPN and WR ID. Native context device names must map to the two
+published, distinct PCI RNICs. The external verifier checks every parent
+address/length, both rails' payload, overlap between rails, and at least two
+simultaneously outstanding parents sharing each rail's QP. Payload SQ debt
+must remain at most eight WRs per QP. Completed native bytes must match the
+public engine counters, followed by complete owner drain and native teardown.
+
+The observer serializes receipt bookkeeping around native submissions. It
+measures accepted work awaiting completion observation, not instantaneous
+hardware occupancy, fabric saturation, fairness or throughput. Those require
+separate performance profiles. CPU controls exercise pass-through behavior and
+reject plausible but corrupted native ledgers; they do not establish physical
+contention. Exact qualifying artifacts belong in [qualification](qualification.md).
 
 ## Peer restart with a surviving engine
 

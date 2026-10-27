@@ -12,6 +12,8 @@ use orbit_te::{
     Transport,
 };
 
+#[path = "rdma_host/accounting.rs"]
+mod accounting;
 #[path = "rdma_host/cleanup.rs"]
 mod cleanup;
 #[path = "rdma_host/completion.rs"]
@@ -253,6 +255,7 @@ fn rounds(
     stream: &mut TcpStream,
     phase: usize,
 ) -> Result<()> {
+    let accounting = accounting::Accounting::load(case, memory)?;
     let remote = segment.regions()[0].base_address();
     let baseline = idle(engine)?;
     if baseline.progress_failures != baseline.progress_recoveries {
@@ -264,6 +267,9 @@ fn rounds(
         let mut expected = case.bytes(case.source, phase * ROUNDS + round);
         memory.write(0, &expected)?;
         barrier(stream, &format!("ready-{round}"))?;
+        if let Some(ledger) = &accounting {
+            ledger.begin(round, case)?;
+        }
         if !case.source {
             let start = Barrier::new(case.parents);
             thread::scope(|scope| -> Result<()> {
@@ -308,6 +314,9 @@ fn rounds(
                 }
                 Ok(())
             })?;
+        }
+        if let Some(ledger) = &accounting {
+            ledger.finish(round, case, engine)?;
         }
         barrier(stream, &format!("transferred-{round}"))?;
         let stats = idle(engine)?;
@@ -397,7 +406,7 @@ fn main() -> Result<()> {
         | "installed-cleanup-failure" => restart::run(&case),
         "installed-inflight-dma" => inflight::run(&case),
         "installed-memory-cleanup" => memory::run(&case),
-        "installed-host" => {
+        "installed-host" | "installed-rail-accounting" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
             let mut stream = control(case.source, bind, None)?;
