@@ -11,8 +11,9 @@ def validate(case):
             or case.get('operation') not in ('read', 'write')
             or type(case.get('rdma_events')) is not bool):
         raise ValueError('installed host requires two peers and explicit CPU RDMA/profile choices')
+    max_block = 16 << 20 if case['mode'] == 'installed-inflight-dma' else 4 << 20
     for name, low, high in [('parents', 1, 32), ('payload', 128, 32 << 20),
-                            ('block', 64 << 10, 4 << 20), ('num_lanes', 1, 3), ('mask', 1, 3)]:
+                            ('block', 64 << 10, max_block), ('num_lanes', 1, 3), ('mask', 1, 3)]:
         if type(case.get(name)) is not int or not low <= case[name] <= high:
             raise ValueError('invalid installed host ' + name)
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):

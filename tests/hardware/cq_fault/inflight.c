@@ -17,15 +17,19 @@ static int inflight_post(struct context *context, struct ibv_qp *qp,
     int code = context->post(qp, wr, bad);
     ++inflight.posts;
     if (code) ++inflight.errors;
+    int modified = 0;
+    if (!code) {
+        struct ibv_qp_attr attr = {.qp_state = IBV_QPS_ERR};
+        modified = native_modify_qp(qp, &attr, IBV_QP_STATE);
+        ++inflight.modifications;
+        if (modified) ++inflight.errors;
+    }
+    /* Keep receipt I/O outside the post-to-ERR interval. */
     unsigned index = find(qp->context);
     receipt("\"kind\":\"dma_post\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"wr_id\":%" PRIu64 ",\"operation\":%u,\"code\":%d,\"length\":%u,\"local\":%" PRIu64 ",\"remote\":%" PRIu64,
             index, (uintptr_t)qp->send_cq, qp->qp_num, wr->wr_id, inflight_operation,
             code, wr->sg_list[0].length, wr->sg_list[0].addr, wr->wr.rdma.remote_addr);
     if (!code) {
-        struct ibv_qp_attr attr = {.qp_state = IBV_QPS_ERR};
-        int modified = native_modify_qp(qp, &attr, IBV_QP_STATE);
-        ++inflight.modifications;
-        if (modified) ++inflight.errors;
         receipt("\"kind\":\"dma_error\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"wr_id\":%" PRIu64 ",\"code\":%d,\"state\":%u",
                 index, (uintptr_t)qp->send_cq, qp->qp_num, wr->wr_id, modified, IBV_QPS_ERR);
     }

@@ -287,8 +287,11 @@ provider teardown; those boundaries retain their separate gates.
 ## In-flight DMA interruption
 
 `mode: "installed-inflight-dma"` uses one parent, one lane, rail mask 1 or 2,
-and `payload == block` (one native WR). The focused profile selects 4 MiB,
-READ/polling and WRITE/events, with two persistent registered contexts.
+and `payload == block` (one native WR). The focused profile selects 4 MiB
+READ/polling and 16 MiB WRITE/events, with two persistent registered contexts.
+Only this mode permits blocks up to 16 MiB; other modes retain their 4 MiB
+limit. The first 4 MiB WRITE diagnostic completed every byte before ERR and
+was correctly rejected as proof of interruption.
 It has no restart controls: both original engines must survive the fault.
 Use the same packaged consumer, pinned observer library, provider inventory
 and resource leases described above. Implementation and executed scope are
