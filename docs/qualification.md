@@ -15,6 +15,11 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
+The latest installed delivery adds [CQ/channel/PD dependency cleanup](#installed-dependency-cleanup)
+to the qualified host RoCE profiles. The production host RDMA implementation
+is complete; physical/fabric qualification and independent acceptance remain
+in the existing P4 queue.
+
 ## Current source delivery
 
 Source [`9e1fdea`](https://github.com/OrbitInfra/OrbitTE/commit/9e1fdeaa9f7cd6c03e30aab2dff19a00f0a44578)
@@ -181,9 +186,57 @@ before starting the requester; that failed run and its released-lock receipts
 are preserved. The corrected supervisor allows only the declared MR/MW role.
 
 This qualifies the declared installed memory-cleanup and engine-replacement
-contracts. Installed CQ/channel/PD dependency cases, physical link/device loss,
-physical rail contention, InfiniBand and independent acceptance remain open.
+contracts. The subsequent [dependency cleanup delivery](#installed-dependency-cleanup)
+qualifies its selected CQ/channel/PD cases. Physical link/device loss, physical
+rail contention, InfiniBand and independent acceptance remain open.
 It adds no GPU payload, performance or TENT wire/API compatibility claim.
+
+### Installed dependency cleanup
+
+The [CQ/channel/PD gate](installed-host.md#cq-completion-channel-and-pd-dependency-failures)
+passes **six frozen two-host cases**, three on each compiler artifact built
+from [`78127d7`](https://github.com/OrbitInfra/OrbitTE/commit/78127d7c12aa05789308d0974fa9cd22c84274b0).
+Stable 1.99.1 runs A to B; Rust 1.85 runs B to A on the same independently
+inventoried hosts and locked mlx5 RoCE RNICs. Each case has one requester,
+one 64 KiB payload, one QP/active rail, two registered contexts and two process
+generations. These are selected requester dependency contracts; the existing
+native libtests retain their separately recorded source-side SQ/RQ scope.
+
+| Failure | Workload on each artifact | Owner state after unregister, repeated close and fixture drop |
+| --- | --- | --- |
+| CQ | READ, polling, mask 1 | Two CQs, one MR/backing, grant, SQ and batch remain retained; the payload QP is closed |
+| Completion channel | WRITE, events, mask 2 | One channel, one MR/backing, grant, SQ and batch remain retained; both engine CQs and the payload QP are closed |
+| PD | READ, events, mask 1; idle teardown | One device/PD remains retained; business backing, payload MRs, grants, CQs, channel and batch/SQ charges are released |
+
+A real dependent QP, CQ or MW makes the selected destructor return `EBUSY`
+exactly once. Native probes before and after dropping fixture owners prove the
+remaining dependency; the observer rejects destructor retries and parent-device
+close. Both CQ/channel cases keep 65,536 direct/inflight bytes charged. The PD
+case has zero payload debt and its actual allocation is released. The existing
+supervisor reaps the faulted requester, keeps RNIC locks through replacement,
+and verifies fresh authority at the same endpoint against the live source.
+Old epochs open no QP or WR; three full-byte/guard rounds succeed before and
+after replacement.
+
+The ten affected MR/MW, QP-cleanup and in-flight DMA regressions also pass on
+these packages. Both installed-consumer format, Clippy, test and install gates,
+four native-observer CPU controls and 29 Python controller tests pass. Every
+native child is reaped, original locks are released, provider hashes stay fixed,
+and selected device resource counts return to their preflight values.
+The first artifact pair also passed; final artifacts additionally fence the
+observer's raw QP witness before native destruction begins.
+
+Exact package/binary/provider hashes, scenario contracts, host/boot identities,
+receipts and the reconciliation are outside Git at
+`/root/orbitte-artifacts/installed-dependency-20261027/native-audit.json`.
+The earlier passing packages and controls are preserved there too. Production
+code, public APIs and wire v14 are unchanged.
+
+This closes the declared installed dependency-failure profiles. It does not
+qualify spontaneous hardware failure, physical link/device loss, provider
+removal, physical rail contention, InfiniBand, GPU/NVLink payloads or performance.
+Independent acceptance remains open. The current nodes expose Ethernet/RoCE;
+GPU allocation and RNIC locks do not establish exclusive physical-port ownership.
 
 ## Recorded host RDMA evidence
 

@@ -203,9 +203,9 @@ The installed gate covers healthy host traffic, idle-resource process restart,
 posted-RQ interruption before payload authorization, lost payload CQEs,
 requester QP cleanup failure, in-flight QP interruption and MR/MW cleanup with
 same-process engine replacement. The [QP cases](qualification.md#installed-two-host-fault-qualification)
-and [memory cases](qualification.md#installed-memory-cleanup-and-replacement)
-have selected two-host qualification; CQ/channel/PD dependency failures retain
-separate installed-artifact gates. Physical port/device faults, per-rail
+and [memory cases](qualification.md#installed-memory-cleanup-and-replacement),
+along with [CQ/channel/PD dependency cases](qualification.md#installed-dependency-cleanup),
+have selected two-host qualification. Physical port/device faults, per-rail
 bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
 for executed artifact/profile results and
@@ -263,7 +263,9 @@ identity-pinned two-peer controller and immutable fault library as completion
 loss. The fixture passes the focused
 [single-host diagnostic](qualification.md#installed-cleanup-fixture) and the
 [declared two-host cases](qualification.md#installed-two-host-fault-qualification).
-Broader native cleanup failures retain their separate gates.
+The `qp` selector below is the default. The
+[CQ/channel/PD selectors](#cq-completion-channel-and-pd-dependency-failures)
+reuse this supervisor with their own dependency and memory-lifetime checks.
 
 After the healthy rounds, the observer records one accepted payload WR and
 withholds its actual successful CQE. It arms cleanup failure on that exact
@@ -289,8 +291,8 @@ checks against the surviving source.
 CPU controls verify FD/thread isolation and reject wrong QP identities,
 retries, missing backing and false drain evidence. They do not qualify native
 retention. This profile also does not prove interrupted in-flight DMA, MR/MW
-or channel cleanup failure through the installed API, physical link loss or
-provider teardown; those boundaries retain their separate gates.
+or channel cleanup failure through the installed API; those have their own
+profiles below. Physical link loss and provider teardown remain separate gates.
 
 ## In-flight DMA interruption
 

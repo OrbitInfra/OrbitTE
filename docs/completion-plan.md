@@ -371,8 +371,8 @@ TENT owners and deliberate differences.
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
 | 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Independent review remains open; this observed-state override does not qualify physical link loss. |
-| 2 | Close the declared installed RoCE fault profile | **Selected installed fault profiles qualified; broader gates open:** the installed runner covers healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs. Requester QP cleanup failure and actual in-flight DMA now pass their [four frozen two-host cases](qualification.md#installed-two-host-fault-qualification) on both compiler artifacts. [Installed MR/MW cleanup and same-process engine replacement](qualification.md#installed-memory-cleanup-and-replacement) also pass six frozen cases on both artifacts. Installed CQ/completion-channel/PD dependency failures, physical link/device loss and provider teardown evidence remain open. Freeze each missing scenario, native proof and negative control before adding its fixture. Keep the qualified cases as regressions. |
-| 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
+| 2 | Close the declared installed RoCE fault profile | **Qualified for the frozen installed profiles:** healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs; [QP cleanup and in-flight DMA](qualification.md#installed-two-host-fault-qualification); [MR/MW cleanup and engine replacement](qualification.md#installed-memory-cleanup-and-replacement); and [CQ/channel/PD dependency cleanup](qualification.md#installed-dependency-cleanup). The last group passes six two-host cases on stable and Rust 1.85, plus ten affected regressions. Physical failures retain the separate acceptance conditions below. |
+| 3 | Finish physical/fabric qualification and review | **Unqualified:** physical link/device loss and provider teardown, physical rail contention/accounting, independent discovery/topology repeat and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
 The first row closes the two source gaps found in the frozen-source audit.
 Discovery now keeps an otherwise valid down-port context paused, as TENT's
@@ -399,10 +399,10 @@ The missing fault evidence has distinct meanings:
   CQEs prove recovery after lost engine observation. Neither proves termination
   of physically interrupted DMA.
 - Native QP/MR/MW syscall and CQ/channel/PD dependency failures already have
-  scoped retention evidence. Installed QP/MR/MW ownership now has scoped
-  qualification; the remaining installed CQ/channel/PD cases must keep
-  actual backing, keys and budgets until physical drain is established; do not
-  replace it with another CPU shim or claim spontaneous hardware error coverage.
+  scoped retention evidence. Their declared installed profiles now pass too.
+  CQ/channel failures retain actual backing and unresolved charges; idle PD
+  failure releases drained business memory and retains the device/PD only.
+  These results do not claim spontaneous hardware error coverage.
 - Physical loss requires an authorized disposable link/device and observations
   of its real state. Query failure injection and QP ERR remain useful controls,
   but do not qualify cable loss, device removal or provider teardown.
@@ -697,10 +697,14 @@ The two discovery/recovery source gaps are implemented in `9e1fdea`
 The installed requester QP cleanup-failure and actual in-flight DMA fixtures
 now pass their four frozen two-host cases on both compiler artifacts. Installed
 MR/MW retention and same-process engine replacement also pass six frozen cases.
-Continue with installed CQ/completion-channel/PD dependency failures in the second
-row of [P4 remaining delivery](#p4-remaining-delivery), using the existing
-native scenarios, followed by the declared physical/fabric gates and independent
-review. Do not reopen completed source work or repeat unaffected matrices.
+Installed CQ/completion-channel/PD dependency cleanup now passes six frozen cases
+and ten affected regressions on both final compiler artifacts.
+
+P4 implementation and its declared installed fault fixtures are complete.
+Continue only with the physical/fabric qualification and independent acceptance
+in [P4 remaining delivery](#p4-remaining-delivery). The current two-host allocation
+provides RoCE, without a qualified disposable physical port or InfiniBand fabric.
+Do not reopen completed source work or repeat unaffected matrices.
 Freeze each missing scenario and its proof before implementing any needed
 fixture; use the existing native and installed consumers. Add a case only
 for an uncovered contract or a demonstrated bug. Keep source checks,

@@ -67,14 +67,16 @@ features with the [build guide](docs/build.md), then follow the
 
 ## Project Status
 
-**Under development.** The host RDMA data path is implemented, with scoped
-native and installed-consumer RoCE validation. The packaged host API passes
-the declared two-host QP and MR/MW cleanup-failure, engine-replacement and
-in-flight DMA cases. P4 remains open for the exact hardware and independent-review gates in the
-[completion plan](docs/completion-plan.md#p4-remaining-delivery).
-GPUDirect RDMA, CUDA IPC/NVLink, optional SSD transports and full TENT API/wire
-parity remain later work. See [capabilities](docs/capabilities.md) for the current
-support boundary and [qualification](docs/qualification.md) for recorded evidence.
+**Host RDMA is implemented; P4 acceptance is pending.** The packaged host API
+passes the declared two-host RoCE resource-cleanup, restart, engine-replacement
+and in-flight DMA profiles. The remaining P4 work is physical-fault/fabric
+qualification and independent review; see the fixed
+[acceptance queue](docs/completion-plan.md#p4-remaining-delivery).
+
+OrbitTE remains under development. GPUDirect RDMA, CUDA IPC/NVLink, optional SSD
+transports and full TENT API/wire parity belong to later stages.
+[Capabilities](docs/capabilities.md) describes supported paths;
+[qualification](docs/qualification.md) records exact artifacts and limits.
 
 The published `orbit-te` alpha reserves the package identity. Use the source
 checkout for the implementation described here.

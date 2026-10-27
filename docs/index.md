@@ -42,8 +42,9 @@ staging are implemented. Native qualification applies to the exact profiles
 in [qualification](qualification.md). The published alpha reserves the crate
 name; the source implementation remains under development.
 
-The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks the remaining
-host-RDMA hardware and independent-review gates before OrbitKV integration.
+The host RDMA implementation and declared installed cleanup fixtures are complete.
+The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
+fabric and independent-review acceptance before OrbitKV integration.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
 including GPUDirect RDMA, CUDA IPC/NVLink and full TENT compatibility. For code
 navigation, use the [architecture reading order](architecture.md#source-reading-order).
