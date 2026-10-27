@@ -339,7 +339,9 @@ have bounded qualification and [independent live repetition](qualification.md#p4
 Physical/fabric qualification remains open; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
 keeps them separate. Selected-port address refresh, periodic reclaim and
 fixed-width QP reuse already exist. Broader bandwidth/QoS/retry policy remains
-in P6; GPU direct paths and native wire compatibility remain separate stages.
+in P6. GPU Direct now uses the same context/worker owners with the private-MR
+authority described in [RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership); native
+wire compatibility remains a separate stage.
 
 ## Correspondence and remaining differences
 
@@ -352,7 +354,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
 | Monitor | Unified get/ACK, periodic reclaim, initially paused contexts and automatic GID reselection | TENT also refreshes effective link bandwidth. OrbitTE preserves conservative retained-resource quarantine; focused native recovery passes, with source and bounded RoCE evidence independently accepted |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
-| Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
+| Grant authority | Exact-range host MW or private GPU PD/MR, and bound source receipt | Deliberate Rust authorization contract; TENT publishes native MR keys. GPU source grants are not cached; this is not native wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
 | Worker load | Unfinished grant charge including retained native work | Priority queues, QoS, retry/failover and deadline policies remain P6 work |
 

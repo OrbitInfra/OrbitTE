@@ -350,8 +350,9 @@ keys; OrbitTE's exact per-request authorization additionally needs private PDs
 for GPU source grants. GPU source MRs/QPs are currently per-grant and are not
 cached. Host source MW/QP reuse is retained; a GPU requester can reuse a pair
 when the source is direct host memory. Registration failure on any context fails
-the batch publication. Broad GPU multirail, native fault and performance
-qualification remain distinct from the implemented path.
+the batch publication. The [bounded installed H20/RoCE profile](qualification.md#gpudirect-rdma)
+covers two contexts and preserves an unqualified host-wide context inventory
+limit. Other GPU/provider, native GPU fault and performance claims remain open.
 
 The explicit `hardware_peer` gate accepts `ORBITTE_RDMA_CUDA_MEMORY=direct` and
 optional `ORBITTE_RDMA_SLICE_BYTES` for 1/17/32/64-byte controls. The existing
@@ -359,6 +360,32 @@ supervisor owns GPU/RNIC locks and process reaping. Its passive native observer
 records real MR type/flags, QP PD and payload WR addresses; `gdr.py` checks those
 against declared allocations and full-buffer/guard results. Evidence belongs
 outside the checkout; see [qualification](qualification.md).
+
+Build the installed GPU consumer from a clean commit, then pass both its
+manifest and passive observer to the controller:
+
+```sh
+CC=gcc CXX=g++ python3 tests/hardware/build_installed.py --consumer gpu \
+  --toolchain stable --output /external/installed-gpu-stable
+python3 -B tests/hardware/run.py --profile /external/gpu-profile.json \
+  --binary /external/installed-gpu-stable/installed/bin/orbitte-hardware-peer \
+  --installation /external/installed-gpu-stable/manifest.json \
+  --gdr-observer /external/installed-gpu-stable/liborbitte_cq_fault.so \
+  --output /external/runs/gpu-direct-001
+```
+
+Use `--toolchain 1.85.0` and a new output directory for the MSRV consumer. Each
+GPU case declares `cuda_memory: "direct"`, `transport: "rdma"`, and memory
+kinds `cpu`/`cuda:0`, with at least one GPU. The controller sets the required
+scatter environment before spawning the native process. Nodes must have
+distinct pinned hostnames and boot IDs. Small cases use `payload: 4096` and
+`slice_bytes` of 1, 17, 32 or 64. The two-rail folded-tail profile adds `rails`
+and both original NIC locks, `payload: 8388768`, `rdma_block_size: 1048576`,
+and `expected_grants: 12`. Each native process runs three READ requests followed
+by three WRITE requests. Run both physical directions and both values of
+`rdma_events`; preserve failed runs. The observer does not simulate transfers
+or change provider return values. This profile proves correctness and ownership,
+not bandwidth or GPU-native fault recovery.
 
 ## Run a native profile
 
