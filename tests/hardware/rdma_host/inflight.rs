@@ -186,6 +186,8 @@ pub(super) fn run(case: &Case) -> Result<()> {
         }
         batch.free()?;
     }
+    // The source may still be idle before the request reaches its handler.
+    barrier(&mut stream, "dma-requester-failed")?;
     // Both peers drain before either side reads or reinitializes payload bytes.
     let deadline = Instant::now() + TIMEOUT;
     let rdma = loop {
