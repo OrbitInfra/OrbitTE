@@ -13,6 +13,27 @@ GPU direct transfer or performance.
 
 ## Current source delivery
 
+Initially paused contexts and automatic GID reselection now follow the frozen
+TENT context lifecycle. A usable PD receives persistent MR copies while its
+port is paused; transport admission remains disabled. Recovery reselects a GID
+only for automatic configuration, on the same device/port and after old native
+owners drain. Explicit pins, PD/key identity and existing retained-resource
+rules remain intact. The public API and wire v14 are unchanged.
+
+Stable and Rust 1.85.0 each pass all-feature Clippy and **239 CPU/integration/
+doc tests**. These include the new initial-pause, all-paused registration,
+healthy-sibling dispatch, GID-reselection and strict-pin transitions. Strict
+Sphinx and the 19-page local link/fragment check pass. The focused
+[native recovery gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection)
+is compiled but unqualified; no native result is inferred from the CPU fixture.
+Logs remain outside Git at
+`/root/orbitte-artifacts/rdma-context-recovery-20261027`.
+Earlier native and installed qualifications below retain their original source
+and artifacts. Physical faults, fabric/topology repeat and independent acceptance
+remain in the single [P4 queue](completion-plan.md#p4-remaining-delivery).
+
+## Previous source audit and layout delivery
+
 The P4 closeout audit and context-module refactor change source organization
 and the execution queue. Context orchestration remains on `RdmaTransport`, with
 its previous method bodies and resource semantics. The audit records two real
@@ -27,7 +48,8 @@ CPU/integration/doc tests. Normalizing the equivalent visibility and formatting
 confirms all eight relocated transport method bodies are unchanged. Strict
 Sphinx and the 19-page local link/fragment check pass. Logs remain outside Git
 at `/root/orbitte-artifacts/rdma-p4-closeout-20261026`. Native gates are not
-rerun by this source-only refactor; the newly identified code gaps remain open.
+rerun by that source-only refactor. The subsequent implementation above addresses
+its two identified code gaps without changing the earlier evidence.
 
 ## Latest installed lost-completion delivery
 

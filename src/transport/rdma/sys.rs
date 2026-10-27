@@ -181,7 +181,8 @@ pub(super) struct Verbs {
     pub asynchronous: Option<AsyncVerbs>,
     pub completion: Option<CqEventVerbs>,
     pub discover: Discover,
-    pub query_address: unsafe fn(*const DeviceHandles, &RdmaAddress) -> Result<RdmaAddress>,
+    pub query_address:
+        unsafe fn(*const DeviceHandles, &RdmaAddress, Option<u8>) -> Result<RdmaAddress>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub create_cq:
         unsafe extern "C" fn(*mut CqHandles, *const DeviceHandles, u32, *mut c_void) -> c_int,

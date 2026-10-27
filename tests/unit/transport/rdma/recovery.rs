@@ -25,6 +25,18 @@ fn native(owner: &RdmaContext, apply: impl FnOnce(&FakeDevice)) {
     apply(unsafe { &*resources.handles.context.cast::<FakeDevice>() });
 }
 
+pub(super) fn identity(owner: &RdmaContext) -> (usize, usize, [u8; 16]) {
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("closed context");
+    };
+    (
+        resources.handles.context as usize,
+        resources.handles.pd as usize,
+        resources.domain,
+    )
+}
+
 struct Release(Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>);
 impl Drop for Release {
     fn drop(&mut self) {
@@ -170,5 +182,157 @@ fn failed_native_cleanup_never_resumes_or_retries_on_monitor_ticks() {
                 .close(Instant::now() + Duration::from_secs(2))
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn initially_down_context_registers_mrs_and_recovers_without_reopening_its_pd() {
+    use crate::engine::tests::{rdma_fixture_with_runtime, source_runtime};
+    let engine = rdma_fixture_with_runtime(runtime("direct:async_initial_down"));
+    let memory = engine
+        .register_memory(
+            vec![7; 8].into_boxed_slice(),
+            crate::Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let runtime = source_runtime(&engine);
+    let owner = runtime.device().unwrap();
+    let original = identity(&owner);
+    let address = owner.address().unwrap();
+    assert!(!address.active);
+    assert!(owner.asynchronous.paused());
+    assert_eq!(runtime.stats().unwrap().async_event_sources, 1);
+    assert_eq!(runtime.stats().unwrap().persistent_mrs, 2);
+    assert_eq!(runtime.stats().unwrap().active_cqs, 0);
+    assert!(runtime.paths().is_err());
+    assert!(runtime.allocate(8, 1).is_err());
+    assert!(
+        !runtime.topology().unwrap().unwrap().nic_list[0]
+            .device_attrs
+            .contains_key("rdma.selected")
+    );
+    let mut active = address.clone();
+    active.active = true;
+    native(&owner, |device| {
+        *device.route.lock().unwrap() = Some(active.clone())
+    });
+    wait(runtime, |stats| stats.route_recoveries == 1);
+    assert!(Arc::ptr_eq(&owner, &runtime.device().unwrap()));
+    assert_eq!(identity(&owner), original);
+    assert_eq!(owner.address().unwrap(), active);
+    assert_eq!(runtime.paths().unwrap().len(), 1);
+    assert!(runtime.allocate(8, 1).is_ok());
+    assert_eq!(runtime.stats().unwrap().opened_devices, 1);
+    assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, 2);
+    assert_eq!(runtime.stats().unwrap().active_cqs, 0);
+    assert_eq!(runtime.stats().unwrap().acknowledged_async_events, 0);
+    let mut grant = runtime
+        .endpoint(
+            &memory,
+            0,
+            8,
+            0,
+            Instant::now() + Duration::from_secs(2),
+            None,
+        )
+        .unwrap();
+    assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, 2);
+    grant.close().unwrap();
+    drop(grant);
+    engine.close(Duration::from_secs(2)).unwrap();
+    assert_eq!(runtime.stats().unwrap().active_devices, 0);
+    assert_eq!(runtime.stats().unwrap().persistent_mrs, 0);
+}
+
+#[test]
+fn recovery_reselects_auto_gid_only_after_drain_and_never_moves_explicit_pins() {
+    for (pin, changed_field) in [(None, 0), (Some(0), 0), (None, 1), (None, 2)] {
+        let mut runtime = runtime("qp_pause");
+        runtime.config.gid_index = pin;
+        let mut grant = runtime.staging_endpoint(8, 0).unwrap();
+        let owner = runtime.device().unwrap();
+        let original = identity(&owner);
+        let old = owner.address().unwrap();
+        let mut new = old.clone();
+        match changed_field {
+            0 => new.gid_index = 7,
+            1 => new.port += 1,
+            _ => new.device = "other-device".into(),
+        }
+        let release = Release(pause_device(&owner));
+        native(&owner, |device| {
+            device.route_queries.lock().unwrap().clear();
+            *device.route.lock().unwrap() = Some(new.clone());
+        });
+        wait(&runtime, |stats| stats.progress_failures == 1);
+        assert!(owner.asynchronous.paused());
+        assert_eq!(owner.address().unwrap(), old);
+        assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
+        drop(release);
+        wait(&runtime, |stats| stats.progress_recoveries == 1);
+        if pin.is_none() && changed_field == 0 {
+            wait(&runtime, |stats| stats.route_recoveries == 1);
+            assert_eq!(owner.address().unwrap(), new);
+            assert_eq!(
+                runtime.topology().unwrap().unwrap().nic_list[0].device_attrs["rdma.gid_index"],
+                "7"
+            );
+        } else {
+            let ticks = runtime.stats().unwrap().monitor_ticks;
+            wait(&runtime, |stats| stats.monitor_ticks > ticks);
+            assert!(owner.asynchronous.paused());
+            assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
+            assert_eq!(owner.address().unwrap(), old);
+        }
+        native(&owner, |device| {
+            let queries = device.route_queries.lock().unwrap();
+            assert!(!queries.is_empty());
+            if let Some(pin) = pin {
+                assert!(
+                    queries.iter().all(|query| *query == Some(pin)),
+                    "{queries:?}"
+                );
+            } else {
+                assert!(
+                    queries.contains(&None),
+                    "recovery did not request automatic selection: {queries:?}"
+                );
+                assert!(queries.iter().all(|query| query.is_none()
+                    || *query == Some(old.gid_index)
+                    || *query == Some(new.gid_index)));
+            }
+        });
+        assert_eq!(identity(&owner), original);
+        let _ = grant.close();
+        drop(grant);
+        runtime
+            .close(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+    }
+}
+
+#[test]
+fn paused_port_allows_registration_but_fatal_device_and_lost_consumers_do_not() {
+    for fault in 0..3 {
+        let engine =
+            crate::engine::tests::rdma_fixture_with_runtime(runtime("direct:initial_down"));
+        let runtime = crate::engine::tests::source_runtime(&engine);
+        let owner = runtime.device().unwrap();
+        assert!(owner.asynchronous.paused());
+        match fault {
+            0 => owner
+                .asynchronous
+                .event(ibverbs_sys::IBV_EVENT_DEVICE_FATAL),
+            1 => owner.asynchronous.lost(libc::EIO),
+            _ => owner.asynchronous.lost_completion(libc::EIO),
+        }
+        assert!(
+            engine
+                .register_memory(vec![8; 8].into_boxed_slice(), crate::Permission::RemoteRead)
+                .is_err()
+        );
+        assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, 0);
+        assert_eq!(engine.stats().unwrap().retained_regions, 0);
+        let _ = engine.close(Duration::from_secs(2));
     }
 }

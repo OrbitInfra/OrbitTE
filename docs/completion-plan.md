@@ -109,7 +109,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host data path implemented; two discovery/recovery gaps identified below; scoped RoCE profiles qualified; final fault qualification and independent acceptance open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host data path and discovery/recovery correspondence implemented; focused native recovery, final fault qualification and independent acceptance open; earlier scoped RoCE profiles retain their qualification |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -370,17 +370,18 @@ TENT owners and deliberate differences.
 
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
-| 1 | Complete discovery/recovery correspondence | **Missing code:** retain a usable context for an initially down port, and repeat automatic GID selection on recovery. Explicit device/port/GID pins must remain strict. Publish a replacement route only after old QPs/CQs drain; preserve context/PD identity and persistent MRs. CPU transition tests and a focused native recovery gate are required. |
+| 1 | Complete discovery/recovery correspondence | **Implemented; native gate open:** retain usable initially down contexts and repeat automatic GID selection on recovery. CPU transitions verify strict pins, old-QP/CQ drain, unchanged context/PD/MRs and healthy-sibling dispatch. The opt-in [native recovery gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection) is compiled but unqualified. Run it on an authorized RNIC with two valid GIDs before accepting this row. |
 | 2 | Close the declared installed RoCE fault profile | **Unqualified:** interrupt actual in-flight DMA, exercise native cleanup failure through the packaged public consumer, and verify physical link/device loss and provider teardown. Freeze the scenario, native proof and negative control before running it. Keep the already-qualified cases as regressions. |
 | 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
-The first row is an implementation gap found by reading both trees, not another
-stress-test milestone. OrbitTE currently inventories active routes only and
-re-queries the originally selected GID index. Frozen TENT can keep an otherwise
-valid down-port context paused, and its automatic `refreshAddress` repeats GID
-selection. Reclaiming a previously active port is already implemented; do not
-implement it again. New-device hotplug and general cross-rail retry policy are
-separate from these two selected-context gaps.
+The first row closes the two source gaps found in the frozen-source audit.
+Discovery now keeps an otherwise valid down-port context paused, as TENT's
+`enable` does. Its PD receives persistent MR copies while route admission stays
+disabled. Recovery repeats GID ranking only for automatic configuration, on the
+same selected device and port; explicit pins cannot move. Healthy ticks query
+the selected index. Native drain and the route generation still gate publication.
+New-device hotplug and general cross-rail retry policy remain separate work;
+the native observation fixture does not qualify physical link loss.
 
 For the installed RoCE profile, reuse the existing bounded consumer and recorded
 geometries: two hosts/two mlx5 RNICs, host Direct READ/WRITE in both directions,

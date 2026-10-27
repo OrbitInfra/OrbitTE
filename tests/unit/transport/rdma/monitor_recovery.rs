@@ -5,8 +5,9 @@ use crate::transport::rdma::discovery::RdmaAddress;
 pub(super) unsafe fn query_address(
     handles: *const sys::DeviceHandles,
     address: &RdmaAddress,
+    gid_index: Option<u8>,
 ) -> crate::Result<RdmaAddress> {
-    let observed = unsafe { (sys::REAL.query_address)(handles, address) }?;
+    let observed = unsafe { (sys::REAL.query_address)(handles, address, gid_index) }?;
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     if trace.mode == "monitor-recovery" && trace.target && address.device == trace.rail {
         trace.native_queries += 1;

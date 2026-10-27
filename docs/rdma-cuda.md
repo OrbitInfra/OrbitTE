@@ -153,7 +153,8 @@ described below. Resource reuse alone is no performance result.
 
 The persistent cache uses the actual `RdmaContext`/PD owner together with
 `RegisteredMemory` identity and capability. Host Direct registration prepares
-all enabled contexts atomically before publication. The cache registers the
+all usable contexts, including paused ports, atomically before publication.
+The cache registers the
 entire registered view with `IBV_ACCESS_LOCAL_WRITE` for a requester
 or `LOCAL_WRITE|MW_BIND` for a source, and retains its real allocation and device.
 Capability is part of the cache key: one view used in both roles needs two actual
@@ -1579,7 +1580,7 @@ owners rather than adding topology policy to TCP:
 | `runtime/topology.h`, `topology.cpp` | `runtime/topology.rs` | `Topology`, `NicEntry`, `MemEntry`, three NIC priority ranks; transport attributes remain namespaced metadata |
 | `platform/cpu_probe.cpp` | `platform/cpu_probe.rs` | CPU node inventory, RNIC PCI BDF and known/unknown NUMA node; local rank 0 and fallback rank 2 |
 | `CpuPlatform::probe`, `listInfiniBandDevices` | `rdma::sys::devices`, `rdma::discovery` | Intersect provider-visible RNICs with readable/writable uverbs character nodes; apply device filters before native open |
-| RDMA `getBestGidIndex`, `RdmaContext::openDevice` | `rdma::discovery`, `RdmaContext` | Enumerate/rank active ports and nonzero GIDs; validate the chosen route against the actual native context |
+| RDMA `getBestGidIndex`, `RdmaContext::openDevice` | `rdma::discovery`, `RdmaContext` | Rank valid routes with active ports first; retain valid paused contexts and validate each chosen route against the actual native context |
 | RDMA context address ownership | `RdmaContext::Resources` | Freeze selected device/port/GID/type/netdev/ifindex/LID/MTU/link layer with its actual PD and key domain |
 | Existing RDMA event and endpoint owners | `events`, `Workers`, `EndpointStore` | A changed/unqueryable route fences admission; actual QP/MW/MR owners supply retirement and retention |
 
@@ -3678,8 +3679,7 @@ See [qualification](qualification.md) for the frozen artifact and evidence.
 
 ## Periodic monitor recovery
 
-This delivery completes the second implementation row of the P4 exit queue;
-it does not add another P4 substage. It follows frozen TENT
+Periodic reclaim and selected-port recovery are implemented. They follow frozen TENT
 `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`:
 
 | TENT owner | OrbitTE owner | Contract |
@@ -3720,7 +3720,64 @@ healthy rail's QPs preserved. All process/provider/lock evidence stays outside
 the checkout. See [qualification](qualification.md).
 
 No physical port is changed by this fixture. Physical link/device loss,
-initially down or newly added devices, automatic selection of another GID
-index, link-bandwidth policy, InfiniBand and final installed-host/independent
-acceptance remain open. Native TENT wire parity and OrbitKV integration are
-separate later gates.
+new-device hotplug, link-bandwidth policy, InfiniBand and final installed-host/
+independent acceptance remain open. Initially paused contexts and automatic
+GID reselection now have the separate source contract below. Native TENT wire
+parity and OrbitKV integration remain later gates.
+
+## Initially paused contexts and GID reselection
+
+This closes the two source gaps in the [P4 audit](architecture.md#p4-source-audit).
+It follows frozen TENT's `RdmaContext::enable` (`DEVICE_PAUSED`) and
+`refreshAddress` (`getBestGidIndex` for automatic configuration), within the
+existing discovery, context, monitor and buffer owners.
+
+Discovery ranks active routes first but retains otherwise valid inactive ports.
+Opening such a context still validates its actual provider/GID metadata and
+creates a PD. Host Direct registration prepares persistent local and MW-parent
+MRs on that PD, including when all selected ports are paused. `paths`, selector
+admission and QP construction reject the paused route. A healthy sibling rail
+continues to dispatch; stable NIC IDs and the registration fan-out do not change.
+Invalid device/GID metadata, device-fatal events and lost event consumers do not
+become usable contexts. New-device hotplug is not implemented.
+
+The context retains the configured `gid_index` separately from its selected
+address. Healthy monitor ticks query the selected index only. Paused recovery
+with `None` reranks the current valid GIDs on the same device/port and validates
+the choice through native verbs; `Some(index)` never falls back. OrbitTE's
+existing GID ranking includes real IPv6 RoCEv2, unlike TENT's IPv4-preferred
+branch. Neither implementation correspondence nor CPU controls establish fabric
+compatibility. Publication still requires old endpoint builders, QPs and CQs to
+drain and an unchanged fault generation. PD identity, key history and persistent
+MRs survive recovery; fatal faults and unresolved cleanup remain fenced.
+
+CPU controls cover initial pause, no-event recovery, all-paused registration,
+healthy-sibling selection, strict device/port/GID pins, blocked native teardown,
+automatic index changes and fatal/lost-consumer rejection. The focused native
+gate below is compiled but has not run on this source. It uses real PD/MR/QP/CQ
+operations and native GID queries, with a process-local override of the observed
+port state. It does not alter a physical port or send payloads.
+
+Use an authorized disposable RNIC and an existing exclusive resource-lock file.
+Inspect its native GID table first: `ORBITTE_INITIAL_GID` must name a valid index
+different from the automatically preferred index. The test fails rather than
+skipping if automatic selection does not change it. Keep the resource lease
+through test completion; the fixture holds `flock` through both cases and native
+close. Save output outside the checkout:
+
+```sh
+ORBITTE_RDMA_LOCK=/path/to/authorized-rnic.lock \
+ORBITTE_SHARED_DEVICE=mlx5_0 ORBITTE_SHARED_PORT=1 ORBITTE_INITIAL_GID=0 \
+CC=gcc CXX=g++ cargo +stable test --locked --features rdma \
+  transport::rdma::context::tests::native_context_recovery::native_context_recovery_preserves_pd_mrs_and_strict_gid_selection \
+  -- --exact --ignored --nocapture --test-threads=1 \
+  > /path/to/external-artifacts/context-recovery.log 2>&1
+```
+
+The automatic and pinned cases each register two persistent MRs while paused,
+resume through monitor queries, drain a real QP/CQ on the next pause and resume
+again with a fresh connection incarnation. They require unchanged native
+context/PD/domain and MR counts, then zero live/retained native owners at close.
+`ORBITTE_CONTEXT_RECOVERY` receipts record the selected index and explicitly
+identify the absent physical-fault and payload coverage. Accepting this gate
+does not replace the two-host byte profile, physical-loss or InfiniBand gates.

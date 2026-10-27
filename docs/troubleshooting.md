@@ -36,8 +36,10 @@ another rail.
 
 ## Host registration returns a native error or ResourceExhausted
 
-Host Direct registration prepares MRs on all enabled contexts before publishing
-the range. Check the original device error and count physical copies: one MR
+Host Direct registration prepares MRs on all usable contexts, including paused
+ports, before publishing the range. A successful registration does not mean a
+route is ready: inspect selected topology metadata and wait for port recovery.
+Check the original device error and count physical copies: one MR
 per context for local-only ranges, two per context for remotely accessible
 ranges. Both limits charge the full view for each copy. Published registrations
 cannot be evicted to fit a new range; retire unused registrations or adjust the

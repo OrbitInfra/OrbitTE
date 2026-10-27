@@ -1362,3 +1362,72 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
         source.close(TIMEOUT).unwrap();
     }
 }
+
+#[test]
+fn initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling() {
+    fn paused(
+        config: &RdmaConfig,
+    ) -> Result<(
+        Topology,
+        Vec<crate::transport::rdma::discovery::RdmaAddress>,
+    )> {
+        let (topology, mut addresses) = discover(config)?;
+        addresses[0].active = false;
+        Ok((topology, addresses))
+    }
+    static VERBS: sys::Verbs = sys::Verbs {
+        discover: paused,
+        open_device: open,
+        ..fixture::VERBS
+    };
+    let mut owner = runtime(5, 4);
+    owner.verbs = &VERBS;
+    owner.registrations =
+        buffers::LocalBufferManager::new(&owner.config, Arc::clone(&owner.usage), &VERBS);
+    let engine = rdma_fixture_with_runtime(owner);
+    let memory = engine
+        .register_memory(vec![3; 16].into_boxed_slice(), Permission::RemoteReadWrite)
+        .unwrap();
+    let runtime = source_runtime(&engine);
+    let paused = runtime.device_at(0).unwrap();
+    let healthy = runtime.device_at(2).unwrap();
+    let domain = healthy.domain().unwrap();
+    assert!(paused.asynchronous.paused());
+    assert!(healthy.asynchronous.check().is_ok());
+    assert_eq!(runtime.stats().unwrap().persistent_mrs, 4);
+    assert_eq!(
+        runtime
+            .paths()
+            .unwrap()
+            .iter()
+            .map(|path| path.nic_id)
+            .collect::<Vec<_>>(),
+        [2]
+    );
+    assert!(runtime.allocate(8, 1).is_err());
+    assert_eq!(runtime.allocate(8, 4).unwrap().device_id(), 2);
+    crate::transport::rdma::context::tests::change_route(runtime, |route| route.active = true);
+    let end = Instant::now() + Duration::from_secs(6);
+    while runtime.stats().unwrap().route_recoveries == 0 {
+        assert!(Instant::now() < end);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        runtime
+            .paths()
+            .unwrap()
+            .iter()
+            .map(|path| path.nic_id)
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert!(Arc::ptr_eq(&paused, &runtime.device_at(0).unwrap()));
+    assert!(Arc::ptr_eq(&healthy, &runtime.device_at(2).unwrap()));
+    assert_eq!(healthy.domain().unwrap(), domain);
+    assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, 4);
+    assert_eq!(runtime.stats().unwrap().opened_devices, 2);
+    assert_eq!(runtime.stats().unwrap().opened_connections, 0);
+    memory.write(0, &[4; 16]).unwrap();
+    engine.close(TIMEOUT).unwrap();
+    assert_eq!(runtime.stats().unwrap().persistent_mrs, 0);
+}

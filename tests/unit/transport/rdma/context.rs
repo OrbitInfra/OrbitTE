@@ -884,3 +884,6 @@ impl RdmaContext {
 
 #[path = "recovery.rs"]
 mod recovery;
+
+#[path = "native_context_recovery.rs"]
+mod native_context_recovery;

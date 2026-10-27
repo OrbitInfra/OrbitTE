@@ -205,7 +205,9 @@ fn gid_ranking_prefers_physical_v2_but_keeps_ib_and_valid_fallbacks() {
         None
     );
     f.put("sys/class/infiniband/a/ports/1/state", "2: INIT");
-    assert!(f.discover(&RdmaConfig::default()).is_err());
+    let (_, routes) = f.discover(&RdmaConfig::default()).unwrap();
+    assert_eq!(routes.len(), 1);
+    assert!(!routes[0].active);
 }
 
 #[test]
@@ -229,4 +231,54 @@ fn removed_malformed_unaddressable_and_inaccessible_entries_never_become_candida
     fs::remove_file(f.root.join("dev/infiniband/uverbs0")).unwrap();
     f.put("dev/infiniband/uverbs0", "not a character device");
     assert!(f.discover(&RdmaConfig::default()).is_err());
+}
+
+#[test]
+fn down_ports_keep_stable_inventory_and_reselection_obeys_exact_pins() {
+    let mut f = Fixture::new();
+    f.nic("a", 0);
+    f.nic("b", 1);
+    f.gid("a", 1, 0, "2605::1", "IB/RoCE v1", "eth0");
+    f.gid("a", 1, 3, "2605::1", "RoCE v2", "eth0");
+    f.gid("a", 2, 0, "2605::2", "RoCE v2", "eth1");
+    f.gid("b", 1, 3, "2605::3", "RoCE v2", "eth2");
+    f.put("sys/class/infiniband/a/ports/1/state", "1: DOWN");
+    let (topology, routes) = f.discover(&RdmaConfig::default()).unwrap();
+    assert_eq!(
+        topology
+            .nic_list
+            .iter()
+            .map(|nic| nic.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(routes[0].active);
+    assert_eq!(routes[0].port, 2);
+    assert_eq!(routes.iter().filter(|route| !route.active).count(), 2);
+    let config = RdmaConfig::new("a");
+    let (pinned, routes) = f.discover(&config).unwrap();
+    assert_eq!(pinned.nic_list.len(), 1);
+    assert_eq!(routes.len(), 1);
+    assert_eq!(
+        (routes[0].port, routes[0].gid_index, routes[0].active),
+        (1, 0, false)
+    );
+
+    let sys = f.root.join("sys");
+    assert_eq!(port_addresses(&sys, "a", 1, None)[0].gid_index, 3);
+    fs::remove_file(sys.join("class/infiniband/a/ports/1/gids/3")).unwrap();
+    f.gid("a", 1, 7, "2605::7", "RoCE v2", "eth0");
+    let refreshed = port_addresses(&sys, "a", 1, None);
+    assert_eq!((refreshed[0].gid_index, refreshed[0].active), (7, true));
+    assert!(
+        refreshed
+            .iter()
+            .all(|route| route.device == "a" && route.port == 1)
+    );
+    assert!(port_addresses(&sys, "a", 1, Some(3)).is_empty());
+    assert_eq!(port_addresses(&sys, "a", 1, Some(0))[0].gid_index, 0);
+    for state in ["0: NOP", "6: UNKNOWN", "unreadable"] {
+        f.put("sys/class/infiniband/a/ports/1/state", state);
+        assert!(port_addresses(&sys, "a", 1, None).is_empty(), "{state}");
+    }
 }

@@ -642,6 +642,7 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
     let address = RdmaAddress {
         device: "mlx5_0".into(),
         port: 1,
+        active: true,
         gid_index: 3,
         gid_type: discovery::GidType::RoceV2,
         net_device: Some("eth0".into()),
@@ -755,6 +756,7 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
     let address = RdmaAddress {
         device: "fixture".into(),
         port: 1,
+        active: true,
         gid_index: 3,
         gid_type: discovery::GidType::RoceV2,
         net_device: Some("lo".into()),
@@ -801,7 +803,7 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
             );
         });
         let _reset = AddressReadGuard;
-        let result = unsafe { (REAL.query_address)(&handles, &address) };
+        let result = unsafe { (REAL.query_address)(&handles, &address, Some(address.gid_index)) };
         assert_eq!(result.is_ok(), field == 0, "{field}: {result:?}");
         ADDRESS_READ.with(|slot| {
             assert!(

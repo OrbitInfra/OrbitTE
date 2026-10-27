@@ -42,6 +42,18 @@ pub(super) unsafe fn query_descriptor(
     port: u8,
     gid_index: u8,
 ) -> std::result::Result<Descriptor, c_int> {
+    let (descriptor, active) = unsafe { read_descriptor(device, port, gid_index) }?;
+    if !active {
+        return Err(libc::ENETDOWN);
+    }
+    Ok(descriptor)
+}
+
+unsafe fn read_descriptor(
+    device: *const DeviceHandles,
+    port: u8,
+    gid_index: u8,
+) -> std::result::Result<(Descriptor, bool), c_int> {
     unsafe {
         let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
         // All consumed fields are in the published binding's legacy output prefix.
@@ -53,11 +65,12 @@ pub(super) unsafe fn query_descriptor(
         if code != 0 {
             return Err(code);
         }
-        if attr.state != ffi::ibv_port_state::IBV_PORT_ACTIVE {
-            return Err(libc::ENETDOWN);
-        }
+        let active = attr.state == ffi::ibv_port_state::IBV_PORT_ACTIVE;
+        let mtu = attr.active_mtu as u8;
         if !matches!(attr.link_layer, 1 | 2)
-            || !(1..=5).contains(&(attr.active_mtu as u8))
+            || !(1..=5).contains(&attr.state)
+            || mtu > 5
+            || (active && mtu == 0)
             || i32::from(gid_index) >= attr.gid_tbl_len
         {
             return Err(libc::EADDRNOTAVAIL);
@@ -75,13 +88,16 @@ pub(super) unsafe fn query_descriptor(
         if gid.raw == [0; 16] || std::net::Ipv6Addr::from(gid.raw).is_multicast() {
             return Err(libc::EADDRNOTAVAIL);
         }
-        Ok(Descriptor {
-            lid: attr.lid,
-            mtu: attr.active_mtu as u8,
-            link_layer: attr.link_layer,
-            gid: gid.raw,
-            ..Descriptor::default()
-        })
+        Ok((
+            Descriptor {
+                lid: attr.lid,
+                mtu,
+                link_layer: attr.link_layer,
+                gid: gid.raw,
+                ..Descriptor::default()
+            },
+            active,
+        ))
     }
 }
 
@@ -115,11 +131,13 @@ unsafe fn read_address(
         return result;
     }
 
-    let descriptor = unsafe { query_descriptor(device, expected.port, expected.gid_index) }
-        .map_err(|code| Error::Backend {
-            operation: "ibverbs route query",
-            code,
-        })?;
+    let (descriptor, active) = unsafe {
+        read_descriptor(device, expected.port, expected.gid_index)
+    }
+    .map_err(|code| Error::Backend {
+        operation: "ibverbs route query",
+        code,
+    })?;
     let mut entry: ffi::ibv_gid_entry = unsafe { std::mem::zeroed() };
     let code = unsafe {
         ffi::_ibv_query_gid_ex(
@@ -140,6 +158,7 @@ unsafe fn read_address(
         descriptor.link_layer,
     )?;
     let observed = RdmaAddress {
+        active,
         descriptor,
         gid_type,
         net_device,
@@ -150,6 +169,34 @@ unsafe fn read_address(
 }
 
 pub(super) unsafe fn query_address(
+    device: *const DeviceHandles,
+    expected: &RdmaAddress,
+    gid_index: Option<u8>,
+) -> Result<RdmaAddress> {
+    if let Some(gid_index) = gid_index {
+        let pinned = RdmaAddress {
+            gid_index,
+            ..expected.clone()
+        };
+        return unsafe { query_selected_address(device, &pinned) };
+    }
+    let candidates = discovery::port_addresses(
+        std::path::Path::new("/sys"),
+        &expected.device,
+        expected.port,
+        None,
+    );
+    let mut error = Error::Unavailable("no valid GID on the selected RDMA port");
+    for candidate in candidates {
+        match unsafe { query_selected_address(device, &candidate) } {
+            Ok(address) => return Ok(address),
+            Err(fault) => error = fault,
+        }
+    }
+    Err(error)
+}
+
+unsafe fn query_selected_address(
     device: *const DeviceHandles,
     expected: &RdmaAddress,
 ) -> Result<RdmaAddress> {
