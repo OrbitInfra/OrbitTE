@@ -11,6 +11,17 @@ import sys
 import time
 
 
+def fault_scope(environment):
+    mode = environment.get('ORBITTE_HOST_MODE')
+    role = environment.get('ORBITTE_SHARED_ROLE')
+    if mode == 'installed-memory-cleanup':
+        owner = environment.get('ORBITTE_CLEANUP_KIND')
+        return (role in ('source', 'requester') and role == environment.get('ORBITTE_CLEANUP_ROLE')
+                and owner in ('mr', 'mw') and (owner != 'mw' or role == 'source'))
+    return (role == 'requester'
+            and mode in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma'))
+
+
 def write(path, value):
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
@@ -61,8 +72,7 @@ def supervise(config_path):
                 library = root.parent / 'liborbitte_cq_fault.so'
                 if (hashlib.sha256(library.read_bytes()).hexdigest() != fault_hash
                         or environment.get('LD_PRELOAD') != str(library)
-                        or environment.get('ORBITTE_SHARED_ROLE') != 'requester'
-                        or environment.get('ORBITTE_HOST_MODE') not in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma')):
+                        or not fault_scope(environment)):
                     raise RuntimeError('fault library scope or immutable hash mismatch')
                 environment['ORBITTE_RESTART_GENERATION'] = str(generation)
                 environment['ORBITTE_RESTART_ROOT'] = str(root)

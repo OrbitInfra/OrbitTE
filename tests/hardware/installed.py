@@ -47,7 +47,6 @@ def validate(case):
                 or case['mask'] not in (1, 2) or case['payload'] > case['block']):
             raise ValueError('memory cleanup requires one QP and an explicit MR/MW owner')
     elif 'fault_role' in case or 'generations' in case:
-
         raise ValueError('restart controls require the installed-restart mode')
     if case['mode'] in ('installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure') and case['payload'] > case['block']:
         raise ValueError('interruption profiles require one slice per parent')

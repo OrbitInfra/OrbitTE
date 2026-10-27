@@ -5,6 +5,7 @@ import unittest
 
 import installed
 import run
+import supervise
 
 
 class InstalledMemoryEvidence(unittest.TestCase):
@@ -104,6 +105,16 @@ class InstalledMemoryEvidence(unittest.TestCase):
                                             self.case(), 'a', 'source', '/tmp/run')
         self.assertEqual(environment['ORBITTE_CLEANUP_ROLE'], 'requester')
         self.assertNotIn('ORBITTE_RESTART_GENERATIONS', environment)
+        for kind, role in [('mr', 'source'), ('mr', 'requester'), ('mw', 'source')]:
+            env = dict(environment, ORBITTE_CLEANUP_KIND=kind, ORBITTE_CLEANUP_ROLE=role,
+                       ORBITTE_SHARED_ROLE=role)
+            self.assertTrue(supervise.fault_scope(env))
+            for change in [dict(ORBITTE_SHARED_ROLE='wrong'), dict(ORBITTE_CLEANUP_ROLE='wrong'),
+                           dict(ORBITTE_CLEANUP_KIND='pd'), dict(ORBITTE_HOST_MODE='installed-host')]:
+                self.assertFalse(supervise.fault_scope({**env, **change}))
+        self.assertFalse(supervise.fault_scope(dict(environment, ORBITTE_CLEANUP_KIND='mw',
+                                                   ORBITTE_SHARED_ROLE='requester')))
+
 
 
 if __name__ == '__main__':
