@@ -372,7 +372,14 @@ TENT owners and deliberate differences.
 | --- | --- | --- |
 | 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Independent review remains open; this observed-state override does not qualify physical link loss. |
 | 2 | Close the declared installed RoCE fault profile | **Qualified for the frozen installed profiles:** healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs; [QP cleanup and in-flight DMA](qualification.md#installed-two-host-fault-qualification); [MR/MW cleanup and engine replacement](qualification.md#installed-memory-cleanup-and-replacement); and [CQ/channel/PD dependency cleanup](qualification.md#installed-dependency-cleanup). The last group passes six two-host cases on stable and Rust 1.85, plus ten affected regressions. Physical failures retain the separate acceptance conditions below. |
-| 3 | Finish physical/fabric qualification and review | **Unqualified:** physical link/device loss and provider teardown, physical rail contention/accounting, independent discovery/topology repeat and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
+| 3 | Finish physical/fabric qualification and review | **Unqualified:** physical link/device loss and provider teardown, independent discovery/topology repeat and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
+
+**Physical rail contention/accounting is qualified for the bounded installed
+profile:** source `cc6ab0f` passes four two-host configurations on stable and
+Rust 1.85. Both physical RNICs carry concurrent parent slices on shared QPs;
+native WR/CQE identities, full payload/guard checks, exact byte counters and
+final owner drain agree. See [the artifact and limits](qualification.md#installed-physical-rail-accounting).
+Line-rate saturation, bandwidth arbitration and fairness remain P6 work.
 
 The first row closes the two source gaps found in the frozen-source audit.
 Discovery now keeps an otherwise valid down-port context paused, as TENT's
@@ -699,6 +706,8 @@ now pass their four frozen two-host cases on both compiler artifacts. Installed
 MR/MW retention and same-process engine replacement also pass six frozen cases.
 Installed CQ/completion-channel/PD dependency cleanup now passes six frozen cases
 and ten affected regressions on both final compiler artifacts.
+The bounded installed physical-rail accounting profile now passes four cases
+on both compiler artifacts, closing that item in the existing queue.
 
 P4 implementation and its declared installed fault fixtures are complete.
 Continue only with the physical/fabric qualification and independent acceptance
