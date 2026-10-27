@@ -77,6 +77,32 @@ two-host profile, interrupted in-flight DMA or physical loss. The two Forge
 replicas currently share a physical host. Earlier libtest cleanup evidence
 remains scoped to its own artifact; independent acceptance is still open.
 
+### Installed in-flight DMA fixture
+
+The [installed in-flight profile](installed-host.md#in-flight-dma-interruption)
+passes with source [`56edccc`](https://github.com/OrbitInfra/OrbitTE/commit/56edcccd3c94d6504b5f65f8cb14f66051cbdc10):
+stable 1.99.1 READ/polling with one 4 MiB WR, and Rust 1.85 WRITE/events with
+one 16 MiB WR. Both use two registered mlx5 contexts and one active RoCE rail.
+The actual failed WC and successful QP destruction identify the accepted
+payload WR. Post-drain reads prove both copied and untouched destination bytes,
+with guards intact. Both original processes retain their four MRs, release
+all temporary charges and resume three healthy rounds before complete close.
+
+The first 4 MiB WRITE run copied every byte despite its failed WC; the fixture
+correctly rejected it. A later run exposed a fixture race that checked source
+idle before the request arrived; an explicit requester-failure barrier fixes
+that ordering. Both failed runs and their resource-reaping receipts are retained.
+The final package inputs, native/public ledger checks, actual provider hashes,
+original resource locks and unchanged device resource counts are recorded in
+`/root/orbitte-artifacts/installed-inflight-20261027/native-audit.json`.
+
+This closes the missing fixture for actual in-flight DMA interruption. It is
+**single-host diagnostic evidence**, because both Forge replicas share one
+physical host. It does not qualify the declared two-host profile, physical
+link/device loss, broader cleanup failures or InfiniBand. Independent acceptance
+and the fixed remaining P4 queue stay open. Production runtime, dependencies,
+public API and wire v14 are unchanged.
+
 ## Recorded host RDMA evidence
 
 The table links immutable delivery records. Paths below are external artifact

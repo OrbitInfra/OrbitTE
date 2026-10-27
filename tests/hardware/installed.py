@@ -5,14 +5,15 @@ PROTOCOL = 'orbitte-installed-host-v4'
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
             or type(case.get('rdma_events')) is not bool):
         raise ValueError('installed host requires two peers and explicit CPU RDMA/profile choices')
+    max_block = 16 << 20 if case['mode'] == 'installed-inflight-dma' else 4 << 20
     for name, low, high in [('parents', 1, 32), ('payload', 128, 32 << 20),
-                            ('block', 64 << 10, 4 << 20), ('num_lanes', 1, 3), ('mask', 1, 3)]:
+                            ('block', 64 << 10, max_block), ('num_lanes', 1, 3), ('mask', 1, 3)]:
         if type(case.get(name)) is not int or not low <= case[name] <= high:
             raise ValueError('invalid installed host ' + name)
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
@@ -27,6 +28,9 @@ def validate(case):
             or case['generations'] != 2 or case['parents'] != 1 or case['num_lanes'] != 1
             or case['mask'] not in (1, 2)):
         raise ValueError('cleanup failure requires one requester QP and two generations')
+    if case['mode'] == 'installed-inflight-dma' and (case['parents'] != 1 or case['num_lanes'] != 1
+            or case['mask'] not in (1, 2) or case['payload'] != case['block']):
+        raise ValueError('in-flight DMA requires one parent, QP and payload WR')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -60,6 +64,9 @@ def command(profile, case, node, role, root, readiness=None):
 
 def verify(profile, case, evidence):
     validate(case)
+    if case['mode'] == 'installed-inflight-dma':
+        from installed_inflight import verify as verify_inflight
+        return verify_inflight(profile, case, evidence)
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         from installed_restart import verify as verify_restart
         return verify_restart(profile, case, evidence)

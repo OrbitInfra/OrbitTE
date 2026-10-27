@@ -87,14 +87,16 @@ def build(root, output, toolchain, allow_dirty=False):
         fault_library = output / 'liborbitte_cq_fault.so'
         run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
                              str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
-        control = output / 'test_cq_fault'
-        run('fault-control-build', [*compiler, *flags, str(fault_sources / 'test_cq_fault.c'),
-                                   '-ldl', '-o', str(control)])
-        fault_root = output / 'fault-control'
-        fault_root.mkdir()
-        environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
-        run('fault-control', [str(control)], cwd=output)
-        del environment['ORBITTE_RESTART_ROOT'], environment['ORBITTE_RESTART_GENERATION']
+        for name in ('cq_fault', 'inflight'):
+            control = output / ('test_' + name)
+            run(name + '-control-build', [*compiler, *flags, str(fault_sources / ('test_' + name + '.c')),
+                                         '-ldl', '-o', str(control)])
+            fault_root = output / (name + '-control')
+            fault_root.mkdir()
+            environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
+            run(name + '-control', [str(control)], cwd=output)
+        environment.pop('ORBITTE_RESTART_ROOT')
+        environment.pop('ORBITTE_RESTART_GENERATION')
         manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
         run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'

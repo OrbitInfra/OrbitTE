@@ -195,9 +195,10 @@ No test-only route bypasses the production handshake or native resource lifecycl
 test coordination; payload requests remain explicit RDMA.
 
 The installed gate covers healthy host traffic, idle-resource process restart,
-posted-RQ interruption before payload authorization and lost payload CQEs.
-Mid-flight DMA death, native teardown failures and poisoned-engine recovery
-still need installed-artifact gates. Physical port/device faults, per-rail
+posted-RQ interruption before payload authorization, lost payload CQEs,
+requester QP cleanup failure and in-flight QP interruption. The last two
+fixtures require qualification of their declared two-host profiles; broader
+native teardown failures retain separate installed-artifact gates. Physical port/device faults, per-rail
 bandwidth/fairness and InfiniBand/GPU transfers are outside this profile. Native fault libtests retain
 their separate internal ownership evidence. See [qualification](qualification.md)
 for executed artifact/profile results and
@@ -282,3 +283,50 @@ retries, missing backing and false drain evidence. They do not qualify native
 retention. This profile also does not prove interrupted in-flight DMA, MR/MW
 or channel cleanup failure through the installed API, physical link loss or
 provider teardown; those boundaries retain their separate gates.
+
+## In-flight DMA interruption
+
+`mode: "installed-inflight-dma"` uses one parent, one lane, rail mask 1 or 2,
+and `payload == block` (one native WR). The focused profile selects 4 MiB
+READ/polling and 16 MiB WRITE/events, with two persistent registered contexts.
+Only this mode permits blocks up to 16 MiB; other modes retain their 4 MiB
+limit. The first 4 MiB WRITE diagnostic completed every byte before ERR and
+was correctly rejected as proof of interruption.
+It has no restart controls: both original engines must survive the fault.
+Use the same packaged consumer, pinned observer library, provider inventory
+and resource leases described above. Implementation and executed scope are
+reported separately in [qualification](qualification.md).
+
+After three healthy rounds, the requester observer calls the real provider
+`post_send`, then transitions that exact test-owned QP to `IBV_QPS_ERR` through
+`ibv_modify_qp`. It changes no port or device configuration. All CQEs pass
+through unchanged. The observer joins the accepted WR to its actual error WC
+by CQ, QPN and WR ID; it never reads opcode or byte length from an error WC.
+A real successful QP destruction must follow that failed completion before
+the observer can report native drain.
+
+The public batch must fail with zero successful payload bytes and proven
+local drain. WRITE effects remain unknown. Both peers wait for SQ/RQ, grants,
+windows and byte/batch charges to drain and for progress recovery. Only then
+does the fixture read the entire registered allocation through the public
+API. The destination must contain both copied source bytes and untouched
+sentinel bytes; positions where source equals the sentinel are ambiguous and
+count toward neither proof. Zero-progress and fully completed copies fail
+qualification. Every other byte, including guards and inputs, must be unchanged.
+No concurrent CPU read races with active DMA.
+
+Both original processes retain their four persistent MRs and complete three
+more healthy rounds using bounded replacement QPs, then close all resources.
+`rdma_host/inflight.rs` owns the public assertions; `cq_fault/inflight.c` owns
+the process-local native trigger/observer; `installed_inflight.py` joins the
+independent native and public ledgers. CPU controls reject completed/no-op
+copies, wrong WR/address/process identities, missing destruction and unpaid
+debt. The trigger corresponds to the frozen TENT endpoint's
+[`beginDestroyNoLock`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp)
+ERR transition. OrbitTE keeps PD/MRs in `RdmaContext`, QPs in `RdmaEndpoint`,
+WR completion ownership in CQ lanes, and shared progress in transport Workers.
+The fixture verifies those existing owners through the installed API.
+
+The focused [single-host diagnostic](qualification.md#installed-in-flight-dma-fixture)
+passes both compiler profiles. It cannot qualify the declared two-host profile,
+physical link/device loss, InfiniBand or throughput.

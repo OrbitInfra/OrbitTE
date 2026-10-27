@@ -18,6 +18,8 @@ mod cleanup;
 mod completion;
 #[path = "rdma_host/gate.rs"]
 mod gate;
+#[path = "rdma_host/inflight.rs"]
+mod inflight;
 #[path = "rdma_host/interruption.rs"]
 mod interruption;
 #[path = "rdma_host/resources.rs"]
@@ -77,9 +79,14 @@ impl Case {
                 .map(str::to_owned)
                 .collect(),
         };
+        let max_block = if env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-inflight-dma" {
+            16 << 20
+        } else {
+            4 << 20
+        };
         if !(1..=32).contains(&case.parents)
             || !(128..=32 << 20).contains(&case.payload)
-            || !(64 << 10..=4 << 20).contains(&case.block)
+            || !(64 << 10..=max_block).contains(&case.block)
             || !(1..=3).contains(&case.lanes)
             || !(1..=3).contains(&case.mask)
             || case.rails.len() != 2
@@ -384,6 +391,7 @@ fn main() -> Result<()> {
         | "installed-interruption"
         | "installed-lost-completion"
         | "installed-cleanup-failure" => restart::run(&case),
+        "installed-inflight-dma" => inflight::run(&case),
         "installed-host" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;

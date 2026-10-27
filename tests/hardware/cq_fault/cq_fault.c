@@ -75,10 +75,17 @@ static unsigned operation(enum ibv_wr_opcode op) {
     return op == IBV_WR_RDMA_READ ? 1 : op == IBV_WR_RDMA_WRITE ? 2 : 0;
 }
 
+#include "inflight.c"
+
 static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     pthread_mutex_lock(&lock);
     unsigned index = find(qp->context);
     struct context context = contexts[index];
+    if (inflight.armed && operation(wr->opcode)) {
+        int code = inflight_post(&context, qp, wr, bad);
+        pthread_mutex_unlock(&lock);
+        return code;
+    }
     uint64_t phase = state.phase;
     int armed = state.armed;
     pthread_mutex_unlock(&lock);
@@ -115,7 +122,10 @@ static int poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
     pthread_mutex_lock(&lock);
     int kept = 0;
     for (int i = 0; i < count; ++i) {
-        unsigned op = wc[i].opcode == IBV_WC_RDMA_READ ? 1 : wc[i].opcode == IBV_WC_RDMA_WRITE ? 2 : 0;
+        inflight_completion(cq, &wc[i]);
+        unsigned op = 0;
+        if (wc[i].status == IBV_WC_SUCCESS)
+            op = wc[i].opcode == IBV_WC_RDMA_READ ? 1 : wc[i].opcode == IBV_WC_RDMA_WRITE ? 2 : 0;
         if (state.armed && wc[i].status == IBV_WC_SUCCESS && op == selected_operation) {
             if (state.lost >= expected) ++state.errors;
             ++state.lost;
@@ -223,6 +233,7 @@ int ibv_destroy_qp(struct ibv_qp *qp) {
         receipt("\"kind\":\"cleanup_error\",\"context\":%u,\"cq\":%" PRIuPTR ",\"qpn\":%u,\"code\":%d,\"attempts\":%" PRIu64 ",\"syscall_fault\":true",
                 index, cq, qpn, code, cleanup.attempts);
     } else if (code != 0) ++state.errors;
+    inflight_destroyed((struct ibv_cq *)cq, qpn, code);
     if (code == 0) ++state.destroyed_qps;
     pthread_mutex_unlock(&lock);
     return code;
@@ -234,7 +245,7 @@ int orbitte_cq_fault(unsigned command, unsigned phase, unsigned op, unsigned lim
     pthread_mutex_lock(&lock);
     int error = 0;
     if (command == 1) {
-        if (state.armed || state.errors || state.contexts != 2 || !(op == 1 || op == 2) || !limit || limit > 32) error = EINVAL;
+        if (inflight.armed || state.armed || state.errors || state.contexts != 2 || !(op == 1 || op == 2) || !limit || limit > 32) error = EINVAL;
         else {
             state.armed = 1; state.phase = phase; state.posts = 0; state.lost = 0; state.destroyed_qps = 0;
             expected = limit; selected_operation = op;
