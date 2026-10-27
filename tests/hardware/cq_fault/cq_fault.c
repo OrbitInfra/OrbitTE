@@ -244,6 +244,7 @@ int ibv_destroy_qp(struct ibv_qp *qp) {
     uintptr_t cq = (uintptr_t)qp->send_cq;
     int inject = cleanup.armed && qp == payload_qp;
     if (inject && ++cleanup.attempts != 1) fail();
+    if (contexts[index].last_qp == qp) contexts[index].last_qp = NULL;
     pthread_mutex_unlock(&lock);
     int code;
     if (inject) {
@@ -261,10 +262,7 @@ int ibv_destroy_qp(struct ibv_qp *qp) {
                 index, cq, qpn, code, cleanup.attempts);
     } else if (code != 0) ++state.errors;
     inflight_destroyed((struct ibv_cq *)cq, qpn, code);
-    if (code == 0) {
-        ++state.destroyed_qps;
-        if (contexts[index].last_qp == qp) contexts[index].last_qp = NULL;
-    }
+    if (code == 0) ++state.destroyed_qps;
     pthread_mutex_unlock(&lock);
     return code;
 }

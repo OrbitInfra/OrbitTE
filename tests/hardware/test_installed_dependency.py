@@ -71,6 +71,12 @@ class InstalledDependencyEvidence(unittest.TestCase):
                 broken['requester']['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, rows))
                 with self.subTest(kind=kind, event=event, key=key), self.assertRaises(ValueError):
                     installed_completion.verify(case, broken)
+            broken = copy.deepcopy(evidence)
+            rows = [json.loads(line) for line in broken['requester']['cq-fault-0.jsonl'].splitlines()]
+            rows.append(dict(seq=len(rows) + 1, pid=200, phase=0, kind='close_context', context=0, code=0))
+            broken['requester']['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, rows))
+            with self.subTest(kind=kind, premature_parent_close=True), self.assertRaises(ValueError):
+                installed_completion.verify(case, broken)
             for key, value in [('backing_retained', kind == 'pd'), ('fixture_owners_dropped', False),
                                ('persistent_mrs', int(kind == 'pd')), ('sq_debt', int(kind == 'pd')),
                                ('locally_drained', True), ('sequence', 999), ('retained_endpoints', 1),

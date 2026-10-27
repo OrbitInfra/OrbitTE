@@ -53,6 +53,12 @@ static int fake_query(struct ibv_qp *qp, struct ibv_qp_attr *attr, int mask, str
     (void)init; assert(qp == &blocker_qp && mask == IBV_QP_STATE);
     ++probe_calls; attr->qp_state = IBV_QPS_RESET; return 0;
 }
+static int fake_destroy_payload(struct ibv_qp *qp) {
+    assert(!contexts[find(qp->context)].last_qp);
+    struct dependency_snapshot output;
+    assert(orbitte_dependency_fault(1, test_kind, "selected", &output) == EINVAL);
+    return 0;
+}
 static int destroy(struct ibv_cq *cq, struct ibv_comp_channel *channel, struct ibv_pd *pd) {
     return test_kind == 1 ? ibv_destroy_cq(cq) : test_kind == 2 ? ibv_destroy_comp_channel(channel) : ibv_dealloc_pd(pd);
 }
@@ -61,6 +67,7 @@ static void run(unsigned kind) {
     native_create_qp = fake_create_qp; native_create_cq = fake_create_cq;
     native_destroy_cq = fake_destroy_cq; native_destroy_channel = fake_destroy_channel;
     native_dealloc_pd = fake_dealloc_pd; native_query_qp = fake_query; native_close = fake_close;
+    native_destroy_qp = fake_destroy_payload;
     pthread_once(&symbols, resolved);
     struct ibv_device device[2] = {0};
     strcpy(device[0].name, "selected"); strcpy(device[1].name, "sibling");
@@ -79,6 +86,8 @@ static void run(unsigned kind) {
     state.armed = kind != 3; state.posts = state.lost = expected = 1;
     struct dependency_snapshot output;
     assert(sizeof(output) == 104);
+    assert(ibv_destroy_qp(&qp) == 0 && !contexts[0].last_qp);
+    contexts[0].last_qp = &qp;
     assert(orbitte_dependency_fault(2, 0, NULL, &output) == EINVAL);
     assert(orbitte_dependency_fault(1, kind, "sibling", &output) == EINVAL);
     assert(orbitte_dependency_fault(1, kind, "selected", &output) == 0);

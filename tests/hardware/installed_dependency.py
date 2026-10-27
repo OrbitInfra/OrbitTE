@@ -30,8 +30,11 @@ def verify(case, evidence, logs):
             or not arm['seq'] < destroys[0]['seq'] < error['seq']
             or any(destroys[0][key] != arm[key] for key in ('context', 'cq', 'qpn'))):
         raise ValueError('payload QP did not close before the dependency failed')
+    if any(r['kind'] == 'close_context' and r['context'] == arm['context'] for r in rows):
+        raise ValueError('retained dependency lost its parent context')
     releases = select('dependency_release')
-    if any(r['context'] != arm['context'] or r['code'] != 0 for r in releases):
+    if any(r['context'] != arm['context'] or r['code'] != 0 or r['owner'] not in (1, 2)
+           or (kind == 1 and (r['owner'] != 1 or r['handle'] == arm['cq'])) for r in releases):
         raise ValueError('dependency releases escaped the selected context')
     if kind in (2, 3):
         cqs = [r for r in releases if r['owner'] == 1]

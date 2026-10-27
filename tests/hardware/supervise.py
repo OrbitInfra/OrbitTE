@@ -22,7 +22,7 @@ def fault_scope(environment):
         return (role == 'requester' and environment.get('ORBITTE_CLEANUP_KIND', 'qp') in ('qp', 'cq', 'channel', 'pd')
                 and (environment.get('ORBITTE_CLEANUP_KIND') != 'channel' or environment.get('ORBITTE_RDMA_EVENTS') == '1'))
     return (role == 'requester'
-            and mode in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma'))
+            and mode in ('installed-lost-completion', 'installed-inflight-dma'))
 
 
 def write(path, value):
