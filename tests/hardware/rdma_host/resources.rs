@@ -166,15 +166,22 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             .as_mut()
             .ok_or("missing RDMA configuration")?
             .gid_index = Some(255);
-        match TransferEngine::new(pinned) {
+        let engine = TransferEngine::new(pinned)?;
+        let registration =
+            engine.register_memory(vec![0; 64].into_boxed_slice(), Permission::RemoteReadWrite);
+        engine.close(TIMEOUT)?;
+        match registration {
             Err(orbit_te::Error::Unavailable(_)) => {
+                clean(&engine)?;
                 println!(
                     "ORBITTE_INSTALLED_DISCOVERY_PIN {{\"gid_index\":255,\"unavailable\":true}}"
                 );
             }
             Err(error) => return Err(error.into()),
-            Ok(engine) => {
-                engine.close(TIMEOUT)?;
+            Ok(memory) => {
+                engine.unregister_memory(&memory)?;
+                drop(memory);
+                clean(&engine)?;
                 return Err("absent strict GID unexpectedly fell back".into());
             }
         }

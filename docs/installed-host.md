@@ -112,8 +112,10 @@ contention. Exact qualifying artifacts belong in [qualification](qualification.m
 Add `"discovery": "auto"` to the frozen physical-rail accounting cases.
 Device, port and GID pins are unset, while the whitelist contains exactly the
 two locked RNICs. An identical blacklist checks the documented whitelist
-precedence. An absent strict GID 255 must return `Unavailable` before the
-normal automatic engine is constructed; it must not fall back to another GID.
+precedence. A separate engine registers a small host allocation to trigger lazy
+discovery with strict GID 255. Registration must return `Unavailable`, and
+closing that engine must leave no retained owners, before the normal automatic
+engine is constructed; it must not fall back to another GID.
 
 The supervisor runs the packaged, hash-pinned `discovery_inventory.py` under
 the original RNIC locks before and after each child. This read-only tool imports
