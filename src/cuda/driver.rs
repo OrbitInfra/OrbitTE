@@ -17,6 +17,16 @@ pub(super) struct Driver {
     pub(super) _library: Option<Library>,
     pub init: unsafe extern "C" fn(c_uint) -> Status,
     pub device_get: unsafe extern "C" fn(*mut c_int, c_int) -> Status,
+    #[cfg(feature = "rdma")]
+    pub device_attribute:
+        unsafe extern "C" fn(*mut c_int, sys::CUdevice_attribute, c_int) -> Status,
+    #[cfg(feature = "rdma")]
+    pub set_pointer_attribute: unsafe extern "C" fn(*const c_void, PointerAttribute, u64) -> Status,
+    #[cfg(feature = "rdma")]
+    pub flush_rdma: unsafe extern "C" fn(
+        sys::CUflushGPUDirectRDMAWritesTarget,
+        sys::CUflushGPUDirectRDMAWritesScope,
+    ) -> Status,
     pub primary_retain: unsafe extern "C" fn(*mut Context, c_int) -> Status,
     pub primary_release: unsafe extern "C" fn(c_int) -> Status,
     pub push: unsafe extern "C" fn(Context) -> Status,
@@ -63,6 +73,12 @@ impl Driver {
         let driver = Self {
             init: symbol!(cuInit),
             device_get: symbol!(cuDeviceGet),
+            #[cfg(feature = "rdma")]
+            device_attribute: symbol!(cuDeviceGetAttribute),
+            #[cfg(feature = "rdma")]
+            set_pointer_attribute: symbol!(cuPointerSetAttribute),
+            #[cfg(feature = "rdma")]
+            flush_rdma: symbol!(cuFlushGPUDirectRDMAWrites),
             primary_retain: symbol!(cuDevicePrimaryCtxRetain),
             primary_release: symbol!(cuDevicePrimaryCtxRelease_v2),
             push: symbol!(cuCtxPushCurrent_v2),

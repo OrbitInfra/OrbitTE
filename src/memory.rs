@@ -235,15 +235,26 @@ impl HostMemory {
 }
 
 #[cfg(feature = "rdma")]
-pub(crate) struct HostDmaLease {
+pub(crate) struct DmaLease {
     _registration: RegisteredMemory,
-    allocation: Arc<HostMemory>,
+    allocation: Allocation,
     range: Range<usize>,
     address: NonNull<u8>,
 }
 
 #[cfg(feature = "rdma")]
-impl HostDmaLease {
+impl DmaLease {
+    pub(crate) fn registration(&self) -> RegisteredMemory {
+        self._registration.clone()
+    }
+    pub(crate) fn complete(&self) -> Result<()> {
+        match &self.allocation {
+            Allocation::Host(_) => Ok(()),
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(memory) => memory.complete_dma(),
+        }
+    }
+
     pub(crate) fn address(&self) -> NonNull<u8> {
         self.address
     }
@@ -253,14 +264,18 @@ impl HostDmaLease {
 }
 
 #[cfg(feature = "rdma")]
-impl Drop for HostDmaLease {
+impl Drop for DmaLease {
     fn drop(&mut self) {
-        let mut backing = self
-            .allocation
-            .backing
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        backing.dma.retain(|range| *range != self.range);
+        match &self.allocation {
+            Allocation::Host(memory) => memory
+                .backing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .dma
+                .retain(|range| *range != self.range),
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(memory) => memory.release_dma(&self.range),
+        }
     }
 }
 
@@ -301,28 +316,12 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "rdma")]
-    #[allow(unsafe_code)]
-    pub(crate) fn host_address(&self) -> Result<NonNull<u8>> {
-        #[cfg(not(feature = "cuda"))]
-        let Allocation::Host(memory) = &self.0.allocation;
-        #[cfg(feature = "cuda")]
-        let Allocation::Host(memory) = &self.0.allocation else {
-            return Err(Error::Unavailable("persistent MR requires host memory"));
-        };
-        let backing = memory
-            .backing
-            .lock()
-            .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        // SAFETY: registration retains this exact stable allocation range.
-        Ok(unsafe {
-            NonNull::new_unchecked(
-                backing
-                    .bytes
-                    .address()
-                    .as_ptr()
-                    .add(self.0.allocation_offset),
-            )
-        })
+    pub(crate) fn with_rdma_context<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        match &self.0.allocation {
+            Allocation::Host(_) => operation(),
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(memory) => memory.with_rdma_context(operation),
+        }
     }
 
     #[cfg(feature = "rdma")]
@@ -335,45 +334,39 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "rdma")]
-    #[allow(unsafe_code)]
-    pub(crate) fn host_dma_lease(
-        &self,
-        offset: usize,
-        length: usize,
-    ) -> Result<Option<HostDmaLease>> {
+    pub(crate) fn dma_lease(&self, offset: usize, length: usize) -> Result<DmaLease> {
         checked_range(offset, length, self.len())?;
-        #[cfg(not(feature = "cuda"))]
-        let Allocation::Host(memory) = &self.0.allocation;
-        #[cfg(feature = "cuda")]
-        let Allocation::Host(memory) = &self.0.allocation else {
-            return Ok(None);
-        };
         let offset = self
             .0
             .allocation_offset
             .checked_add(offset)
             .ok_or(Error::InvalidRange)?;
-        let range = checked_range(offset, length, memory.len())?;
-        let mut backing = memory
-            .backing
-            .lock()
-            .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
-        backing
-            .dma
-            .try_reserve(1)
-            .map_err(|_| Error::ResourceExhausted)?;
-        // SAFETY: the lease is inside this exact stable allocation and retains
-        // the actual Registration as well as its backing, including its charge.
+        let range = checked_range(offset, length, self.0.allocation.len())?;
         let address =
-            unsafe { NonNull::new_unchecked(backing.bytes.address().as_ptr().add(offset)) };
-        backing.dma.push(range.clone());
-        Ok(Some(HostDmaLease {
+            NonNull::new((self.0.allocation.base_address() + offset as u64) as usize as *mut u8)
+                .ok_or(Error::InvalidRange)?;
+        match &self.0.allocation {
+            Allocation::Host(memory) => {
+                let mut backing = memory
+                    .backing
+                    .lock()
+                    .map_err(|_| Error::Internal("memory lock poisoned"))?;
+                backing.check_access(&range)?;
+                backing
+                    .dma
+                    .try_reserve(1)
+                    .map_err(|_| Error::ResourceExhausted)?;
+                backing.dma.push(range.clone());
+            }
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(memory) => memory.acquire_dma(range.clone())?,
+        }
+        Ok(DmaLease {
             _registration: self.clone(),
-            allocation: Arc::clone(memory),
+            allocation: self.0.allocation.clone(),
             range,
             address,
-        }))
+        })
     }
 
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
@@ -549,6 +542,7 @@ impl MemoryRegistry {
         &self,
         ranges: &[(Arc<crate::cuda::CudaMemory>, usize, usize)],
         permission: Permission,
+        publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
     ) -> Result<Vec<RegisteredMemory>> {
         let mut allocations = Vec::new();
         allocations
@@ -557,7 +551,7 @@ impl MemoryRegistry {
         for (allocation, offset, length) in ranges {
             allocations.push((Allocation::Cuda(Arc::clone(allocation)), *offset, *length));
         }
-        self.register_batch(&allocations, permission, |_| Ok(()))
+        self.register_batch(&allocations, permission, publish)
     }
 
     fn register_batch(

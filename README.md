@@ -43,8 +43,8 @@ recovery policy and replica placement.
   in-flight byte accounting select paths for bounded request slices. Parent
   completion requires every slice and its source receipt.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
-  Driver API. Current device transfers use owned host staging with reusable streams and
-  per-copy completion events.
+  Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
+  with allocation-range ownership and consumer visibility before completion.
 
 ## Quick Start
 
@@ -79,8 +79,9 @@ P5 CUDA work proceeds
 with the available hardware; see the fixed
 [acceptance queue](docs/completion-plan.md#p4-remaining-delivery).
 
-OrbitTE remains under development. GPUDirect RDMA, CUDA IPC/NVLink, optional SSD
-transports and full TENT API/wire parity belong to later stages.
+OrbitTE remains under development. Direct GPU registration and RDMA are implemented
+with explicit provider prerequisites; qualification is profile-specific. CUDA
+IPC/NVLink, optional SSD transports and full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
 [qualification](docs/qualification.md) records exact artifacts and limits.
 

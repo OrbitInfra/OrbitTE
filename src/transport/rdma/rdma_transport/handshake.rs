@@ -46,8 +46,8 @@ impl RdmaTransport {
             return Err(Error::InvalidRange);
         }
         crate::memory::checked_range(offset, length, memory.len())?;
-        let direct = if self.config.host_memory == RdmaHostMemory::Direct {
-            memory.host_dma_lease(offset, length)?
+        let direct = if self.direct(memory) {
+            Some(memory.dma_lease(offset, length)?)
         } else {
             None
         };
@@ -98,7 +98,8 @@ impl RdmaTransport {
         } else {
             None
         };
-        let cached_mr = if is_direct {
+        let remote_mr = is_direct && memory.is_cuda() && permission != 0;
+        let cached_mr = if is_direct && !remote_mr {
             Some(self.registrations.acquire(
                 Arc::clone(&device),
                 memory,
@@ -108,7 +109,10 @@ impl RdmaTransport {
         } else {
             None
         };
-        let mut memory_handles = sys::MemoryHandles::default();
+        let mut memory_handles = sys::MemoryHandles {
+            remote_mr,
+            ..Default::default()
+        };
         if let Some(registration) = &cached_mr {
             memory_handles.mr = registration.handle()?;
         }
@@ -221,7 +225,7 @@ impl RdmaTransport {
         credits: &Arc<GrantCredits>,
     ) -> Result<GrantLease> {
         let length = selection.length();
-        let is_direct = self.host_direct(memory);
+        let is_direct = self.direct(memory);
         {
             let mut usage = self
                 .usage
@@ -268,8 +272,12 @@ impl RdmaTransport {
         }
     }
 
-    pub(super) fn host_direct(&self, memory: &RegisteredMemory) -> bool {
-        self.config.host_memory == RdmaHostMemory::Direct && !memory.is_cuda()
+    pub(super) fn direct(&self, memory: &RegisteredMemory) -> bool {
+        if memory.is_cuda() {
+            self.config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
+        } else {
+            self.config.host_memory == RdmaHostMemory::Direct
+        }
     }
 
     pub(super) fn requester_grant(
@@ -287,7 +295,7 @@ impl RdmaTransport {
         } else {
             TransferOp::Write
         };
-        let direct = self.host_direct(&request.local);
+        let direct = self.direct(&request.local);
         let device = self.device_at(grant_lease._selection.device_id())?;
         device.check_address()?;
         let connection = if direct && width != 0 {
@@ -334,7 +342,7 @@ impl RdmaTransport {
         } else {
             TransferOp::Write
         };
-        let direct = self.host_direct(&request.local);
+        let direct = self.direct(&request.local);
         let cached = endpoint.cached_peer;
         let prepared = (|| {
             if operation == TransferOp::Write {
@@ -368,14 +376,17 @@ impl RdmaTransport {
             if remote_identity.epoch != wire.epoch {
                 return Err(Error::EpochMismatch);
             }
-            if remote_identity.connection.domain != remote_path.domain {
+            let profile = offer[OFFER_SIZE - 1];
+            if profile != super::super::protocol::MR_AUTHORITY
+                && remote_identity.connection.domain != remote_path.domain
+            {
                 return Err(Error::Protocol("RDMA source changed its protection domain"));
             }
             if cached.is_some_and(|peer| remote_identity.connection != peer.connection) {
                 return Err(Error::Protocol("RDMA source changed cached connection"));
             }
             let cacheable = match offer[OFFER_SIZE - 1] {
-                0 if endpoint.endpoint.is_none() => false,
+                0 | super::super::protocol::MR_AUTHORITY if endpoint.endpoint.is_none() => false,
                 1 if direct && endpoint.endpoint.is_some() => true,
                 _ => return Err(Error::Protocol("RDMA release profile mismatch")),
             };
@@ -398,7 +409,7 @@ impl RdmaTransport {
                 remote_identity,
                 Identity::local(&endpoint, epoch)?,
                 grant,
-                cacheable,
+                profile,
             )?;
             binding.write(channel, ACCEPT)?;
             channel.write_all(&endpoint.connection())?;
@@ -496,7 +507,8 @@ impl RdmaTransport {
         if expected.is_some_and(|domain| domain != hello.expected_domain) {
             return Err(Error::Protocol("RDMA slice rendezvous changed planned PD"));
         }
-        let cacheable = hello.direct && self.host_direct(memory);
+        let remote_mr = self.direct(memory) && memory.is_cuda();
+        let cacheable = hello.direct && self.direct(memory) && !remote_mr;
         if cacheable != (hello.qp_width != 0) || hello.qp_width > self.config.num_lanes {
             return Err(Error::Protocol("RDMA bootstrap QP width/profile mismatch"));
         }
@@ -580,22 +592,23 @@ impl RdmaTransport {
             offer[..IDENTITY_SIZE].copy_from_slice(&identity.encode());
             offer[IDENTITY_SIZE..IDENTITY_SIZE + 8].copy_from_slice(&grant.to_be_bytes());
             offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1].copy_from_slice(&endpoint.connection());
-            offer[OFFER_SIZE - 1] = u8::from(cacheable);
+            offer[OFFER_SIZE - 1] = if remote_mr {
+                super::super::protocol::MR_AUTHORITY
+            } else {
+                u8::from(cacheable)
+            };
             channel.reply(epoch, 0, OFFER_SIZE as u64)?;
             channel.write_all(&offer)?;
-            let binding = Binding::accept(
-                channel,
-                request,
-                identity,
-                hello.requester,
-                grant,
-                cacheable,
-            )?;
+            let profile = offer[OFFER_SIZE - 1];
+            let binding =
+                Binding::accept(channel, request, identity, hello.requester, grant, profile)?;
             let mut bytes = [0; DESCRIPTOR_SIZE];
             channel.read_exact(&mut bytes)?;
             let remote = Descriptor::decode_connection(&bytes)?;
             endpoint.connect(&remote)?;
-            endpoint.bind_window()?;
+            if !remote_mr {
+                endpoint.bind_window()?;
+            }
             endpoint.post_receive(&binding.0, admission.receive.take()?)?;
             let peer = Peer {
                 route: None,

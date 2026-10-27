@@ -28,7 +28,8 @@ from that extracted package offline, preserves locked dependency versions, check
 under `installed/bin/orbitte-rdma-host`. The manifest pins the source commit,
 archive, every fixture module, consumer lockfile, binary, features and local
 native libraries. `orbitte-installed-host-v4` identifies this test protocol;
-the production public API and wire v14 are unchanged.
+the current production wire is v15; historical v14 artifacts retain their own
+recorded qualification. The host profile remains MW-based.
 The consumer is an acceptance fixture, not a new production CLI/API.
 
 CI performs this build on stable and Rust 1.85.0 and retains the artifacts.
@@ -188,10 +189,10 @@ processes; their evidence must not be interpreted as a surviving-engine run.
 `installed-interruption` uses the same restart roles and two/three-generation
 supervisor policy. Set `payload <= block` (one slice per parent), with 1–32
 concurrent parents. The test protocol is `orbitte-installed-host-v4`; the
-production protocol remains v14.
+current production protocol is v15.
 
 Before each nonfinal restart, complete three healthy byte/guard rounds, then
-arm a source-side control relay. It forwards Describe and the v14 single-slice
+arm a source-side control relay. It forwards Describe and the v15 single-slice
 RDMA handshake unchanged, but holds READY/GRANT after the source has bound its
 MW and posted its real completion receive. It rejects TCP payload and sliced
 opcodes. All native payload traffic still travels directly over RDMA.

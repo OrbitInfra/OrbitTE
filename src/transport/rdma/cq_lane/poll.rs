@@ -225,9 +225,7 @@ impl ProgressState {
                 if !grant.handles.mw.is_null() || !grant.handles.mr.is_null() {
                     return Err(("RDMA grant lacks native drain receipt", libc::EBUSY));
                 }
-                if let Buffer::Direct { loan, .. } = &mut grant.buffer {
-                    drop(loan.take());
-                }
+                grant.buffer.release()?;
             }
         }
         request.phase = Phase::Closed;
@@ -269,9 +267,7 @@ impl ProgressState {
                 .receive_queue
                 .release(work, self.verbs)?;
         }
-        if let Buffer::Direct { loan, .. } = &mut grant.buffer {
-            drop(loan.take());
-        }
+        grant.buffer.release()?;
         drop(resources.grant.take());
         request.work = None;
         request.receive = None;
@@ -332,6 +328,7 @@ impl ProgressState {
             .retiring()
             .receive_queue
             .close(self.verbs)?;
+        resources.connection.retiring().close_grant_pd(self.verbs)?;
         Self::unlock(&mut request)?;
         self.control
             .lock()
@@ -394,11 +391,13 @@ impl ProgressState {
                         return;
                     }
                 }
-                let closed = resources
-                    .connection
-                    .retiring()
-                    .receive_queue
-                    .close(self.verbs);
+                let closed = {
+                    let mut connection = resources.connection.retiring();
+                    connection
+                        .receive_queue
+                        .close(self.verbs)
+                        .and_then(|()| connection.close_grant_pd(self.verbs))
+                };
                 if let Err((operation, code)) = closed {
                     drop(request);
                     self.retain(operation, code);
@@ -514,6 +513,8 @@ impl ProgressState {
                         message.memory.address.as_ptr() as u64,
                         message.memory.length,
                         work.remote.rkey,
+                        message.memory.bytes()[COMPLETION_MESSAGE_SIZE - 1]
+                            != super::super::protocol::MR_AUTHORITY,
                         &mut posted,
                     )
                 }

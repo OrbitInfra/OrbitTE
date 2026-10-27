@@ -434,6 +434,7 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
             let mut memory = MemoryHandles {
                 mr: (&mut mr as *mut ffi::ibv_mr).cast(),
                 mw: (&mut mw as *mut ffi::ibv_mw).cast(),
+                remote_mr: false,
                 window_key: 0x123456ff,
             };
             let mut result = PostResult::default();
@@ -461,6 +462,7 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
 }
 
 struct MessagePost {
+    invalidate: bool,
     code: i32,
     foreign_bad: bool,
     calls: usize,
@@ -512,12 +514,22 @@ unsafe extern "C" fn capture_message(
         assert_eq!(request.wr_id, 0x1234567812345601);
         assert!(request.next.is_null());
         assert_eq!(request.num_sge, 1);
-        assert_eq!(request.opcode, ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV);
+        assert_eq!(
+            request.opcode,
+            if state.invalidate {
+                ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV
+            } else {
+                ffi::ibv_wr_opcode::IBV_WR_SEND
+            }
+        );
         assert_eq!(
             request.send_flags,
             ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
         );
-        assert_eq!(request.__bindgen_anon_1.invalidate_rkey, 0x01020304);
+        assert_eq!(
+            request.__bindgen_anon_1.invalidate_rkey,
+            if state.invalidate { 0x01020304 } else { 0 }
+        );
         let sge = &*request.sg_list;
         assert_eq!(
             (sge.addr, sge.length, sge.lkey),
@@ -541,12 +553,13 @@ unsafe extern "C" fn capture_message(
 #[test]
 fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_ownership() {
     let length = super::super::COMPLETION_MESSAGE_SIZE;
-    for receive in [true, false] {
+    for (receive, invalidate) in [(true, false), (false, true), (false, false)] {
         let mut context = Box::new(ffi::ibv_context::default());
         context.ops.post_recv = Some(capture_receive);
         context.ops.post_send = Some(capture_message);
         let mut bytes = vec![0u8; length];
         let mut state = MessagePost {
+            invalidate,
             code: 0,
             foreign_bad: false,
             calls: 0,
@@ -594,6 +607,7 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
                         state.address,
                         length,
                         0x01020304,
+                        invalidate,
                         &mut result,
                     )
                 }
@@ -623,6 +637,7 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
                         address,
                         size,
                         0x01020304,
+                        invalidate,
                         &mut result,
                     )
                 }

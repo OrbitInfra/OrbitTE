@@ -286,7 +286,9 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let _admission = self.source.admit()?;
-        self.source.registry.register_cuda_batch(ranges, permission)
+        self.source
+            .registry
+            .register_cuda_batch(ranges, permission, |memory| self.register_native(memory))
     }
 
     /// Resolves an absolute local address to an owned registered range and offset.

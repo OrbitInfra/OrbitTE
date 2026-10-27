@@ -35,13 +35,28 @@ impl Drop for GrantLease {
 pub(super) enum Buffer {
     Staged(Staging),
     Direct {
-        loan: Option<crate::memory::HostDmaLease>,
+        loan: Option<crate::memory::DmaLease>,
         address: NonNull<u8>,
         length: usize,
     },
 }
 
 impl Buffer {
+    pub(super) fn release(&mut self) -> std::result::Result<(), (&'static str, i32)> {
+        if let Self::Direct { loan, .. } = self {
+            if let Some(owner) = loan.as_ref() {
+                owner.complete().map_err(|error| match error {
+                    Error::Unquiesced { operation, code } | Error::Backend { operation, code } => {
+                        (operation, code)
+                    }
+                    _ => ("RDMA buffer completion", libc::EIO),
+                })?;
+            }
+            drop(loan.take());
+        }
+        Ok(())
+    }
+
     pub(super) fn address(&self) -> NonNull<u8> {
         match self {
             Self::Staged(bytes) => bytes.address,
@@ -285,11 +300,11 @@ impl RdmaGrant {
         self.record.require_live()?;
         let request = self.lock()?;
         request.check()?;
-        if !request
-            .resources
-            .as_ref()
-            .is_some_and(|r| r.grant.as_ref().is_some_and(|g| g.window_bound))
-            || request.phase != Phase::Connected
+        if !request.resources.as_ref().is_some_and(|r| {
+            r.grant
+                .as_ref()
+                .is_some_and(|g| g.window_bound || (g.handles.remote_mr && !g.handles.mr.is_null()))
+        }) || request.phase != Phase::Connected
         {
             return Err(Error::Unavailable("source MW has no completed bind"));
         }

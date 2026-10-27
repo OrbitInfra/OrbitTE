@@ -158,7 +158,7 @@ fn failed_cold_accept_rolls_back_its_slot_before_retry() {
         channel.read_exact(&mut offer).unwrap();
         let local = Identity::decode(&offer[..IDENTITY_SIZE]).unwrap();
         let mut binding =
-            Binding::new(&wire, local, requester, u64_at(&offer, IDENTITY_SIZE), true).unwrap();
+            Binding::new(&wire, local, requester, u64_at(&offer, IDENTITY_SIZE), 1).unwrap();
         binding.0[BINDING_SIZE - 9] ^= 1;
         binding.write(&mut channel, ACCEPT).unwrap();
         assert!(Reply::read(&mut channel, source.source_epoch()).is_err());

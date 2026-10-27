@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "cuda")]
+pub(crate) use super::context::tests::after_open;
 pub(crate) use super::context::tests::{events, pause};
 pub(crate) use super::cq::tests::event_runtime;
 use super::*;
@@ -22,6 +24,8 @@ pub(crate) struct FakeDevice {
     )>,
     async_acks: (Mutex<usize>, Condvar),
     pub(crate) events: Arc<Mutex<Vec<&'static str>>>,
+    #[cfg(feature = "cuda")]
+    pub(super) after_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     endpoints: AtomicUsize,
     mrs: AtomicUsize,
     windows: AtomicUsize,
@@ -73,7 +77,14 @@ fn native_qps() -> &'static Mutex<std::collections::HashMap<u32, usize>> {
     QPS.get_or_init(Default::default)
 }
 
+struct FakePd {
+    device: *const FakeDevice,
+    mrs: AtomicUsize,
+    qps: AtomicUsize,
+}
+
 struct FakeMr {
+    private_pd: *mut FakePd,
     device: *const FakeDevice,
     address: usize,
     length: usize,
@@ -123,6 +134,8 @@ pub(super) unsafe extern "C" fn open_device(
         asynchronous,
         async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
+        #[cfg(feature = "cuda")]
+        after_open: Mutex::new(None),
         endpoints: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
@@ -176,6 +189,13 @@ unsafe extern "C" fn create_cq(
     }
 }
 
+#[cfg(feature = "cuda")]
+thread_local! { static AFTER_REGISTER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
+#[cfg(feature = "cuda")]
+pub(crate) fn after_register(hook: impl FnOnce() + 'static) {
+    AFTER_REGISTER.with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
+}
+
 unsafe extern "C" fn register_memory(
     h: *mut sys::MemoryHandles,
     handles: *const sys::DeviceHandles,
@@ -190,8 +210,17 @@ unsafe extern "C" fn register_memory(
         "register_local"
     });
     device.mrs.fetch_add(1, Ordering::SeqCst);
+    let private_pd = if unsafe { (*handles).pd as usize } == 1 {
+        std::ptr::null_mut()
+    } else {
+        unsafe { (*handles).pd.cast::<FakePd>() }
+    };
+    if !private_pd.is_null() {
+        unsafe { &*private_pd }.mrs.fetch_add(1, Ordering::SeqCst);
+    }
     unsafe {
         (*h).mr = Box::into_raw(Box::new(FakeMr {
+            private_pd,
             device,
             address: address as usize,
             length,
@@ -202,6 +231,12 @@ unsafe extern "C" fn register_memory(
         }))
         .cast();
     }
+    #[cfg(feature = "cuda")]
+    AFTER_REGISTER.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
     if device.mode == "register_pause" {
         block(device);
     }
@@ -230,13 +265,19 @@ unsafe extern "C" fn prepare_grant(
     );
     unsafe {
         if (*memory).mr.is_null() {
+            if !(*h).private_pd.is_null() {
+                (*(*h).private_pd.cast::<FakePd>())
+                    .mrs
+                    .fetch_add(1, Ordering::SeqCst);
+            }
             device.mrs.fetch_add(1, Ordering::SeqCst);
             (*memory).mr = Box::into_raw(Box::new(FakeMr {
+                private_pd: (*h).private_pd.cast(),
                 device,
                 address: bytes as usize,
                 length,
                 local_only: false,
-                window_bind: permission != 0,
+                window_bind: permission != 0 && !(*memory).remote_mr,
                 qps: AtomicUsize::new(0),
                 windows: AtomicUsize::new(0),
             }))
@@ -265,7 +306,12 @@ unsafe extern "C" fn prepare_grant(
         qp.length.store(length, Ordering::Release);
         qp.first_id.store(0, Ordering::Release);
         qp.send_id.store(0, Ordering::Release);
-        if permission != 0 && !device.mode.starts_with("open") {
+        if (*memory).remote_mr {
+            assert!(!(*h).private_pd.is_null());
+            (*memory).window_key = 0x707;
+            device.events.lock().unwrap().push("register_gpu_grant");
+        }
+        if permission != 0 && !(*memory).remote_mr && !device.mode.starts_with("open") {
             device.events.lock().unwrap().push("alloc_window");
             if device.mode == "window_unsupported" {
                 return libc::EOPNOTSUPP;
@@ -327,6 +373,39 @@ unsafe extern "C" fn open(
     if cq.retiring.load(Ordering::Acquire) {
         return libc::EIO;
     }
+    if unsafe { (*memory).remote_mr } {
+        let pd = Box::into_raw(Box::new(FakePd {
+            device,
+            mrs: AtomicUsize::new(0),
+            qps: AtomicUsize::new(0),
+        }));
+        unsafe {
+            (*h).private_pd = pd.cast();
+        }
+        device.events.lock().unwrap().push("alloc_grant_pd");
+        if device.mode == "gpu_partial_pd" {
+            return libc::EIO;
+        }
+        if device.mode == "gpu_partial_mr" {
+            unsafe {
+                (*memory).mr = Box::into_raw(Box::new(FakeMr {
+                    private_pd: pd,
+                    device,
+                    address: bytes as usize,
+                    length,
+                    local_only: false,
+                    window_bind: false,
+                    qps: AtomicUsize::new(0),
+                    windows: AtomicUsize::new(0),
+                }))
+                .cast();
+            }
+            unsafe { &*pd }.mrs.fetch_add(1, Ordering::SeqCst);
+            device.mrs.fetch_add(1, Ordering::SeqCst);
+            return libc::EIO;
+        }
+        unsafe { &*pd }.qps.fetch_add(1, Ordering::SeqCst);
+    }
     device.endpoints.fetch_add(1, Ordering::SeqCst);
     cq.qps.fetch_add(1, Ordering::SeqCst);
     let receive_cq = unsafe { &*(*h).receive_cq.cast::<FakeCq>() };
@@ -378,6 +457,10 @@ unsafe extern "C" fn open(
             link_layer: 1,
             gid: [0; 16],
         };
+    }
+    #[cfg(feature = "cuda")]
+    if let Some(hook) = device.after_open.lock().unwrap().take() {
+        hook();
     }
     if device.mode.starts_with("open") {
         5
@@ -648,6 +731,11 @@ unsafe extern "C" fn post_receive(
         return libc::ENOMEM;
     }
     let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    assert_eq!(
+        unsafe { &*mr }.private_pd.cast::<c_void>(),
+        unsafe { (*handles).private_pd },
+        "RQ MR must be in its QP PD"
+    );
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
     assert!(
         qp.messages
@@ -676,6 +764,7 @@ unsafe extern "C" fn send_completion(
     address: u64,
     length: usize,
     rkey: u32,
+    invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
     let qp = unsafe { &*(*handles).qp.cast::<Fake>() };
@@ -729,8 +818,9 @@ unsafe extern "C" fn send_completion(
             .iter()
             .find_map(|(key, grant)| {
                 if grant.window == 0 {
-                    return None;
+                    return (!invalidate && rkey == 0x707).then_some((*key, 0));
                 }
+                assert!(invalidate);
                 let window = unsafe { &*(grant.window as *const FakeWindow) };
                 (window.bound.load(Ordering::Acquire) && window.key.load(Ordering::Acquire) == rkey)
                     .then_some((*key, grant.window))
@@ -749,9 +839,11 @@ unsafe extern "C" fn send_completion(
                     receive_address as *mut u8,
                     length,
                 );
-                (*(window as *const FakeWindow))
-                    .bound
-                    .store(false, Ordering::Release);
+                if window != 0 {
+                    (*(window as *const FakeWindow))
+                        .bound
+                        .store(false, Ordering::Release);
+                }
             }
             source
                 .completed_grants
@@ -767,8 +859,8 @@ unsafe extern "C" fn send_completion(
                     qpn: source.qpn,
                     opcode: 128,
                     length: length as u32,
-                    flags: sys::WITH_INVALIDATE,
-                    invalidated_rkey: rkey,
+                    flags: if invalidate { sys::WITH_INVALIDATE } else { 0 },
+                    invalidated_rkey: if invalidate { rkey } else { 0 },
                     ..Default::default()
                 });
         }
@@ -895,6 +987,11 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
         .qps
         .fetch_sub(1, Ordering::SeqCst);
     device.endpoints.fetch_sub(1, Ordering::SeqCst);
+    if !handles.private_pd.is_null() {
+        unsafe { &*handles.private_pd.cast::<FakePd>() }
+            .qps
+            .fetch_sub(1, Ordering::SeqCst);
+    }
     unsafe {
         drop(Box::from_raw(handles.qp.cast::<Fake>()));
     }
@@ -932,6 +1029,8 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
     );
     if device.mode.ends_with("close1")
         || device.mode == "mr_close"
+        || (device.mode == "gpu_payload_close" && !state.private_pd.is_null() && !state.local_only)
+        || (device.mode == "gpu_rq_close" && !state.private_pd.is_null() && state.local_only)
         || (device.mode == "message_close"
             && state.local_only
             && state.length == COMPLETION_MESSAGE_SIZE)
@@ -942,6 +1041,11 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
         block(device);
     }
     device.mrs.fetch_sub(1, Ordering::SeqCst);
+    if !state.private_pd.is_null() {
+        unsafe { &*state.private_pd }
+            .mrs
+            .fetch_sub(1, Ordering::SeqCst);
+    }
     unsafe {
         drop(Box::from_raw(handles.mr.cast::<FakeMr>()));
     }
@@ -982,6 +1086,25 @@ unsafe extern "C" fn cq(h: *mut sys::CqHandles) -> c_int {
 unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
     let h = unsafe { &mut *h };
     if h.pd.is_null() {
+        return 0;
+    }
+    if h.context.is_null() {
+        let pd = unsafe { &*h.pd.cast::<FakePd>() };
+        let state = unsafe { &*pd.device };
+        assert_eq!(pd.qps.load(Ordering::SeqCst), 0, "private QP before PD");
+        assert_eq!(
+            pd.mrs.load(Ordering::SeqCst),
+            0,
+            "payload and RQ MR before private PD"
+        );
+        state.events.lock().unwrap().push("dealloc_grant_pd");
+        if state.mode == "gpu_pd_close" {
+            return libc::EBUSY;
+        }
+        unsafe {
+            drop(Box::from_raw(h.pd.cast::<FakePd>()));
+        }
+        h.pd = std::ptr::null_mut();
         return 0;
     }
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
@@ -1963,3 +2086,14 @@ pub(super) fn cold_contention() -> (usize, usize) {
     let state = COLD_OPEN.get().unwrap().0.lock().unwrap();
     (state.entered, state.waiters.len())
 }
+
+#[cfg(feature = "cuda")]
+pub(crate) fn gpu_runtime(mode: &str) -> RdmaTransport {
+    let mut runtime = runtime(mode);
+    runtime.config.cuda_memory = RdmaCudaMemory::Direct;
+    runtime.config.max_direct_bytes = 128;
+    runtime
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) mod gpu_handshake;

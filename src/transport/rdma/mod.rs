@@ -29,7 +29,7 @@ mod stats;
 mod sys;
 mod workers;
 
-pub use config::{RdmaConfig, RdmaHostMemory, RdmaProgressMode};
+pub use config::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
 pub(crate) use rdma_transport::RdmaTransport;
 pub use stats::RdmaStats;
 

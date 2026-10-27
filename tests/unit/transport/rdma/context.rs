@@ -19,6 +19,24 @@ pub(crate) fn events(runtime: &RdmaTransport) -> Arc<Mutex<Vec<&'static str>>> {
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.events)
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) fn after_open(runtime: &RdmaTransport, hook: impl FnOnce() + Send + 'static) {
+    let owner = runtime.device().unwrap();
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("device is not open");
+    };
+    let device = unsafe { &*resources.handles.context.cast::<FakeDevice>() };
+    assert!(
+        device
+            .after_open
+            .lock()
+            .unwrap()
+            .replace(Box::new(hook))
+            .is_none()
+    );
+}
+
 pub(crate) fn pause(runtime: &RdmaTransport) -> Arc<(Mutex<(bool, bool)>, std::sync::Condvar)> {
     pause_device(&runtime.device().unwrap())
 }

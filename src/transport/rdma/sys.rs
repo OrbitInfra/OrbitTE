@@ -53,6 +53,7 @@ pub(super) struct ConnectionHandles {
     pub cq: *mut c_void,
     pub receive_cq: *mut c_void,
     pub qp: *mut c_void,
+    pub private_pd: *mut c_void,
 }
 
 impl Default for ConnectionHandles {
@@ -61,6 +62,7 @@ impl Default for ConnectionHandles {
             cq: std::ptr::null_mut(),
             receive_cq: std::ptr::null_mut(),
             qp: std::ptr::null_mut(),
+            private_pd: std::ptr::null_mut(),
         }
     }
 }
@@ -110,6 +112,7 @@ pub(super) struct MemoryHandles {
     pub mr: *mut c_void,
     pub mw: *mut c_void,
     pub window_key: u32,
+    pub remote_mr: bool,
 }
 
 impl Default for MemoryHandles {
@@ -118,6 +121,7 @@ impl Default for MemoryHandles {
             mr: std::ptr::null_mut(),
             mw: std::ptr::null_mut(),
             window_key: 0,
+            remote_mr: false,
         }
     }
 }
@@ -262,6 +266,7 @@ pub(super) struct Verbs {
         u64,
         usize,
         u32,
+        bool,
         *mut PostResult,
     ) -> c_int,
     pub dealloc_window: CloseMemory,

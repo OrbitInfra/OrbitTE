@@ -49,6 +49,34 @@ pub(super) unsafe extern "C" fn prepare_grant(
         {
             return libc::EINVAL;
         }
+        if memory.remote_mr {
+            if permission == 0 || !(*handles).qp.is_null() || !memory.mr.is_null() {
+                return libc::EINVAL;
+            }
+            (*handles).private_pd = ffi::ibv_alloc_pd(device.context.cast()).cast();
+            if (*handles).private_pd.is_null() {
+                return failure();
+            }
+            let mut access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
+            if permission & 1 != 0 {
+                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+            }
+            if permission & 2 != 0 {
+                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+            }
+            memory.mr = ffi::ibv_reg_mr(
+                (*handles).private_pd.cast(),
+                buffer,
+                length,
+                access as c_int,
+            )
+            .cast();
+            if memory.mr.is_null() {
+                return failure();
+            }
+            memory.window_key = (*memory.mr.cast::<ffi::ibv_mr>()).rkey;
+            return 0;
+        }
         let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
             | if permission != 0 {
                 ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0

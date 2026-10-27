@@ -140,6 +140,7 @@ impl CqLane {
             &mut message.handles,
             message.memory.address,
             message.memory.length,
+            std::ptr::null_mut(),
         );
         message.registered();
         registered
@@ -162,10 +163,11 @@ impl CqLane {
             request.check_claim(claim)?;
             if request.phase != Phase::Connected
                 || request.receive.is_some()
-                || !request
-                    .resources
-                    .as_ref()
-                    .is_some_and(|r| r.grant.as_ref().is_some_and(|g| g.window_bound))
+                || !request.resources.as_ref().is_some_and(|r| {
+                    r.grant.as_ref().is_some_and(|g| {
+                        g.window_bound || (g.handles.remote_mr && !g.handles.mr.is_null())
+                    })
+                })
             {
                 return Err(Error::Internal("RDMA receive before source grant"));
             }
@@ -182,11 +184,13 @@ impl CqLane {
             );
             let mut connection = resources.connection.lock()?;
             let device = Arc::clone(&connection.device);
+            let private_pd = connection.handles.private_pd;
             connection.receive_queue.prepare(
                 Arc::clone(&receive),
                 credits,
                 &device,
                 self.shared.config.max_grants + self.shared.config.max_cqes,
+                private_pd,
             )?;
             drop(connection);
             request.receive = Some(receive);

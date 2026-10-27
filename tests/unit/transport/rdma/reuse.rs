@@ -402,7 +402,7 @@ fn completion_requires_data_drain_exact_payload_key_and_exact_current_native_bin
     let requester = Identity::local(&endpoint, SourceEpoch([4; 16])).unwrap();
     let mut request = request(SourceEpoch([7; 16]), 1);
     request.operation = Operation::RdmaRead;
-    let binding = Binding::new(&request, identity(7, 8, 9), requester, 1, true).unwrap();
+    let binding = Binding::new(&request, identity(7, 8, 9), requester, 1, 1).unwrap();
     assert!(endpoint.finish_sent(&binding.0).is_err());
     endpoint
         .transfer(&descriptor, TransferOp::Read, deadline(TIMEOUT).unwrap())
@@ -610,7 +610,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
             Identity::decode(&offer[..IDENTITY_SIZE]).unwrap(),
             local_identity,
             u64_at(&offer, IDENTITY_SIZE),
-            true,
+            1,
         )
         .unwrap();
         binding.write(&mut channel, ACCEPT).unwrap();

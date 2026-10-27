@@ -10,9 +10,11 @@ fn fixture(limit: usize) -> (RdmaTransport, Arc<RdmaContext>, ReceiveQueue) {
 }
 
 fn work(index: u8) -> Arc<ReceiveWork> {
+    let mut binding = [index; COMPLETION_MESSAGE_SIZE];
+    binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
     ReceiveWork::new(
         128 * u64::from(index) + 1,
-        [index; COMPLETION_MESSAGE_SIZE],
+        binding,
         0x0102_0300 + u32::from(index),
         Instant::now() + Duration::from_secs(3),
     )
@@ -39,7 +41,7 @@ unsafe extern "C" fn post(
 
 fn prepare(queue: &mut ReceiveQueue, work: &Arc<ReceiveWork>, device: &RdmaContext) -> Result<()> {
     let credits = ReceiveCredits::acquire(Arc::clone(&queue.usage), 8, 1)?;
-    queue.prepare(Arc::clone(work), credits, device, 8)
+    queue.prepare(Arc::clone(work), credits, device, 8, std::ptr::null_mut())
 }
 
 fn posted(
@@ -265,5 +267,35 @@ impl ReceiveQueue {
             .iter()
             .filter(|slot| slot.credits.is_some())
             .count()
+    }
+}
+
+#[test]
+fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidation() {
+    for case in ["valid", "invalidation", "binding", "profile"] {
+        let (runtime, device, mut queue) = fixture(1);
+        let mut binding = [0x55; COMPLETION_MESSAGE_SIZE];
+        binding[COMPLETION_MESSAGE_SIZE - 1] = crate::transport::rdma::protocol::MR_AUTHORITY;
+        let receipt = ReceiveWork::new(129, binding, 7, Instant::now() + Duration::from_secs(3));
+        prepare(&mut queue, &receipt, &device).unwrap();
+        posted(&mut queue, &receipt, runtime.verbs, 0, 1).unwrap();
+        let mut completion = delivered(&mut queue, receipt.id, &receipt);
+        completion.flags = 0;
+        completion.invalidated_rkey = 0;
+        match case {
+            "invalidation" => {
+                completion.flags = sys::WITH_INVALIDATE;
+                completion.invalidated_rkey = receipt.rkey;
+            }
+            "binding" => queue.slots[0].message.memory.bytes_mut()[0] ^= 1,
+            "profile" => queue.slots[0].message.memory.bytes_mut()[COMPLETION_MESSAGE_SIZE - 1] = 0,
+            _ => {}
+        }
+        assert_eq!(
+            acknowledge(&mut queue, completion).is_ok(),
+            case == "valid",
+            "{case}"
+        );
+        close(runtime, device, queue);
     }
 }

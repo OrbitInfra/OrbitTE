@@ -118,7 +118,7 @@ remains the target; the current order does not reduce the required scope.
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
-| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/staging and P5.2 owned copy streams/events implemented; full P5 open |
+| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Allocation/copy streams and P5.3 explicit GPU direct RDMA implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
@@ -487,8 +487,16 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
 - [ ] Implement CUDA location/pointer classification, allocation, exact context
   restoration and retained streams/events/export/import mappings. Unexpected
   driver errors cannot select an ordinary CPU copy path.
-- [ ] Implement GDR discovery and registration, supported host/device READ/WRITE
-  combinations, direct-versus-staged routing and explicit unavailable behavior.
+- [x] **P5.3 — Explicit GPU direct RDMA (Implemented; qualification pending).**
+  Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
+  persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
+  without unsupported PeerDirect MWs. v15 binds an ordinary SEND receipt to the
+  grant; source ACK follows native close and GPU visibility. Failed registration
+  never selects staging. CPU controls cover aliases, partial construction,
+  payload/RQ MR and PD cleanup, context restore and retained owners/budgets.
+  The existing public peer/supervisor now records real MR/WR GPU addresses.
+  GPU source QP/MR reuse, automatic GPU topology policy and broad native-fault/
+  multirail qualification remain open; this is not full P5 acceptance.
 - [ ] Implement NVLink IPC handle sharing and copy completion; MNNVL fabric
   import/export and EGM as separate qualified topology profiles.
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
@@ -742,8 +750,10 @@ collected host inventories, plus two fixed-GID regressions.
 
 P4 implementation and its declared installed fault fixtures are complete.
 The independent review accepts source and bounded RoCE evidence at `121ab95`,
-including four fresh live repeats. Under the user's 2026-10-27 sequencing decision, continue P5 CUDA
-owners and available GPU tests. Keep the physical/fabric requirements in
+including four fresh live repeats. Under the user's 2026-10-27 sequencing decision,
+finish the declared P5.3 GPU direct profiles and independent review, then proceed
+to CUDA IPC/NVLink handle ownership and completion. Proxy/staging scheduling
+follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
 Do not reopen completed source work or repeat unaffected matrices.

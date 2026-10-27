@@ -12,14 +12,14 @@ for the exact artifacts and profiles behind each result.
 | Async batches and notifications | Implemented | CPU cancellation, detached handles, bounded admission and receipt controls |
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 READ/WRITE profiles; InfiniBand remains unqualified |
 | Persistent host MRs and multi-context publication | Implemented | Scoped two-RNIC atomic publication, rollback and retirement; paused-context MR preparation and recovery pass the focused native PD/MR/QP gate |
-| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, public v14 multiplexing, exact WR/receipt dispatch and shared physical SQ/RQ limits |
+| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, public v15 multiplexing, exact WR/receipt dispatch and shared physical SQ/RQ limits |
 | Multirail slices and shared quotas | Implemented | Selected folded-tail and concurrent-parent profiles verify bytes, whole-parent admission and native drain. The installed two-physical-rail profile joins every payload WR/CQE and verifies shared-QP contention/accounting; bandwidth/fairness policy remains P6 |
 | Transport workers, CQ lanes and NUMA binding | Implemented | Scoped native worker/lane routing, CPU-mask and polling/event profiles; broader scheduling policy remains later work |
 | Discovery and periodic recovery | Implemented | Scoped process-local query-failure recovery; initially paused contexts and automatic/strict GID recovery pass the focused one-RNIC native gate. Installed two-host automatic discovery matches a separate sysfs inventory, including strict-pin rejection and NUMA ranks. Independent review includes four fresh live RoCE repeats; physical loss remains open |
 | Native failure retention and live reconnect | Implemented | Scoped QP ERR, lost CQEs, QP/MR/MW syscall faults and CQ/channel/PD EBUSY. Failed owners remain retained; device-close errors have CPU ABI coverage only |
 | Packaged public host consumer | Scoped tests | Qualified profiles cover healthy traffic, restarts, lost CQEs, actual in-flight DMA interruption, QP/MR/MW/CQ/channel/PD cleanup, engine replacement, physical rail accounting and automatic discovery. Physical link/device loss and InfiniBand remain open |
-| NVIDIA allocation, pinned host memory and copy streams/events | Implemented | Serialized stream/event reuse passes the bounded two-host/four-H20 local-copy profile on stable and Rust 1.85. Failure retention has CPU controls. Device pointers use host staging |
-| Direct GPU registration / GPUDirect RDMA | Planned | Requires actual GPU/RNIC transfer and drain qualification |
+| NVIDIA allocation, pinned host memory and copy streams/events | Implemented | Serialized stream/event reuse passes the bounded two-host/four-H20 local-copy profile on stable and Rust 1.85. Failure retention has CPU controls. Staging is the default device policy |
+| Direct GPU registration / GPUDirect RDMA | Implemented, qualification pending | Persistent local GPU MRs, isolated per-grant source PD/MR/QP, ordinary SEND receipt and CUDA visibility. Explicit Direct policy requires scatter-to-CQE disabled; no silent fallback |
 | CUDA IPC / NVLink | Planned | Separate from NVIDIA allocation support |
 | Local SSD through io_uring / cuFile GDS | Planned, optional | Separate storage transports and direct-path qualification |
 | TENT C/Python/C++ API and mixed-peer wire compatibility | Open | Separate API/ABI/wire gates; the current protocol is OrbitTE-only |

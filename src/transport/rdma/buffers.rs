@@ -245,7 +245,10 @@ impl LocalBufferManager {
             for memory in memories {
                 for device in devices {
                     for window_bind in [false, true] {
-                        if window_bind && memory.permission() == crate::Permission::LocalOnly {
+                        if window_bind
+                            && (memory.permission() == crate::Permission::LocalOnly
+                                || memory.is_cuda())
+                        {
                             continue;
                         }
                         leases

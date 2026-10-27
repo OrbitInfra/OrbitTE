@@ -51,7 +51,12 @@ pub(super) unsafe extern "C" fn open(
         init.cap.max_recv_wr = max_recv_wr;
         init.cap.max_send_sge = 1;
         init.cap.max_recv_sge = 1;
-        h.qp = ffi::ibv_create_qp(device.pd.cast(), &mut init).cast();
+        let pd = if h.private_pd.is_null() {
+            device.pd
+        } else {
+            h.private_pd
+        };
+        h.qp = ffi::ibv_create_qp(pd.cast(), &mut init).cast();
         if h.qp.is_null() {
             return failure();
         }
@@ -318,6 +323,7 @@ pub(super) unsafe extern "C" fn send_completion(
     address: u64,
     length: usize,
     rkey: u32,
+    invalidate: bool,
     result: *mut PostResult,
 ) -> c_int {
     unsafe {
@@ -337,10 +343,14 @@ pub(super) unsafe extern "C" fn send_completion(
         wr.wr_id = id;
         wr.sg_list = &mut sge;
         wr.num_sge = 1;
-        wr.opcode = ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV;
+        wr.opcode = if invalidate {
+            ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV
+        } else {
+            ffi::ibv_wr_opcode::IBV_WR_SEND
+        };
         wr.send_flags =
             ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
-        wr.__bindgen_anon_1.invalidate_rkey = rkey;
+        wr.__bindgen_anon_1.invalidate_rkey = if invalidate { rkey } else { 0 };
         let mut bad = std::ptr::null_mut();
         let code = post(qp, &mut wr, &mut bad);
         if code == 0 {

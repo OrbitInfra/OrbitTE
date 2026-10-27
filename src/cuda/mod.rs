@@ -13,6 +13,8 @@ use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
 mod driver;
+#[cfg(feature = "rdma")]
+mod rdma;
 mod stream;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
 use stream::CopyStream;
@@ -130,6 +132,10 @@ struct DeviceAllocation {
     owner: Option<Arc<dyn Send + Sync>>,
     uncertain: bool,
     copy_stream: Option<CopyStream>,
+    #[cfg(feature = "rdma")]
+    dma: Vec<std::ops::Range<usize>>,
+    #[cfg(feature = "rdma")]
+    rdma: Option<rdma::Ordering>,
 }
 
 impl Drop for DeviceAllocation {
@@ -272,6 +278,10 @@ impl CudaMemory {
             owner: None,
             uncertain: false,
             copy_stream: None,
+            #[cfg(feature = "rdma")]
+            dma: Vec::new(),
+            #[cfg(feature = "rdma")]
+            rdma: None,
         };
         context.current(|| {
             // SAFETY: the owner is installed before allocation/init can fail.
@@ -388,6 +398,10 @@ impl CudaMemory {
                 owner: Some(owner),
                 uncertain: false,
                 copy_stream: None,
+                #[cfg(feature = "rdma")]
+                dma: Vec::new(),
+                #[cfg(feature = "rdma")]
+                rdma: None,
             }),
         })
     }
@@ -426,6 +440,8 @@ impl CudaMemory {
                 code: -1,
             });
         }
+        #[cfg(feature = "rdma")]
+        allocation.check_dma(&(offset..offset + length))?;
         let context = Arc::clone(&allocation.context);
         let mut staging = PinnedAllocation::new(&context, length)?;
         if let Some(bytes) = source {

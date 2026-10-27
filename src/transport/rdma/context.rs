@@ -278,7 +278,6 @@ impl RdmaContext {
         memory: &RegisteredMemory,
         window_bind: bool,
     ) -> Result<()> {
-        let address = memory.host_address()?;
         let state = self
             .state
             .lock()
@@ -288,14 +287,16 @@ impl RdmaContext {
         };
         self.asynchronous.check_device()?;
         // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
-        check("ibv_reg_mr", unsafe {
-            (self.verbs.register_memory)(
-                handles,
-                &resources.handles,
-                address.as_ptr().cast(),
-                memory.len(),
-                window_bind,
-            )
+        memory.with_rdma_context(|| {
+            check("ibv_reg_mr", unsafe {
+                (self.verbs.register_memory)(
+                    handles,
+                    &resources.handles,
+                    memory.base_address() as usize as *mut std::ffi::c_void,
+                    memory.len(),
+                    window_bind,
+                )
+            })
         })
     }
 
@@ -304,6 +305,7 @@ impl RdmaContext {
         handles: &mut sys::MemoryHandles,
         address: NonNull<u8>,
         length: usize,
+        private_pd: *mut std::ffi::c_void,
     ) -> Result<()> {
         let state = self
             .state
@@ -313,15 +315,18 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
+        let device = sys::DeviceHandles {
+            context: resources.handles.context,
+            pd: if private_pd.is_null() {
+                resources.handles.pd
+            } else {
+                private_pd
+            },
+            async_fd: resources.handles.async_fd,
+        };
         // The send grant or physical RQ owns these bytes through native teardown.
         check("ibv_reg_mr completion message", unsafe {
-            (self.verbs.register_memory)(
-                handles,
-                &resources.handles,
-                address.as_ptr().cast(),
-                length,
-                false,
-            )
+            (self.verbs.register_memory)(handles, &device, address.as_ptr().cast(), length, false)
         })
     }
 
@@ -387,6 +392,12 @@ impl RdmaContext {
             Some(id) => id,
             None => ConnectionId::next(device.domain, &mut device.next_connection)?,
         };
+        let private_pd = resources.grant()?.handles.remote_mr;
+        let incarnation = if private_pd {
+            ConnectionId::next(ConnectionId::new_domain()?, &mut device.next_connection)?
+        } else {
+            incarnation
+        };
         let generation = device.next_grant;
         device.next_grant = generation.checked_add(1).ok_or(Error::ResourceExhausted)?;
         connection.incarnation = Some(incarnation);
@@ -396,45 +407,63 @@ impl RdmaContext {
         let buffer = grant.buffer.address().as_ptr().cast();
         let length = grant.buffer.len();
         // The record lock excludes posting and retirement throughout construction.
-        let code = if reused {
-            *local = connection.local;
-            let grant = resources
-                .grant
-                .as_mut()
-                .ok_or(Error::Internal("missing reused grant"))?;
-            unsafe {
-                (self.verbs.prepare_grant)(
-                    &mut connection.handles,
-                    &mut grant.handles,
-                    &device.handles,
-                    buffer,
-                    length,
-                    permission,
-                )
-            }
-        } else {
-            let grant = resources
-                .grant
-                .as_mut()
-                .ok_or(Error::Internal("missing new grant"))?;
-            unsafe {
-                (self.verbs.open)(
-                    &mut connection.handles,
-                    &mut grant.handles,
-                    &device.handles,
-                    device.address.port,
-                    device.address.gid_index,
-                    &device.address.descriptor,
-                    buffer,
-                    length,
-                    permission,
-                    psn,
-                    config.max_send_wr as u32,
-                    config.max_cqes as u32,
-                    local,
-                )
-            }
+        let registration = match &grant.buffer {
+            super::grant::Buffer::Direct {
+                loan: Some(loan), ..
+            } => Some(loan.registration()),
+            _ => None,
         };
+        let mut construct = || {
+            Ok(if reused {
+                *local = connection.local;
+                let grant = resources
+                    .grant
+                    .as_mut()
+                    .ok_or(Error::Internal("missing reused grant"))?;
+                unsafe {
+                    (self.verbs.prepare_grant)(
+                        &mut connection.handles,
+                        &mut grant.handles,
+                        &device.handles,
+                        buffer,
+                        length,
+                        permission,
+                    )
+                }
+            } else {
+                let grant = resources
+                    .grant
+                    .as_mut()
+                    .ok_or(Error::Internal("missing new grant"))?;
+                unsafe {
+                    (self.verbs.open)(
+                        &mut connection.handles,
+                        &mut grant.handles,
+                        &device.handles,
+                        device.address.port,
+                        device.address.gid_index,
+                        &device.address.descriptor,
+                        buffer,
+                        length,
+                        permission,
+                        psn,
+                        config.max_send_wr as u32,
+                        config.max_cqes as u32,
+                        local,
+                    )
+                }
+            })
+        };
+        let code = if let Some(memory) = registration {
+            memory.with_rdma_context(construct)
+        } else {
+            construct()
+        };
+        if private_pd && !connection.handles.private_pd.is_null() {
+            let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.active_grant_pds += 1;
+            usage.opened_grant_pds += 1;
+        }
         if !reused && !connection.handles.qp.is_null() {
             device
                 .usage
@@ -448,11 +477,14 @@ impl RdmaContext {
             usage.active_windows += 1;
             usage.opened_windows += 1;
         }
+        let code = code?;
         if code == libc::ESTALE {
             self.asynchronous.fence_route();
         }
         check("ibverbs grant/endpoint construction", code)?;
-        if permission != 0 {
+        if permission != 0 && private_pd {
+            local.rkey = grant.handles.window_key;
+        } else if permission != 0 {
             if grant.handles.mw.is_null() {
                 return Err(Error::Internal("source endpoint has no MW"));
             }
