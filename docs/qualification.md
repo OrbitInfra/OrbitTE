@@ -56,10 +56,26 @@ qualification. Independent acceptance remains open.
 ### Installed cleanup fixture
 
 The [packaged requester QP cleanup fixture](installed-host.md#native-cleanup-failure)
-is implemented with separate native and public-owner receipts. Its native
-execution is **unqualified**. Package builds and CPU syscall/ledger controls
-do not establish native retention or interrupted in-flight DMA. The earlier
-libtest cleanup record below remains scoped to its own artifact.
+passes a single-host, two-process diagnostic with artifacts built from
+`5897f28`: stable READ/polling and Rust 1.85 WRITE/events. Each uses one
+64 KiB payload, one QP/active rail and two registered contexts. A real
+`ibv_destroy_qp` returns EIO once; public batches remain unquiesced, and
+post-drop native queries, actual backing and byte/SQ/batch charges prove
+retention. The supervisor reaps the faulted requester; its replacement rejects
+stale authority and completes healthy rounds against the live source.
+Provider maps, exact child lifetimes and unchanged pre/post device resource
+counts are recorded in
+`/root/orbitte-artifacts/installed-cleanup-20261027/native-audit.json`.
+
+The failed first diagnostic exposed fixture initialization order; its evidence
+is retained. A separate failed audit incorrectly required ERR, although close
+fences admission and calls destruction directly. The corrected verifier records
+the actual retained QP state and preserves the original receipts.
+
+This is **single-host diagnostic evidence**, not acceptance of the declared
+two-host profile, interrupted in-flight DMA or physical loss. The two Forge
+replicas currently share a physical host. Earlier libtest cleanup evidence
+remains scoped to its own artifact; independent acceptance is still open.
 
 ## Recorded host RDMA evidence
 

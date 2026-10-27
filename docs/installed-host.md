@@ -252,8 +252,9 @@ separate qualification gates; this is correctness evidence, not performance.
 quarantine contract. Freeze `fault_role: "requester"`, two generations, one
 parent, `payload <= block`, one lane and rail mask 1 or 2. It uses the same
 identity-pinned two-peer controller and immutable fault library as completion
-loss. The fixture is implemented; native execution of this installed profile
-is still unqualified.
+loss. The fixture is implemented and has passed the focused
+[single-host diagnostic](qualification.md#installed-cleanup-fixture). The declared
+two-host profile is still unqualified.
 
 After the healthy rounds, the observer records one accepted payload WR and
 withholds its actual successful CQE. It arms cleanup failure on that exact
