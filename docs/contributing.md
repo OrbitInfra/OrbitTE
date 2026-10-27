@@ -59,10 +59,26 @@ claims aligned with the [capability matrix](capabilities.md), and label planned
 paths in architecture figures. The theme stays upstream; Orbit-specific
 styles are limited to branding and homepage spacing.
 
+## Maintaining technical content
+
+Keep README and the homepage focused on purpose, current capability and
+entry points. User guides describe current behavior and runnable setup;
+architecture pages explain owners and their frozen TENT correspondence.
+Update existing sections when behavior changes instead of appending a
+delivery diary with obsolete filenames or protocols.
+
+The completion plan is the only execution queue. Qualification indexes
+exact source/artifact/profile evidence and links maintained reproduction
+recipes. Preserve superseded records with immutable commit links; verify an
+external archive before removing the only working copy. Raw results stay
+outside Git. Documentation changes alone grant no hardware acceptance.
+
 ## Theme and asset provenance
 
 The presentation reference is the [Mooncake documentation](https://kvcache-ai.github.io/Mooncake/)
-and its [documentation configuration](https://github.com/kvcache-ai/Mooncake/blob/main/docs/source/conf.py).
+and its [pinned documentation layout](https://github.com/OrbitInfra/Mooncake/blob/12cbf549b6351c800de0f94a480276d216b9a43b/docs/source/index.md).
+This presentation reference is separate from the frozen TENT implementation
+baseline in the parity contract.
 Sphinx Book Theme is installed as an upstream dependency. Project styles
 and assets are maintained separately.
 

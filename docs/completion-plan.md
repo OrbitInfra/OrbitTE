@@ -371,7 +371,7 @@ TENT owners and deliberate differences.
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
 | 1 | Complete discovery/recovery correspondence | **Implemented; native gate open:** retain usable initially down contexts and repeat automatic GID selection on recovery. CPU transitions verify strict pins, old-QP/CQ drain, unchanged context/PD/MRs and healthy-sibling dispatch. The opt-in [native recovery gate](rdma-cuda.md#initially-paused-contexts-and-gid-reselection) is compiled but unqualified. Run it on an authorized RNIC with two valid GIDs before accepting this row. |
-| 2 | Close the declared installed RoCE fault profile | **Unqualified:** interrupt actual in-flight DMA, exercise native cleanup failure through the packaged public consumer, and verify physical link/device loss and provider teardown. Freeze the scenario, native proof and negative control before running it. Keep the already-qualified cases as regressions. |
+| 2 | Close the declared installed RoCE fault profile | **Gate implementation and qualification open:** the installed runner covers healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs. It still needs fixtures for actual in-flight DMA interruption and native cleanup failure through the packaged public consumer, plus physical link/device loss and provider teardown evidence. Freeze each scenario, native proof and negative control before adding its fixture. Keep the qualified cases as regressions. |
 | 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
 The first row closes the two source gaps found in the frozen-source audit.
@@ -691,12 +691,15 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Implement the two discovery/recovery gaps in the first row of
-[P4 remaining delivery](#p4-remaining-delivery), then run the fixed remaining
-qualification gates. Use the existing native and installed consumers; add a
-case only when it protects an uncovered contract or a demonstrated bug.
-Keep runtime/source checks, installed-artifact checks and hardware results
-separate. A layout-only refactor does not qualify new hardware or close P4.
+The two discovery/recovery source gaps are implemented in `9e1fdea`
+(PR #57); do not reopen them as missing code. Run the focused native gate
+in the first row of [P4 remaining delivery](#p4-remaining-delivery), then
+close the remaining declared fault/fabric gates and independent review.
+Freeze each missing scenario and its proof before implementing any needed
+fixture; use the existing native and installed consumers. Add a case only
+for an uncovered contract or a demonstrated bug. Keep source checks,
+installed-artifact checks and hardware results separate. A documentation
+cleanup or layout refactor does not qualify hardware or close P4.
 
 New test nodes require fresh job/stage, host, provider and RNIC-lock inventories;
 never reuse executor identities from a terminated job. A node with one usable
