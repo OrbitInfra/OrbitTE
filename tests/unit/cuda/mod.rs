@@ -1,242 +1,14 @@
 #![allow(unsafe_code)]
 
-use std::cell::{RefCell, UnsafeCell};
-use std::collections::BTreeMap;
-use std::ffi::{c_int, c_uint, c_void};
-use std::sync::atomic::AtomicI32;
-use std::sync::{OnceLock, Weak};
 use std::time::Duration;
 
 use super::*;
 use crate::{
     BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport,
 };
-use driver::Status;
 
-// The shim owns actual host backing and records Driver API boundaries. These
-// tests prove CPU ownership contracts, not GPU execution or memory ordering.
-struct Device {
-    bytes: UnsafeCell<Box<[u8]>>,
-    pins: Mutex<BTreeMap<usize, Box<[u8]>>>,
-    copy_error: AtomicI32,
-    sync_error: AtomicI32,
-    pop_error: AtomicI32,
-    free_error: AtomicI32,
-    memory_type: AtomicI32,
-    managed: AtomicI32,
-    events: Mutex<Vec<&'static str>>,
-}
-// SAFETY: device bytes are accessed exclusively via one CudaMemory lock; pinned
-// buffers are private to each copy and the map serializes allocation/deallocation.
-unsafe impl Send for Device {}
-unsafe impl Sync for Device {}
-thread_local! { static STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
-static DEVICES: OnceLock<Mutex<BTreeMap<u64, Weak<Device>>>> = OnceLock::new();
-fn device_at(address: u64) -> Arc<Device> {
-    DEVICES
-        .get()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .range(..=address)
-        .next_back()
-        .unwrap()
-        .1
-        .upgrade()
-        .unwrap()
-}
-fn current() -> &'static Device {
-    let pointer = STACK.with(|stack| *stack.borrow().last().unwrap());
-    // The Context retains its actual owner until a successful pop, or forever
-    // on an unproven restore. The test shim never exposes this reference publicly.
-    unsafe { &*(pointer as *const Device) }
-}
-fn event(name: &'static str) {
-    current().events.lock().unwrap().push(name);
-}
-fn status(code: c_int) -> Status {
-    match code {
-        0 => SUCCESS,
-        1 => Status::CUDA_ERROR_INVALID_VALUE,
-        201 => Status::CUDA_ERROR_INVALID_CONTEXT,
-        700 => Status::CUDA_ERROR_ILLEGAL_ADDRESS,
-        _ => panic!("unexpected CUDA test error {code}"),
-    }
-}
-unsafe extern "C" fn init(_: c_uint) -> Status {
-    SUCCESS
-}
-unsafe extern "C" fn get(output: *mut c_int, ordinal: c_int) -> Status {
-    unsafe {
-        *output = ordinal;
-    }
-    SUCCESS
-}
-unsafe extern "C" fn retain(_: *mut driver::Context, _: c_int) -> Status {
-    unreachable!()
-}
-unsafe extern "C" fn release(_: c_int) -> Status {
-    unreachable!()
-}
-unsafe extern "C" fn push(context: driver::Context) -> Status {
-    STACK.with(|s| s.borrow_mut().push(context as usize));
-    event("push");
-    SUCCESS
-}
-unsafe extern "C" fn pop(output: *mut driver::Context) -> Status {
-    event("pop");
-    let error = current().pop_error.load(Ordering::Acquire);
-    if error != 0 {
-        return status(error);
-    }
-    unsafe {
-        *output = STACK.with(|s| s.borrow_mut().pop().unwrap()) as driver::Context;
-    }
-    SUCCESS
-}
-unsafe extern "C" fn sync() -> Status {
-    event("sync");
-    status(current().sync_error.load(Ordering::Acquire))
-}
-unsafe extern "C" fn allocate(_: *mut u64, _: usize) -> Status {
-    unreachable!()
-}
-unsafe extern "C" fn free(_: u64) -> Status {
-    unreachable!()
-}
-unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> Status {
-    unreachable!()
-}
-unsafe extern "C" fn to_host(output: *mut c_void, address: u64, length: usize) -> Status {
-    event("DtoH");
-    let error = current().copy_error.load(Ordering::Acquire);
-    if error == 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(address as *const u8, output.cast(), length);
-        }
-    }
-    status(error)
-}
-unsafe extern "C" fn to_device(address: u64, input: *const c_void, length: usize) -> Status {
-    event("HtoD");
-    let error = current().copy_error.load(Ordering::Acquire);
-    // A synchronized backend error may still have changed a prefix of GPU
-    // bytes. Logical failure is not a rollback receipt.
-    let copied = if error == 0 { length } else { length.min(1) };
-    unsafe {
-        std::ptr::copy_nonoverlapping(input.cast::<u8>(), address as *mut u8, copied);
-    }
-
-    status(error)
-}
-unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c_uint) -> Status {
-    event("pin");
-    let mut bytes = vec![0; length].into_boxed_slice();
-    let pointer = bytes.as_mut_ptr();
-    current()
-        .pins
-        .lock()
-        .unwrap()
-        .insert(pointer as usize, bytes);
-    unsafe {
-        *output = pointer.cast();
-    }
-    SUCCESS
-}
-unsafe extern "C" fn host_free(pointer: *mut c_void) -> Status {
-    event("unpin");
-    let error = current().free_error.load(Ordering::Acquire);
-    if error == 0 {
-        assert!(
-            current()
-                .pins
-                .lock()
-                .unwrap()
-                .remove(&(pointer as usize))
-                .is_some()
-        );
-    }
-    status(error)
-}
-unsafe extern "C" fn attribute(
-    output: *mut c_void,
-    attribute: PointerAttribute,
-    address: u64,
-) -> Status {
-    let device = device_at(address);
-    unsafe {
-        match attribute {
-            PointerAttribute::CU_POINTER_ATTRIBUTE_CONTEXT => {
-                *output.cast::<driver::Context>() = Arc::as_ptr(&device) as driver::Context
-            }
-            PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE => {
-                *output.cast::<i32>() = device.memory_type.load(Ordering::Acquire)
-            }
-            PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED => {
-                *output.cast::<u32>() = device.managed.load(Ordering::Acquire) as u32
-            }
-            PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => *output.cast::<i32>() = 0,
-            _ => return Status::CUDA_ERROR_INVALID_VALUE,
-        }
-    }
-    SUCCESS
-}
-unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> Status {
-    let device = device_at(address);
-    let bytes = unsafe { &*device.bytes.get() };
-    unsafe {
-        *base = bytes.as_ptr() as u64;
-        *length = bytes.len();
-    }
-    SUCCESS
-}
-fn driver() -> Arc<Driver> {
-    Arc::new(Driver {
-        _library: None,
-        init,
-        device_get: get,
-        primary_retain: retain,
-        primary_release: release,
-        push,
-        pop,
-        synchronize: sync,
-        allocate,
-        free,
-        memset,
-        to_host,
-        to_device,
-        host_allocate,
-        host_free,
-        pointer_attribute: attribute,
-        address_range: range,
-    })
-}
-fn allocation(bytes: &[u8]) -> Arc<Device> {
-    let device = Arc::new(Device {
-        bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
-        pins: Mutex::default(),
-        copy_error: AtomicI32::new(0),
-        sync_error: AtomicI32::new(0),
-        pop_error: AtomicI32::new(0),
-        free_error: AtomicI32::new(0),
-        memory_type: AtomicI32::new(2),
-        managed: AtomicI32::new(0),
-        events: Mutex::default(),
-    });
-    let address = unsafe { &*device.bytes.get() }.as_ptr() as u64;
-    DEVICES
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap()
-        .insert(address, Arc::downgrade(&device));
-    device
-}
-fn memory(device: &Arc<Device>) -> Arc<CudaMemory> {
-    let bytes = unsafe { &*device.bytes.get() };
-    Arc::new(
-        CudaMemory::register(bytes.as_ptr() as u64, bytes.len(), device.clone(), driver()).unwrap(),
-    )
-}
+mod shim;
+use shim::*;
 
 #[test]
 fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
@@ -293,7 +65,7 @@ fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
         .0;
     assert_eq!(
         &events[error_copy..error_copy + 3],
-        &["DtoH", "sync", "pop"]
+        &["DtoH", "stream-sync", "pop"]
     );
 }
 
@@ -492,7 +264,7 @@ fn source_cuda_sync_failure_retains_source_owner_and_prevents_false_drain() {
 
 #[test]
 fn cuda_sync_restore_and_unpin_failures_retain_native_backing_and_poison_reuse() {
-    for mode in ["sync", "restore", "unpin"] {
+    for mode in ["sync", "restore", "copy-restore", "unpin"] {
         std::thread::spawn(move || {
             let owner = allocation(&[0x7b; 8]);
             let weak = Arc::downgrade(&owner);
@@ -500,6 +272,7 @@ fn cuda_sync_restore_and_unpin_failures_retain_native_backing_and_poison_reuse()
             match mode {
                 "sync" => owner.sync_error.store(700, Ordering::Release),
                 "restore" => owner.pop_error.store(201, Ordering::Release),
+                "copy-restore" => owner.pop_after_completion.store(true, Ordering::Release),
                 "unpin" => owner.free_error.store(1, Ordering::Release),
                 _ => unreachable!(),
             }
@@ -523,5 +296,136 @@ fn cuda_sync_restore_and_unpin_failures_retain_native_backing_and_poison_reuse()
         })
         .join()
         .unwrap();
+    }
+}
+
+#[test]
+fn cuda_copy_reuses_its_stream_and_event_without_context_synchronization() {
+    let owner = allocation(&[0x44; 32]);
+    let memory = memory(&owner);
+    let mut threads = Vec::new();
+    for offset in 0..8 {
+        let memory = Arc::clone(&memory);
+        threads.push(std::thread::spawn(move || {
+            memory.write(offset, &[offset as u8]).unwrap();
+            let mut bytes = [0; 1];
+            memory.read(offset, &mut bytes).unwrap();
+            assert_eq!(bytes, [offset as u8]);
+            assert!(STACK.with(|s| s.borrow().is_empty()));
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert!(owner.pins.lock().unwrap().is_empty());
+    drop(memory);
+    assert!(owner.streams.lock().unwrap().is_empty());
+    assert!(owner.completions.lock().unwrap().is_empty());
+    let events = owner.events.lock().unwrap();
+    for name in [
+        "stream-create",
+        "event-create",
+        "stream-destroy",
+        "event-destroy",
+    ] {
+        assert_eq!(events.iter().filter(|e| **e == name).count(), 1, "{name}");
+    }
+    assert_eq!(events.iter().filter(|e| **e == "event-sync").count(), 16);
+    assert!(!events.contains(&"sync"));
+    assert!(!events.contains(&"stream-sync"));
+}
+
+#[test]
+fn cuda_stream_partial_construction_and_record_failure_release_only_after_drain() {
+    for mode in ["stream-create", "event-create", "record"] {
+        let owner = allocation(&[0x55; 8]);
+        let memory = memory(&owner);
+        match mode {
+            "stream-create" => owner.stream_create_error.store(1, Ordering::Release),
+            "event-create" => owner.event_create_error.store(1, Ordering::Release),
+            "record" => owner.record_error.store(1, Ordering::Release),
+            _ => unreachable!(),
+        }
+        let mut bytes = [0xcc; 8];
+        assert!(
+            matches!(memory.read(0, &mut bytes), Err(Error::Backend { .. })),
+            "{mode}"
+        );
+        assert_eq!(bytes, [0xcc; 8]);
+        assert!(owner.pins.lock().unwrap().is_empty());
+        assert!(!owner.events.lock().unwrap().contains(&"event-sync"));
+        assert_eq!(
+            owner.events.lock().unwrap().contains(&"stream-sync"),
+            mode == "record"
+        );
+        owner.stream_create_error.store(0, Ordering::Release);
+        owner.event_create_error.store(0, Ordering::Release);
+        owner.record_error.store(0, Ordering::Release);
+        memory.read(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [0x55; 8]);
+        drop(memory);
+        assert!(owner.streams.lock().unwrap().is_empty());
+        assert!(owner.completions.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn cuda_copy_completion_and_destroy_failures_retain_native_owners() {
+    for mode in [
+        "submit-drain",
+        "record-drain",
+        "event-wait",
+        "event-destroy",
+        "stream-destroy",
+    ] {
+        let owner = allocation(&[0x66; 8]);
+        let weak = Arc::downgrade(&owner);
+        let memory = memory(&owner);
+        if mode == "record-drain" {
+            // Leave an older, completed event behind. It must never stand in
+            // for a failed record of the next copy.
+            memory.read(0, &mut [0; 8]).unwrap();
+            owner.events.lock().unwrap().clear();
+        }
+        let pending = matches!(mode, "submit-drain" | "record-drain" | "event-wait");
+        if pending {
+            owner.sync_error.store(700, Ordering::Release);
+        }
+        match mode {
+            "submit-drain" => owner.copy_error.store(1, Ordering::Release),
+            "record-drain" => owner.record_error.store(1, Ordering::Release),
+            "event-wait" => (),
+            "event-destroy" => owner.event_destroy_error.store(1, Ordering::Release),
+            "stream-destroy" => owner.stream_destroy_error.store(1, Ordering::Release),
+            _ => unreachable!(),
+        }
+        let mut bytes = [0xcc; 8];
+        let result = memory.read(0, &mut bytes);
+        if pending {
+            assert!(matches!(result, Err(Error::Unquiesced { .. })), "{mode}");
+            assert_eq!(bytes, [0xcc; 8]);
+            assert!(matches!(
+                memory.read(0, &mut bytes),
+                Err(Error::Unquiesced { .. })
+            ));
+        } else {
+            result.unwrap();
+            assert_eq!(bytes, [0x66; 8]);
+        }
+        drop(memory);
+        assert_eq!(!owner.pins.lock().unwrap().is_empty(), pending, "{mode}");
+        assert!(!owner.streams.lock().unwrap().is_empty(), "{mode}");
+        assert_eq!(
+            owner.completions.lock().unwrap().is_empty(),
+            mode == "stream-destroy"
+        );
+        if pending {
+            let events = owner.events.lock().unwrap();
+            assert!(!events.contains(&"event-destroy"));
+            assert!(!events.contains(&"stream-destroy"));
+        }
+        assert!(STACK.with(|s| s.borrow().is_empty()));
+        drop(owner);
+        assert!(weak.upgrade().is_some(), "{mode}");
     }
 }

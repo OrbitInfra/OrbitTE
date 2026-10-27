@@ -43,7 +43,8 @@ recovery policy and replica placement.
   in-flight byte accounting select paths for bounded request slices. Parent
   completion requires every slice and its source receipt.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
-  Driver API. Current device transfers use synchronized host staging.
+  Driver API. Current device transfers use owned host staging with reusable streams and
+  per-copy completion events.
 
 ## Quick Start
 
@@ -67,13 +68,15 @@ features with the [build guide](docs/build.md), then follow the
 
 ## Project Status
 
-**Host RDMA is implemented; P4 acceptance is pending.** The packaged host API
+**The bounded host-RDMA RoCE profile is independently accepted.** The packaged host API
 passes the declared two-host RoCE concurrency, resource-cleanup, restart,
 engine-replacement and in-flight DMA profiles. Native WR/CQE accounting verifies
 shared QP limits and exact bytes on two physical rails. Installed automatic
 discovery also matches a separately collected PCI, NUMA, port and GID inventory.
-Remaining P4 acceptance requires physical link/device-loss evidence, provider
-teardown, InfiniBand and independent review; see the fixed
+Full P4 acceptance still requires physical link/device-loss evidence, provider
+teardown and InfiniBand. Four fresh independent two-host RoCE repeats pass.
+P5 CUDA work proceeds
+with the available hardware; see the fixed
 [acceptance queue](docs/completion-plan.md#p4-remaining-delivery).
 
 OrbitTE remains under development. GPUDirect RDMA, CUDA IPC/NVLink, optional SSD
