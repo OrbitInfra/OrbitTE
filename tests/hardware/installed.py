@@ -4,6 +4,26 @@ import json
 PROTOCOL = 'orbitte-installed-host-v4'
 
 
+def validate_nodes(profile):
+    nodes = profile.get('nodes', {})
+    cases = profile.get('cases')
+    if not isinstance(nodes, dict) or not isinstance(cases, list) or not cases:
+        raise ValueError('installed host requires a nonempty two-host profile')
+    for case in cases:
+        validate(case)
+        identities = []
+        for role in ('source', 'requester'):
+            node = nodes.get(case[role])
+            if not isinstance(node, dict):
+                raise ValueError('installed host requires inventoried source and requester nodes')
+            identity = tuple(node.get(field) for field in ('hostname', 'boot_id'))
+            if any(not isinstance(value, str) or not value.strip() for value in identity):
+                raise ValueError('installed host requires pinned hostname and boot ID')
+            identities.append(identity)
+        if any(left == right for left, right in zip(*identities)):
+            raise ValueError('installed host requires distinct physical hosts and boot IDs')
+
+
 def validate(case):
     if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'

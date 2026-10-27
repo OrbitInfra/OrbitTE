@@ -477,6 +477,7 @@ def main():
     manifest = {'profile': profile, 'binary_sha256': controller.sha256, 'remote_root': controller.remote, 'started_unix': time.time(), 'status': 'running', 'performance_measurement': False}
     try:
         if profile.get('runner') == 'orbitte-installed-host':
+            installed.validate_nodes(profile)
             if args.installation is None:
                 raise ValueError('installed host requires its frozen installation manifest')
             installation = json.loads(args.installation.read_text())
@@ -492,8 +493,6 @@ def main():
             manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
             if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:
                 raise ValueError('unexpected installed binary protocol')
-            for case in profile['cases']:
-                installed.validate(case)
         elif args.installation is not None:
             raise ValueError('--installation is reserved for the installed-host runner')
         native_test = native_peer_test(profile)
