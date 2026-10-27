@@ -44,6 +44,24 @@ class GpuDirectEvidence(unittest.TestCase):
                                                              native_pid=123, fault_library_sha256='abc'))}
         return profile, case, evidence
 
+    def test_profile_requires_two_pinned_hosts_and_explicit_gpu_direct_scope(self):
+        profile, case, _ = self.evidence()
+        profile.update(nodes={'a': dict(hostname='a', boot_id='boot-a'),
+                              'b': dict(hostname='b', boot_id='boot-b')},
+                       cases=[dict(case, source='a', requester='b', transport='rdma', cuda_memory='direct')])
+        gdr.validate_profile(profile)
+        for changes in [dict(requester='a'), dict(source_kind='cpu', requester_kind='cpu'),
+                        dict(cuda_memory='staged'), dict(transport='tcp')]:
+            candidate = copy.deepcopy(profile)
+            candidate['cases'][0].update(changes)
+            with self.subTest(control=changes), self.assertRaises(ValueError):
+                gdr.validate_profile(candidate)
+        for field, value in [('hostname', 'a'), ('boot_id', 'boot-a'), ('boot_id', '')]:
+            candidate = copy.deepcopy(profile)
+            candidate['nodes']['b'][field] = value
+            with self.subTest(control=field, value=value), self.assertRaises(ValueError):
+                gdr.validate_profile(candidate)
+
     def test_native_gpu_rail_authority_and_lifetime_proofs_cannot_be_omitted(self):
         profile, case, good = self.evidence()
         gdr.verify(profile, case, good)

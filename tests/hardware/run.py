@@ -528,7 +528,7 @@ def main():
         if args.gdr_observer:
             if profile.get('runner') is not None or not all(case.get('cuda_memory') == 'direct' for case in profile['cases']):
                 raise ValueError('GPU observer requires explicit public direct CUDA cases')
-            installed.validate_nodes(profile)
+            gdr.validate_profile(profile)
             controller.fault_library = args.gdr_observer.resolve()
             manifest['gdr_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
         if profile.get('runner') == 'orbitte-installed-host':

@@ -7,6 +7,28 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def validate_profile(profile):
+    nodes, cases = profile.get('nodes'), profile.get('cases')
+    require(isinstance(nodes, dict) and isinstance(cases, list) and cases,
+            'GPU gate requires a nonempty inventoried two-host profile')
+    require(profile.get('runner') is None, 'GPU gate uses the public hardware peer')
+    for case in cases:
+        kinds = [case.get(role + '_kind') for role in ('source', 'requester')]
+        require(case.get('transport') == 'rdma' and case.get('cuda_memory') == 'direct'
+                and all(kind in ('cpu', 'cuda:0') for kind in kinds) and 'cuda:0' in kinds
+                and case.get('source') != case.get('requester'), 'invalid GPU direct gate scope')
+        identities = []
+        for role in ('source', 'requester'):
+            node = nodes.get(case.get(role))
+            require(isinstance(node, dict), 'GPU gate requires both inventoried nodes')
+            identity = tuple(node.get(field) for field in ('hostname', 'boot_id'))
+            require(all(isinstance(value, str) and value.strip() for value in identity),
+                    'GPU gate requires pinned hostname and boot ID')
+            identities.append(identity)
+        require(all(left != right for left, right in zip(*identities)),
+                'GPU gate requires distinct physical hosts and boot IDs')
+
+
 def records(evidence, prefix):
     return [json.loads(line[len(prefix):]) for line in evidence['stdout.log'].splitlines()
             if line.startswith(prefix)]
