@@ -22,6 +22,8 @@ mod gate;
 mod inflight;
 #[path = "rdma_host/interruption.rs"]
 mod interruption;
+#[path = "rdma_host/memory.rs"]
+mod memory;
 #[path = "rdma_host/resources.rs"]
 mod resources;
 #[path = "rdma_host/restart.rs"]
@@ -392,6 +394,7 @@ fn main() -> Result<()> {
         | "installed-lost-completion"
         | "installed-cleanup-failure" => restart::run(&case),
         "installed-inflight-dma" => inflight::run(&case),
+        "installed-memory-cleanup" => memory::run(&case),
         "installed-host" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;

@@ -95,7 +95,8 @@ fn clean(engine: &TransferEngine) -> Result<()> {
             Ok("installed-interruption"
                 | "installed-lost-completion"
                 | "installed-cleanup-failure"
-                | "installed-inflight-dma")
+                | "installed-inflight-dma"
+                | "installed-memory-cleanup")
         ) && rdma.progress_failures != 0)
         || rdma.completion_errors
             > u64::from(env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-inflight-dma"))
@@ -117,7 +118,8 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             Ok("installed-interruption"
                 | "installed-lost-completion"
                 | "installed-cleanup-failure"
-                | "installed-inflight-dma")
+                | "installed-inflight-dma"
+                | "installed-memory-cleanup")
         ) {
             Duration::from_secs(8)
         } else {

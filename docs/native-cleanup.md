@@ -66,7 +66,9 @@ backing release, false drain, wrong fault roles and incomplete child reaping.
 The [installed cleanup fixture](installed-host.md#native-cleanup-failure) now
 exercises the requester QP boundary through the ordinary packaged crate. Its
 [selected two-host cases](qualification.md#installed-two-host-fault-qualification)
-pass on both compiler artifacts. Broader installed teardown failures remain open;
+pass on both compiler artifacts. The [installed MR/MW fixture](installed-host.md#mrmw-cleanup-and-engine-replacement)
+now checks registration and grant ownership through same-process engine
+replacement. Broader installed teardown failures remain open;
 the libtest results above cannot substitute for those installed gates.
 
 ## Native TENT correspondence
@@ -84,6 +86,13 @@ remaining native owners without automatically retrying an ambiguous failure.
 It also preserves unresolved grant loans and quota until a native receipt
 proves cancellation. This gate validates that Rust contract; it does not claim
 identical error policy or native wire compatibility.
+
+TENT's `LocalBufferManager::removeBuffer` removes context-keyed registration
+entries after calling `RdmaContext::unregisterMemReg`; that method reports an
+MR deregistration error after removing its tracking entry. OrbitTE retains the
+failed MR and backing instead. Its per-request Type-2 MW authority and retained
+key/grant charges are deliberate Rust ownership contracts, not features copied
+from TENT's buffer registry.
 
 See [qualification](qualification.md) for executed profiles and
 [P4's remaining gates](completion-plan.md#p4-remaining-delivery) for limits.

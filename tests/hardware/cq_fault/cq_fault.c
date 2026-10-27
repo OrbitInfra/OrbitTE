@@ -25,6 +25,9 @@ struct context {
     struct ibv_context *owner;
     int (*poll)(struct ibv_cq *, int, struct ibv_wc *);
     int (*post)(struct ibv_qp *, struct ibv_send_wr *, struct ibv_send_wr **);
+    int (*dealloc_mw)(struct ibv_mw *);
+    struct ibv_mr *bound_mr;
+    uint32_t data_lkey;
 };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct context contexts[8];
@@ -75,12 +78,36 @@ static unsigned operation(enum ibv_wr_opcode op) {
     return op == IBV_WR_RDMA_READ ? 1 : op == IBV_WR_RDMA_WRITE ? 2 : 0;
 }
 
+static void deny_commands(int descriptor) {
+    unsigned fd = (unsigned)descriptor;
+    struct sock_filter filter[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_write, 1, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ioctl, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, fd, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EIO),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program = {sizeof(filter) / sizeof(filter[0]), filter};
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program)) fail();
+}
+
 #include "inflight.c"
+#include "memory.c"
 
 static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     pthread_mutex_lock(&lock);
     unsigned index = find(qp->context);
     struct context context = contexts[index];
+    if (wr->opcode == IBV_WR_BIND_MW) contexts[index].bound_mr = wr->bind_mw.bind_info.mr;
+    if (operation(wr->opcode) && wr->num_sge == 1) contexts[index].data_lkey = wr->sg_list[0].lkey;
+    if (memory_fault.armed && memory_fault.kind == 2 && wr->opcode == IBV_WR_BIND_MW
+            && qp->context == memory_context && !memory_fault.attempts) {
+        int code = memory_bind(&context, qp, wr, bad);
+        pthread_mutex_unlock(&lock);
+        return code;
+    }
     if (inflight.armed && operation(wr->opcode)) {
         int code = inflight_post(&context, qp, wr, bad);
         pthread_mutex_unlock(&lock);
@@ -154,7 +181,8 @@ static void attach(struct ibv_context *context) {
     unsigned index = 0;
     while (index < 8 && contexts[index].owner) ++index;
     if (index == 8 || !context->ops.poll_cq || !context->ops.post_send) fail();
-    contexts[index] = (struct context){context, context->ops.poll_cq, context->ops.post_send};
+    contexts[index] = (struct context){.owner = context, .poll = context->ops.poll_cq,
+        .post = context->ops.post_send, .dealloc_mw = context->ops.dealloc_mw};
     Dl_info provider = {0};
     if (!dladdr((void *)context->ops.poll_cq, &provider) || !provider.dli_fname) fail();
     char provider_path[4096];
@@ -163,6 +191,7 @@ static void attach(struct ibv_context *context) {
     ++state.contexts;
     context->ops.poll_cq = poll;
     context->ops.post_send = post;
+    if (context->ops.dealloc_mw) context->ops.dealloc_mw = memory_dealloc_mw;
     pthread_mutex_unlock(&lock);
 }
 
@@ -179,12 +208,13 @@ int ibv_close_device(struct ibv_context *context) {
     unsigned index = find(context);
     context->ops.poll_cq = contexts[index].poll;
     context->ops.post_send = contexts[index].post;
+    context->ops.dealloc_mw = contexts[index].dealloc_mw;
     pthread_mutex_unlock(&lock);
     int code = native_close(context);
     pthread_mutex_lock(&lock);
     receipt("\"kind\":\"close_context\",\"context\":%u,\"code\":%d", index, code);
     if (code == 0) { contexts[index] = (struct context){0}; --state.contexts; }
-    else { context->ops.poll_cq = poll; context->ops.post_send = post; ++state.errors; }
+    else { context->ops.poll_cq = poll; context->ops.post_send = post; context->ops.dealloc_mw = memory_dealloc_mw; ++state.errors; }
     pthread_mutex_unlock(&lock);
     return code;
 }
@@ -194,18 +224,7 @@ int ibv_close_device(struct ibv_context *context) {
 struct destruction { struct ibv_qp *qp; int code; };
 static void *deny_destroy(void *argument) {
     struct destruction *call = argument;
-    unsigned fd = (unsigned)call->qp->context->cmd_fd;
-    struct sock_filter filter[] = {
-        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_write, 1, 0),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_ioctl, 0, 3),
-        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[0])),
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, fd, 0, 1),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EIO),
-        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
-    };
-    struct sock_fprog program = {sizeof(filter) / sizeof(filter[0]), filter};
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) || prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program)) fail();
+    deny_commands(call->qp->context->cmd_fd);
     call->code = native_destroy_qp(call->qp);
     return NULL;
 }

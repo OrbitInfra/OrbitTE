@@ -2,8 +2,8 @@
 
 This gate consumes a packaged `orbit-te` crate as a normal Rust dependency.
 It runs the public `TransferEngine` API with the `rdma` feature only. Private
-libtests and CUDA are absent from the installed binary. The explicit lost-completion
-profile adds a separate process-local native qualification library described below.
+libtests and CUDA are absent from the installed binary. The explicit native fault profiles add a separate process-local qualification
+library described below.
 The published alpha on crates.io remains a name reservation; this workflow
 packages the selected source without publishing it.
 
@@ -338,3 +338,43 @@ Both compiler profiles pass the focused
 [declared two-host cases](qualification.md#installed-two-host-fault-qualification).
 These process-local QP faults do not qualify physical link/device loss,
 InfiniBand or throughput.
+
+## MR/MW cleanup and engine replacement
+
+`installed-memory-cleanup` exercises the packaged public API with one parent,
+one QP and one payload slice. Select `cleanup_kind: "mr"` and an explicit
+`fault_role` of `requester` or `source`; `cleanup_kind: "mw"` requires `source`.
+Use one rail (`mask: 1` or `2`), while registering both locked contexts.
+The frozen cases reuse 64 KiB READ/polling and WRITE/events workloads; larger
+payloads and higher concurrency add no new owner contract to this gate.
+
+After three healthy byte/guard rounds, the target fails the real
+`ibv_dereg_mr` or provider `dealloc_mw` call with EIO. A joined helper thread
+filters command writes/ioctls only on that context's uverbs FD; engine workers
+remain unfiltered. The observer selects the actual payload lkey or source
+parent MR, and joins MW cleanup to the accepted BIND's MR/MW/key identity.
+It rejects any destructor retry on the retained object.
+
+Idle MR failure must retain the registration charge and actual backing, with
+zero SQ/RQ debt. MW failure must retain its parent MR borrow, grant, exact DMA
+loan, byte quota and key domain. Repeated public close must not report drain.
+After unregistering and dropping fixture owners, a weak reference to the actual
+allocation must survive. The observer checks unchanged native handle/key fields
+and calls the real PD destructor, which must still return EBUSY. This is a
+native dependency check, not an MR query API or a physical-device-loss test.
+
+Both original processes then create fresh engines at the same service addresses.
+Old source epochs and segments fail before native QP creation. Three more
+complete byte/guard rounds reuse the fresh engines' persistent MRs and QPs;
+the fresh allocations are released, while the old quarantined allocation and
+native dependency remain retained. Process exit and supervisor reaping finally
+release the kernel resources. A successful replacement does not mark the old
+engine drained or recover its quarantined owners.
+
+`rdma_host/memory.rs` owns these public lifecycle assertions;
+`cq_fault/memory.c` owns native observation and scoped syscall failure;
+`installed_memory.py` independently joins both ledgers to supervisor PIDs,
+provider mappings and released locks. CPU controls reject wrong identities,
+missing native errors, retries, early backing/quota release, false drain,
+stale epochs and unreaped children. Hardware results belong in
+[qualification](qualification.md), separately from fixture implementation.
