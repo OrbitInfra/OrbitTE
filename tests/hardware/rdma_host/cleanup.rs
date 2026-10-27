@@ -32,6 +32,7 @@ pub(super) fn create(
         case.length(),
         Permission::RemoteReadWrite,
     )?;
+    resources::inventory(case, &engine)?;
     Ok((engine, registered, weak))
 }
 

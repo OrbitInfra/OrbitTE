@@ -144,6 +144,10 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
         }),
         ..Default::default()
     })?;
+    Ok(engine)
+}
+
+pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
     let topology = engine.topology()?.ok_or("missing topology")?;
     if topology.nic_list.len() != 2
         || topology.nic_list[0].pci_bus_id == topology.nic_list[1].pci_bus_id
@@ -164,7 +168,7 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
                 .ok_or("missing GID type")?
         );
     }
-    Ok(engine)
+    Ok(())
 }
 
 pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, RegisteredMemory)> {
@@ -173,6 +177,7 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
         vec![0; case.length()].into_boxed_slice(),
         Permission::RemoteReadWrite,
     )?;
+    inventory(case, &engine)?;
     Ok((engine, memory))
 }
 
