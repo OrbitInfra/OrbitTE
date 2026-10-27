@@ -32,9 +32,10 @@ connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
 unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
-Periodic monitor reclaim and selected-port recovery are implemented; initial-down
-port retention and automatic GID reselection remain open. The host
-RDMA stage has scoped installed-consumer validation for healthy traffic and
+Periodic monitor reclaim, initially paused contexts and automatic GID reselection
+on recovery are implemented. The new discovery/recovery paths have CPU coverage;
+their focused native gate remains unqualified. The host RDMA stage has scoped
+installed-consumer validation for healthy traffic and
 repeated peer restart while one engine keeps its persistent MRs, including
 process death with a posted completion RQ and loss of actual successful payload
 CQEs. Mid-flight DMA interruption, installed native-cleanup failures, physical
@@ -55,8 +56,9 @@ checkout for the implementation described here.
 - **Persistent RDMA resources.** Context-specific MRs, connected QP reuse,
   per-context CQ lanes and a transport-level worker pool keep resources with
   their physical owners. `num_lanes` aligns workers and CQ parallelism; new
-  slices use worker load while cached QPs retain their CQ lane. Host Direct registration prepares all enabled contexts
-  before exposing a range. Direct peers negotiate a fixed QP width; cold
+  slices use worker load while cached QPs retain their CQ lane. Host Direct
+  registration prepares all usable contexts, including paused ports, before
+  exposing a range. Direct peers negotiate a fixed QP width; cold
   builders reserve slots before native creation and concurrent requests share
   published connections. Peer endpoint arrays, physical QPs and per-slice
   grants have separate owners; data workers bind to allowed NUMA CPU sets and

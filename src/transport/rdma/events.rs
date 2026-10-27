@@ -24,6 +24,17 @@ pub(super) struct State {
 
 impl State {
     pub(super) fn check(&self) -> Result<()> {
+        self.check_device()?;
+        if self.paused() {
+            return Err(Error::Backend {
+                operation: "RDMA route changed",
+                code: libc::ESTALE,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_device(&self) -> Result<()> {
         let asynchronous = self.fault.load(Ordering::Acquire);
         let completion = self.completion_fault.load(Ordering::Acquire);
         if asynchronous >= 0 && completion != 0 {
@@ -33,10 +44,6 @@ impl State {
             });
         }
         match asynchronous {
-            0 if self.paused() => Err(Error::Backend {
-                operation: "RDMA route changed",
-                code: libc::ESTALE,
-            }),
             0 => Ok(()),
             code if code > 0 => Err(Error::Backend {
                 operation: "RDMA asynchronous event",

@@ -29,8 +29,9 @@ authority. Repeated registration of the same range keeps its original
 permission. CPU access coordination is shared across aliases.
 
 For a configured RDMA engine with host Direct policy, host registration prepares
-every enabled context's MR copies before lookup/descriptor visibility and before
-duplicate reference increments commit. A failed batch retires only its newly
+every usable context's MR copies before lookup/descriptor visibility and before
+duplicate reference increments commit. This includes paused ports: their PDs
+retain memory registration, while transfer admission waits for recovery. A failed batch retires only its newly
 created copies. Previously published ranges remain valid; failed native cleanup
 retains unpublished backing and its charges. This can fail at registration time
 when native resources or aggregate MR capacity are unavailable. See the

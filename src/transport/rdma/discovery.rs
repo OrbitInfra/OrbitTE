@@ -25,11 +25,12 @@ impl GidType {
     }
 }
 
-/// One route is frozen in the actual context/PD before any MR or QP is published.
+/// Selected port address and observed link state; publication waits for native drain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RdmaAddress {
     pub device: String,
     pub port: u8,
+    pub active: bool,
     pub gid_index: u8,
     pub gid_type: GidType,
     pub net_device: Option<String>,
@@ -180,53 +181,7 @@ fn discover_at(
             if port == 0 || config.port.is_some_and(|pin| pin != port) {
                 continue;
             }
-            let path = ports_path.join(port.to_string());
-            if !text(&path.join("state")).is_ok_and(|value| value.split(':').next() == Some("4")) {
-                continue;
-            }
-            let link_layer = match text(&path.join("link_layer")).as_deref() {
-                Ok("InfiniBand") => 1,
-                Ok("Ethernet") => 2,
-                _ => continue,
-            };
-            let Ok(gids) = fs::read_dir(path.join("gids")) else {
-                continue;
-            };
-            for gid_index in gids
-                .flatten()
-                .filter_map(|entry| entry.file_name().to_str()?.parse::<u8>().ok())
-            {
-                if config.gid_index.is_some_and(|pin| pin != gid_index) {
-                    continue;
-                }
-                let Ok(gid) = text(&path.join("gids").join(gid_index.to_string())).and_then(|s| {
-                    s.parse::<Ipv6Addr>()
-                        .map_err(|_| Error::Unavailable("malformed RDMA GID"))
-                }) else {
-                    continue;
-                };
-                if gid.is_unspecified() || gid.is_multicast() {
-                    continue;
-                }
-                let Ok((gid_type, net_device, net_device_index)) =
-                    gid_metadata(sys, name, port, gid_index, link_layer)
-                else {
-                    continue;
-                };
-                candidates.push(RdmaAddress {
-                    device: name.clone(),
-                    port,
-                    gid_index,
-                    gid_type,
-                    net_device,
-                    net_device_index,
-                    descriptor: Descriptor {
-                        gid: gid.octets(),
-                        link_layer,
-                        ..Descriptor::default()
-                    },
-                });
-            }
+            candidates.extend(port_addresses(sys, name, port, config.gid_index));
         }
     }
     // A NIC is inventoried only when at least one route satisfies the selectors.
@@ -241,19 +196,10 @@ fn discover_at(
             .find(|nic| nic.name == route.device);
         let local = config.preferred_numa_node.is_some()
             && nic.is_some_and(|nic| nic.numa_node == config.preferred_numa_node);
-        let overlay = route
-            .net_device
-            .as_ref()
-            .is_some_and(|name| sys.join("devices/virtual/net").join(name).exists());
-        let gid = Ipv6Addr::from(route.descriptor.gid);
-        let preferred = matches!(route.gid_type, GidType::Ib | GidType::RoceV2);
-        // IPv4-mapped and real IPv6 RoCEv2 both participate in preferred ranking.
         (
+            !route.active,
             !local,
-            !preferred,
-            route.net_device.is_none(),
-            overlay,
-            gid.is_unicast_link_local(),
+            gid_priority(sys, route),
             route.device.clone(),
             route.port,
             route.gid_index,
@@ -261,10 +207,89 @@ fn discover_at(
     });
     if candidates.is_empty() {
         return Err(Error::Unavailable(
-            "no accessible active RDMA route matches selectors",
+            "no accessible RDMA route matches selectors",
         ));
     }
     Ok((topology, candidates))
+}
+
+fn gid_priority(sys: &Path, route: &RdmaAddress) -> (bool, bool, bool, bool) {
+    let overlay = route
+        .net_device
+        .as_ref()
+        .is_some_and(|name| sys.join("devices/virtual/net").join(name).exists());
+    let preferred = matches!(route.gid_type, GidType::Ib | GidType::RoceV2);
+    (
+        !preferred,
+        route.net_device.is_none(),
+        overlay,
+        Ipv6Addr::from(route.descriptor.gid).is_unicast_link_local(),
+    )
+}
+
+pub(super) fn port_addresses(
+    sys: &Path,
+    device: &str,
+    port: u8,
+    gid_index: Option<u8>,
+) -> Vec<RdmaAddress> {
+    let path = sys
+        .join("class/infiniband")
+        .join(device)
+        .join("ports")
+        .join(port.to_string());
+    let active = match text(&path.join("state"))
+        .ok()
+        .and_then(|value| value.split(':').next()?.trim().parse::<u8>().ok())
+    {
+        Some(state @ 1..=5) => state == 4,
+        _ => return Vec::new(),
+    };
+    let link_layer = match text(&path.join("link_layer")).as_deref() {
+        Ok("InfiniBand") => 1,
+        Ok("Ethernet") => 2,
+        _ => return Vec::new(),
+    };
+    let Ok(gids) = fs::read_dir(path.join("gids")) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for index in gids
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u8>().ok())
+    {
+        if gid_index.is_some_and(|pin| pin != index) {
+            continue;
+        }
+        let Some(gid) = text(&path.join("gids").join(index.to_string()))
+            .ok()
+            .and_then(|value| value.parse::<Ipv6Addr>().ok())
+            .filter(|gid| !gid.is_unspecified() && !gid.is_multicast())
+        else {
+            continue;
+        };
+        let Ok((gid_type, net_device, net_device_index)) =
+            gid_metadata(sys, device, port, index, link_layer)
+        else {
+            continue;
+        };
+        candidates.push(RdmaAddress {
+            device: device.into(),
+            port,
+            active,
+            gid_index: index,
+            gid_type,
+            net_device,
+            net_device_index,
+            descriptor: Descriptor {
+                gid: gid.octets(),
+                link_layer,
+                ..Descriptor::default()
+            },
+        });
+    }
+    candidates.sort_by_key(|route| (gid_priority(sys, route), route.gid_index));
+    candidates
 }
 
 #[cfg(test)]

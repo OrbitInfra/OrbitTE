@@ -206,7 +206,7 @@ impl TransferEngine {
     }
 
     /// Registers owned host bytes, preparing configured host Direct RDMA MRs
-    /// in every enabled context before exposing the range.
+    /// in every usable context, including paused ports, before exposing the range.
     pub fn register_memory(
         &self,
         bytes: Box<[u8]>,
@@ -228,7 +228,7 @@ impl TransferEngine {
     /// Registers an existing host allocation range. Exact duplicate ranges share
     /// a registration reference and retain the first permission, as in TENT.
     /// Overlapping ranges must share the same HostMemory access lock. Configured
-    /// host Direct RDMA prepares all enabled contexts before publication.
+    /// host Direct RDMA prepares usable contexts, including paused ports, before publication.
     pub fn register_host_memory(
         &self,
         allocation: Arc<HostMemory>,

@@ -39,6 +39,7 @@ struct Resources {
     next_grant: u64,
     keys: keys::Keys,
     address: RdmaAddress,
+    gid_index: Option<u8>,
 }
 
 impl Drop for Resources {
@@ -78,6 +79,7 @@ impl RdmaContext {
                 next_grant: 1,
                 keys: keys::Keys::new(config.max_window_key_indices),
                 address,
+                gid_index: config.gid_index,
             }))),
             verbs,
             asynchronous: Arc::default(),
@@ -95,15 +97,24 @@ impl RdmaContext {
             // SAFETY: RdmaContext retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
-                let observed =
-                    unsafe { (verbs.query_address)(&resources.handles, &resources.address) }?;
+                let observed = unsafe {
+                    (verbs.query_address)(
+                        &resources.handles,
+                        &resources.address,
+                        Some(resources.address.gid_index),
+                    )
+                }?;
                 let mut expected = resources.address.clone();
+                expected.active = observed.active;
                 expected.descriptor.lid = observed.descriptor.lid;
                 expected.descriptor.mtu = observed.descriptor.mtu;
                 if observed != expected {
                     return Err(Error::Unavailable(
                         "RDMA discovery route changed during construction",
                     ));
+                }
+                if !observed.active {
+                    owner.asynchronous.fence_route();
                 }
                 resources.address = observed;
                 if let Some(asynchronous) = verbs.asynchronous {
@@ -158,14 +169,32 @@ impl RdmaContext {
             return AddressRefresh::Deferred;
         }
         let generation = self.asynchronous.generation();
-        let observed =
-            unsafe { (self.verbs.query_address)(&resources.handles, &resources.address) };
+        let gid_index = if self.asynchronous.paused() {
+            resources.gid_index
+        } else {
+            Some(resources.address.gid_index)
+        };
+        let observed = unsafe {
+            (self.verbs.query_address)(&resources.handles, &resources.address, gid_index)
+        };
         let Ok(address) = observed else {
             if !self.asynchronous.paused() {
                 self.asynchronous.fence_route();
             }
             return AddressRefresh::Paused;
         };
+        if !address.active
+            || address.device != resources.address.device
+            || address.port != resources.address.port
+            || resources
+                .gid_index
+                .is_some_and(|pin| pin != address.gid_index)
+        {
+            if !self.asynchronous.paused() {
+                self.asynchronous.fence_route();
+            }
+            return AddressRefresh::Paused;
+        }
         if address != resources.address && !self.asynchronous.paused() {
             self.asynchronous.fence_route();
             return AddressRefresh::Paused;
@@ -185,8 +214,13 @@ impl RdmaContext {
 
     fn verify_address(&self, resources: &Resources) -> Result<()> {
         self.asynchronous.check()?;
-        let observed =
-            unsafe { (self.verbs.query_address)(&resources.handles, &resources.address) };
+        let observed = unsafe {
+            (self.verbs.query_address)(
+                &resources.handles,
+                &resources.address,
+                Some(resources.address.gid_index),
+            )
+        };
         if !observed.is_ok_and(|address| address == resources.address) {
             self.asynchronous.fence_route();
         }
@@ -252,7 +286,7 @@ impl RdmaContext {
         let State::Open(resources) = &*state else {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
-        self.asynchronous.check()?;
+        self.asynchronous.check_device()?;
         // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
         check("ibv_reg_mr", unsafe {
             (self.verbs.register_memory)(

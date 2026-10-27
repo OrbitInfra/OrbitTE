@@ -25,9 +25,9 @@ pub enum RdmaProgressMode {
 pub struct RdmaConfig {
     /// None discovers an accessible provider device; Some is a strict pin.
     pub device: Option<String>,
-    /// None discovers an active port; port zero is never valid.
+    /// None prefers active ports but retains valid paused ports; zero is invalid.
     pub port: Option<u8>,
-    /// None ranks valid GIDs; Some(0) explicitly selects GID zero.
+    /// None ranks valid GIDs again on recovery; Some(0) strictly pins GID zero.
     pub gid_index: Option<u8>,
     /// Applied before opening a device. A nonempty whitelist supersedes blacklist.
     pub rdma_whitelist: Vec<String>,
@@ -54,7 +54,7 @@ pub struct RdmaConfig {
     pub max_send_wr: usize,
     /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
     pub max_cqes: usize,
-    /// Aggregate physical MR copies, including every enabled context/capability.
+    /// Aggregate physical MR copies, including usable paused contexts/capabilities.
     /// Published host Direct registrations are pinned until unregister or close.
     pub max_cached_mrs: usize,
     /// Aggregate full-view bytes of every physical MR copy.

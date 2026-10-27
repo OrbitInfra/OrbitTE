@@ -14,6 +14,7 @@ use super::*;
 pub(crate) struct FakeDevice {
     pub(super) mode: String,
     pub(super) route: Mutex<Option<discovery::RdmaAddress>>,
+    pub(super) route_queries: Mutex<Vec<Option<u8>>>,
     pub(super) route_error: std::sync::atomic::AtomicI32,
     asynchronous: Option<(
         Mutex<std::os::unix::net::UnixStream>,
@@ -117,6 +118,7 @@ pub(super) unsafe extern "C" fn open_device(
     let state = Box::into_raw(Box::new(FakeDevice {
         mode,
         route: Mutex::default(),
+        route_queries: Mutex::default(),
         route_error: std::sync::atomic::AtomicI32::new(0),
         asynchronous,
         async_acks: (Mutex::new(0), Condvar::new()),
@@ -1024,6 +1026,7 @@ pub(super) fn discover(
     let address = discovery::RdmaAddress {
         device: name.into(),
         port: config.port.unwrap_or(1),
+        active: !name.contains("initial_down"),
         gid_index: config.gid_index.unwrap_or(0),
         gid_type: discovery::GidType::Ib,
         net_device: None,
@@ -1049,8 +1052,10 @@ pub(super) fn discover(
 unsafe fn query_address(
     handles: *const sys::DeviceHandles,
     address: &discovery::RdmaAddress,
+    gid_index: Option<u8>,
 ) -> Result<discovery::RdmaAddress> {
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    device.route_queries.lock().unwrap().push(gid_index);
     let code = device.route_error.load(Ordering::Acquire);
     if code != 0 {
         return Err(Error::Backend {

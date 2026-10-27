@@ -93,15 +93,13 @@ impl RdmaTransport {
             let mut available = 0;
             for (id, slot) in contexts.slots.iter().enumerate() {
                 if let Some(owner) = &slot.owner {
-                    owner.asynchronous.check()?;
+                    owner.asynchronous.check_device()?;
                     available |= 1u64 << id;
                     devices.push(Arc::clone(owner));
                 }
             }
             if available & self.config.device_mask == 0 {
-                return Err(Error::Unavailable(
-                    "no enabled RDMA context matches device mask",
-                ));
+                return Err(Error::Unavailable("no RDMA context matches device mask"));
             }
             devices
         };

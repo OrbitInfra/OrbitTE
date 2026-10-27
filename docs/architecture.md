@@ -157,9 +157,10 @@ construction reservations. See [qualification](qualification.md) for the tested 
 ## Follow one transfer
 
 1. **Register.** Host Direct publication prepares local-only MRs and separate
-   MW-bind parents in every enabled context before making the range visible.
-   Partial failures roll back only newly created copies. Device masks restrict
-   dispatch, not the set of enabled contexts receiving registration.
+   MW-bind parents in every usable context before making the range visible,
+   including contexts whose selected port is paused. Partial failures roll back
+   only newly created copies. Device masks restrict dispatch, not MR publication;
+   paused contexts cannot supply a transfer path.
 2. **Plan.** The transport partitions large parents with TENT's bounded,
    short-tail-folding geometry. Static `path` metadata checks compatible peers;
    `DeviceSelector` applies device masks, topology ranks and byte charges.
@@ -205,8 +206,15 @@ inspection so a native destructor waiting for event ACK cannot stall its ACK
 consumer. Transport shutdown detaches the weak context registration before
 dropping resource owners; the monitor cannot become their last owner.
 
-`RdmaContext::refresh_address` queries the selected native port/GID tuple.
-Down ports and changed GID/LID/MTU fence admission and wake every old lane.
+Discovery retains a context with valid device/GID metadata even when its port
+starts down. `events::State::check_device` permits persistent MR registration
+on its usable PD; route operations also require `check`, which rejects paused
+ports. Device-fatal or lost-consumer faults still block registration.
+
+`RdmaContext::refresh_address` queries the selected native port/GID tuple while
+healthy. Paused recovery repeats automatic GID selection on that same port;
+explicit device/port/GID pins stay strict. Down ports and changed GID/LID/MTU
+fence admission and wake every old lane.
 PORT_ERR, PORT_ACTIVE, GID_CHANGE and LID_CHANGE apply only to the selected
 port, though all native events are acknowledged. A monotonic route generation
 prevents an older query result from clearing a newer fault. Recovery requires
@@ -226,9 +234,10 @@ consume one explicit CACHE_MISS per array slot before a fresh handshake;
 the original deadline still applies and payload submission has not begun.
 This does not retry an ambiguous data transfer.
 
-Initial down-device discovery, automatic migration to a different GID index,
-link-bandwidth policy and physical fabric/device-loss qualification remain
-outside this delivery. See [the recovery contract](rdma-cuda.md#periodic-monitor-recovery)
+Initially paused context retention and automatic GID reselection have CPU
+coverage; their focused native gate remains unqualified. New-device hotplug,
+link-bandwidth policy and physical fabric/device-loss qualification remain open.
+See [the recovery contract](rdma-cuda.md#initially-paused-contexts-and-gid-reselection)
 and [qualification](qualification.md).
 
 ## Source reading order
@@ -289,7 +298,8 @@ and headers when comparing size: OrbitTE has 38 Rust source files / 11,387
 physical lines in `src/transport/rdma`; TENT has 28 `.cpp`/`.h` files / 11,133
 physical lines across its RDMA source and include directories. Counts include
 comments and blank lines, exclude tests and are not measures of feature parity.
-The current context-method relocation adds one source file, not a new owner.
+The subsequent context-method relocation adds one source file, not a new owner.
+These counts describe the audited commit, before the recovery changes below.
 
 The basic context/MR/endpoint/worker/slice decomposition is present. Per-request
 MW authority, exact source receipts, bilateral epochs and conservative retention
@@ -297,15 +307,17 @@ add work beyond TENT's registered-region path. These are deliberate OrbitTE
 contracts, not automatic requirements of writing Rust. Removing them would
 require a separately reviewed public lifetime/authority change.
 
-Two selected-context behaviors remain missing against the frozen
-[context implementation][context]:
+The audit identified two gaps against the frozen [context implementation][context].
+The current source implements both; the historical finding and current evidence
+remain distinct:
 
-| Behavior | Frozen TENT | OrbitTE at this audit |
-| --- | --- | --- |
-| Initially down port with otherwise valid device/GID | `RdmaContext::enable` retains the context as `DEVICE_PAUSED` | `discovery::discover_at` filters non-active ports before constructing context slots |
-| Automatic GID reselection on port recovery | `RdmaContext::refreshAddress` reruns `getBestGidIndex` when the configuration is automatic | `RdmaContext::refresh_address` calls `query_address` with the existing index only |
+| Behavior | Frozen TENT | OrbitTE at `f2c7e7f` | Current source |
+| --- | --- | --- | --- |
+| Initially down port with otherwise valid device/GID | `RdmaContext::enable` retains the context as `DEVICE_PAUSED` | Discovery filtered non-active ports | Discovery retains a paused context/PD; persistent MR publication includes it, while route admission excludes it |
+| Automatic GID reselection on port recovery | `RdmaContext::refreshAddress` reruns `getBestGidIndex` for automatic configuration | Refresh queried the existing index only | Paused refresh reranks valid GIDs on the selected device/port; explicit pins stay strict; native drain precedes publication |
 
-These are code gaps. Physical-fault, fabric and installed-consumer evidence are
+CPU transitions cover these paths. The focused native recovery test is compiled
+but unqualified. Physical-fault, fabric and installed-consumer evidence remain
 qualification gaps; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
 keeps them separate. Selected-port address refresh, periodic reclaim and
 fixed-width QP reuse already exist. Broader bandwidth/QoS/retry policy remains
@@ -320,7 +332,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | Area | Current OrbitTE | Remaining correspondence |
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
-| Monitor | Unified get/ACK, periodic endpoint/lane reclaim and native selected-port address recovery | Initial-down/automatic-GID gaps are listed above; TENT also refreshes effective link bandwidth. OrbitTE preserves conservative retained-resource quarantine |
+| Monitor | Unified get/ACK, periodic reclaim, initially paused contexts and automatic GID reselection | TENT also refreshes effective link bandwidth. OrbitTE preserves conservative retained-resource quarantine; the new native recovery gate remains unqualified |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
 | Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |

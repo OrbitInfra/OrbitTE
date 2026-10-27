@@ -47,9 +47,11 @@ impl RdmaTransport {
                     Arc::clone(&self.workers.monitor),
                 ) {
                     Ok(owner) => {
-                        owner.address()?.publish(&mut topology)?;
+                        if owner.asynchronous.check().is_ok() {
+                            owner.address()?.publish(&mut topology)?;
+                            available |= 1u64 << id;
+                        }
                         slot.owner = Some(owner);
-                        available |= 1u64 << id;
                         break;
                     }
                     Err(Error::Unquiesced { operation, code }) => {
