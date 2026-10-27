@@ -11,7 +11,7 @@ static int fake_poll(struct ibv_cq *cq, int n, struct ibv_wc *wc) {
 }
 static int fake_post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     (void)qp; (void)bad;
-    if (wr->opcode == IBV_WR_BIND_MW) wr->bind_mw.mw->rkey = wr->bind_mw.rkey;
+    (void)wr; /* Type-2 BIND carries its key in the WR, not the MW object. */
     return 0;
 }
 static int filtered(void) {

@@ -7,6 +7,7 @@ static struct ibv_context *memory_context;
 static struct ibv_mr *memory_mr;
 static struct ibv_mw *memory_mw;
 static uint64_t memory_base;
+static uint32_t memory_bound_key;
 static int (*native_dereg_mr)(struct ibv_mr *);
 static int (*native_dealloc_pd)(struct ibv_pd *);
 
@@ -30,9 +31,9 @@ static int memory_destroy(struct ibv_mr *mr, struct ibv_mw *mw) {
     pthread_t thread;
     if (pthread_create(&thread, NULL, deny_memory_destroy, &call) || pthread_join(thread, NULL)) fail();
     memory_fault.code = call.code;
-    receipt("\"kind\":\"memory_error\",\"resource\":%" PRIu64 ",\"context\":%u,\"mr\":%" PRIu64 ",\"mw\":%" PRIu64 ",\"pd\":%" PRIu64 ",\"lkey\":%" PRIu64 ",\"rkey\":%" PRIu64 ",\"address\":%" PRIu64 ",\"length\":%zu,\"code\":%d,\"attempts\":1,\"syscall_fault\":true",
+    receipt("\"kind\":\"memory_error\",\"resource\":%" PRIu64 ",\"context\":%u,\"mr\":%" PRIu64 ",\"mw\":%" PRIu64 ",\"pd\":%" PRIu64 ",\"lkey\":%" PRIu64 ",\"rkey\":%" PRIu64 ",\"bound_key\":%u,\"address\":%" PRIu64 ",\"length\":%zu,\"code\":%d,\"attempts\":1,\"syscall_fault\":true",
             memory_fault.kind, find(mr->context), memory_fault.mr, memory_fault.mw, memory_fault.pd,
-            memory_fault.lkey, memory_fault.rkey, (uint64_t)(uintptr_t)mr->addr, mr->length, call.code);
+            memory_fault.lkey, memory_fault.rkey, memory_bound_key, (uint64_t)(uintptr_t)mr->addr, mr->length, call.code);
     if (call.code != EIO) fail();
     return call.code;
 }
@@ -71,7 +72,7 @@ static int memory_bind(struct context *context, struct ibv_qp *qp,
                        struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     struct ibv_mr *mr = wr->bind_mw.bind_info.mr;
     if (wr->next || memory_mw || !mr || (uint64_t)(uintptr_t)mr->addr != memory_base) fail();
-    memory_mr = mr; memory_mw = wr->bind_mw.mw;
+    memory_mr = mr; memory_mw = wr->bind_mw.mw; memory_bound_key = wr->bind_mw.rkey;
     int code = context->post(qp, wr, bad);
     receipt("\"kind\":\"memory_bind\",\"context\":%u,\"mr\":%" PRIuPTR ",\"mw\":%" PRIuPTR ",\"qpn\":%u,\"wr_id\":%" PRIu64 ",\"key\":%u,\"code\":%d",
             find(qp->context), (uintptr_t)mr, (uintptr_t)memory_mw, qp->qp_num, wr->wr_id, wr->bind_mw.rkey, code);

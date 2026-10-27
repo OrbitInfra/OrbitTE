@@ -129,5 +129,6 @@ def verify(profile, case, evidence):
             raise ValueError('post-drop native PD no longer owns its dependencies')
         if binds and (not arm['seq'] < binds[0]['seq'] < error['seq']
                       or any(binds[0][k] != error[k] for k in ('context', 'mr', 'mw'))
-                      or binds[0]['code'] != 0 or binds[0]['key'] != error['rkey']):
+                      or binds[0]['code'] != 0 or binds[0]['key'] != error['bound_key']
+                      or binds[0]['key'] >> 8 != error['rkey'] >> 8):
             raise ValueError('MW cleanup does not belong to the actual bound grant')

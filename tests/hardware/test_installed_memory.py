@@ -45,7 +45,7 @@ class InstalledMemoryEvidence(unittest.TestCase):
                 if resource == 2:
                     native += [dict(kind='memory_bind', context=0, mr=101, mw=102, qpn=8, wr_id=9, key=10, code=0)]
                 identity = dict(resource=resource, context=0, mr=101, mw=102 if resource == 2 else 0, pd=103)
-                native += [dict(identity, kind='memory_error', address=1024, length=131264, lkey=7, rkey=10,
+                native += [dict(identity, kind='memory_error', address=1024, length=131264, lkey=7, rkey=9, bound_key=10 if resource == 2 else 0,
                                 code=5, attempts=1, syscall_fault=True),
                            dict(identity, kind='memory_retained', code=16, keys_intact=True),
                            dict(identity, kind='memory_retained', code=16, keys_intact=True)]
