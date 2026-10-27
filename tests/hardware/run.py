@@ -18,6 +18,9 @@ import installed
 
 def restart_plan(case):
     mode = case.get('mode')
+    if mode == 'installed-memory-cleanup':
+        installed.validate(case)
+        return None
     if mode in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         installed.validate(case)
         return case['fault_role'], case['generations']
@@ -133,9 +136,11 @@ class Controller:
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
                           restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
         if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma')
-                and environment['ORBITTE_SHARED_ROLE'] == 'requester'):
+                and environment['ORBITTE_SHARED_ROLE'] == 'requester') or (
+                environment.get('ORBITTE_HOST_MODE') == 'installed-memory-cleanup'
+                and environment['ORBITTE_SHARED_ROLE'] == environment['ORBITTE_CLEANUP_ROLE']):
             if self.fault_library is None:
-                raise ValueError('lost completion requires the pinned native fault library')
+                raise ValueError('native fault requires its pinned observer library')
             environment['LD_PRELOAD'] = self.remote + '/liborbitte_cq_fault.so'
             config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
         local = self.output / (Path(root).name + '.json')
@@ -485,7 +490,7 @@ def main():
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != installed.PROTOCOL):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
-            if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma') for case in profile['cases']):
+            if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') for case in profile['cases']):
                 controller.fault_library = Path(installation['fault_library'])
                 if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
                     raise ValueError('native fault library differs from the packaged artifact')

@@ -25,7 +25,7 @@ def validate_nodes(profile):
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -40,6 +40,12 @@ def validate(case):
         if (case.get('fault_role') not in ('source', 'requester')
                 or type(case.get('generations')) is not int or case['generations'] not in (2, 3)):
             raise ValueError('restart requires an explicit target and two or three generations')
+    elif case['mode'] == 'installed-memory-cleanup':
+        if (case.get('cleanup_kind') not in ('mr', 'mw') or case.get('fault_role') not in ('source', 'requester')
+                or (case['cleanup_kind'] == 'mw' and case['fault_role'] != 'source')
+                or 'generations' in case or case['parents'] != 1 or case['num_lanes'] != 1
+                or case['mask'] not in (1, 2) or case['payload'] > case['block']):
+            raise ValueError('memory cleanup requires one QP and an explicit MR/MW owner')
     elif 'fault_role' in case or 'generations' in case:
         raise ValueError('restart controls require the installed-restart mode')
     if case['mode'] in ('installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure') and case['payload'] > case['block']:
@@ -51,6 +57,8 @@ def validate(case):
     if case['mode'] == 'installed-inflight-dma' and (case['parents'] != 1 or case['num_lanes'] != 1
             or case['mask'] not in (1, 2) or case['payload'] != case['block']):
         raise ValueError('in-flight DMA requires one parent, QP and payload WR')
+    if 'cleanup_kind' in case and case['mode'] != 'installed-memory-cleanup':
+        raise ValueError('memory fault selector escaped its mode')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -75,6 +83,8 @@ def command(profile, case, node, role, root, readiness=None):
     if case['mode'] in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         environment.update(ORBITTE_RESTART_GENERATIONS=str(case['generations']),
                            ORBITTE_RESTART_KILL_ROLE=case['fault_role'])
+    if case['mode'] == 'installed-memory-cleanup':
+        environment.update(ORBITTE_CLEANUP_KIND=case['cleanup_kind'], ORBITTE_CLEANUP_ROLE=case['fault_role'])
     if readiness is not None:
         if len(readiness) != 1:
             raise ValueError('invalid installed host readiness')
@@ -84,6 +94,9 @@ def command(profile, case, node, role, root, readiness=None):
 
 def verify(profile, case, evidence):
     validate(case)
+    if case['mode'] == 'installed-memory-cleanup':
+        from installed_memory import verify as verify_memory
+        return verify_memory(profile, case, evidence)
     if case['mode'] == 'installed-inflight-dma':
         from installed_inflight import verify as verify_inflight
         return verify_inflight(profile, case, evidence)

@@ -69,8 +69,8 @@ features with the [build guide](docs/build.md), then follow the
 
 **Under development.** The host RDMA data path is implemented, with scoped
 native and installed-consumer RoCE validation. The packaged host API passes
-the declared two-host QP cleanup-failure and in-flight DMA cases. P4 remains
-open for the exact hardware and independent-review gates in the
+the declared two-host QP and MR/MW cleanup-failure, engine-replacement and
+in-flight DMA cases. P4 remains open for the exact hardware and independent-review gates in the
 [completion plan](docs/completion-plan.md#p4-remaining-delivery).
 GPUDirect RDMA, CUDA IPC/NVLink, optional SSD transports and full TENT API/wire
 parity remain later work. See [capabilities](docs/capabilities.md) for the current

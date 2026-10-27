@@ -136,6 +136,55 @@ physical link/device loss, broader installed cleanup failures, physical rail
 contention, InfiniBand, GPU/NVLink payloads or performance. Independent acceptance
 and the remaining [P4 gates](completion-plan.md#p4-remaining-delivery) stay open.
 
+### Installed memory cleanup and replacement
+
+The [installed MR/MW gate](installed-host.md#mrmw-cleanup-and-engine-replacement)
+passes **six frozen two-host cases**, three on each compiler artifact built
+from [`1428138`](https://github.com/OrbitInfra/OrbitTE/commit/1428138b83a1ef16b55053d7f83a7c7eefcb80c3).
+Controller source is
+[`b83dbc3`](https://github.com/OrbitInfra/OrbitTE/commit/b83dbc32867cb434e130e8ec3b3b9b4d50fd1d33);
+its runtime and native consumer sources are identical to those packages.
+The two physical hosts and locked mlx5 RoCE devices are the same separately
+inventoried allocation used above. Stable 1.99.1 runs A to B; Rust 1.85 runs
+B to A. These are host-memory tests.
+
+| Native failure | Frozen workload on each artifact | Retained owner after unregister, close and drop |
+| --- | --- | --- |
+| Requester MR | 64 KiB READ, polling, rail mask 1 | One MR and its 131,264-byte backing; no grant or SQ/RQ debt |
+| Source MR | 64 KiB WRITE, events, rail mask 2 | One parent MR, backing and its PD key domain; no grant or SQ/RQ debt |
+| Source MW | 64 KiB WRITE, events, rail mask 2 | One MW/grant, its parent MR, DMA loan, key domain and 65,536-byte direct quota |
+
+Every selected real destructor returns EIO exactly once under an exact-FD,
+thread-local syscall filter. The installed public API reports failed close;
+actual backing survives fixture-owner drop. Native handle/key fields remain
+intact and the real PD destructor returns EBUSY before and after replacement.
+Both original processes recreate engines at the same service addresses,
+reject old epochs before QP creation and finish three recovered byte/guard
+rounds, with fresh allocations released and quarantined old backing retained.
+The distinction between an allocated MW key and its BIND grant key is recorded
+explicitly; the low-byte generation is not assumed identical.
+
+The four existing QP cleanup/in-flight cases also pass with these new packages.
+The shared native observer changed, so those affected regressions were rerun;
+the unrelated healthy/concurrency matrices were not expanded. All native
+children are reaped, original RNIC locks are free, providers remain unchanged,
+and selected PD/CQ/QP/MR/context counts return to their preflight values.
+The 27 controller tests and both packaged-consumer format, Clippy, test and
+install checks pass. Native fault controls additionally check exact owner,
+helper-thread/FD isolation and retry rejection.
+
+Exact package/binary/provider hashes, scenario geometry, identities, receipts
+and cleanup are in
+`/root/orbitte-artifacts/installed-memory-20261027/native-audit.json`.
+The first run was rejected by the supervisor's missing new-mode allowlist
+before starting the requester; that failed run and its released-lock receipts
+are preserved. The corrected supervisor allows only the declared MR/MW role.
+
+This qualifies the declared installed memory-cleanup and engine-replacement
+contracts. Installed CQ/channel/PD dependency cases, physical link/device loss,
+physical rail contention, InfiniBand and independent acceptance remain open.
+It adds no GPU payload, performance or TENT wire/API compatibility claim.
+
 ## Recorded host RDMA evidence
 
 The table links immutable delivery records. Paths below are external artifact
