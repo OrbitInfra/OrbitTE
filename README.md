@@ -70,8 +70,10 @@ features with the [build guide](docs/build.md), then follow the
 **Host RDMA is implemented; P4 acceptance is pending.** The packaged host API
 passes the declared two-host RoCE concurrency, resource-cleanup, restart,
 engine-replacement and in-flight DMA profiles. Native WR/CQE accounting verifies
-shared QP limits and exact bytes on two physical rails. Remaining P4 acceptance
-requires physical link/device-loss evidence, InfiniBand and independent review; see the fixed
+shared QP limits and exact bytes on two physical rails. Installed automatic
+discovery also matches a separately collected PCI, NUMA, port and GID inventory.
+Remaining P4 acceptance requires physical link/device-loss evidence, provider
+teardown, InfiniBand and independent review; see the fixed
 [acceptance queue](docs/completion-plan.md#p4-remaining-delivery).
 
 OrbitTE remains under development. GPUDirect RDMA, CUDA IPC/NVLink, optional SSD

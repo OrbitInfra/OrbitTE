@@ -78,6 +78,7 @@ class Controller:
         self.started = []
         self.connections = []
         self.fault_library = None
+        self.inventory_tool = None
 
     def command(self, command, *, allow_failure=False):
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
@@ -103,13 +104,15 @@ class Controller:
         self.ssh(node, ['mkdir', '-m', '700', '-p', self.remote])
         if self.fault_library is not None:
             self.copy(node, self.fault_library, self.remote + '/liborbitte_cq_fault.so')
+        if self.inventory_tool is not None:
+            self.copy(node, self.inventory_tool, self.remote + '/discovery_inventory.py')
         self.copy(node, self.binary, self.remote + '/hardware_peer')
         self.copy(node, Path(__file__).with_name('supervise.py'), self.remote + '/supervise.py')
         self.ssh(node, ['chmod', '700', self.remote + '/hardware_peer'])
         self.ssh(node, ['ldd', self.remote + '/hardware_peer'])
 
     def collect(self, node, root):
-        names = ['running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
+        names = ['inventory-before.json', 'inventory-after.json', 'running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
         names += ['cq-fault-' + str(g) + '.jsonl' for g in range(3)]
         names += ['maps-' + str(g) + '.txt' for g in range(3)]
         names += ['restart-' + kind + '-' + str(g) + '.txt'
@@ -130,6 +133,10 @@ class Controller:
             locks.append(target['gpu_lock'])
             environment['CUDA_VISIBLE_DEVICES'] = target['gpu_uuid']
         config = {'hostname': target['hostname'], 'boot_id': target['boot_id'], 'binary_sha256': self.sha256, 'arguments': arguments, 'locks': locks, 'env': environment, 'timeout_seconds': 55}
+        if environment.get('ORBITTE_HOST_DISCOVERY') == 'auto':
+            if self.inventory_tool is None:
+                raise ValueError('automatic discovery requires its packaged inventory tool')
+            config['inventory_tool_sha256'] = hashlib.sha256(self.inventory_tool.read_bytes()).hexdigest()
         if 'ORBITTE_RESTART_GENERATIONS' in environment:
             config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
@@ -494,6 +501,10 @@ def main():
                 controller.fault_library = Path(installation['fault_library'])
                 if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
                     raise ValueError('native fault library differs from the packaged artifact')
+            if any(case.get('discovery') == 'auto' for case in profile['cases']):
+                controller.inventory_tool = Path(installation['inventory_tool'])
+                if hashlib.sha256(controller.inventory_tool.read_bytes()).hexdigest() != installation['inventory_tool_sha256']:
+                    raise ValueError('discovery inventory differs from the packaged artifact')
             manifest['installation'] = installation
             manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
             if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:

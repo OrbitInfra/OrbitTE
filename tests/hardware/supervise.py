@@ -37,6 +37,7 @@ def supervise(config_path):
     result = {'hostname': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'started_unix': time.time(), 'supervisor_pid': os.getpid()}
     locks = []
     process = None
+    inventory_command = None
     try:
         if result['hostname'] != config['hostname'] or result['boot_id'] != config['boot_id']:
             raise RuntimeError('host/boot identity changed')
@@ -52,6 +53,16 @@ def supervise(config_path):
         # Protect direct peer connections from process-wide HTTP proxy settings.
         for name in ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
             environment.pop(name, None)
+        if environment.get('ORBITTE_HOST_DISCOVERY') == 'auto':
+            inventory = root.parent / 'discovery_inventory.py'
+            expected = config.get('inventory_tool_sha256')
+            if (not expected or hashlib.sha256(inventory.read_bytes()).hexdigest() != expected
+                    or environment.get('ORBITTE_HOST_MODE') != 'installed-rail-accounting'):
+                raise ValueError('discovery inventory scope or immutable hash mismatch')
+            inventory_command = [sys.executable, str(inventory), *environment['ORBITTE_SHARED_RAILS'].split(',')]
+            observed = json.loads(subprocess.check_output(inventory_command, text=True, timeout=10))
+            write(root / 'inventory-before.json', observed)
+            result['inventory_tool_sha256'] = expected
         restart = config.get('restart_role')
         if restart is not None and restart not in ('source', 'requester'):
             raise ValueError('restart_role must name the configured native peer')
@@ -141,6 +152,12 @@ def supervise(config_path):
             while process.poll() is None:
                 time.sleep(1)
             result['exit_code'] = process.wait()
+        if inventory_command is not None:
+            try:
+                observed = json.loads(subprocess.check_output(inventory_command, text=True, timeout=10))
+                write(root / 'inventory-after.json', observed)
+            except Exception as error:
+                result.update(status='failed', inventory_error=str(error))
         result['child_reaped'] = True
         result['finished_unix'] = time.time()
         for lock in locks:

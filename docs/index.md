@@ -44,7 +44,9 @@ name; the source implementation remains under development.
 
 The host RDMA implementation and declared installed cleanup fixtures are complete.
 [Physical rail accounting](qualification.md#installed-physical-rail-accounting)
-now verifies concurrent parents, shared QP limits and exact native payload bytes.
+verifies concurrent parents, shared QP limits and exact native payload bytes.
+[Automatic discovery](qualification.md#installed-automatic-discovery) now passes
+two-host READ/WRITE against a separately captured PCI, NUMA and route inventory.
 The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
 fabric and independent-review acceptance before OrbitKV integration.
 [Capabilities](capabilities.md) distinguishes current paths from later work,

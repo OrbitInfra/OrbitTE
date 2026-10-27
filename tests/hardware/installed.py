@@ -65,6 +65,8 @@ def validate(case):
         raise ValueError('native fault selector escaped its mode')
     if case['mode'] == 'installed-rail-accounting' and (case['parents'], case['payload'], case['block'], case['num_lanes'], case['mask']) != (16, (4 << 20) + 1, 1 << 20, 1, 3):
         raise ValueError('rail accounting requires the frozen folded-tail profile')
+    if 'discovery' in case and (case['discovery'] != 'auto' or case['mode'] != 'installed-rail-accounting'):
+        raise ValueError('automatic discovery requires the installed physical rail profile')
     if case['parents'] * (2 * case['payload'] + 3 * 64) > 256 << 20:
         raise ValueError('installed host backing exceeds 256 MiB')
 
@@ -93,6 +95,9 @@ def command(profile, case, node, role, root, readiness=None):
         environment['ORBITTE_CLEANUP_KIND'] = case.get('cleanup_kind', 'qp')
     if case['mode'] == 'installed-memory-cleanup':
         environment.update(ORBITTE_CLEANUP_KIND=case['cleanup_kind'], ORBITTE_CLEANUP_ROLE=case['fault_role'])
+    if case.get('discovery') == 'auto':
+        environment['ORBITTE_HOST_DISCOVERY'] = 'auto'
+        environment.pop('ORBITTE_SHARED_GID')
     if readiness is not None:
         if len(readiness) != 1:
             raise ValueError('invalid installed host readiness')
@@ -156,3 +161,7 @@ def verify(profile, case, evidence):
     if case['mode'] == 'installed-rail-accounting':
         from installed_accounting import verify as verify_accounting
         verify_accounting(profile, case, evidence)
+
+    if case.get('discovery') == 'auto':
+        from installed_discovery import verify as verify_discovery
+        verify_discovery(profile, case, evidence)
