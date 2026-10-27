@@ -94,9 +94,11 @@ fn clean(engine: &TransferEngine) -> Result<()> {
             env::var("ORBITTE_HOST_MODE").as_deref(),
             Ok("installed-interruption"
                 | "installed-lost-completion"
-                | "installed-cleanup-failure")
+                | "installed-cleanup-failure"
+                | "installed-inflight-dma")
         ) && rdma.progress_failures != 0)
-        || rdma.completion_errors != 0
+        || rdma.completion_errors
+            > u64::from(env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-inflight-dma"))
     {
         return Err(format!("close retained resources: {stats:?}").into());
     }
@@ -114,7 +116,8 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             env::var("ORBITTE_HOST_MODE").as_deref(),
             Ok("installed-interruption"
                 | "installed-lost-completion"
-                | "installed-cleanup-failure")
+                | "installed-cleanup-failure"
+                | "installed-inflight-dma")
         ) {
             Duration::from_secs(8)
         } else {

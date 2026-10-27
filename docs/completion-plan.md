@@ -371,7 +371,7 @@ TENT owners and deliberate differences.
 | Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
 | 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Independent review remains open; this observed-state override does not qualify physical link loss. |
-| 2 | Close the declared installed RoCE fault profile | **Gate implementation and qualification open:** the installed runner covers healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs. The packaged requester QP cleanup-failure fixture is implemented and passes the focused single-host diagnostic; its declared two-host profile remains unqualified. Actual in-flight DMA interruption still needs a fixture; broader native cleanup, physical link/device loss and provider teardown evidence remain open. Freeze each scenario, native proof and negative control before adding its fixture. Keep the qualified cases as regressions. |
+| 2 | Close the declared installed RoCE fault profile | **Gate implementation and qualification open:** the installed runner covers healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs. The packaged requester QP cleanup-failure fixture is implemented and passes the focused single-host diagnostic; its declared two-host profile remains unqualified. The actual in-flight DMA fixture is implemented with exact error-WC/QP-destruction joins and post-drain partial-byte proof; its native profile remains unqualified; broader native cleanup, physical link/device loss and provider teardown evidence remain open. Freeze each scenario, native proof and negative control before adding its fixture. Keep the qualified cases as regressions. |
 | 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
 The first row closes the two source gaps found in the frozen-source audit.
@@ -693,8 +693,8 @@ and independent acceptance remain separate states.
 
 The two discovery/recovery source gaps are implemented in `9e1fdea`
 (PR #57), and the focused native gate now passes on both toolchains.
-Qualify the installed requester QP cleanup-failure fixture and implement the
-missing actual in-flight DMA fixture in the second row of
+Qualify the installed requester QP cleanup-failure and actual in-flight DMA
+fixtures in the second row of
 [P4 remaining delivery](#p4-remaining-delivery), followed by the declared
 physical/fabric gates and independent review. Do not reopen completed
 source work or repeat unaffected matrices.
