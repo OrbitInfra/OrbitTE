@@ -92,7 +92,9 @@ fn clean(engine: &TransferEngine) -> Result<()> {
         || rdma.progress_failures != rdma.progress_recoveries
         || (!matches!(
             env::var("ORBITTE_HOST_MODE").as_deref(),
-            Ok("installed-interruption" | "installed-lost-completion")
+            Ok("installed-interruption"
+                | "installed-lost-completion"
+                | "installed-cleanup-failure")
         ) && rdma.progress_failures != 0)
         || rdma.completion_errors != 0
     {
@@ -101,7 +103,7 @@ fn clean(engine: &TransferEngine) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, RegisteredMemory)> {
+pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
     let engine = TransferEngine::new(EngineConfig {
         bind_addr: bind,
         max_registered_bytes: case.length(),
@@ -110,7 +112,9 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
         handler_threads: case.parents + 2,
         handler_timeout: if matches!(
             env::var("ORBITTE_HOST_MODE").as_deref(),
-            Ok("installed-interruption" | "installed-lost-completion")
+            Ok("installed-interruption"
+                | "installed-lost-completion"
+                | "installed-cleanup-failure")
         ) {
             Duration::from_secs(8)
         } else {
@@ -140,10 +144,10 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
         }),
         ..Default::default()
     })?;
-    let memory = engine.register_memory(
-        vec![0; case.length()].into_boxed_slice(),
-        Permission::RemoteReadWrite,
-    )?;
+    Ok(engine)
+}
+
+pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {
     let topology = engine.topology()?.ok_or("missing topology")?;
     if topology.nic_list.len() != 2
         || topology.nic_list[0].pci_bus_id == topology.nic_list[1].pci_bus_id
@@ -164,6 +168,16 @@ pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, R
                 .ok_or("missing GID type")?
         );
     }
+    Ok(())
+}
+
+pub(super) fn create(case: &Case, bind: SocketAddr) -> Result<(TransferEngine, RegisteredMemory)> {
+    let engine = engine(case, bind)?;
+    let memory = engine.register_memory(
+        vec![0; case.length()].into_boxed_slice(),
+        Permission::RemoteReadWrite,
+    )?;
+    inventory(case, &engine)?;
     Ok((engine, memory))
 }
 

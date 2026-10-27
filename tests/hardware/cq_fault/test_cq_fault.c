@@ -1,6 +1,7 @@
 /* Local callback controls only. Native receipts require the two-host gate. */
 #include "cq_fault.c"
 #include <assert.h>
+#include <sys/ioctl.h>
 
 static int posts, polls, poll_code;
 static struct ibv_wc completions[3];
@@ -16,6 +17,15 @@ static int fake_poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
     assert(capacity >= 3);
     if (poll_code > 0) memcpy(wc, completions, (size_t)poll_code * sizeof(*wc));
     return poll_code;
+}
+
+static int other_fd, destroy_calls;
+static int syscall_destroy(struct ibv_qp *qp) {
+    ++destroy_calls;
+    assert(write(other_fd, "x", 1) == 1);
+    assert(ioctl(qp->context->cmd_fd, 0, NULL) == -1 && errno == EIO);
+    assert(write(qp->context->cmd_fd, "x", 1) == -1 && errno == EIO);
+    return errno;
 }
 
 int main(void) {
@@ -51,6 +61,22 @@ int main(void) {
     assert(context[0].ops.poll_cq(&cq, 3, received) == 3 && received[1].wr_id == 9);
     assert(orbitte_cq_fault(1, 1, 1, 1, &output) == 0 && output.posts == 0 && output.lost == 0);
     assert(context[0].ops.poll_cq(&cq, 3, received) == 3);
+    struct cleanup_snapshot cleanup_output;
+    assert(sizeof(cleanup_output) == 56);
+    assert(orbitte_cleanup_fault(1, &cleanup_output) == EINVAL);
+    assert(orbitte_cleanup_fault(2, &cleanup_output) == EINVAL);
+    int blocked[2], other[2];
+    assert(pipe(blocked) == 0 && pipe(other) == 0);
+    context[0].cmd_fd = blocked[1];
+    other_fd = other[1];
+    native_destroy_qp = syscall_destroy;
+    struct destruction call = {&qp, 0};
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, deny_destroy, &call) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(call.code == EIO && destroy_calls == 1);
+    assert(write(blocked[1], "x", 1) == 1); /* caller is not filtered */
+    for (int i = 0; i < 2; ++i) { close(blocked[i]); close(other[i]); }
     puts("CQ fault controls passed: native callbacks once, selective loss, errors/pass-through, generation fences");
     return 0;
 }

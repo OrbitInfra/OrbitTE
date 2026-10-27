@@ -63,6 +63,11 @@ before opening QPs, transfer two complete byte/guard rounds and drain. The
 controller independently rejects missing native receipts, retries, early
 backing release, false drain, wrong fault roles and incomplete child reaping.
 
+The [installed cleanup fixture](installed-host.md#native-cleanup-failure) now
+exercises the requester QP boundary through the ordinary packaged crate. Its focused
+single-host diagnostic passes, while two-host qualification remains open; the
+libtest results above cannot substitute for that installed gate.
+
 ## Native TENT correspondence
 
 The frozen reference is Mooncake TENT

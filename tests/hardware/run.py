@@ -18,7 +18,7 @@ import installed
 
 def restart_plan(case):
     mode = case.get('mode')
-    if mode in ('installed-restart', 'installed-interruption', 'installed-lost-completion'):
+    if mode in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'):
         installed.validate(case)
         return case['fault_role'], case['generations']
     if mode in ('large-cq-busy', 'large-pd-busy', 'large-qp-cleanup-error', 'large-channel-busy'):
@@ -131,8 +131,8 @@ class Controller:
             config.update(restart_role=environment['ORBITTE_SHARED_ROLE'],
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
-                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion'))
-        if (environment.get('ORBITTE_HOST_MODE') == 'installed-lost-completion'
+                          restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
+        if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure')
                 and environment['ORBITTE_SHARED_ROLE'] == 'requester'):
             if self.fault_library is None:
                 raise ValueError('lost completion requires the pinned native fault library')
@@ -432,7 +432,7 @@ class Controller:
                 running = json.loads(evidence['source']['running.json'] or '{}')
                 ready = [line.split()[1] for line in (evidence['source']['stdout.log'] or '').splitlines()
                          if line.startswith('ORBITTE_READY ')]
-                generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption', 'installed-lost-completion')
+                generation = (len(ready) - 1 if case.get('mode') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure')
                               else running.get('generation'))
                 if (type(generation) is int and 0 < generation < restart[1]
                         and generation not in forwarded and len(ready) > generation):
@@ -484,7 +484,7 @@ def main():
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != installed.PROTOCOL):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
-            if any(case.get('mode') == 'installed-lost-completion' for case in profile['cases']):
+            if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure') for case in profile['cases']):
                 controller.fault_library = Path(installation['fault_library'])
                 if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
                     raise ValueError('native fault library differs from the packaged artifact')

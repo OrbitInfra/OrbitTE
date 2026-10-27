@@ -5,6 +5,7 @@ from installed_restart import records
 
 
 def verify(case, evidence):
+    cleanup = case.get('mode') == 'installed-cleanup-failure'
     requester = evidence['requester']
     source = evidence['source']
     target = case['fault_role'] == 'requester'
@@ -41,8 +42,10 @@ def verify(case, evidence):
                 if len(active) != 2:
                     raise ValueError('fault did not arm on two live native contexts')
             elif kind in ('post', 'lost', 'destroy_qp'):
-                if row['context'] not in active or (kind == 'destroy_qp' and row['code'] != 0):
+                if row['context'] not in active or (kind == 'destroy_qp' and row['code'] not in ((0, 5) if cleanup and generation == 0 else (0,))):
                     raise ValueError('native operation escaped its context or failed cleanup')
+            elif cleanup and generation == 0 and kind in ('arm_cleanup', 'cleanup_error', 'query_cleanup'):
+                pass
             elif kind != 'disarm':
                 raise ValueError('unknown native receipt')
         if process['exit_code'] == 0 and active:
@@ -105,3 +108,7 @@ def verify(case, evidence):
         raise ValueError('unexpected native fault phase')
     if sum(r['kind'] in ('post', 'lost') for rows in logs for r in rows) != 2 * count * len(phases):
         raise ValueError('payload receipts escaped the declared fault windows')
+
+    if cleanup:
+        from installed_cleanup import verify as verify_cleanup
+        verify_cleanup(case, evidence, logs)

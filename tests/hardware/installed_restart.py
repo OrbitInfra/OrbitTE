@@ -10,8 +10,8 @@ def records(record, prefix):
 
 
 def verify(profile, case, evidence):
-    lost = case['mode'] == 'installed-lost-completion'
-    interrupted = case['mode'] in ('installed-interruption', 'installed-lost-completion')
+    lost = case['mode'] in ('installed-lost-completion', 'installed-cleanup-failure')
+    interrupted = case['mode'] in ('installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure')
     count, killed = case['generations'], case['fault_role']
     peer_phases = {}
     for role in ('source', 'requester'):
@@ -95,7 +95,7 @@ def verify(profile, case, evidence):
         for phase, row in enumerate(kills):
             if (row['phase'] != phase or row['pid'] != phases[phase]['native_pid']
                     or not 1 <= row['cached_qps'] <= 2 * case['num_lanes']
-                    or row['persistent_mrs'] != 4 or row['sq_debt'] != (case['parents'] if lost and role == 'requester' else 0) or row['rq_debt'] != (case['parents'] if interrupted and role == 'source' else 0)
+                    or (row['persistent_mrs'] < 1 if case['mode'] == 'installed-cleanup-failure' else row['persistent_mrs'] != 4) or row['sq_debt'] != (case['parents'] if lost and role == 'requester' else 0) or row['rq_debt'] != (case['parents'] if interrupted and role == 'source' else 0)
                     or row['orderly_close'] is not False):
                 raise ValueError('kill point did not retain idle native resources')
         exits = records(record, 'ORBITTE_INSTALLED_PEER_EXIT ')

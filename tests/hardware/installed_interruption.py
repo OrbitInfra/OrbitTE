@@ -4,7 +4,7 @@ from installed_restart import records
 
 def verify(case, evidence):
     count = case['parents']
-    lost = case['mode'] == 'installed-lost-completion'
+    lost = case['mode'] in ('installed-lost-completion', 'installed-cleanup-failure')
     for role in ('source', 'requester'):
         source = role == 'source'
         target = role == case['fault_role']

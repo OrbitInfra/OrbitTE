@@ -117,6 +117,11 @@ fn terminate(engine: &TransferEngine, phase: usize, state: &str, pending: bool) 
         stats.receive_work_requests
     );
     std::io::stdout().flush()?;
+    request_kill(phase, state)
+}
+
+pub(super) fn request_kill(phase: usize, state: &str) -> Result<()> {
+    std::io::stdout().flush()?;
     let marker = file("request", phase)?;
     let temporary = marker.with_extension("tmp");
     std::fs::write(&temporary, format!("{state} {phase}\n"))?;
@@ -128,7 +133,10 @@ fn terminate(engine: &TransferEngine, phase: usize, state: &str, pending: bool) 
 
 pub(super) fn run(case: &Case) -> Result<()> {
     let mode = env::var("ORBITTE_HOST_MODE")?;
-    let lost_completion = mode == "installed-lost-completion";
+    let lost_completion = matches!(
+        mode.as_str(),
+        "installed-lost-completion" | "installed-cleanup-failure"
+    );
     let interrupted = mode == "installed-interruption" || lost_completion;
     if interrupted && case.payload > case.block {
         return Err("interruption relay requires one slice per parent".into());
@@ -155,7 +163,23 @@ pub(super) fn run(case: &Case) -> Result<()> {
             .ok_or("missing original service address")?
             .parse()?
     };
-    let (engine, memory) = create(case, bind)?;
+    let cleanup_failure = mode == "installed-cleanup-failure";
+    if cleanup_failure
+        && (killed_source
+            || generations != 2
+            || case.parents != 1
+            || case.lanes != 1
+            || !matches!(case.mask, 1 | 2))
+    {
+        return Err("cleanup failure requires one requester QP and two generations".into());
+    }
+    let (engine, memory, backing) = if cleanup_failure && target && generation == 0 {
+        let (engine, memory, backing) = cleanup::create(case, bind)?;
+        (engine, memory, Some(backing))
+    } else {
+        let (engine, memory) = create(case, bind)?;
+        (engine, memory, None)
+    };
     let engine = Arc::new(engine);
     let gate = if interrupted && !lost_completion && case.source {
         let gate_bind = if generation == 0 {
@@ -263,7 +287,23 @@ pub(super) fn run(case: &Case) -> Result<()> {
             } else {
                 Vec::new()
             };
+            let cleanup = if cleanup_failure && target {
+                Some(cleanup::CleanupFault::arm()?)
+            } else {
+                None
+            };
             barrier(&mut stream, "kill-ready")?;
+            if let Some(fault) = cleanup {
+                return cleanup::retain(
+                    case,
+                    engine,
+                    memory,
+                    pending,
+                    backing.ok_or("missing backing witness")?,
+                    fault,
+                    &state,
+                );
+            }
             if target {
                 // Keep public batch handles and all native owners alive until SIGKILL.
                 let outcome = terminate(&engine, phase, &state, interrupted);
