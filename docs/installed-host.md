@@ -268,7 +268,9 @@ The public batch must fail with `Unquiesced` and `locally_drained = false`;
 inflight-byte charges remain held. Unregister removes lookup ownership, while
 two close attempts cannot report drain or retry native destruction. After all
 fixture-owned strong handles drop, an external allocation's weak owner and a
-real QP query must still prove retained backing and the same ERR QP. Separate
+real QP query must still prove retained backing and the same native QP.
+Closing fences software admission before calling the destructor; it does not
+require a preceding transition to ERR. Record the actual queried state. Separate
 native receipts join the submitted WR, one destructor failure and both QP
 queries to the public ownership proof. The supervisor then reaps that exact
 process; its replacement runs the existing stale-authority and healthy-transfer

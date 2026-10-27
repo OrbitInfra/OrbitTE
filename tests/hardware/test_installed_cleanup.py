@@ -33,8 +33,8 @@ def fixture():
         ('arm_cleanup', dict(qpn=20)),
         ('destroy_qp', dict(**identity, code=5)),
         ('cleanup_error', dict(**identity, code=5, attempts=1, syscall_fault=True)),
-        ('query_cleanup', dict(qpn=20, code=0, state=6)),
-        ('query_cleanup', dict(qpn=20, code=0, state=6)),
+        ('query_cleanup', dict(qpn=20, code=0, state=3)),
+        ('query_cleanup', dict(qpn=20, code=0, state=3)),
     ]:
         rows.append(dict(seq=len(rows) + 1, pid=200, phase=0, kind=kind, **fields))
     proof = dict(phase=0, pid=200, qpn=20, sequence=len(rows), attempts=1, code=5,
@@ -58,7 +58,7 @@ class InstalledCleanupEvidence(unittest.TestCase):
             ('arm_cleanup', 'qpn', 999), ('destroy_qp', 'code', 0),
             ('cleanup_error', 'attempts', 2), ('cleanup_error', 'syscall_fault', False),
             ('cleanup_error', 'cq', 999), ('query_cleanup', 'qpn', 999),
-            ('query_cleanup', 'code', 5), ('query_cleanup', 'state', 3),
+            ('query_cleanup', 'code', 5), ('query_cleanup', 'state', 99),
         ]:
             broken = copy.deepcopy(evidence)
             rows = [json.loads(line) for line in broken['requester']['cq-fault-0.jsonl'].splitlines()]

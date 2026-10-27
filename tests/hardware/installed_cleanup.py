@@ -26,9 +26,9 @@ def verify(case, evidence, logs):
         if any(row[k] != post[k] for k in ('context', 'cq', 'qpn')) or row['code'] != 5:
             raise ValueError('native EIO did not belong to the payload QP')
     if (error['attempts'] != 1 or error['syscall_fault'] is not True
-            or any(r['code'] != 0 or r['state'] != 6 for r in queries)):
-        raise ValueError('cleanup must fail once and retain a real ERR QP')
-    # IBV_QPS_ERR is 6; a query receipt must prove the native handle still exists.
+            or any(r['code'] != 0 or type(r['state']) is not int or not 0 <= r['state'] <= 6 for r in queries)):
+        raise ValueError('cleanup must fail once and retain a queryable native QP')
+    # close fences admission and calls destroy directly; ERR is not a prerequisite.
     expected = dict(attempts=1, code=5, retained_grants=1, retained_endpoints=1,
                     sq_debt=1, direct_bytes=case['payload'], inflight_bytes=case['payload'], batches=1,
                     unregistered=True, backing_retained=True, post_drop_native_query=True,
