@@ -29,7 +29,7 @@ contracts.
 | Periodic RDMA port recovery | Implemented | One-second native queries detect missed events, drain stale QP/CQ owners and resume the selected port/GID without replacing PDs/MRs; retained cleanup failures and lost event consumers remain fenced; physical port/device loss is unqualified |
 | Live-process RDMA recovery | Scoped tests | Two QP ERR/reconnect cycles preserve engine/PD/MR identity; failed MR/MW owners stay quarantined while same-process fresh engines use new epochs/PDs and reject old authority |
 | MR/MW command failures | Scoped tests | Thread-local uverbs syscall injection produces actual EIO from libibverbs; backing/MW loans survive repeated close and observer-free Drop; spontaneous hardware failures and in-place healing remain unqualified |
-| Device/port/GID discovery | Implemented | CPU and scoped native evidence; complete independent native repeat remains open |
+| Device/port/GID discovery | Active-route path implemented | Initial-down context retention and automatic GID reselection on recovery are missing; independent native repeat remains open |
 | Multiple contexts and request-level rail selection | Implemented | CPU dispatch controls and scoped two-physical-RNIC native masks/routing; broader topology and fabric qualification remains open |
 | NVIDIA device/pinned-host allocation and synchronized staging | Implemented | Declared CUDA and host-staging profiles only |
 | Single-request cross-rail slicing | Implemented | CPU controls and scoped two-RNIC host Direct READ/WRITE, reuse, either-rail CQ/partial-post faults and drain; broader physical faults remain open |

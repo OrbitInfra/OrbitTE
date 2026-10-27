@@ -495,6 +495,7 @@ impl Drop for RdmaTransport {
 }
 
 pub(super) mod connections;
+mod contexts;
 mod handshake;
 
 #[cfg(test)]

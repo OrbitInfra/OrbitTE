@@ -19,24 +19,12 @@ Do not replace or duplicate that project's state, storage or adapter roadmap her
 ## Starting point and delivery states
 
 `orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-tree implements the P1.1-P1.4/P2.1/P2.2 CPU substages described in
-[the CPU TCP contract](cpu-tcp.md), plus P4.3 direct host RDMA, P4.4 slice
-progress, P4.5 local MR reuse, P4.6 shared CQ/progress, P4.7a/P4.7b source
-authority/key domains, P4.7c transport/owner separation, P4.7d source receive/WR
-identities, P4.7e persistent source host MRs, P4.7f host Direct connected reuse, P4.8 host/RNIC discovery, P4.9 optional CQ event progress and P4.1/P5.1 RDMA/CUDA staging
-paths. P4.12c adds eager multi-context publication and cross-rail slice ownership.
-P4.12d validates the declared two-RNIC host Direct profile and native fault/drain owners.
-P4.12e adds aggregate CQ quota wakeups and scoped concurrent-parent validation.
-P4.12f adds atomic whole-parent source RQ admission on wire v12 and scoped
-four-parent/three-slice native qualification. P4.12g extends the native fixture
-to eight parents, MiB requests, folded tails and two-WR fault windows, with an
-isolated frozen TENT geometry comparison. P4.12h separates data and native
-destruction deadlines and validates scoped QP ERR, lost CQEs and fresh-process
-restart. P4.12i adds real CQ/PD cleanup failure, requester death and
-three-generation fresh-process recovery gates. Wire v12 remains unchanged;
-physical port/device loss stays open.
-P1.5 adds the opt-in consumer allocation bridge; P2.3 connects the consumer TCP peer path below. This code is not
-published to crates.io yet.
+implements the CPU TCP path and NVIDIA host staging, plus host Direct RDMA:
+persistent multi-context MRs, fixed-width reusable QP arrays, shared workers/CQs,
+multirail slicing, bounded admission and selected-port recovery. See
+[capabilities](capabilities.md) for implemented paths and
+[qualification](qualification.md) for the exact artifacts and hardware profiles.
+These implementations have not been published to crates.io.
 
 Use these states for each substage and each claimed hardware profile:
 
@@ -121,7 +109,7 @@ remains the target; the current order does not reduce the required scope.
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host path, concurrent QP grants, fixed-width cold construction and periodic monitor recovery implemented; scoped RoCE profiles qualified; final installed qualification and independent acceptance open |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Host data path implemented; two discovery/recovery gaps identified below; scoped RoCE profiles qualified; final fault qualification and independent acceptance open |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.1 allocation/copy staging implemented; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
@@ -375,657 +363,72 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
 ### P4 remaining delivery
 
-The host READ/WRITE path, fixed-width connection arrays and periodic monitor
-recovery are implemented. P4 is still open because complete installed hardware
-qualification and independent acceptance have not passed. The historical entries below record delivered code and scoped evidence;
-they are not a queue of features to implement again.
+The host data path is implemented. This queue separates actual code gaps from
+qualification; a new test geometry is not a new implementation stage. The
+[frozen-source audit](architecture.md#p4-source-audit) records the corresponding
+TENT owners and deliberate differences.
 
-| Order | Work | Completion condition |
+| Order | Remaining work | Kind and completion condition |
 | --- | --- | --- |
-| 1 | Fixed-width peer QP arrays with concurrent grants — implemented | Bound the peer's QP count by the configured `num_lanes` width; give concurrent grants independent WR/message owners and shared QP-depth admission. Preparing an entire parent must not deadlock when slices exceed QP count. QP failure drains every affiliated grant exactly once; stale generations and cancellation cannot affect a newer or sibling grant. |
-| 2 | Periodic monitor recovery — implemented | Reclaim retired endpoint/orphan owners without new submissions; re-query paused ports and address/link changes, invalidate stale connections and resume selection only with safe native evidence. Missing events must not leave a recovered port permanently unselectable. |
-| 3 | Complete P4 qualification and independent acceptance | Freeze the final host support envelope and run the outstanding gates below against the installed artifact. An independent reviewer checks the diff, reruns relevant gates and accepts the remaining limits. Missing hardware stays unqualified. |
+| 1 | Complete discovery/recovery correspondence | **Missing code:** retain a usable context for an initially down port, and repeat automatic GID selection on recovery. Explicit device/port/GID pins must remain strict. Publish a replacement route only after old QPs/CQs drain; preserve context/PD identity and persistent MRs. CPU transition tests and a focused native recovery gate are required. |
+| 2 | Close the declared installed RoCE fault profile | **Unqualified:** interrupt actual in-flight DMA, exercise native cleanup failure through the packaged public consumer, and verify physical link/device loss and provider teardown. Freeze the scenario, native proof and negative control before running it. Keep the already-qualified cases as regressions. |
+| 3 | Finish fabric/topology qualification and review | **Unqualified:** independent discovery/topology repeat, physical rail contention/accounting and the separate InfiniBand profile. An independent reviewer reruns relevant gates and accepts the exact source/artifact, declared profile and remaining limits. Missing hardware does not pass this row. |
 
-The first row is implemented; qualification and acceptance are tracked separately: QP-owned send depth and exact outstanding-WR
-accounting are implemented in `qp/send_queue.rs`; per-grant `SendWork` no
-longer owns global SQ credits. Payload, bind and completion SEND consume that
-shared owner, including post errors and native cancellation. Public v14 now
-activates simultaneous grants on connected QPs. `RdmaQp` now owns a shared physical connection;
-independent CQ-lane grant records hold work, namespaces and waiters. Receive CQEs
-dispatch through the QP-owned slot to the exact binding/key grant, including when
-the donor record has retired. Native cancellation fences every affiliated grant,
-and physical retention counters are distinct from grant counters.
-The shared-QP fixture exercises four live native grants, reverse receipts, stale
-record isolation and lost-CQE barriers. Whole-parent grant reservations and
-source RQ admission now precede authority; source RQ depth is independent of
-the SQ width. Cold construction now reserves fixed endpoint slots before QP
-creation, negotiates a common width, publishes the passive pair before GRANT
-and retains failed native cleanup in its slot. Waiter deadlines and reservation
-tokens isolate cancellation from other builders and replacement generations. [Qualification](qualification.md) pins each delivered scope.
-No new P4 milestone is added for this prerequisite.
+The first row is an implementation gap found by reading both trees, not another
+stress-test milestone. OrbitTE currently inventories active routes only and
+re-queries the originally selected GID index. Frozen TENT can keep an otherwise
+valid down-port context paused, and its automatic `refreshAddress` repeats GID
+selection. Reclaiming a previously active port is already implemented; do not
+implement it again. New-device hotplug and general cross-rail retry policy are
+separate from these two selected-context gaps.
 
-The second row uses the transport monitor's one-second tick to reclaim fully
-drained lanes/endpoints, query selected native port/GID addresses, fence changed
-routes and resume selection only after old QPs/CQs drain. Event generations
-prevent stale recovery; native cleanup retention and lost consumers stay fenced.
-The same PD/key domain and persistent MRs survive recovery. A source-side array
-reset can require multiple explicit cache misses before payload admission;
-bootstrap is bounded by QP width and the original deadline. See
-[the contract](rdma-cuda.md#periodic-monitor-recovery) and
-[current qualification](qualification.md); physical loss is not inferred from
-query-failure injection.
+For the installed RoCE profile, reuse the existing bounded consumer and recorded
+geometries: two hosts/two mlx5 RNICs, host Direct READ/WRITE in both directions,
+polling/events, 1–3 QPs per peer/context/operation, masks 1/2/3, 12/16/32 parents
+and the recorded requests up to 9 MiB. The 256 MiB backing limit is per peer;
+these are selected combinations, not every Cartesian product. The existing
+72-case healthy matrix and idle-restart, posted-RQ and lost-CQE matrices remain
+qualified only for their recorded packages. Re-run affected contracts when code
+changes; do not grow the matrix solely by increasing parent count or payload.
+The fixture's larger configurable limits are not blanket support claims.
 
-The final host gate must cover physical two-host/multi-RNIC traffic; IB and
-RoCE profiles separately; full READ/WRITE bytes and sentinels; geometry and
-admission beyond the existing eight-parent/5 MiB/folded/quarter-tail profiles;
-topology ranks, timeout/retry and connection incarnations; shared CQ/SQ fairness
-and persistent MRs under physical rail pressure. Freeze the declared limits
-and negative controls before that run, rather than treating each extra parent
-count as another implementation milestone.
+The missing fault evidence has distinct meanings:
 
-Native QP destruction EIO and completion-channel EBUSY now have scoped
-source/requester ownership and restart evidence; see the [cleanup gate](native-cleanup.md).
-Device-close nonzero returns remain a CPU ABI defense: the selected native
-implementation returns zero after its provider callback, so a fabricated
-return value is not native qualification.
-Outstanding coverage includes physical link/device loss and provider teardown;
-spontaneous MR/MW cleanup errors beyond syscall controls; broader
-source/requester death and live reconnect; poisoned-live-engine recovery;
-and remaining failure profiles through the installed consumer. The
-[installed restart gate](installed-host.md#peer-restart-with-a-surviving-engine)
-now passes 32 installed restart configurations across two compilers for idle
-cached QPs/MRs: one peer dies repeatedly while the other keeps its engine and
-registration. Eight healthy regressions also pass; the exact profiles are in
-[qualification](qualification.md). A further 40-case installed matrix includes 32
-posted-RQ interruption cases: source MWs/RQ and public requester batches remain
-live when either peer exits, then temporary owners drain while persistent MRs
-survive. Another 40-case installed matrix includes 32 lost-payload-completion
-sequences: real successful CQEs are withheld from the engine, exact native WR
-identities and QP destruction are reconciled, and one live engine recovers.
-Mid-flight DMA death and installed native cleanup failure remain separate gates.
-Existing QP ERR,
-lost-CQE, QP/MR/MW syscall, CQ/channel/PD EBUSY and process-generation results
-remain scoped evidence. For every
-verbs operation, the source/requester proof must prevent stale rkeys, connections
-or outstanding DMA from reaching reused backing. Local reference counts do not
-establish physical quiescence. Independent discovery/topology qualification,
-including the earlier P4.8 repeat, is part of this final gate.
+- Posted-RQ interruption proves pre-payload authority drain. Lost successful
+  CQEs prove recovery after lost engine observation. Neither proves termination
+  of physically interrupted DMA.
+- Native QP/MR/MW syscall and CQ/channel/PD dependency failures already have
+  scoped retention evidence. The remaining installed-consumer gate must keep
+  actual backing, keys and budgets until physical drain is established; do not
+  replace it with another CPU shim or claim spontaneous hardware error coverage.
+- Physical loss requires an authorized disposable link/device and observations
+  of its real state. Query failure injection and QP ERR remain useful controls,
+  but do not qualify cable loss, device removal or provider teardown.
+- InfiniBand remains a separate unqualified fabric. RoCE results, including a
+  new GPU node allocation, cannot satisfy that requirement.
 
-P4 completion means this host-RDMA boundary is accepted. It does not complete
-P5 GPUDirect/NVLink, P6 priority/QoS/adaptive recovery policy, P9 native API/wire
-compatibility or the other transport stages. OrbitKV integration remains after
-the accepted P4 exit. Full TENT-core parity cannot be claimed from a working
-host transport alone.
+QP arrays, persistent MRs, concurrent grant/SQ/RQ ownership, transport Workers,
+NUMA affinity and periodic monitor reclaim are implemented. They need regression
+coverage for relevant changes, not another feature milestone. Priority/QoS,
+bandwidth-aware spraying and generic retry/failover remain P6; direct GPU DMA,
+NVLink and GDS remain P5/P7; native API/wire compatibility remains P9. These
+boundaries do not remove any requirement from the complete TENT target.
+
+P4 stays open until the above code and qualification gates are accepted. A
+reviewer may accept a narrower RoCE profile explicitly, but that does not turn
+missing IB/physical-fault evidence into a pass. OrbitKV integration remains after
+the accepted P4 boundary; no dependency migration is part of this closeout.
 
 ### P4 implementation record
 
-The states and source pins below apply to their recorded delivery. Later
-entries supersede earlier implementation limits without extending the earlier
-artifact's qualification. Historical acceptance states are preserved.
-
-- **P4.1 — owned staging RC verbs (Implemented, not Accepted).** Explicit
-  single device/port/GID, bounded per-slice PD/CQ/QP/MR, real READ/WRITE WR/CQ,
-  fenced control bootstrap and commit/ACK, exact teardown ordering and retained
-  native resources on failure. Explicit request hints reject unavailable RDMA.
-  CPU ABI fault controls pass; physical profiles remain subject to the
-  [RDMA/CUDA gates](rdma-cuda.md). This does not register application/GPU memory
-  directly, cache endpoints, implement multirail or close full P4.
-
-  The binding maintenance substage reuses published `ibverbs-sys` rather
-  than carrying an OrbitTE C bridge. It preserves explicit fallible teardown
-  and retained DMA owners; the backend's qualification limits still apply.
-- **P4.2a — OrbitKV RDMA selection and registered-host execution candidate
-  (Implemented; scoped installed consumer gate accepted, broader faults open).** The consumer
-  explicitly enables `orbitte-rdma`, configures one RNIC/port/GID and advertises
-  `orbitte+rdma://`. It reuses allocation registration, grant epoch and completion
-  owners; each request selects RDMA without a TCP/TENT payload fallback. The
-  first path uses P4.1's private host staging, not application/GPU MRs. A shared
-  hardware runner executes the consumer's actual registered-read body with
-  ordinary host backing, epoch/namespace controls, fragmented bytes/guards,
-  native CQ counts and zero resource charges. The host component is separate
-  from the embedded pinned Manager/GPU gate. A CPU verbs fault control uses actual
-  TCP framing to show that a source MR-destroy failure can arrive as an ordinary
-  backend error while the requester is locally drained: source backing,
-  admission/staging charges and pending source close remain retained.
-  Independent source/CPU review and two-node host reruns pass at consumer
-  `660f893d` and test harness `ff30ee1`: both RoCE directions, native CQ counts,
-  bytes/guards and zero normal-close resource charges, with no CUDA/TENT mapped.
-  Frozen source, binary and external evidence locations are linked in
-  [OrbitTE #12](https://github.com/OrbitInfra/OrbitTE/pull/12) and
-  [OrbitKV #305](https://github.com/OrbitInfra/OrbitKV/pull/305). A separate A-node
-  CUDA 13.1 compatibility profile passes pinned source grants and embedded
-  Manager TCP/RDMA staging GPU Save/Restore at `660f893d`; R535 alone does not
-  exclude CUDA 13 when supported compatibility libraries are loaded. See the
-  [runtime profile](rdma-cuda.md). B-node compute awaits free GPU leases.
-  The later installed IPC/peer-byte gate at consumer `eb1cc90f` is independently
-  accepted for the explicit single-runtime H20 profile in [the runtime contract](rdma-cuda.md).
-  Installed serving, physical cross-host Manager/GPU, source/requester RNIC
-  faults, lost DONE/ACK qualification, endpoint caching,
-  zero-copy, GDR and multirail stay open. Old CUDA 12.2 pilots remain historical.
-- **P4.2b — shared RNIC context/PD and whole-engine close (Implemented;
-  scoped source/CPU/healthy native gates independently Accepted).** A per-engine lazy
-  owner reuses one context/PD across slices; CQ/QP/MR/staging stay exclusive.
-  Every new endpoint re-queries port/GID addressing. Actual device references
-  survive failed slice teardown. Whole-engine `close` fences both directions
-  before shared-deadline drain and explicitly destroys PD/context, with stable
-  failure retention and no retry from concurrent close or Drop. Existing
-  directional close remains independent. CPU ABI/concurrency controls and the
-  physical probe require single device construction and complete normal close.
-  Source `1782771` passes independent CPU reruns and six two-host RoCE/TCP
-  DRAM/A-H20 staging native cases, with actual byte/guard/CQ checks, one device
-  open per RDMA peer and zero normal-close charges. See the scoped
-  [qualification and external evidence](rdma-cuda.md#shared-device-owner-qualification)
-  and [owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
-  This does not add pooled endpoints/MRs, application registrations, GDR,
-  multirail or a performance claim. OrbitKV's pinned earlier implementation
-  and shutdown receipt must be migrated and qualified separately.
-- **P4.3 — direct application host MR (Implemented; scoped source/CPU and
-  healthy native gates independently Accepted).** RDMA registers the exact
-  requested DRAM or CUDA-pinned host range in the engine's shared PD. Canonical allocation
-  range leases retain the real registration, allocation and budget across
-  aliases/engines; overlapping CPU or DMA accesses fail while disjoint ranges
-  remain usable. Native teardown must succeed before CPU access and source ACK.
-  Explicit staging remains selectable; device allocations keep the declared
-  staging path, and a failed host registration never falls back to staging.
-  This substage used wire v5 (now v7), rejecting earlier peers: WRITE attempts can change application bytes
-  before DONE/ACK, and a failed direct READ can already have changed its target.
-  CPU fault controls cover mixed policies, exact MR extents, retained teardown,
-  unregister and running cancel/detach/close. Source `09fa949` passes independent
-  CPU reruns and twelve native two-host DRAM, CUDA-pinned host direct,
-  mixed/explicit staging and A-H20 device-staging/TCP cases; full bytes/guards,
-  actual direct/CQ counts, frozen libraries and complete normal release pass.
-  `dc77a5b` adds only the close-before-drop assertion. See the scoped
-  [qualification and external evidence](rdma-cuda.md#direct-host-mr-qualification).
-  This is per-request registration, not TENT's persistent MR cache, endpoint
-  pooling, GDR or complete P4.
-- **P4.4 — bounded native slice submission and completion debt
-  (Implemented; source/CPU and healthy native profile independently Accepted).**
-  The frozen TENT slice geometry uses a 64 KiB base, adaptive CPU READ cap64 or
-  WRITE/device cap32 and quarter-block short-tail folding. One request retains
-  its complete MR/DMA lease across bounded, all-signaled WR windows, with unique
-  IDs, exact local/remote offsets and CQ status/opcode/READ-length checks.
-  Known accepted prefixes release only an unposted suffix; unknown `bad_wr`
-  preserves the entire possible debt without dereferencing an untrusted pointer
-  or replay. Physical slice bytes/CQs and whole-request completion are distinct.
-  Successful QP/MR/CQ teardown clears remaining WR charges; failed teardown
-  retains real owners and debt. This prerequisite precedes persistent MR and
-  endpoint-store reuse. It does not add pooled CQs/QPs, backend abort, multirail,
-  asynchronous event progress, direct GPU registration or complete P4.
-  Source `e04e381` passes independent CPU gates and fourteen two-host native
-  cases with exact CQ/byte/post counts, folded tails and windows 1/2/3/4/8.
-  See the scoped [qualification and external evidence](rdma-cuda.md#bounded-slice-and-wr-progress-qualification).
-- **P4.5 — persistent requester local-only host MRs (Implemented;
-  source/CPU and healthy native profile independently Accepted).** Following frozen
-  TENT's independent registered-buffer/PD owner, a bounded cache reuses a full
-  registered HostMemory view with LOCAL_WRITE permission only. Actual identity,
-  backing and device survive Creating/Ready/retiring/closing states; physical
-  count/full-view byte limits include in-flight creation and closing. Same-view
-  creation is single-flight, idle entries use LRU eviction, and each borrower
-  separately retains its exact allocation-relative DMA range. Idle MRs allow
-  CPU access. Final unregister revokes lookup before retirement; accepted work
-  can finish without resurrecting an idle entry. Deregistration failure retains
-  real owners/charges and poisons admission without retry. Shared-deadline close
-  drains cached MRs before PD; waits on other creators/closers remain bounded.
-  CPU controls cover real-owner release/retention, aliases, duplicate refs,
-  unregister/creation races, timeout, capacity, concurrent close and SGEs whose
-  request base differs from MR base. Source remote-permission MRs stay exact
-  and per request to preserve rkey revocation. This does not add source MR reuse,
-  endpoint/QP/CQ pooling, shared progress, GPU MR/GDR or complete P4.
-  Source `2c4aa27` passes independent stable/MSRV CPU gates and fourteen native
-  cases from each separately built binary, with exact 1-open/5-reuse/full-view
-  idle-MR checks for direct host requesters and complete normal close before PD.
-  Physical eviction, unregister races and failed deregistration remain covered
-  only by CPU controls. See the scoped
-  [qualification and external evidence](rdma-cuda.md#persistent-local-host-mr-qualification).
-- **P4.6 — context-owned shared CQ and post/poll worker (Implemented;
-  source/CPU and healthy native profile independently Accepted).** One
-  CQ/worker serves bounded per-request QPs. Monotonic request WR identities and native QP numbers route
-  completion ownership; aggregate CQ and per-QP SQ quotas are reserved before
-  dispatch. Fatal or ambiguous progress fences all attached constructors and
-  posting, closes every QP and then the shared CQ before canceling unresolved
-  debt. Failed native cleanup retains the actual remaining lane and charges,
-  without retry. P4.12h gives parent request cleanup one fresh shared
-  thirty-second destruction deadline. Expiry before proven drain returns
-  Unquiesced; both peers consume that close receipt.
-  Closed resources move back to the caller before its receipt; metadata
-  snapshots cannot delay quota release. Source ACK follows output commit and
-  endpoint drop. Source `8e38447` passes independent stable/MSRV CPU review,
-  including 90 units, 30 release single-CPU concurrent runs and 35 old-logic
-  negative controls. Six four-real-QP cases and fourteen public regressions
-  pass for each separately built native binary, with exact bytes/counts,
-  single-endpoint public RDMA quotas and complete normal resource release.
-  Source grants and connected QPs remain per request. No endpoint reuse,
-  source-rkey reuse, event progress, multirail, GDR or complete P4 is claimed.
-  See [the contract and acceptance gates](rdma-cuda.md#shared-cq-and-progress-qualification).
-- **P4.7a — one-use source MW authority (Accepted for the declared
-  CPU/native profiles).** Exact per-request parent MRs use LOCAL_WRITE|MW_BIND,
-  with no remote access flags. Type-2B support is required explicitly; there is
-  no fallback to publishing a parent MR key. QP-only bootstrap carries zero
-  memory address/key. Successful BIND CQE precedes a source grant; requester
-  data CQEs and actual QP close precede DONE; successful LOCAL_INV CQE precedes
-  source QP/MW/MR teardown, WRITE commit, output drop and final ACK. Both control
-  opcodes share aggregate CQ/SQ debt and never count as payload bytes. Unknown
-  posts, deadlines and native cleanup failures keep the existing whole-lane
-  barrier/actual-owner retention contract. One MW binds once; connections and
-  parent MRs remain per request. CPU controls cover source grant export, mixed
-  data/control capacity, opcode routing and failed cleanup with unresolved
-  control debt. A context-owned async event thread remains alive through native
-  QP/CQ destruction; fatal/unknown events fence the lane before ACK without
-  request locks, and loss of the consumer retains actual owners. CPU controls
-  also require the real TCP source to consume INV CQE before final ACK.
-  The ignored native window probe requires real old-key/parent-key remote-access
-  errors, plus full guards and normal cleanup.
-  Source `fc9717f63066137a01f0a13d08934d2685fb43ff` passes independent source/CPU
-  review and two independently built 24-case native runs. Scope, exact artifacts
-  and open physical fault gates are recorded in
-  [the qualification](rdma-cuda.md#one-use-source-memory-window-qualification).
-- **P4.7b — persistent PD key domain and bilateral incarnations
-  (Accepted for the declared CPU/native profiles).** The actual PD owns a bounded,
-  non-evicting bitmap of burned full MW rkeys across native MW destruction and
-  reallocation. Tag/index-capacity exhaustion refuses authority before BIND;
-  failed cleanup retains the actual owners and history. Separate checked PD-owned
-  connection/grant counters and a random PD nonce drive OrbitTE wire v7.
-  All RDMA phases bind both process/PD/connection identities, the exact request
-  and an independent grant generation; no old-version fallback exists.
-  Connections, MWs and parent MRs remain per request with both physical QP
-  barriers. CPU controls cover all 256 tags, index limits, concurrent burns,
-  unused grants, retained PDs, counter overflow and real control-socket replay
-  rejection before connect/BIND/data or staged output commit. Source
-  `4d94410e56aa192a268fe75cc6d7cbe46c639f3a` passes independent stable/MSRV
-  review, 38 old-logic controls, 20 release single-CPU runs per build and two
-  independently built 24-case native regressions with complete resource close.
-  Native tag/index exhaustion and physical replay/fault injection remain
-  unqualified. Qualification and remaining reuse limits are tracked in
-  [the contract](rdma-cuda.md#persistent-key-domain-and-bilateral-incarnation-qualification).
-- **P4.7c — TENT transport boundaries and connection/grant retirement
-  (Accepted for the declared source/CPU/native profiles).** `ControlService`
-  owns common RPC/admission;
-  parallel `TcpTransport` and `RdmaTransport` own their payload paths. Engine
-  dispatches directly and the old `tcp::rdma` wrapper is removed. Native modules
-  use `RdmaContext`, `LocalBufferManager`, `Workers`, CQ, slice, endpoint and
-  `EndpointStore` responsibilities. Actual connection QP/context/identity/quota
-  owners are separate from MR/MW/key/grant-generation/loan/byte owners.
-  Physical QP close returns only its quota; a later MW/MR failure retains grant
-  memory and blocks admission. Grant release requires the creating connection's
-  actual drain, cleared native memory handles and resolved work. Runtime close
-  also waits for completed outputs' memory owners. The store detaches terminal
-  records before native cleanup, retains completion routing and quotas, removes
-  exact owners and never performs native cleanup under its lookup lock.
-  Both per-request QP barriers remain. Source
-  `1b88240192822f1a80e61873d6f88a46b4764c38` passes independent stable/MSRV
-  feature-matrix review, 60 CPU negative controls, 20 release single-CPU runs
-  per independent build and two independently built 24-case native regressions
-  with complete resource close. Connected reuse and broader physical fault
-  qualification remain open. See [the contract](rdma-cuda.md#transport-boundaries-and-connectiongrant-retirement).
-- **P4.7d — source receive completion and independent WR identities
-  (Accepted for the declared source/CPU/native profiles).** A separate
-  local-only message MR, accepted source RQ, same-QP fenced SEND_WITH_INV and
-  exact receive-CQE/binding validation precede source confirmation. One worker
-  polls separate SQ/RQ CQs with independent credits. Every operation burns a
-  checked nonrepeating WR namespace. Both physical QP-close barriers remain;
-  this is a prerequisite for connected reuse, not its drain acceptance. Source
-  `62d18ed5cf72fbc3fe6df62e3e6c41b6d4555e79` passes independent stable/MSRV
-  four-feature checks, 125 library tests, 124 rejected CPU negative controls,
-  20 single-CPU release runs per compiler and two independently built 29-case
-  native runs with actual process/resource close. Arbitrary physical faults and
-  release without QP close remain unqualified. See [the contract](rdma-cuda.md#source-receive-completion-and-independent-wr-identities).
-- **P4.7e — persistent source host MR owners (Accepted for the declared
-  source/CPU/native profiles).** `LocalBufferManager` caches separate
-  local-only and MW-bind capabilities under shared physical count/full-view byte
-  limits. Source READ/WRITE reuse a non-remote-enabled parent while every grant
-  keeps its exact MW, key burn and DMA lease. Both physical QP barriers remain;
-  actual MW deallocation precedes parent-borrow release. Final unregister retires
-  every capability before native close, including when the first deregistration
-  fails. Source `dda4db90ad06c04ccfe060cd5e79fa1b9ab2daea` passes independent
-  stable/MSRV four-feature checks, 128 unit tests, 148 rejected CPU negative
-  controls, 40 independent single-CPU release runs, and two independently built
-  31-case native runs with actual process/resource close. Native eviction,
-  unregister and arbitrary cleanup/device faults remain unqualified. See
-  [the contract and evidence](rdma-cuda.md#persistent-source-registration).
-- **P4.7f — connected endpoint-store ownership (Accepted for the declared
-  source/CPU/native profiles).** Fixed-role,
-  fixed READ/WRITE host Direct peers retain the actual RC QP, routing, PSN,
-  ConnectionId and physical quota. Each claim has a checked local token and new
-  deadline; each grant has fresh MW/key/generation/WR namespaces. Mandatory v9
-  pre-authority rendezvous binds both cached identities, previous grant and
-  selected release profile. Worker-owned sealed drain combines all payload
-  CQEs, same-SQ FENCE|SIGNALED SEND_WITH_INV/SEND CQE, exact source RQ and bound
-  DONE. Actual grant/MW/message/loan cleanup precedes source ACK, source READY
-  publication and bound READY; requester validates both receipts before caching.
-  READY has no old grant or SQ/RQ debt. Failed operations use physical retirement;
-  ambiguous WRITE is never replayed. Only explicit pre-authority cache miss can
-  retire the stale half and retry fresh once under the same epoch/PD/deadline.
-  Idle-only eviction and shutdown repay connection quota after actual close,
-  outside Store locks. Native retention and live-PD key history remain intact.
-  Source/CPU controls cover simultaneous claim, stale handle/receipt, cross-view
-  reuse, capacity-one eviction, pre-open generation/async faults and deterministic
-  Store/fault accounting races. The new native runner records four unchanged
-  QPs through public simultaneous duplex transfers and old-parent/backing
-  retirement. Source `371d804` passes independent stable/MSRV gates, 140 unit
-  tests, effective protocol/claim negative controls and 40 single-CPU release
-  runs. Implementation and independent MSRV native builds pass the declared
-  35-case profile, with actual QP continuity, all process waits and resource
-  close verified. This accepts that scope; complete P4 remains open. See
-  [the scope and architecture correspondence](rdma-cuda.md#connected-qp-reuse).
-- **P4.8 — device/port/GID and host topology discovery (Implemented;
-  source/CPU Accepted, implementation native Qualified, independent native
-  Unqualified).** `Topology` and `platform/cpu_probe` inventory and rank
-  host/RNIC locations; the actual `RdmaContext` validates and freezes one route.
-  Automatic selectors coexist with strict pins and pre-open whitelist filtering.
-  Both peers check the route before READY claims; changes fence the existing
-  lane without replacing its PD/key history. Failed candidate cleanup retains
-  the real owner and stops fallback. Source `97cc94f` passes independent
-  stable/MSRV gates, 153 unit tests, 42 effective controls and 40 single-CPU
-  release pressure runs. The implementation's 39-case IPv6 RoCEv2 profile passes
-  and its raw owners/DSO/process/lock evidence is independently audited. The
-  separately built MSRV repeat executes zero cases: fresh selected-stage History
-  finds A RELEASED/B KILLED, no RUNNING replacement. Replacement resources now
-  support P4.10's scoped host-native runs; the complete independent P4.8 repeat
-  remains required before accepting this row. Physical IB, multiple RNIC/NUMA
-  rank comparisons, route/device faults and complete P4 remain open. See
-  [the scope and TENT correspondence](rdma-cuda.md#device-port-gid-and-host-topology-discovery).
-- **P4.9 — optional CQ event progress (Implemented; scoped host-native
-  gates pass, independent and full qualification open).** Default polling remains the frozen TENT behavior.
-  Event mode shares one native completion channel between the existing SQ/RQ
-  CQs. A separate channel consumer ACKs each actual returned event without
-  acquiring progress or budget locks between receipts. Atomic ACK counters and
-  a retained thread wake token keep event bursts independent of native teardown.
-  The data worker arms before polling and parks until a wake or the earliest
-  unresolved SQ/RQ deadline; its close waiters retain a condition variable.
-  Event receipts never complete a WR or grant. Actual QP/CQ destruction precedes consumer
-  stop/join and channel destruction. Lost consumption or failed cleanup retains
-  real owners and charges without retry. Source controls exercise public
-  READ/WRITE/connected reuse in both modes, real native-notify ABI dispatch,
-  wakeups, deadline retirement, partial construction and eight-event ACK bursts
-  during native destruction with progress, budget or both locks held. Context
-  asynchronous events obey the same burst contract. The physical runner accepts
-  an explicit `rdma_events` flag without changing RNIC/GPU locks. P4.10 now
-  covers the declared host-native polling/event regressions. Independent review,
-  the remaining native profiles and P4.8's complete independent repeat remain
-  required before accepting the dependent hardware scope. See
-  [the event-progress contract](rdma-cuda.md#optional-cq-event-progress).
-- **P4.10 — fragmented CQ-error and native lane drain (Implemented;
-  scoped native gates pass, independent acceptance and full fault qualification
-  open).** The native
-  MW gate adds three signaled WRs in one post, a valid 4 KiB prefix and a real
-  remote-access error beyond the exact MW. READ/WRITE, both peer directions and
-  both progress modes assert actual QP destruction, an outstanding WR charge,
-  live MR and conflicting application access until both native CQ receipts.
-  The failed request is never replayed. The event-stat gate distinguishes a
-  healthy idle lane from a fault-drained lane while requiring actual channel
-  creation and zero retained/closed resources. P4.6/P4.9 still own whole-lane
-  cancellation on P4.4 slices. P4.11 separately qualifies scoped native partial
-  admission. Lost completion/device faults, arbitrary cancellation and full P4
-  remain open. See
-  [the native fragment-error gate](rdma-cuda.md#fragmented-cq-error-and-native-drain).
-- **P4.11 — native partial post admission (Implemented; scoped native
-  gates pass, independent acceptance and full fault qualification open).** The
-  exact native test installs a
-  requester-only post-send adapter before starting its context workers. It
-  changes WR 1's SGE count and invokes the actual mlx5 provider; production
-  code builds the three-WR chain and decodes the real `bad_wr` pointer. The
-  known accepted prefix keeps one WR charge, its MR and the application loan
-  through actual QP/CQ destruction; only the proven unposted suffix loses its
-  reservation. READ/WRITE validation allows unknown effects within the first
-  4 KiB and requires unchanged suffixes/guards. Neither a successful CQE nor
-  zero WRITE effects may be inferred from the post error. No automatic replay.
-  Source `760c147` passes 13 stable/MSRV source/build gates and 76 two-host
-  CPU DRAM/IPv6 RoCEv2 cases, including 16 actual partial-admission cases. All
-  152 peers are reaped with locks released. Six native controls reject early
-  WR-debt repayment, early DMA-loan release and retained unposted-suffix quota
-  in both modes, with no timeouts or inconclusive runs. Raw native DSO, binary,
-  process, lock and byte evidence is archived outside the checkout. These are
-  same-agent gates; independent review and full P4 remain open. See
-  [the admission contract and TENT correspondence](rdma-cuda.md#native-partial-post-admission).
-- **P4.12a — per-context persistent MR ownership (Implemented;
-  source/CPU and scoped native gates pass, independent acceptance open).** The
-  `LocalBufferManager` cache keys actual `RdmaContext` identity, registered view
-  and local/MW-bind capability. Distinct contexts cannot reuse, coalesce or wait
-  on each other's MR. Count and full-view byte limits remain aggregate across
-  every context and capability. Final unregister marks all copies retiring
-  before native cleanup; existing borrows stay owned until release. A second
-  context's failed registration leaves previous owners intact; failed cleanup
-  retains actual resources and globally fences new cache admission without
-  retry. The native gate opens two actual PDs on the one locked RNIC and checks
-  provider MR/PD identity, same-key reuse, duplicate unregister, idle/borrowed
-  retirement and actual deregistration/close receipts, followed by shared-CQ
-  traffic. Source `721f95a` passes 13 stable/MSRV source/build gates, including
-  170 all-feature units per toolchain, and 48 two-host CPU DRAM/IPv6 RoCEv2
-  cases. All 96 peers are reaped with locks released. Sixteen native helper
-  invocations verify 32 actual PDs and 64 MR registration/deregistration
-  receipts. Two CPU and four native controls reject omitted context/capability
-  keys without timeouts or inconclusive runs. These are same-agent scoped gates;
-  independent acceptance remains open. This is registration groundwork;
-  transport dispatch is implemented separately in P4.12b and cross-rail slices
-  in P4.12c. The complete P4 exit remains open. See
-  [the context registration contract](rdma-cuda.md#per-context-persistent-mr-ownership).
-- **P4.12b — context set, DeviceSelector and request-level rail routing
-  (Implemented; source/CPU and scoped native regression gates pass,
-  independent acceptance open; two-RNIC profile added in P4.12d).** Keep topology NIC IDs stable across clean construction
-  failures. Each enabled NIC owns its actual PD/key ledger, shared SQ/RQ CQs,
-  progress worker and endpoint store. Wire v10 advertises bounded NIC/PD paths
-  before authority; device masks, compatible GID profiles, name affinity,
-  topology ranks and charged bytes select one path per request. Cached pairs
-  retain their source NIC/PD binding; cache-miss retry pins both PD domains.
-  Exact device-byte leases survive failed native cleanup. MR, connection,
-  message and outstanding-WR budgets remain aggregate. Idle eviction crosses
-  contexts, while a worker fault only debits its own idle store. Close fences
-  every context and preserves partial-construction retained PDs. Source
-  `4b3638c` passes 13 stable/MSRV source/build gates (179 all-feature unit tests
-  per toolchain) and 48 two-host CPU DRAM/IPv6 RoCEv2 regression cases. All
-  96 peers exit with original locks released; three CPU mutations reject ignored
-  masks, compacted NIC slots and removed cached-PD guards. These are same-agent
-  gates on one selected RNIC per host, including the earlier two-PD registration
-  helper. Raw evidence stays outside Git. P4.12c implements single-request
-  slicing; P4.12d validates scoped physical two-RNIC dispatch/striping and native
-  faults. Circuit-breaker/failover behavior and full P4 remain open. See
-  [the architecture and TENT mapping](rdma-cuda.md#multiple-contexts-device-selection-and-request-level-rails).
-- **P4.12c — eager multi-context publication and cross-rail slices
-  (Implemented; source/CPU and scoped native gates pass, independent acceptance
-  open; two-RNIC profile added in P4.12d).** Prepare every enabled context's local/MW-bind MRs
-  before registry visibility or duplicate-reference commit. Failed batches
-  retire only newly created copies; failed native cleanup retains unpublished
-  backing and charges. Active published copies cannot be evicted. TENT's bounded
-  slice geometry and per-slice DeviceSelector feed the existing context workers.
-  One source handler prepares all exact-range grants before payload submission;
-  parent success requires every child's native and bound control receipts.
-  Cleanup visits all children and cannot mask one rail's retained DMA debt.
-  CPU controls cover all host Direct/Staged READ/WRITE combinations, both
-  progress modes, concurrent workers, masks/window limits, malformed plans,
-  changed planned PDs, unregister/close, publication rollback and retained loans.
-  Source `14c0ace` passes 17 sequential stable/MSRV gates, 187 all-feature units
-  per toolchain and four effective CPU mutation controls. Both frozen release
-  binaries pass 48 two-host host-DRAM/IPv6 RoCEv2 cases; all 96 peers are reaped
-  with locks released. Sixteen same-RNIC/two-PD helper invocations verify 32 PD
-  constructions and 112 native MR registration/deregistration receipts,
-  including 48 rolled-back copies. These are same-agent scoped gates.
-  P4.12d adds physical two-RNIC selection/striping and scoped native faults;
-  independent acceptance remains open. See
-  [the contracts and TENT correspondence](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
-- **P4.12d — two-RNIC native qualification and failure drain
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Preserve the existing TENT context/buffer/endpoint/worker boundaries. Public
-  engine operations with test-only native observers validate actual MR/PD/QP
-  identity, two-rail payload dispatch, masks, two-round connected reuse and
-  all-context publication/rollback. Either rail can produce a real CQ error or
-  partial post; the failed record's own WR debt and exact loan survive actual
-  QP destruction until both native CQ receipts. Paused posts prove concurrent
-  unregister/close preserves borrowed MRs until release. Source `8fc28cb` passes
-  17 stable/MSRV gates, 187 all-feature units per toolchain and ten runner
-  controls. Both frozen release binaries pass 152 two-host CPU DRAM/IPv4 RoCEv2
-  cases across both directions/progress modes. All 304 peers are reaped with
-  both NIC locks released. Raw evidence accounts for 608 context opens/closes,
-  1,776 MR registration/deregistration receipts (including message MRs), 128
-  failed-CQ receipts and 32 partial admissions. Four native mutation controls
-  reject one payload rail or premature own-record WR-debt repayment without
-  timeouts. Production source/dependencies are unchanged from PR #33. These
-  are same-agent libtest-profile gates; full P4 and independent acceptance stay
-  open. See [the scoped contract and evidence](rdma-cuda.md#two-rnic-native-qualification-and-failure-drain).
-- **P4.12e — cross-context quota wakeups and concurrent parents
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Preserve per-context progress and actual resource owners; `CqQuota` wakes
-  blocked workers after aggregate SQ/RQ capacity returns, with enrollment before
-  the budget recheck. Two public parents share two requester SQ credits and four
-  source RQ credits. Real CQE delay validates byte/connection rejection before
-  new QPs, four-QP reuse and concurrent unregister/close. Either-rail native CQ
-  faults reconcile payload and completion SEND debt per actual CQ/QPN/WR owner;
-  already completed siblings retire independently. Source `c76b9b5` passes 17
-  stable/MSRV gates, 188 all-feature units per toolchain and ten runner controls.
-  Both binaries pass 232 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 cases: 80 new
-  concurrent and 152 retained regressions. All 464 peers are reaped with both
-  locks released. One CPU control rejects missing notifications; four native
-  controls reject aggregate SQ overruns or early debt repayment. These are
-  same-agent scoped gates; complete P4 and independent acceptance remain open.
-  See [the concurrency contract and evidence](rdma-cuda.md#cross-context-quota-wakeups-and-concurrent-parents).
-- **P4.12f — whole-parent source RQ admission
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Atomically reserve the validated plan's completion receive credits before
-  either peer constructs QPs; wire v12 adds the admission reply. Unused credits
-  roll back, while actual/uncertain receives retain theirs through CQ completion
-  or native QP/CQ drain. Frozen source `7606c1a` passes 17 stable/MSRV gates,
-  190 all-feature units per toolchain and ten runner controls. Both binaries pass
-  296 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 cases: 64 new and 232 retained
-  regressions. Four parents each use three 8 KiB slices, sharing three requester
-  SQ and thirteen source RQ credits. A fifth parent is rejected despite one
-  remaining credit, before new QPs. All twelve QPs reuse across rounds; paused
-  close and either-rail CQ faults preserve actual owners. All 592 peers are reaped
-  with both locks released. One CPU control rejects omitted parent admission;
-  two native controls reject early receive-credit return. These are same-agent
-  scoped gates; full P4 and independent acceptance remain open. See
-  [the RQ contract and evidence](rdma-cuda.md#whole-parent-source-rq-admission).
-- **P4.12g — larger/folded geometry and eight-parent pressure
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Production source, dependencies and wire v12 are unchanged from PR #36.
-  Frozen fixture `aebb3e8` passes 19 stable/MSRV gates, 190 all-feature units
-  per toolchain and ten runner controls. Sixteen valid plans match the unchanged
-  isolated frozen TENT function; two geometry mutations are rejected by each
-  toolchain. Both binaries pass 288 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 cases:
-  144 new geometry cases and 144 affected two-/four-parent regressions. Eight
-  parents own 32/40 QPs and share five requester SQ credits; a ninth parent is
-  rejected before new QPs with one source RQ credit remaining. The 5 MiB,
-  MiB-plus-one folded and exact-quarter-tail plans preserve exact native WR
-  lengths and QP reuse. Sixty-four two-WR fault windows retain one unresolved
-  sibling through both CQ destruction receipts. All 576 peers are reaped with
-  both locks released. Four native mutation runs reject early WR-debt or source
-  RQ-credit return in polling/event modes. These are same-agent scoped gates;
-  full P4 and independent acceptance remain open. See
-  [the geometry contract and evidence](rdma-cuda.md#larger-requests-folded-tails-and-eight-parent-admission).
-- **P4.12h — native QP errors, lost CQEs and process restart
-  (Implemented; declared native gates pass; physical port/device and
-  independent acceptance open).**
-  Frozen operational source `ec852d4` gives one parent's endpoint teardown a
-  separate shared thirty-second deadline, matching frozen TENT's destroy
-  window. Transfer failure remains failure; unproven native teardown retains
-  owners. Nineteen stable/MSRV gates pass, including 191 all-feature units per
-  toolchain and eleven runner controls. Both binaries pass 284 two-host/two-RNIC
-  CPU DRAM/IPv4 RoCEv2 cases: 208 new fault/restart and 76 targeted regressions.
-  Sixty-four real QP ERR transitions, 128 dropped actual successful SQ/RQ CQEs
-  and sixteen source SIGKILL/restarts preserve exact owners through teardown.
-  All 600 native children are reaped: 584 completed libtests and sixteen
-  intentionally killed sources. Fresh sources rebind the same RPC address and
-  registration ID; old epochs fail before new QPs, then forty-QP reuse resumes
-  in fresh processes. Four native mutations reject early WR/RQ return; one CPU
-  mutation rejects releasing leases between restart generations. Both selected
-  containers lack CAP_NET_ADMIN; physical port/device-down is unqualified.
-  See [the destruction and restart contract](rdma-cuda.md#native-endpoint-faults-lost-completions-and-restart).
-- **P4.12i — native cleanup failure and repeated process generations
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Production source, dependencies and wire v12 are unchanged from PR #38.
-  Frozen fixture `02ef99d` passes nineteen stable/Rust 1.85 gates, 191 all-feature
-  units per toolchain and eleven runner controls. Both binaries pass 280 two-host/
-  two-RNIC CPU DRAM/IPv4 RoCEv2 cases: 176 new configurations and 104 targeted
-  regressions. Real dependent verbs objects cause 64 CQ and 64 PD EBUSY errors
-  on either peer/rail. CQ failures retain actual WR/RQ debt, grant/MR/DMA loans
-  and admission after repeated close/Drop and removal of observer references;
-  PD-only failures retain device owners while drained application backing leaves.
-  Source/requester death and three fresh process generations preserve both NIC
-  leases, RPC rebinding, numeric registration IDs and all-prior-epoch rejection
-  before QPs. All 984 native children are reaped: 772 completed libtests and
-  212 intentionally killed children. Eight native controls reject early debt/
-  credit return and post-Drop CQ/PD retries; one CPU control rejects releasing
-  leases between generations. Physical port/device loss, native QP/MR/MW and
-  completion-channel/device-close failures, poisoned-live-engine recovery and independent
-  acceptance remain open. See [the cleanup/restart contract](rdma-cuda.md#native-cleanup-failure-and-repeated-process-generations).
-- **P4.12j — MR/MW command failures and live-process recovery
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Frozen operational source `586df69` passes nineteen stable/Rust 1.85 gates,
-  192 all-feature units per toolchain and eleven runner controls. Both binaries
-  pass 248 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 configurations: 128 new cases
-  and 120 targeted regressions. Thirty-two paired configurations complete two
-  QP ERR/reconnect cycles in the same engines, PDs and persistent MR owners.
-  Thread-local uverbs syscall faults produce 64 MR and 32 MW EIO errors;
-  post-Drop backing/loan quarantine survives same-process engine replacement
-  with fresh epochs/PDs and stale open/data rejection before QPs or effects.
-  All 536 children are reaped: 516 completed libtests and twenty deliberate
-  source/requester kills in prior CQ/PD/restart regressions. Eight native
-  mutation runs reject early MR/MW release and missing public-entry recovery.
-  Spontaneous provider failure, physical device recovery, in-place healing of
-  retained owners remain open; P4.12k below adds the transport pool. See
-  [the recovery contract](rdma-cuda.md#mr-and-mw-cleanup-faults-and-live-process-recovery).
-- **P4.12k — transport Workers pool and multi-context progress
-  (Implemented; declared native gates pass, independent acceptance open).**
-  `RdmaTransport` owns one configurable `Workers` pool. Stable NIC IDs assign
-  context CQ pairs to data workers; polling/event passes rotate contexts and
-  endpoints, share aggregate quota wakes and use the earliest event deadline.
-  Context fault recovery detaches drained snapshots without restarting the pool.
-  Endpoint owners retain the pool after transport-handle Drop. Configuration,
-  statistics, pool scheduling, grant protocol and native progress passes have
-  separate modules. Frozen source `914761b` passes nineteen stable/Rust 1.85
-  gates, 195 all-feature units per toolchain and eleven runner controls. Both
-  binaries pass 168 two-host/two-RNIC CPU DRAM/IPv4 RoCEv2 configurations with
-  1/2/3 workers, actual CQ/thread identities, quota/unequal-tail admission,
-  fault/drain, live recovery, cleanup failures and repeated process generations.
-  All 384 children are reaped (360 completed libtests and 24 deliberate kills).
-  Two native wrong-owner controls and one CPU early-pool-stop control reject
-  the intended errors. P4.12l below adds multiple CQ lanes and load-based
-  slice dispatch. Priority queues, worker affinity and monitor consolidation
-  remain open. See [the pool contract](rdma-cuda.md#transport-workers-and-shared-context-progress).
-- **P4.12l — multiple CQ lanes and load-based slice dispatch
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Frozen TENT's `num_lanes` aligns transport workers and each context's CQ
-  pairs. Worker `i` polls lane `i` across contexts. New wire slices choose
-  the least-loaded worker with rotating ties; grant-owned `SliceLease` keeps
-  load charged through drain or quarantine. QP reuse stays in its original
-  lane, and source rendezvous searches all lanes by exact bilateral identity.
-  Single-RNIC large requests can use lane parallelism. Context PD/MR/key
-  owners and aggregate quotas remain shared. Device-event wakeups fan out;
-  drained fault recovery replaces one lane without restarting the pool.
-  Context-slot, lane and worker resources have separate modules. Frozen source
-  `2952f06` passes nineteen stable/Rust 1.85 gates, 198 all-feature units per
-  toolchain and eleven runner controls. Both binaries pass 180 two-host/two-RNIC
-  CPU DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual CQ/thread
-  identities, exact worker-load reconciliation, one-RNIC slicing, concurrent
-  admission, fault/drain, live recovery, MR/MW errors and repeated generations.
-  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
-  Two native wrong-owner controls and one CPU reversed-load control reject
-  their intended errors. Independent acceptance and full P4 remain open. See
-  [the lane contract](rdma-cuda.md#multiple-cq-lanes-and-load-based-slice-dispatch).
-- **P4.12m — peer QP arrays, NUMA worker binding and unified event monitor
-  (Implemented; declared native gates pass, independent acceptance open).**
-  Context-owned peer endpoints retain cross-lane physical QP arrays; CQ-local
-  stores own idle/retiring progress and exact WR lookup. `RdmaGrant` separates
-  each memory authorization from its persistent peer. Reuse consults the array
-  while preserving bilateral identities, capability, generation and lane.
-  Workers bind to allowed NUMA CPU sets before admission. One transport monitor
-  owns all device/CQ event consumption, with get/ACK serialized before native
-  owner detachment and atomic fault/receipt bookkeeping. CPU gates cover
-  cpuset intersection, actual binding, multiple event sources, concurrent ACK
-  detachment and preserved grant/drain ownership. Frozen source `5ea3a35`
-  passes nineteen stable/Rust 1.85 gates, 203 all-feature units per toolchain
-  and eleven runner controls. Both binaries pass 180 two-host/two-RNIC CPU
-  DRAM/IPv4 RoCEv2 configurations with 1/2/3/6 lanes, actual NUMA masks,
-  CQ/thread and QP-array identities, unified event consumption, admission,
-  faults, native cleanup failures, live recovery and repeated generations.
-  All 408 children are reaped (384 completed libtests, 24 deliberate kills).
-  Two native and one CPU mutation controls reject their intended errors.
-  An initial repeated-close EPIPE is repaired; failed evidence is archived.
-  Fixed-width concurrent QP multiplexing, periodic port recovery and full P4
-  acceptance remain open. See
-  [the owner contract](rdma-cuda.md#peer-qp-arrays-worker-affinity-and-unified-monitor).
-Exit: two physical RNIC hosts, IB/RoCE profiles separately, complete sentinels
-and READ/WRITE equality, multirail accounting, real completion/endpoint faults,
-partial registration/deregistration, concurrent shutdown and restart controls.
-Fake verbs tests complement these gates and never replace them.
+Current ownership and behavior live in [architecture](architecture.md),
+[RDMA contracts](rdma-cuda.md), [native cleanup](native-cleanup.md) and
+[installed consumers](installed-host.md). Exact source pins, scoped results,
+failed runs and artifact locations remain in [qualification](qualification.md).
+The detailed P4.1–P4.12m delivery history is preserved in the
+[immutable plan before this consolidation](https://github.com/OrbitInfra/OrbitTE/blob/f2c7e7f5d32bb9c231596752af6bd59142b1f3a9/docs/completion-plan.md#p4-implementation-record).
+It is historical evidence, not an execution queue. No raw evidence is moved or
+deleted by this consolidation.
 
 ## P5 — CUDA, GPUDirect and staged transfers
 
@@ -1287,34 +690,18 @@ and independent acceptance remain separate states.
 
 ## Immediate next delivery
 
-Proceed to the final host qualification and independent acceptance, the third
-row of [P4 remaining delivery](#p4-remaining-delivery). Fixed-width construction
-and periodic monitor recovery now have reachable implementations and focused
-controls; do not add another implementation milestone for these prerequisites.
+Implement the two discovery/recovery gaps in the first row of
+[P4 remaining delivery](#p4-remaining-delivery), then run the fixed remaining
+qualification gates. Use the existing native and installed consumers; add a
+case only when it protects an uncovered contract or a demonstrated bug.
+Keep runtime/source checks, installed-artifact checks and hardware results
+separate. A layout-only refactor does not qualify new hardware or close P4.
 
-Use the [installed host gate](installed-host.md) to freeze packaged crates and
-independent public-API consumers. The declared healthy RoCEv2 profile now
-passes 72 installed configurations on two compilers, with 12/16/32 parents
-and requests up to 9 MiB. A further 40-configuration installed matrix covers
-32 repeated-peer-restart cases with one live engine, plus eight healthy
-regressions. The kill point retains idle QPs/MRs with zero SQ/RQ debt.
-The posted-RQ interruption profile now passes another 40-case installed matrix:
-32 three-generation interrupted sequences and eight healthy/idle-restart
-regressions. It holds GRANT after native RQ posting and validates 768 pending
-parents, temporary-owner drain and persistent-MR reuse.
-The lost-payload-CQE profile now passes 40 installed configurations, including
-32 three-generation loss sequences and eight regressions; 768 actual successful
-CQEs are withheld while native WR identity, public debt and teardown agree.
-Next cover mid-flight DMA interruption and native cleanup failures through
-installed consumers, alongside physical link/device loss and
-provider teardown. InfiniBand and independent acceptance still require their
-own gates. Freeze those remaining fault profiles before running them;
-idle-resource death, pre-payload RQ interruption and loss of already-successful
-CQEs do not establish termination of physically interrupted DMA.
-Link-bandwidth scheduling, new-device/GID migration and general retry policy are not implied by selected-port recovery. Keep frozen
-TENT comparisons, native manifests and failed controls outside Git. The
-[architecture reading order](architecture.md#source-reading-order) identifies
-the current resource owners.
+New test nodes require fresh job/stage, host, provider and RNIC-lock inventories;
+never reuse executor identities from a terminated job. A node with one usable
+RNIC can qualify only its declared single-rail profile. GPU allocation alone
+says nothing about RNIC count, fabric or GPUDirect capability. Keep manifests,
+logs and failed controls outside Git.
 
 OrbitKV dependency migration, whole-engine shutdown consumption and installed
 Manager/serving qualification resume under P11 after the accepted P4 boundary.

@@ -32,7 +32,8 @@ connected reuse, multirail slicing, shared CQ progress, NUMA worker binding and
 unified event monitoring are implemented with scoped native validation.
 NVIDIA device transfers currently use synchronized host staging.
 
-Periodic monitor reclaim and selected-port recovery are implemented. The host
+Periodic monitor reclaim and selected-port recovery are implemented; initial-down
+port retention and automatic GID reselection remain open. The host
 RDMA stage has scoped installed-consumer validation for healthy traffic and
 repeated peer restart while one engine keeps its persistent MRs, including
 process death with a posted completion RQ and loss of actual successful payload
