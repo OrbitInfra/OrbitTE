@@ -128,6 +128,12 @@ being ranked by a second copy of the implementation. Public NIC IDs, memory
 priority tiers and strict-pin rejection are checked alongside the existing
 native WR/CQE and full-payload ledger.
 
+This exercises the resource boundary corresponding to frozen TENT's
+`platform/cpu_probe.cpp`, `runtime/topology.cpp` and RDMA context address
+selection: host probing supplies PCI/NUMA identity, topology assigns memory
+priority tiers, and each context owns its selected port/GID. The collector is
+an external oracle for this fixed inventory, not a new production layer.
+
 This qualifies installed automatic selection on the declared RoCE inventory.
 It does not qualify down-port transitions, physical link loss, InfiniBand,
 page placement, hotplug or independent reviewer acceptance. Results and exact

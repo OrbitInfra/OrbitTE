@@ -15,10 +15,51 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery adds [physical rail accounting](#installed-physical-rail-accounting)
-to the qualified host RoCE profiles, following [CQ/channel/PD dependency cleanup](#installed-dependency-cleanup). The production host RDMA implementation
-is complete; physical/fabric qualification and independent acceptance remain
-in the existing P4 queue.
+The latest installed delivery qualifies [automatic discovery](#installed-automatic-discovery)
+against a separately captured host inventory, retaining the full
+[physical rail accounting](#installed-physical-rail-accounting) contract.
+The production host RDMA implementation is complete; physical/fabric
+qualification and independent acceptance remain in the existing P4 queue.
+
+## Installed automatic discovery
+
+Source [`36890c8`](https://github.com/OrbitInfra/OrbitTE/commit/36890c87b71c56922149824633d5b5811bc479e4)
+passes four frozen two-host configurations: READ/polling and WRITE/events with
+stable 1.99.1, then both in the reverse direction with Rust 1.85.0. Each process
+leaves device, port and GID pins unset and selects within its two locked mlx5
+RNICs. An identical blacklist confirms whitelist precedence. Before normal
+registration, a separate engine attempts a 64-byte registration with absent
+strict GID 255; registration returns `Unavailable`, and close leaves no owners.
+
+A packaged, hash-pinned collector reads sysfs without importing OrbitTE's
+selection code. Before/after inventories must match under the original resource
+locks. Published PCI addresses, NUMA nodes, port state, RoCEv2 GIDs, physical
+network interfaces/indices and memory priority tiers agree with that inventory.
+The declared hosts have one unambiguous preferred GID per RNIC; ambiguous
+inventories fail the verifier. The same consumer checks 16 concurrent parents,
+4 MiB + 1 byte requests and three rounds of exact WR/CQE, full-payload, guard,
+QP-limit and final-drain accounting. Two additional fixed-GID cases pass with
+the new packages, one on each compiler.
+
+Both packaged-consumer builds pass formatting, Clippy, tests and five native C
+controls. The 34 controller tests include mismatched routes, PCI/NUMA ranks,
+strict-pin fallback, changed inventories and ambiguous-GID negative controls.
+Both hosts return to their pre-run native resource counts; all supervised
+children exit and both original RNIC locks are released.
+
+Artifacts are outside Git at
+`/root/orbitte-artifacts/installed-discovery-20261027/`.
+`native-audit.json` links the two final packages, four automatic cases and two
+pinned controls. The initial failed run at `native-stable-v1/` remains archived:
+its fixture incorrectly expected construction to perform lazy discovery. The
+final fixture triggers discovery through public memory registration. Production
+owners, dependencies, API and wire v14 are unchanged.
+
+See the [reproduction contract](installed-host.md#automatic-discovery-against-an-independent-inventory).
+Separate inventory collection is not independent reviewer acceptance. This
+profile does not qualify physical loss, provider teardown, InfiniBand, hotplug,
+page placement, GPU transfers or performance. Those limits retain their
+existing stages and acceptance gates.
 
 ## Installed physical rail accounting
 

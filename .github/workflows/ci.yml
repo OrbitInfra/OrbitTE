@@ -61,5 +61,6 @@ jobs:
             ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.stderr
             ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.crate
             ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/*.so
+            ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/discovery_inventory.py
             ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/consumer/Cargo.lock
             ${{ runner.temp }}/orbitte-installed-host-${{ matrix.toolchain }}/installed/bin/orbitte-rdma-host
