@@ -264,6 +264,20 @@ class NativeEvidence(unittest.TestCase):
             self.assertEqual(rows[-4]['address'], 0x123456789abc)
             self.assertEqual(rows[-3]['source'], rows[-2]['destination'])
             self.assertEqual(rows[-1]['address'], 0x123456789abc)
+            staged_log = tmp/'staged.jsonl'
+            staged = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library),
+                'ORBITTE_IPC_LOG': str(staged_log), 'ORBITTE_STAGING_OBSERVE': '1'}, capture_output=True, timeout=10)
+            self.assertEqual(staged.returncode, 0, staged.stderr)
+            staged_rows = [json.loads(line) for line in staged_log.read_text().splitlines()]
+            returns = [r for r in staged_rows if not r['kind'].endswith('_begin')]
+            self.assertEqual([(r['kind'],r['code']) for r in returns], [(r['kind'],r['code']) for r in rows+lifecycle if not r['kind'].endswith('_begin')])
+            begins = [r for r in staged_rows if r['kind'].endswith('_begin')]
+            self.assertEqual(len(begins), 7)
+            for begin in begins:
+                end = staged_rows[begin['seq']]
+                self.assertEqual(end['kind'], begin['kind'].removesuffix('_begin'))
+                for key in begin.keys() - {'seq','kind','code'}:
+                    self.assertEqual(begin[key], end[key])
 
 
 if __name__ == '__main__':
