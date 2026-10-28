@@ -68,6 +68,10 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
         frees = select(rows, 'free')
         assert len(frees) == (0 if mode == 'requester-exit' else len(allocations)), 'native allocation release/retention'
         assert all(free['address'] in [a['address'] for a in allocations] for free in frees), 'free owner mismatch'
+        if frees:
+            assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'record', 'wait', 'close')), 'allocation freed before its last native use'
+            if rows is requester and closes:
+                assert any(closes[-1]['seq'] < pop['seq'] < frees[0]['seq'] for pop in select(rows, 'pop')), 'requester allocation freed before close context restoration'
     return {'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes)}
 
 

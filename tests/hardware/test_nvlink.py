@@ -70,6 +70,22 @@ class NativeEvidence(unittest.TestCase):
             with self.subTest(control=name), self.assertRaises(AssertionError):
                 nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
 
+    def test_early_free_is_not_accepted_as_cleanup(self):
+        for side in (0, 1):
+            rows = self.evidence()
+            free = next(row for row in rows[side] if row['kind'] == 'free')
+            rows[side].remove(free)
+            rows[side].insert(1, free)
+            for index, row in enumerate(rows[side]):
+                row['seq'] = index+1
+            with self.subTest(side=side), self.assertRaises(AssertionError):
+                nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
+        rows = self.evidence()
+        last_close = max(row['seq'] for row in rows[1] if row['kind'] == 'close')
+        next(row for row in rows[1] if row['kind'] == 'pop' and row['seq'] > last_close)['kind'] = 'ignored'
+        with self.assertRaises(AssertionError):
+            nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
+
     def test_observer_forwards_arguments_outputs_and_native_failures(self):
         root = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as directory:
