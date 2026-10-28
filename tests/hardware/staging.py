@@ -42,12 +42,28 @@ def verify(case, evidence):
         require(stats[0] == dict(allocations=1, reuses=5, chunks=6 * len(sizes), bytes=6 * length, reserved_bytes=chunk), role + ': chunk accounting mismatch')
         native = [json.loads(line) for line in proof['cuda-staging.jsonl'].splitlines()]
         require(native and all(row['pid'] == result['native_pid'] and row['code'] == 0 for row in native), role + ': failed or foreign CUDA receipt')
+        memory = records(proof, 'ORBITTE_MEMORY ')
+        require(len(memory) == 1 and memory[0].get('cuda') is True
+                and memory[0]['base'] > 0 and memory[0]['length'] == case['payload'] + 128,
+                role + ': missing exact GPU allocation identity')
+        owner = memory[0]
+        allocations = [row for row in native if row['kind'] == 'allocate']
+        require(len(allocations) == 1 and allocations[0]['address'] == owner['base']
+                and allocations[0]['length'] == owner['length'], role + ': GPU allocation differs from registered owner')
         live = {}
+        devices = {}
+        transfers = []
         previous = 0
         for row in native:
             require(row['seq'] > previous, role + ': native sequence is not ordered')
             previous = row['seq']
-            if row['kind'] == 'pin':
+            if row['kind'] == 'allocate':
+                require(row['address'] not in devices, role + ': duplicate live GPU allocation')
+                devices[row['address']] = row['length']
+            elif row['kind'] == 'free':
+                require(row['address'] in devices, role + ': device free without live allocation')
+                del devices[row['address']]
+            elif row['kind'] == 'pin':
                 address, size = row['address'], row['length']
                 require(address > 0 and size > 0 and all(address + size <= start or start + count <= address for start, count in live.items()), role + ': duplicate/overlapping live pin')
                 live[address] = size
@@ -56,8 +72,25 @@ def verify(case, evidence):
                 del live[row['address']]
             elif row['kind'] in ('htod', 'dtoh'):
                 address = row['source'] if row['kind'] == 'htod' else row['destination']
-                require(any(start <= address and address + row['length'] <= start + count for start, count in live.items()), role + ': copy outside live pinned memory')
-        require(not live, role + ': pinned allocations remain after shutdown')
+                hosts = [start for start, count in live.items() if start <= address and address + row['length'] <= start + count]
+                require(row['length'] > 0 and len(hosts) == 1, role + ': copy outside live pinned memory')
+                device = row['destination'] if row['kind'] == 'htod' else row['source']
+                require(any(start <= device and device + row['length'] <= start + count for start, count in devices.items()),
+                        role + ': copy outside live GPU allocation')
+                transfers.append((row, hosts[0]))
+        require(not live and not devices, role + ': native allocations remain after shutdown')
+        device_free = next(row['seq'] for row in native if row['kind'] == 'free' and row['address'] == owner['base'])
+        for index, (copy, host) in enumerate(transfers):
+            host_free = next(row['seq'] for row in native if row['kind'] == 'unpin'
+                             and row['address'] == host and row['seq'] > copy['seq'])
+            next_copy = transfers[index + 1][0]['seq'] if index + 1 < len(transfers) else device_free
+            end = min(next_copy, host_free, device_free)
+            following = [row for row in native if copy['seq'] < row['seq'] < end and row['tid'] == copy['tid']]
+            require([row['kind'] for row in following[:3]] == ['record', 'wait', 'pop'],
+                    role + ': native reuse/free before event wait/context restore')
+            record, wait, _ = following[:3]
+            require(record['stream'] == copy['stream'] and record['event'] != 0 and wait['event'] == record['event'],
+                    role + ': completion belongs to a different stream/event')
         pins = [row for row in native if row['kind'] == 'pin' and row['length'] == chunk]
         require(len(pins) == 1, role + ': missing persistent physical chunk')
         pin = pins[0]
@@ -68,14 +101,12 @@ def verify(case, evidence):
         copies = [row for row in native if pin['seq'] < row['seq'] < free['seq'] and (
             (row['kind'] == 'htod' and row['source'] == pin['address']) or
             (row['kind'] == 'dtoh' and row['destination'] == pin['address']))]
+        expected_copies = [(owner['base'] + 64 + index * (case['payload'] // 4)
+                            + (11 if role == 'source' else 5) + offset, min(chunk, length - offset))
+                           for index in range(3) for offset in range(0, length, chunk)]
         for direction in ('htod', 'dtoh'):
-            require([row['length'] for row in copies if row['kind'] == direction] == sizes * 3,
-                    role + ': native ' + direction + ' chunk/tail mismatch')
+            actual_copies = [(row['destination'] if direction == 'htod' else row['source'], row['length'])
+                             for row in copies if row['kind'] == direction]
+            require(actual_copies == expected_copies,
+                    role + ': native ' + direction + ' GPU range/chunk/tail mismatch')
         require(len({row['stream'] for row in copies}) == 1, role + ': allocation copy stream changed')
-        for index, copy in enumerate(copies):
-            end = copies[index + 1]['seq'] if index + 1 < len(copies) else free['seq']
-            following = [row for row in native if copy['seq'] < row['seq'] < end and row['tid'] == copy['tid']]
-            require([row['kind'] for row in following[:3]] == ['record', 'wait', 'pop'], role + ': reuse before event wait/context restore')
-            record, wait, _ = following[:3]
-            require(record['stream'] == copy['stream'] and record['event'] != 0 and wait['event'] == record['event'],
-                    role + ': completion belongs to a different stream/event')

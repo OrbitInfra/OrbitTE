@@ -659,6 +659,23 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .collect();
         let mut batch = engine.allocate_batch(requests.len())?;
         batch.submit(TransferOp::Read, &peer, &requests[..1], None, TIMEOUT)?;
+        let first_deadline = Instant::now() + TIMEOUT;
+        loop {
+            let first = batch.submissions()?.remove(0);
+            if first.failure.is_some() {
+                return Err(format!("first READ submission failed: {:?}", first.failure).into());
+            }
+            if first.locally_drained {
+                if first.completed_requests != 1 {
+                    return Err("first READ submission did not complete".into());
+                }
+                break;
+            }
+            if Instant::now() >= first_deadline {
+                return Err("first READ submission drain deadline".into());
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
         batch.submit(
             TransferOp::Read,
             &peer,
