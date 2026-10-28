@@ -557,7 +557,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   or RDMA CROSS legs. One handler and parent slot suffice; scoped phase receipts,
   explicit private MR retirement and fallible chunk release fence reuse. CPU
   controls cover partial effects, lost receipts and retained CUDA/MR failures.
-  The new installed profile is still unqualified. Qualify this serial boundary,
+  Independent review accepts the serial source boundary at `64c9899`; the new
+  installed profile is still unqualified. Qualify this serial boundary,
   then complete overlapping PRE/CROSS/POST pipelines and remote scheduling
   before claiming full ProxyManager parity. See [the contract](staging.md#serial-remote-staging).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible

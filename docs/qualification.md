@@ -36,7 +36,13 @@ operations and loss of the final Unpin reply. Independent review found that
 nonce-only replies could accept a repeated prior receipt as final completion;
 success replies now echo the full operation and range. The retained failing
 control and current source-gate evidence live outside Git in
-`/root/orbitte-artifacts/proxy-remote-20261028/`.
+`/root/orbitte-artifacts/proxy-remote-20261028/`. Independent review accepts source
+correctness at [`64c9899`](https://github.com/OrbitInfra/OrbitTE/commit/64c9899fa088898b01000fe87ccb924bed356c32),
+including a fresh real TCP relay control that repeats the previous phase receipt
+while withholding Unpin. Both directions reject early completion. The review
+record is `independent-review/final-source-review.json` in that artifact root.
+Clean stable and Rust 1.85 installed consumers build from that same commit;
+package provenance and source acceptance do not qualify device execution.
 
 Installed consumer inputs extend the existing staging gate with
 `remote_staging: true`, remote GPU ranges, explicit source operation counts and

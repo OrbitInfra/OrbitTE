@@ -121,9 +121,11 @@ admission. Ordinary confirmed errors remain errors even when locally drained.
 There is no automatic retry of a possibly executed WRITE.
 
 `EngineStats.staging.remote_pins`, `remote_delegates`, `remote_crosses` and
-`remote_unpins` count source-side completed operations. The Unpin counter records
-physical release before its reply, so a lost reply can coexist with a completed
-source Unpin. These observations do not replace requester completion receipts.
+`remote_unpins` count source-side completed operations. Unpin returns the drained
+chunk to the pool before its reply; native host unpin normally occurs when the
+pool closes.
+A lost reply can coexist with a completed source Unpin. These observations do
+not replace requester completion receipts.
 
 ## Validation
 
