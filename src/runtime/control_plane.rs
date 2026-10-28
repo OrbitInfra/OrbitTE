@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 15;
+const VERSION: u16 = 16;
 pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -33,6 +33,9 @@ pub(crate) enum Operation {
     RdmaWriteSlices = 7,
     NvlinkRead = 8,
     NvlinkWrite = 9,
+    NvlinkReadCached = 10,
+    NvlinkWriteCached = 11,
+    NvlinkClose = 12,
 }
 
 pub(crate) struct Request {
@@ -69,6 +72,9 @@ impl Request {
             7 => Operation::RdmaWriteSlices,
             8 => Operation::NvlinkRead,
             9 => Operation::NvlinkWrite,
+            10 => Operation::NvlinkReadCached,
+            11 => Operation::NvlinkWriteCached,
+            12 => Operation::NvlinkClose,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -476,6 +482,22 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         channel.reply(source.epoch, 1, 0)?;
         return Ok(());
     }
+    // A close receipt releases an existing export; it grants no new access.
+    // It remains serviceable after admission closes or registration disappears.
+    if request.operation == Operation::NvlinkClose {
+        #[cfg(feature = "cuda")]
+        let result = source
+            .nvlink
+            .as_ref()
+            .ok_or(Error::Unavailable("NVLink is not configured"))?
+            .serve_close(channel, source.epoch, &request);
+        #[cfg(not(feature = "cuda"))]
+        let result: Result<()> = Err(Error::Unavailable("build with --features cuda"));
+        if let Err(error) = result {
+            channel.reply(source.epoch, error_status(&error), 0)?;
+        }
+        return Ok(());
+    }
     let admission = match source.admit() {
         Ok(admission) => admission,
         Err(error) => {
@@ -540,6 +562,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 | Operation::RdmaWrite
                 | Operation::RdmaWriteSlices
                 | Operation::NvlinkWrite
+                | Operation::NvlinkWriteCached
         )) {
             return Err(Error::PermissionDenied);
         }
@@ -556,7 +579,10 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 offset,
                 length,
             ),
-            Operation::NvlinkRead | Operation::NvlinkWrite => {
+            Operation::NvlinkRead
+            | Operation::NvlinkWrite
+            | Operation::NvlinkReadCached
+            | Operation::NvlinkWriteCached => {
                 #[cfg(feature = "cuda")]
                 return source
                     .nvlink

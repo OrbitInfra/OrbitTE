@@ -34,7 +34,7 @@ fn ipc_mapping_budget_charges_physical_extent_and_retains_failed_closes() {
 
 #[test]
 fn ipc_grant_validation_binds_request_epochs_and_allocation_extent() {
-    let transport = NVLinkTransport::new(2 << 20).unwrap();
+    let transport = NVLinkTransport::new(2 << 20, 0).unwrap();
     let request = Request {
         operation: Operation::NvlinkRead,
         epoch: SourceEpoch([1; 16]),

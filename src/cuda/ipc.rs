@@ -115,6 +115,19 @@ impl IpcMapping {
         })
     }
 
+    /// Release completed local copy owners while retaining the remote import.
+    /// A later import-close failure cannot retroactively invalidate these copies.
+    pub(crate) fn finish_copies(&mut self) -> Result<()> {
+        if self.pending || self.uncertain || self.context.poisoned.load(Ordering::Acquire) {
+            return Err(Error::Unquiesced {
+                operation: "CUDA IPC cached copies",
+                code: -1,
+            });
+        }
+        self.memories.clear();
+        Ok(())
+    }
+
     pub(crate) fn close(&mut self) -> Result<()> {
         let result = self.close_mapping();
         if result.is_err() {

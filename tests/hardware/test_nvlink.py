@@ -12,8 +12,9 @@ import nvlink_run
 
 class NativeEvidence(unittest.TestCase):
     def evidence(self, mode='healthy', memory='device'):
-        batched = mode.startswith("batch-")
-        mode = mode.removeprefix("batch-")
+        cached = mode.startswith("cache-")
+        batched = cached or mode.startswith("batch-")
+        mode = mode.removeprefix("cache-").removeprefix("batch-")
         source, requester = [], []
 
         def add(rows, kind, **values):
@@ -23,7 +24,7 @@ class NativeEvidence(unittest.TestCase):
         add(source, 'allocate', address=1000, length=2 << 20)
         add(source, 'memset', address=1000, length=2 << 20, value=0)
         add(source, 'sync')
-        count = 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
+        count = 1 if cached else 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
         if count:
             add(requester, 'allocate', address=2000, length=151)
             if batched: add(requester, 'allocate', address=4000, length=151)
@@ -31,8 +32,12 @@ class NativeEvidence(unittest.TestCase):
             add(source, 'export', address=1000, handle=1234)
             add(requester, 'open', address=3000, handle=1234, flags=1)
             read = mode == 'healthy' and index == 0
-            for part, (offset,length) in enumerate([(10,7),(0,5),(5,5)] if batched else [(0,17)]):
-                remote, own = 3067+offset, (2000 if part%2 == 0 else 4000)+67+offset
+            slices = [(10,7),(0,5),(5,5)] if batched else [(0,17)]
+            if cached and mode=='healthy': slices *= 5
+            for part, (offset,length) in enumerate(slices):
+                if cached: read = mode=='healthy' and part < 12
+                local_part = part%3 if cached else part
+                remote, own = 3067+offset, (2000 if local_part%2 == 0 else 4000)+67+offset
                 add(requester, 'copy', source=remote if read else own,
                     destination=own if read else remote, length=length, stream=4)
                 add(requester, 'record', event=5, stream=4)
@@ -54,6 +59,48 @@ class NativeEvidence(unittest.TestCase):
                 elif host and row['kind']=='free': row['kind']='unpin'
                 elif host and row['kind']=='copy': row['kind']='dtoh' if 3000 <= row['source'] < 3200 else 'htod'
         return source, requester
+
+    def test_cached_native_has_one_import_for_concurrent_reads_and_later_write(self):
+        for memory in ('device','host','mixed'):
+            for mode in ('cache-healthy','cache-graceful','cache-requester-exit'):
+                rows = self.evidence(mode,memory)
+                result = nvlink_run.validate_native(*rows,17,mode,101,102,memory)
+                self.assertEqual(result['imports'],1)
+                self.assertEqual(result['copies'],15 if mode=='cache-healthy' else 3)
+            for fault in ('missing-copy','extra-open','missing-event','wrong-direction','early-close','wrong-context-restore','unowned-staging'):
+                source, requester = self.evidence('cache-healthy',memory)
+                copies = [r for r in requester if r['kind'] in ('copy','dtoh','htod')]
+                if fault=='missing-copy': requester.remove(copies[3])
+                elif fault=='extra-open': requester.insert(4,dict(next(r for r in requester if r['kind']=='open')))
+                elif fault=='missing-event': next(r for r in requester if r['kind']=='record')['kind']='ignored'
+                elif fault=='wrong-direction': copies[-1]['source'],copies[-1]['destination']=copies[-1]['destination'],copies[-1]['source']
+                elif fault=='early-close':
+                    close=next(r for r in requester if r['kind']=='close');requester.remove(close);requester.insert(7,close)
+                elif fault=='wrong-context-restore':
+                    close=next(i for i,r in enumerate(requester) if r['kind']=='close');requester[close+1]['tid']=99
+                else:
+                    requester.insert(5,dict(pid=102,tid=1,code=0,kind='htod',source=9999999,destination=8888888,length=17,stream=4))
+                for i,row in enumerate(requester): row['seq']=i+1
+                with self.subTest(memory=memory,fault=fault), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source,requester,17,'cache-healthy',101,102,memory)
+
+    def test_cached_payload_cannot_borrow_completion_from_owned_device_readback(self):
+        for missing in ('record', 'wait', 'pop'):
+            source, requester = self.evidence('cache-healthy')
+            close = next(i for i, row in enumerate(requester) if row['kind'] == 'close')
+            readback = [dict(kind='pin', address=6000, length=151, flags=1),
+                        dict(kind='dtoh', source=2000, destination=6000, length=151, stream=4),
+                        dict(kind='record', event=5, stream=4), dict(kind='pop'),
+                        dict(kind='wait', event=5), dict(kind='pop'),
+                        dict(kind='unpin', address=6000)]
+            requester[close:close] = [dict(pid=102, tid=1, code=0, **row) for row in readback]
+            for i, row in enumerate(requester): row['seq'] = i+1
+            nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
+            index = max(i for i, row in enumerate(requester[:close]) if row['kind'] == missing)
+            requester.pop(index)
+            for i, row in enumerate(requester): row['seq'] = i+1
+            with self.subTest(missing=missing), self.assertRaises(AssertionError):
+                nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
 
     def test_host_and_mixed_need_actual_pinned_owners_and_direct_copy_apis(self):
         for memory in ('host','mixed'):

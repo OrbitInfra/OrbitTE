@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod ipc;
+mod ipc_cache;
 mod ipc_host;
 #[cfg(feature = "rdma")]
 mod rdma;

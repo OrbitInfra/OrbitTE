@@ -10,6 +10,12 @@ pub struct EngineConfig {
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
     pub nvlink: bool,
+    /// Maximum persistent CUDA IPC imports and exports, independently per side.
+    /// Zero closes imports after each subbatch. Nonzero requires cooperating
+    /// peers to close requesters before releasing exporters. Cached exports keep
+    /// their whole allocation loan until an explicit native-close receipt.
+    #[cfg(feature = "cuda")]
+    pub nvlink_cache_entries: usize,
     #[cfg(feature = "rdma")]
     pub rdma: Option<crate::transport::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
@@ -36,6 +42,8 @@ impl Default for EngineConfig {
         Self {
             #[cfg(feature = "cuda")]
             nvlink: false,
+            #[cfg(feature = "cuda")]
+            nvlink_cache_entries: 0,
             #[cfg(feature = "rdma")]
             rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
@@ -58,6 +66,12 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.nvlink_cache_entries > 4096 || (self.nvlink_cache_entries != 0 && !self.nvlink) {
+            return Err(Error::InvalidConfig(
+                "NVLink cache requires NVLink and at most 4096 entries",
+            ));
+        }
         #[cfg(feature = "rdma")]
         if let Some(config) = &self.rdma {
             config.validate()?;

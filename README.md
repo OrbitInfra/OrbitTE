@@ -46,7 +46,8 @@ recovery policy and replica placement.
   Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
   with allocation-range ownership and consumer visibility before completion.
   Cooperative same-host GPU IPC adds explicit export ownership and close receipts;
-  local owned pinned host READ/WRITE is also implemented.
+  local owned pinned host READ/WRITE and bounded cross-submission import reuse
+  are also available.
 
 ## Quick Start
 
@@ -88,7 +89,10 @@ host-wide context inventory limit. Direct mode has provider prerequisites. The
 with explicit exporter-lifetime limits. Bounded subbatch import reuse passes
 28 additional installed cases on two H20 hosts; local owned pinned host
 READ/WRITE and mixed host/GPU groups pass 30 further cases plus four independent
-repeats. These bounded profiles are independently accepted.
+repeats. These bounded profiles are independently accepted. Optional
+cross-submission import caching passes 34 installed cases plus four independent
+repeats, with bounded mappings and explicit exporter close receipts. It supports
+a fixed working set until requester shutdown; source allocations stay loaned.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

@@ -96,9 +96,14 @@ fn released(engine: &TransferEngine) -> Result<()> {
 }
 
 fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
-    let mode = mode.strip_prefix("batch-").unwrap_or(mode);
+    let cached = mode.starts_with("cache-");
+    let mode = mode
+        .strip_prefix("cache-")
+        .or_else(|| mode.strip_prefix("batch-"))
+        .unwrap_or(mode);
     let engine = TransferEngine::new(EngineConfig {
         nvlink: true,
+        nvlink_cache_entries: if cached { 2 } else { 0 },
         handler_timeout: TIMEOUT,
         ..EngineConfig::default()
     })?;
@@ -157,9 +162,9 @@ fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
         let stats = engine.stats()?;
         let ipc = stats.nvlink.ok_or(Error::Internal("missing IPC stats"))?;
         let extent = (memory.len() + (2 << 20) - 1) & !((2 << 20) - 1);
-        if stats.active_source_operations != 1
+        if stats.active_source_operations != usize::from(!cached)
             || ipc.exports != 1
-            || ipc.retained_exports != 1
+            || ipc.retained_exports != usize::from(!cached)
             || ipc.allocation_bytes != extent
             || memory.read(0, &mut [0; 1]).is_ok()
         {
@@ -168,8 +173,9 @@ fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
             ));
         }
         println!(
-            "NVLINK_SOURCE_RETAINED pid={} extent={extent} source_ops=1",
-            std::process::id()
+            "NVLINK_SOURCE_RETAINED pid={} extent={extent} source_ops={}",
+            std::process::id(),
+            stats.active_source_operations
         );
         return Ok(());
     }
@@ -197,8 +203,12 @@ fn requester(
     mode: &str,
     memory_kind: &str,
 ) -> Result<()> {
-    let batched = mode.starts_with("batch-");
-    let mode = mode.strip_prefix("batch-").unwrap_or(mode);
+    let cached = mode.starts_with("cache-");
+    let batched = cached || mode.starts_with("batch-");
+    let mode = mode
+        .strip_prefix("cache-")
+        .or_else(|| mode.strip_prefix("batch-"))
+        .unwrap_or(mode);
     let ready = fs::read_to_string(root.join("ready"))?;
     let fields: Vec<_> = ready.lines().collect();
     if fields.len() != 5 {
@@ -213,6 +223,7 @@ fn requester(
         .map_err(|_| Error::Protocol("source address"))?;
     let engine = TransferEngine::new(EngineConfig {
         nvlink: true,
+        nvlink_cache_entries: if cached { 2 } else { 0 },
         ..EngineConfig::default()
     })?;
     if mode == "stale" {
@@ -269,9 +280,33 @@ fn requester(
         })
         .collect();
     if mode == "healthy" {
-        let report = engine.submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)?;
-        if !report.is_complete() || !report.locally_drained {
-            return Err(Error::Internal("NVLink READ incomplete"));
+        if cached {
+            let barrier = std::sync::Barrier::new(4);
+            std::thread::scope(|copies| -> Result<()> {
+                let tasks: Vec<_> = (0..4)
+                    .map(|_| {
+                        copies.spawn(|| {
+                            barrier.wait();
+                            engine.submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)
+                        })
+                    })
+                    .collect();
+                for task in tasks {
+                    let report = task
+                        .join()
+                        .map_err(|_| Error::Internal("cached requester panicked"))??;
+                    if !report.is_complete() || !report.locally_drained {
+                        eprintln!("cached READ: {report:?}");
+                        return Err(Error::Internal("cached READ incomplete"));
+                    }
+                }
+                Ok(())
+            })?;
+        } else {
+            let report = engine.submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)?;
+            if !report.is_complete() || !report.locally_drained {
+                return Err(Error::Internal("NVLink READ incomplete"));
+            }
         }
         for (storage, memory) in memories.iter().enumerate() {
             let mut expected = vec![0xa5; memory.len()];
@@ -308,6 +343,19 @@ fn requester(
         {
             return Err(Error::Internal("requester WRITE changed source/guards"));
         }
+    }
+    if cached {
+        let stats = engine.stats()?;
+        let ipc = stats.nvlink.ok_or(Error::Internal("missing cache stats"))?;
+        if ipc.imports != 1 || stats.inflight_bytes != 0 {
+            return Err(Error::Internal(
+                "cached mapping or completed byte accounting",
+            ));
+        }
+        println!(
+            "NVLINK_CACHE_IDLE imports=1 completed_submissions={}",
+            if mode == "healthy" { 5 } else { 1 }
+        );
     }
     engine.close(TIMEOUT)?;
     for region in &registered {
@@ -346,18 +394,20 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "batch-healthy",
         "batch-graceful",
         "batch-requester-exit",
+        "cache-healthy",
+        "cache-graceful",
+        "cache-requester-exit",
     ]
     .contains(&mode)
     {
         return Err("unknown mode".into());
     }
-    if mode.starts_with("batch-") && payload < 3 {
+    let grouped = mode.starts_with("batch-") || mode.starts_with("cache-");
+    if grouped && payload < 3 {
         return Err("batch requires at least three bytes".into());
     }
     let memory_kind = args[5].as_str();
-    if !["device", "host", "mixed"].contains(&memory_kind)
-        || (memory_kind == "mixed" && !mode.starts_with("batch-"))
-    {
+    if !["device", "host", "mixed"].contains(&memory_kind) || (memory_kind == "mixed" && !grouped) {
         return Err("invalid requester memory profile".into());
     }
     match args[0].as_str() {

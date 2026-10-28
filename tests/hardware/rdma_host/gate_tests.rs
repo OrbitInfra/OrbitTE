@@ -5,7 +5,7 @@ use super::*;
 fn wire<const N: usize>(code: u8, length: u64) -> [u8; N] {
     let mut bytes = [0; N];
     bytes[..8].copy_from_slice(b"ORBITTE\0");
-    bytes[8..10].copy_from_slice(&15u16.to_be_bytes());
+    bytes[8..10].copy_from_slice(&16u16.to_be_bytes());
     bytes[10] = code;
     bytes[28..36].copy_from_slice(&length.to_be_bytes());
     bytes

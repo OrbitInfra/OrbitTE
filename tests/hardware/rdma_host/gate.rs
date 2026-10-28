@@ -1,4 +1,4 @@
-//! Test-only wire-v15 relay. Hold READY after the source posts its completion RQ.
+//! Test-only wire-v16 relay. Hold READY after the source posts its completion RQ.
 //! Payload opcodes are rejected; RDMA bytes never pass through this listener.
 
 use std::net::Shutdown;
@@ -162,8 +162,8 @@ fn frame<const N: usize>(stream: &mut TcpStream) -> Result<[u8; N]> {
 }
 
 fn header(bytes: &[u8]) -> Result<(u8, usize)> {
-    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != 15u16.to_be_bytes() || bytes[11] != 0 {
-        return Err("relay only supports the frozen wire-v15 header".into());
+    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != 16u16.to_be_bytes() || bytes[11] != 0 {
+        return Err("relay only supports the frozen wire-v16 header".into());
     }
     Ok((
         bytes[10],
@@ -273,3 +273,24 @@ fn relay(mut client: TcpStream, upstream: SocketAddr, control: &Control) -> Resu
 #[cfg(test)]
 #[path = "gate_tests.rs"]
 mod tests;
+
+#[test]
+fn relay_tracks_the_public_engines_current_wire() {
+    let source = TransferEngine::new(orbit_te::EngineConfig::default()).unwrap();
+    let requester = TransferEngine::new(orbit_te::EngineConfig::default()).unwrap();
+    let memory = source
+        .register_memory(
+            vec![1; 17].into_boxed_slice(),
+            orbit_te::Permission::RemoteRead,
+        )
+        .unwrap();
+    let gate = GrantGate::new("127.0.0.1:0".parse().unwrap(), source.endpoint()).unwrap();
+    let peer = requester
+        .open_segment(gate.address(), source.source_epoch(), TIMEOUT)
+        .unwrap();
+    assert_eq!(peer.regions().len(), 1);
+    assert_eq!(peer.regions()[0].base_address(), memory.base_address());
+    gate.close().unwrap();
+    requester.close(TIMEOUT).unwrap();
+    source.close(TIMEOUT).unwrap();
+}

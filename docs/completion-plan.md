@@ -528,8 +528,20 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   owner; failed completion retains and fences actual pinned backing. Source
   gates, 30 installed stable/MSRV H20 cases and four fresh independent repeats
   pass. Source and the bounded profile are independently accepted.
-  Remote host exports, cross-submission
-  import-cache ownership and broader stream scheduling remain open; exporter-crash safety is
+  **P5.4d — bounded cross-submission import cache (Accepted for the declared profile):**
+  opt-in transport-owned single-flight relocation entries retain context/import
+  and physical quota. Every reuse rechecks source authority. An independent
+  export owner retains registration and whole-allocation loan until explicit
+  native-close receipt; ready-offer prevents late initial grants after close.
+  Operation completion releases drained local owners. Requester close retries
+  lost close ACKs without repeating native close; mutual shutdown closes outgoing
+  imports first. CPU controls include cold concurrency, closed/unregistered/
+  read-only sources, lost receipts, late hello, source/requester capacity, actual
+  source-owner retention and native cleanup faults. Stable/MSRV installed
+  consumers pass 34 H20 cases plus four fresh independent repeats; source and
+  this fixed-working-set profile are accepted.
+  Cache eviction/continuing flush, remote host exports and broader stream
+  scheduling remain open; exporter-crash safety is
   explicitly unqualified. See [the transport contract](cuda-ipc.md).
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
   Delegate/Pin/Unpin operations, nested admission and owned proxy shutdown.
@@ -790,8 +802,12 @@ The cooperative P5.4 GPU/GPU IPC substage is independently accepted with
 28 installed H20 cases plus four fresh repeats and is independently accepted
 for that profile. P5.4c local owned pinned host directions and mixed groups
 pass 30 installed cases plus four independent repeats and are accepted.
-Next address cross-submission import reuse with explicit exporter lifetime owners. Proxy/staging scheduling
-follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
+P5.4d bounded cross-submission caching and explicit exporter lifetime owners
+pass 34 installed cases plus four fresh independent repeats and are accepted
+for the fixed-working-set profile. Next implement the P5 ProxyManager-equivalent
+chunk/staging ownership: bounded local/remote stage buffers, Delegate/Pin/Unpin,
+nested admission and owned shutdown. Validate partial completion and failure
+retention before adding broader scheduling. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
 Do not reopen completed source work or repeat unaffected matrices.

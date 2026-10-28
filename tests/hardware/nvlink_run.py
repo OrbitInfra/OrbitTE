@@ -52,13 +52,14 @@ def validate_pins(rows, retain):
 
 
 def validate_native(source, requester, payload, mode, source_pid, requester_pid, memory="device"):
-    batched = mode.startswith("batch-")
-    mode = mode.removeprefix("batch-")
+    cached = mode.startswith("cache-")
+    batched = cached or mode.startswith("batch-")
+    mode = mode.removeprefix("cache-").removeprefix("batch-")
     for rows, pid in [(source, source_pid), (requester, requester_pid)]:
         assert [row['seq'] for row in rows] == list(range(1, len(rows)+1)), 'native sequence gap'
         assert all(row['pid'] == pid and row['code'] == 0 for row in rows), 'native PID/driver result'
     select = lambda rows, kind: [row for row in rows if row['kind'] == kind]
-    expected = 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
+    expected = 1 if cached else 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
     exports, imports = select(source, 'export'), select(requester, 'open')
     assert len(exports) == len(imports) == expected, 'native IPC count'
     validate_pins(source, False)
@@ -87,6 +88,13 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
     for index, allocation in enumerate(local):
         for other in local[index+1:]:
             assert allocation['address']+allocation['length'] <= other['address'] or other['address']+other['length'] <= allocation['address'], 'overlapping live requester allocations'
+    def local_device_copy(copy, rows, allocations):
+        if copy['kind'] not in ('htod', 'dtoh'): return False
+        address = copy['destination' if copy['kind']=='htod' else 'source']
+        return any(a['seq'] < copy['seq'] and a['address'] <= address < address+copy['length'] <= a['address']+a['length']
+                   and not any(f['address']==a['address'] and a['seq'] < f['seq'] < copy['seq'] for f in select(rows,'free'))
+                   for a in allocations)
+
     closes = select(requester, 'close')
     assert len(closes) == (0 if mode == 'requester-exit' else expected), 'mapping close count'
     for index, opened in enumerate(imports):
@@ -94,18 +102,20 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         cycle = [row for row in requester if opened['seq'] <= row['seq'] < boundary]
         end = closes[index]['seq'] if mode != 'requester-exit' else boundary
         interval = [row for row in cycle if row['seq'] < end]
-        assert not any(r['kind'] in ('pin','allocate') for r in interval), 'temporary allocation inside IPC copy cycle'
-        cycle_copies = [r for r in interval if r['kind'] in ('copy','htod','dtoh')]
+        if not cached: assert not any(r['kind'] in ('pin','allocate') for r in interval), 'temporary allocation inside IPC copy cycle'
+        cycle_copies = [r for r in interval if r['kind'] in ('copy','htod','dtoh') and (not cached or not local_device_copy(r,requester,select(local,'allocate')))]
         copies.extend(cycle_copies)
-        assert len(cycle_copies) == (3 if batched else 1), 'copies outside their import cycle'
+        assert len(cycle_copies) == (15 if cached and mode=='healthy' else 3 if batched else 1), 'copies outside their import cycle'
         read = mode == 'healthy' and index == 0
         width = payload//3
         slices = [(2*width, payload-2*width), (0,width), (width,width)] if batched else [(0,payload)]
+        if cached and mode == 'healthy': slices *= 5
         for part, (copy, (offset, length)) in enumerate(zip(cycle_copies, slices)):
-            next_copy = cycle_copies[part+1]['seq'] if part+1 < len(cycle_copies) else boundary
+            if cached: read = mode == 'healthy' and part < 12
+            next_copy = next((r['seq'] for r in cycle if r['seq'] > copy['seq'] and r['tid'] == copy['tid'] and r['kind'] in ('copy','htod','dtoh')), boundary)
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
-            assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
-            allocation = local[part % len(local)]
+            if not cached: assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
+            allocation = local[(part % 3 if cached else part) % len(local)]
             expected_api = ('dtoh' if read else 'htod') if allocation['kind']=='pin' else 'copy'
             assert copy['kind'] == expected_api, 'wrong native copy API'
             assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
@@ -119,25 +129,25 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             wait = waits[0]
             pops = [row for row in select(cycle, 'pop') if row['tid'] == copy['tid']]
             assert event['tid'] == wait['tid'] == copy['tid'], 'completion thread mismatch'
+            assert not any(copy['seq'] < r['seq'] < event['seq'] and r['kind'] in ('copy','htod','dtoh') for r in cycle), 'completion event belongs to a later copy'
+            assert not any(copy['seq'] < r['seq'] < wait['seq'] and r['kind'] in ('pin','allocate','unpin','free') for r in cycle), 'allocation changed before payload drain'
             assert not any(copy['seq'] < p['seq'] < event['seq'] for p in pops), 'copy escaped owning context before event record'
-            assert any(wait['seq'] < p['seq'] < next_copy for p in pops), 'copy context not restored before next slice'
+            restored = [r for r in cycle if r['seq'] > wait['seq'] and r['tid'] == copy['tid']]
+            assert restored and restored[0]['kind'] == 'pop' and restored[0]['seq'] < next_copy, 'copy context not immediately restored'
             if mode != 'requester-exit':
                 close = closes[index]
                 assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'
                 assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'copy context not restored'
-                assert close['tid'] == copy['tid'], 'close/import thread mismatch'
+                if not cached: assert close['tid'] == copy['tid'], 'close/import thread mismatch'
                 after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
                 assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
-    assert len(copies) == expected*(3 if batched else 1), 'native IPC copy count'
+    assert len(copies) == (15 if cached and mode=='healthy' else expected*(3 if batched else 1)), 'native IPC copy count'
     assert len(select(requester,'copy')) == len(select(copies,'copy')), 'device copy outside IPC cycle'
     for rows, allocations in [(source, source_alloc), (requester, select(local,'allocate'))]:
         ipc_sequences = {row['seq'] for row in copies} if rows is requester else set()
         for copy in rows:
             if copy['kind'] not in ('htod','dtoh') or copy['seq'] in ipc_sequences: continue
-            address = copy['destination' if copy['kind']=='htod' else 'source']
-            assert any(a['seq'] < copy['seq'] and a['address'] <= address < address+copy['length'] <= a['address']+a['length']
-                       and not any(f['address']==a['address'] and a['seq'] < f['seq'] < copy['seq'] for f in select(rows,'free'))
-                       for a in allocations), 'host copy outside IPC cycle must use a live local device owner'
+            assert local_device_copy(copy,rows,allocations), 'host copy outside IPC cycle must use a live local device owner'
     for pin in pins:
         frees = [r for r in select(requester,'unpin') if r['address']==pin['address'] and r['seq'] > pin['seq']]
         assert len(frees) == int(mode != 'requester-exit'), 'pinned requester release/retention'
@@ -167,7 +177,7 @@ def run(args):
                 'binary_sha256': digest(args.binary), 'observer_sha256': digest(args.observer),
                 'started_unix': time.time(), 'children': [], 'performance_measurement': False}
     locks, children, files = [], [], []
-    mode = args.mode.removeprefix("batch-")
+    mode = args.mode.removeprefix("cache-").removeprefix("batch-")
 
     def inventory(name):
         result = subprocess.run(['nvidia-smi', '--query-gpu=index,uuid,memory.used', '--format=csv,noheader,nounits'], text=True, capture_output=True, check=True, timeout=15)
@@ -276,5 +286,5 @@ if __name__ == '__main__':
     for name in ('binary-sha256', 'observer-sha256', 'devices'): parser.add_argument('--'+name, required=True)
     parser.add_argument('--memory', choices=('device','host','mixed'), default='device')
     parser.add_argument('--payload', type=int, required=True)
-    parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit'), default='healthy')
+    parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit','cache-healthy','cache-graceful','cache-requester-exit'), default='healthy')
     run(parser.parse_args())
