@@ -247,3 +247,6 @@ retention without final source payload readback. Source admission is no longer
 held by an idle handler; the export table remains charged instead. Native ledger
 checks distinguish IPC payload from owned-device setup/readback, require exact
 copy directions/ranges and event/context completion, and validate final cleanup.
+A payload copy cannot borrow an event, wait or restoring context pop from later
+owned-device setup/readback. See [cache qualification](qualification.md#bounded-cross-submission-cuda-ipc-cache)
+for exact artifacts and the accepted profile.

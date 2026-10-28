@@ -410,9 +410,9 @@ This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant now covers a bounded group, with per-slice
 events and one final import close/source receipt. Shared cleanup failure has an
 explicit affected task span. Native TENT keeps a transport-wide relocation cache;
-OrbitTE does so by default, or keeps it until explicit requester close when
-`nvlink_cache_entries` is enabled. The initial ready-offer handshake separates
-unexposed reservations from exposed exporter obligations; a late first request
+OrbitTE closes imports at each subbatch boundary by default, or keeps them until
+explicit requester close when `nvlink_cache_entries` is enabled. The initial
+ready-offer handshake separates unexposed reservations from exposed exporter obligations; a late first request
 cannot expose a handle after its requester already closed the original socket.
 
 `cuda/pinned.rs::PinnedAllocation` owns real host allocation, primary context,

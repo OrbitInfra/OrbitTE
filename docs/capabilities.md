@@ -21,7 +21,7 @@ for the exact artifacts and profiles behind each result.
 | NVIDIA allocation, pinned host memory and copy streams/events | Implemented | Serialized stream/event reuse passes the bounded two-host/four-H20 local-copy profile on stable and Rust 1.85. Failure retention has CPU controls. Staging is the default device policy |
 | Direct GPU registration / GPUDirect RDMA | Implemented; bounded H20/RoCE profile accepted with limits | Both installed toolchains pass host/GPU/GPU READ/WRITE, tiny and folded two-rail slices, real GPU MR/WR witnesses and owned-context drain. B host-wide context non-growth remains unqualified. Explicit Direct requires scatter-to-CQE disabled; GPU source MRs/QPs are per-grant |
 | Cooperative CUDA IPC / NVLink | Bounded GPU/GPU, subbatch and pinned host profiles accepted | Owned GPU/GPU and local owned pinned host/GPU; whole-allocation opt-in and quota, event completion and explicit import-close receipts. The initial path passes 48 installed H20/NV18 cases plus four independent repeats on stable/MSRV. Same-context subbatch reuse passes 28 additional installed cases and four independent repeats. Pinned host and mixed groups pass 30 additional installed cases plus four independent repeats; exporter-crash safety and broader TENT IPC parity remain open |
-| Cross-submission CUDA IPC import cache | Implemented; qualification pending | Explicit bounded cache, fresh source authorization per submission, single-flight imports and separate exporter lifetime. Fixed working set until requester shutdown; no eviction or forced exporter-crash safety |
+| Cross-submission CUDA IPC import cache | Bounded fixed-working-set profile accepted | Explicit bounded cache, fresh source authorization per submission, single-flight imports and separate exporter lifetime. Fixed working set until requester shutdown; no eviction or forced exporter-crash safety |
 | Local SSD through io_uring / cuFile GDS | Planned, optional | Separate storage transports and direct-path qualification |
 | TENT C/Python/C++ API and mixed-peer wire compatibility | Open | Separate API/ABI/wire gates; the current protocol is OrbitTE-only |
 
@@ -50,6 +50,7 @@ Complete the host-RDMA acceptance boundary before
 renewing OrbitKV integration; the other parity rows remain in their own stages.
 
 Optional `nvlink_cache_entries` adds transport-owned cross-submission CUDA IPC
-reuse. Source/CPU controls are implemented; installed qualification is pending.
+reuse. Source/CPU controls, 34 installed H20 cases and four independent repeats
+pass for the declared fixed-working-set profile.
 This fixed working-set profile keeps the whole source allocation loan until
 requester shutdown. See [CUDA IPC](cuda-ipc.md) for lifecycle and open limits.
