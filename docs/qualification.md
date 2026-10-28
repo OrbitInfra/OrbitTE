@@ -83,7 +83,7 @@ Trusted peers and a live exporter process/context remain required. Host IPC,
 external/managed allocations, transport-wide idle import caches, device-wide
 stream scheduling, MNNVL/VMM, native GPU cleanup faults and complete P5 remain
 open. See [the ownership contract](cuda-ipc.md) and the
-[completion plan](completion-plan.md#p5-cuda-gpudirect-and-staged-transfers).
+[completion plan](completion-plan.md).
 
 ## Cooperative CUDA IPC and NVLink
 
