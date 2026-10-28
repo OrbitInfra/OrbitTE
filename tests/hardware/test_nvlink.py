@@ -78,6 +78,23 @@ class NativeEvidence(unittest.TestCase):
                 with self.subTest(memory=memory,fault=fault),self.assertRaises(AssertionError):
                     nvlink_run.validate_native(*rows,17,'batch-healthy',101,102,memory)
 
+    def test_host_copy_after_close_and_unpin_before_close_restore_are_rejected(self):
+        for fault in ('late-copy','early-unpin'):
+            source,requester=self.evidence('batch-healthy','host')
+            close=max(i for i,r in enumerate(requester) if r['kind']=='close')
+            if fault=='late-copy':
+                extra=[dict(kind='htod',source=2077,destination=3077,length=7,stream=4),
+                       dict(kind='record',event=5,stream=4),dict(kind='pop'),
+                       dict(kind='wait',event=5),dict(kind='pop')]
+                requester[close+2:close+2]=[dict(pid=102,tid=1,code=0,**r) for r in extra]
+            else:
+                unpin=next(r for r in requester if r['kind']=='unpin')
+                requester.remove(unpin);unpin['tid']=2
+                requester.insert(close+1,unpin)
+            for i,row in enumerate(requester):row['seq']=i+1
+            with self.subTest(fault=fault),self.assertRaises(AssertionError):
+                nvlink_run.validate_native(source,requester,17,'batch-healthy',101,102,'host')
+
     def test_exact_ranges_initialization_drain_and_cleanup_are_required(self):
         for mode in ('healthy', 'graceful', 'requester-exit', 'stale', 'batch-healthy', 'batch-graceful', 'batch-requester-exit'):
             with self.subTest(mode=mode):

@@ -106,7 +106,8 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
             assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
             allocation = local[part % len(local)]
-            assert copy['kind'] == ('dtoh' if read else 'htod') if allocation['kind']=='pin' else copy['kind']=='copy', 'wrong native copy API'
+            expected_api = ('dtoh' if read else 'htod') if allocation['kind']=='pin' else 'copy'
+            assert copy['kind'] == expected_api, 'wrong native copy API'
             assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
             remote, own = opened['address']+67+offset, allocation['address']+67+offset
             assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
@@ -129,10 +130,21 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
                 assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
     assert len(copies) == expected*(3 if batched else 1), 'native IPC copy count'
     assert len(select(requester,'copy')) == len(select(copies,'copy')), 'device copy outside IPC cycle'
+    for rows, allocations in [(source, source_alloc), (requester, select(local,'allocate'))]:
+        ipc_sequences = {row['seq'] for row in copies} if rows is requester else set()
+        for copy in rows:
+            if copy['kind'] not in ('htod','dtoh') or copy['seq'] in ipc_sequences: continue
+            address = copy['destination' if copy['kind']=='htod' else 'source']
+            assert any(a['seq'] < copy['seq'] and a['address'] <= address < address+copy['length'] <= a['address']+a['length']
+                       and not any(f['address']==a['address'] and a['seq'] < f['seq'] < copy['seq'] for f in select(rows,'free'))
+                       for a in allocations), 'host copy outside IPC cycle must use a live local device owner'
     for pin in pins:
         frees = [r for r in select(requester,'unpin') if r['address']==pin['address'] and r['seq'] > pin['seq']]
         assert len(frees) == int(mode != 'requester-exit'), 'pinned requester release/retention'
-        if frees: assert closes[-1]['seq'] < frees[0]['seq'], 'pinned requester freed before import closed'
+        if frees:
+            final_close = closes[-1]
+            restored = [r for r in requester if r['seq'] > final_close['seq'] and r['tid']==final_close['tid']]
+            assert restored and restored[0]['kind']=='pop' and restored[0]['seq'] < frees[0]['seq'], 'pinned requester freed before close context restored'
     for rows, allocations in [(source, source_alloc), (requester, select(local,'allocate'))]:
         frees = select(rows, 'free')
         assert len(frees) == (0 if mode == 'requester-exit' else len(allocations)), 'native allocation release/retention'
