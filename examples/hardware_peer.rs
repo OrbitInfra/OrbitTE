@@ -709,7 +709,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             || !status.locally_drained
             || status.transferred_bytes != transferred
         {
-            return Err("READ batch result".into());
+            return Err(format!(
+                "READ batch result: {status:?}; submissions: {:?}",
+                batch.submissions()?
+            )
+            .into());
         }
         for submission in batch.submissions()? {
             if submission.failure.is_some()
@@ -754,7 +758,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 NotificationStatus::Delivered
             )
         {
-            return Err("WRITE batch/notification result".into());
+            return Err(format!(
+                "WRITE batch/notification result: {status:?}; submissions: {:?}",
+                batch.submissions()?
+            )
+            .into());
         }
         verify(&memory, &expected)?;
         batch.free()?;
