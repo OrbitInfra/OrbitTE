@@ -224,3 +224,32 @@ Stable/MSRV installed consumers pass 16 two-host H20 cases for this healthy seri
 profile, with four fresh independent repeats. Source and this bounded profile
 are independently accepted. The profile and artifact binding are in [Qualification](qualification.md#serial-remote-cuda-staging); overlapping
 pipeline hardware qualification, physical faults and full ProxyManager parity remain open.
+
+### Installed pipeline validation
+
+Set `staging_pipeline_depth` in the hardware profile, or use
+`source_pipeline_depth` / `requester_pipeline_depth` for asymmetric caps.
+The consumer reports its actual configuration; the harness requires the
+negotiated width to match the physical pool slots and persistent stream/event
+owners. Source private MR counts scale by negotiated width, while the requester
+still has one private payload MR per session. Byte and chunk counts do not scale
+with width.
+
+The staging-only observer adds context push and stream/event create/destroy
+receipts plus paired entry/return records for copy, wait and cleanup calls.
+`staging_native.py` joins each event record generation to its actual stream,
+thread/context and live GPU/pinned allocations. Completion requires both the
+matching wait return and context restoration. Distinct slots may interleave
+and finish in different orders; reusing a slot or entering cleanup on any
+thread before its completion fails the gate. Pool streams/events must be
+destroyed before their pinned allocation is freed. The observer forwards all
+native arguments, outputs and return codes without inserting driver waits.
+
+The frozen bounded profile covers TCP/RDMA, CPU/GPU requesters, both host
+orientations, asymmetric caps, widths 1/2/3/16 and shortening a requested width
+to the chunk count. Main pipeline cases turn the ring more than twice and
+include a tail. All six sessions reuse physical slots; setup/readback copies
+are also checked. Tests distinguish unconfirmed submissions from physical DMA
+execution: native receipts do not establish execution overlap or throughput.
+Hardware qualification requires fresh installed artifacts and new node inventory;
+earlier serial evidence remains bound to its original observer and wire version.

@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 typedef struct { char reserved[64]; } ipc_handle;
 static int references;
 int cuMemAlloc_v2(uint64_t *out, size_t size) { assert(size == 2097152); *out = 123; return 0; }
@@ -21,6 +22,11 @@ int cuMemHostAlloc(void **out, size_t size, unsigned flags) { assert(size == 151
 int cuMemFreeHost(void *ptr) { assert(ptr == (void *)0x123456789abc); return 1; }
 int cuMemcpyHtoDAsync_v2(uint64_t dst, const void *src, size_t size, void *stream) { assert(dst == 456 && src == (void *)0x123456789abc && size == 17 && stream == (void *)2); return 1; }
 int cuMemcpyDtoHAsync_v2(void *dst, uint64_t src, size_t size, void *stream) { assert(dst == (void *)0x123456789abc && src == 456 && size == 17 && stream == (void *)2); return 700; }
+int cuCtxPushCurrent_v2(void *context) { assert(context == (void *)4); return 201; }
+int cuStreamCreate(void **out, unsigned flags) { assert(flags == 1); *out = (void *)2; return 0; }
+int cuEventCreate(void **out, unsigned flags) { assert(flags == 3); *out = (void *)3; return 0; }
+int cuStreamDestroy_v2(void *stream) { assert(stream == (void *)2); return 1; }
+int cuEventDestroy_v2(void *event) { assert(event == (void *)3); return 700; }
 #define LOAD(name) __typeof__(&name) name##_fn = (__typeof__(&name))dlsym(library, #name); assert(name##_fn)
 int main(void) {
     void *library = dlopen(NULL, RTLD_NOW); assert(library);
@@ -44,6 +50,14 @@ int main(void) {
     assert(cuMemcpyHtoDAsync_v2_fn(456,host,17,(void *)2)==1);
     assert(cuMemcpyDtoHAsync_v2_fn(host,456,17,(void *)2)==700);
     assert(cuMemFreeHost_fn(host)==1);
+    assert(setenv("ORBITTE_STAGING_OBSERVE", "1", 1)==0);
+    LOAD(cuCtxPushCurrent_v2); LOAD(cuStreamCreate); LOAD(cuEventCreate);
+    LOAD(cuStreamDestroy_v2); LOAD(cuEventDestroy_v2);
+    void *stream=NULL, *event=NULL;
+    assert(cuCtxPushCurrent_v2_fn((void *)4)==201);
+    assert(cuStreamCreate_fn(&stream,1)==0 && stream==(void *)2);
+    assert(cuEventCreate_fn(&event,3)==0 && event==(void *)3);
+    assert(cuEventDestroy_v2_fn(event)==700 && cuStreamDestroy_v2_fn(stream)==1);
     assert(dlclose(library)==0);
     return 0;
 }

@@ -2,107 +2,154 @@ import copy
 import json
 import unittest
 import staging
+import staging_native
 import supervise
 
 
-def fixture(gpu_role='source'):
-    case = dict(source='a', requester='b', source_kind='cpu', requester_kind='cpu', transport='rdma', payload=128, staging_chunk_size=4)
+def fixture(gpu_role='source', depth=1, cap=None):
+    width = min(depth, cap or depth)
+    case = dict(source='a', requester='b', source_kind='cpu', requester_kind='cpu', transport='rdma',
+                payload=4 * ((width * 2 + 1) * 4 + 24), staging_chunk_size=4)
     case[gpu_role + '_kind'] = 'cuda:0'
+    if depth > 1:
+        case.update(remote_staging=True, source_pipeline_depth=depth, requester_pipeline_depth=cap or depth)
+    length = case['payload'] // 4 - 23
+    size = case['payload'] + 128
     native = []
     def emit(kind, **values):
         native.append(dict(seq=len(native)+1, pid=7, tid=9, kind=kind, code=0, **values))
-    def copy_full(direction, host):
-        emit('pin', address=host, length=256)
-        emit(direction, source=host if direction == 'htod' else 200, destination=host if direction == 'dtoh' else 200, length=256, stream=3)
-        emit('record', event=4, stream=3)
-        emit('wait', event=4)
-        emit('pop', context=5)
-        emit('unpin', address=host)
-    emit('allocate', address=200, length=256)
-    copy_full('htod', 2000)
-    emit('pin', address=100, length=4)
+    def enter(): emit('push', context=5)
+    def leave(): emit('pop', context=5)
+    def call(kind, **values):
+        if kind in ('htod', 'dtoh', 'wait', 'free', 'unpin', 'stream_destroy', 'event_destroy'):
+            emit(kind + '_begin', **values)
+        emit(kind, **values)
+    def once(kind, **values):
+        enter(); call(kind, **values); leave()
+    def handles(stream, event, destroy=False):
+        enter()
+        call('event_destroy' if destroy else 'stream_create', **({'event':event} if destroy else {'stream':stream}))
+        call('stream_destroy' if destroy else 'event_create', **({'stream':stream} if destroy else {'event':event}))
+        leave()
+    def transfer(direction, host, device, count, stream, event, deferred=False):
+        enter()
+        call(direction, source=host if direction == 'htod' else device,
+             destination=host if direction == 'dtoh' else device, length=count, stream=stream)
+        call('record', event=event, stream=stream)
+        if not deferred: call('wait', event=event)
+        leave()
+    def full(direction, host):
+        once('pin', address=host, length=size)
+        transfer(direction, host, 10000, size, 3, 4)
+        once('unpin', address=host)
+    once('allocate', address=10000, length=size)
+    handles(3, 4)
+    full('htod', 20000)
+    for slot in range(width):
+        once('pin', address=100+slot*8, length=4)
+        if width > 1: handles(10+slot, 30+slot)
     for direction in ('dtoh', 'htod'):
         for index in range(3):
-            for offset, length in ((0, 4), (4, 4), (8, 1)):
-                address = 200 + 64 + index * 32 + (11 if gpu_role == 'source' else 5) + offset
-                emit(direction, source=100 if direction == 'htod' else address, destination=100 if direction == 'dtoh' else address, length=length, stream=3)
-                emit('record', event=4, stream=3)
-                emit('wait', event=4)
-                emit('pop', context=5)
-    emit('unpin', address=100)
-    copy_full('dtoh', 3000)
-    emit('free', address=200)
+            pending = []
+            for step, offset in enumerate(range(0, length, 4)):
+                slot = step % width
+                if slot in pending:
+                    once('wait', event=30+slot); pending.remove(slot)
+                address = 10000+64+index*(case['payload']//4)+(11 if gpu_role == 'source' else 5)+offset
+                transfer(direction, 100+slot*8, address, min(4, length-offset),
+                         10+slot if width > 1 else 3, 30+slot if width > 1 else 4, width > 1)
+                if width > 1: pending.append(slot)
+            # Reverse completion order is legal across distinct slots.
+            for slot in reversed(pending): once('wait', event=30+slot)
+    for slot in range(width):
+        if width > 1: handles(10+slot, 30+slot, True)
+        once('unpin', address=100+slot*8)
+    full('dtoh', 20000)  # Reuse a freed native address with a new allocation generation.
+    handles(3, 4, True)
+    once('free', address=10000)
     proof = {'result.json': json.dumps(dict(status='passed', child_reaped=True, resource_locks_released=True, fault_library_sha256='abc', native_pid=7))}
     evidence = {}
     for role in ('source', 'requester'):
         gpu = role == gpu_role
-        stats = dict(allocations=1, reuses=5, chunks=18, bytes=54, reserved_bytes=4) if gpu else dict(allocations=0, reuses=0, chunks=0, bytes=0, reserved_bytes=0)
-        evidence[role] = {**proof, 'stdout.log': 'ORBITTE_MEMORY ' + json.dumps(dict(base=200, length=256, cuda=gpu)) + '\nORBITTE_STAGING_STATS ' + json.dumps(stats)}
+        stats = dict(allocations=width, reuses=5*width, chunks=6*((length+3)//4), bytes=6*length, reserved_bytes=4*width) if gpu else dict(allocations=0, reuses=0, chunks=0, bytes=0, reserved_bytes=0)
+        evidence[role] = {**proof, 'stdout.log': 'ORBITTE_MEMORY ' + json.dumps(dict(base=10000, length=size, cuda=gpu)) + '\nORBITTE_STAGING_STATS ' + json.dumps(stats)}
+        configured = staging.configured_depth(case, role)
+        evidence[role]['stdout.log'] += '\nORBITTE_STAGING_CONFIG '+json.dumps(dict(depth=configured, chunk_count=configured, chunk_size=4))
+        if case.get('remote_staging'):
+            counts = dict(pins=6, delegates=stats['chunks'], crosses=stats['chunks'], unpins=6) if role=='source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
+            evidence[role]['stdout.log'] += '\nORBITTE_REMOTE_STAGE_STATS '+json.dumps(counts)
     return case, evidence, native
 
 
+def verify(case, evidence, native, role='source'):
+    for index, row in enumerate(native): row['seq'] = index+1
+    evidence[role]['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)
+    staging.verify(case, evidence)
+
+
 class StagingProof(unittest.TestCase):
+    def test_serial_and_interleaved_generations(self):
+        for role, depth, cap in [('source', 1, None), ('requester', 1, None), ('source', 2, None),
+                                 ('source', 3, None), ('source', 16, None), ('source', 3, 2), ('source', 2, 3)]:
+            with self.subTest(role=role, depth=depth, cap=cap):
+                case, evidence, native = fixture(role, depth, cap)
+                verify(case, evidence, native, role)
+
     def test_native_owner_receipts_and_negative_controls(self):
-        faults = (None, 'tail', 'pop', 'free', 'pid', 'reuse', 'record-stream', 'wait-event',
-                  'copy-after-free', 'double-free', 'gpu-range', 'gpu-slice', 'gpu-free-early',
-                  'gpu-free-missing', 'gpu-double-free', 'gpu-allocation', 'missing-memory',
-                  'gpu-free-before-readback-wait', 'host-free-before-readback-wait')
-        for role in ('source', 'requester'):
+        faults = ('tail', 'missing-record', 'submission-pop', 'completion-pop', 'pid', 'record-stream',
+                  'wait-event', 'old-wait', 'record-thread', 'wait-thread', 'context', 'gpu-slice',
+                  'free-missing', 'handle-missing', 'double-free', 'free-before-wait', 'free-before-pop',
+                  'destroy-before-wait', 'slot-reuse', 'event-reuse', 'missing-return', 'missing-entry',
+                  'return-arguments', 'width', 'stats', 'unpin-count', 'missing-memory')
+        for depth in (1, 3):
             for fault in faults:
-                with self.subTest(role=role, fault=fault):
-                    case, evidence, native = fixture(role)
-                    def first(kind):
-                        return next(row for row in native if row['kind'] == kind)
-                    if fault == 'tail': next(row for row in native if row.get('length') == 1)['length'] = 4
-                    if fault == 'pop': first('pop')['kind'] = 'record'
-                    if fault == 'free': first('unpin')['address'] = 200
-                    if fault == 'pid': first('dtoh')['pid'] = 8
-                    if fault == 'record-stream': first('record')['stream'] = 999
-                    if fault == 'wait-event': first('wait')['event'] = 999
-                    if fault == 'reuse': native.insert(2, copy.deepcopy(first('pin')))
-                    if fault == 'gpu-range': first('dtoh')['source'] = 0
-                    if fault == 'gpu-slice': next(row for row in native if row['kind'] == 'htod' and row['source'] == 100)['destination'] += 1
-                    if fault == 'gpu-free-early': native.insert(2, native.pop())
-                    if fault == 'gpu-free-missing': native.pop()
-                    if fault in ('gpu-free-before-readback-wait', 'host-free-before-readback-wait'):
-                        freed = native.pop(-1 if fault.startswith('gpu') else -2)
-                        freed['tid'] = 99
-                        wait = max(index for index, row in enumerate(native) if row['kind'] == 'wait')
-                        native.insert(wait, freed)
-                    if fault == 'gpu-allocation': first('allocate')['length'] += 1
-                    if fault == 'missing-memory':
-                        evidence[role]['stdout.log'] = evidence[role]['stdout.log'].split('\n', 1)[1]
-                    if fault in ('copy-after-free', 'double-free', 'gpu-double-free'):
-                        copy_index = next(index for index, row in enumerate(native) if row['kind'] == 'dtoh')
-                        extra = native[copy_index:copy_index+4] if fault == 'copy-after-free' else [first('unpin' if fault == 'double-free' else 'free')]
-                        native.extend(copy.deepcopy(extra))
-                    for index, row in enumerate(native):
-                        row['seq'] = index + 1
-                    evidence[role]['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)
-                    if fault:
-                        with self.assertRaises(ValueError): staging.verify(case, evidence)
-                    else: staging.verify(case, evidence)
+                with self.subTest(depth=depth, fault=fault):
+                    case, evidence, native = fixture(depth=depth)
+                    pos = next(i for i,r in enumerate(native) if r['kind']=='dtoh_begin' and r['destination']==100)
+                    def at(kind): return next(i for i in range(pos,len(native)) if native[i]['kind']==kind)
+                    def first(kind): return native[at(kind)]
+                    if fault == 'tail': next(r for r in native[pos:] if r.get('length')==1)['length']=4
+                    if fault == 'missing-record': native.pop(at('record'))
+                    if fault == 'submission-pop': native.pop(at('pop'))
+                    if fault == 'completion-pop': native.pop(next(i for i in range(at('wait'),len(native)) if native[i]['kind']=='pop'))
+                    if fault == 'pid': first('dtoh')['pid']=8
+                    if fault == 'record-stream': first('record')['stream']=999
+                    if fault == 'wait-event': first('wait')['event']=999
+                    if fault == 'old-wait': native.insert(at('wait')+1, copy.deepcopy(first('wait')))
+                    if fault == 'record-thread': first('record')['tid']=99
+                    if fault == 'wait-thread': first('wait')['tid']=99
+                    if fault == 'context': first('pop')['context']=6
+                    if fault == 'gpu-slice':
+                        first('dtoh_begin')['source']+=1; first('dtoh')['source']+=1
+                    if fault == 'free-missing': native.pop(at('free'))
+                    if fault == 'handle-missing': native.pop(at('event_destroy'))
+                    if fault == 'double-free': native.insert(at('free')+1, copy.deepcopy(first('free')))
+                    if fault in ('free-before-wait','free-before-pop','destroy-before-wait'):
+                        where = at('wait_begin') if fault != 'free-before-pop' else at('wait')+1
+                        kind = 'stream_destroy_begin' if fault == 'destroy-before-wait' else 'unpin_begin'
+                        extra = dict(first(kind), tid=99)
+                        native[where:where] = [dict(seq=0,pid=7,tid=99,kind='push',context=5,code=0),extra]
+                        # The late return remains later in the trace: entering cleanup already violates ownership.
+                    if fault == 'slot-reuse': native[at('record'):at('record')] = copy.deepcopy(native[pos:pos+2])
+                    if fault == 'event-reuse': native.insert(at('record')+1, copy.deepcopy(first('record')))
+                    if fault == 'missing-return': native.pop(at('dtoh'))
+                    if fault == 'missing-entry': native.pop(pos)
+                    if fault == 'return-arguments': first('dtoh')['source']+=1
+                    if fault == 'width': case.update(remote_staging=True, source_pipeline_depth=2, requester_pipeline_depth=2)
+                    if fault == 'stats': evidence['source']['stdout.log'] = evidence['source']['stdout.log'].replace('"allocations": '+str(depth), '"allocations": 99')
+                    if fault == 'unpin-count': evidence['source']['stdout.log'] = evidence['source']['stdout.log'].replace('"unpins": 6','"unpins": 5') if depth>1 else ''
+                    if fault == 'missing-memory': evidence['source']['stdout.log'] = evidence['source']['stdout.log'].split('\n',1)[1]
+                    with self.assertRaises(ValueError): verify(case,evidence,native)
 
-    def test_remote_profile_requires_completed_operations_on_the_source(self):
-        for fault in (None, 'missing', 'unpin', 'cross', 'requester', 'host'):
-            with self.subTest(fault=fault):
-                case, evidence, native = fixture()
-                case['remote_staging'] = True
-                if fault == 'host': case['source_kind'] = 'cpu'
-                evidence['source']['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)
-                for role in ('source', 'requester'):
-                    counts = dict(pins=6, delegates=18, crosses=18, unpins=6) if role == 'source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
-                    if fault == 'unpin' and role == 'source': counts['unpins'] -= 1
-                    if fault == 'cross' and role == 'source': counts['crosses'] -= 1
-                    if fault == 'requester' and role == 'requester': counts['pins'] = 1
-                    if fault != 'missing':
-                        evidence[role]['stdout.log'] += '\nORBITTE_REMOTE_STAGE_STATS ' + json.dumps(counts)
-                if fault:
-                    with self.assertRaises(ValueError): staging.verify(case, evidence)
-                else: staging.verify(case, evidence)
-
-    def test_observer_scope_is_bounded(self):
-        scope = dict(ORBITTE_STAGING_OBSERVE='1', ORBITTE_SHARED_ROLE='source', ORBITTE_STAGING_CHUNK_COUNT='1')
-        self.assertTrue(supervise.fault_scope(scope))
-        for key, value in [('ORBITTE_SHARED_ROLE', 'other'), ('ORBITTE_HOST_MODE', 'fault'), ('ORBITTE_GDR_OBSERVE', '1'), ('ORBITTE_IPC_HOLD', '/tmp/hold')]:
-            self.assertFalse(supervise.fault_scope({**scope, key:value}))
+    def test_profile_and_observer_scope_are_bounded(self):
+        case, _, _ = fixture(depth=3)
+        for value in (0, 17, True, '3', -1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                staging.validate_case({**case, 'source_pipeline_depth':value})
+        for depth in (1, 2, 16):
+            scope = dict(ORBITTE_STAGING_OBSERVE='1', ORBITTE_SHARED_ROLE='source',
+                         ORBITTE_STAGING_CHUNK_COUNT=str(depth), ORBITTE_STAGING_PIPELINE_DEPTH=str(depth))
+            self.assertTrue(supervise.fault_scope(scope))
+            for key,value in [('ORBITTE_SHARED_ROLE','other'),('ORBITTE_HOST_MODE','fault'),('ORBITTE_GDR_OBSERVE','1'),
+                              ('ORBITTE_IPC_HOLD','/tmp/hold'),('ORBITTE_STAGING_CHUNK_COUNT','17')]:
+                self.assertFalse(supervise.fault_scope({**scope,key:value}))

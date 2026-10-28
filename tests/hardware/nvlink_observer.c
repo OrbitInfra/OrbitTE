@@ -33,6 +33,9 @@ static _Atomic(int (*)(uint64_t, uint64_t, size_t, void *)) copy_native;
 static _Atomic(int (*)(void *, void *)) record_native;
 static _Atomic(int (*)(void *)) wait_native;
 static _Atomic(int (*)(void **)) pop_native;
+static _Atomic(int (*)(void *)) push_native;
+static _Atomic(int (*)(void **, unsigned)) stream_create_native, event_create_native;
+static _Atomic(int (*)(void *)) stream_destroy_native, event_destroy_native;
 static _Atomic(int (*)(uint64_t, unsigned char, size_t)) memset_native;
 static _Atomic(int (*)(void)) sync_native;
 
@@ -56,6 +59,7 @@ static uint64_t hash_handle(ipc_handle handle) {
     for (size_t index = 0; index < sizeof(handle); ++index) { hash ^= (unsigned char)handle.reserved[index]; hash *= UINT64_C(1099511628211); }
     return hash;
 }
+static int staging(void);
 static int allocate_wrap(uint64_t *address, size_t length) {
     int code = allocate_native(address, length);
     emit("allocate", "\"address\":%" PRIu64 ",\"length\":%zu,\"code\":%d", *address, length, code); return code;
@@ -68,6 +72,7 @@ static int sync_wrap(void) {
     int code = sync_native(); emit("sync", "\"code\":%d", code); return code;
 }
 static int free_wrap(uint64_t address) {
+    if (staging()) emit("free_begin", "\"address\":%" PRIu64 ",\"code\":%d", address, 0);
     int code = free_native(address); emit("free", "\"address\":%" PRIu64 ",\"code\":%d", address, code); return code;
 }
 static int pin_wrap(void **address, size_t length, unsigned flags) {
@@ -75,14 +80,17 @@ static int pin_wrap(void **address, size_t length, unsigned flags) {
     emit("pin", "\"address\":%" PRIuPTR ",\"length\":%zu,\"flags\":%u,\"code\":%d", (uintptr_t)*address, length, flags, code); return code;
 }
 static int unpin_wrap(void *address) {
+    if (staging()) emit("unpin_begin", "\"address\":%" PRIuPTR ",\"code\":%d", (uintptr_t)address, 0);
     int code = unpin_native(address);
     emit("unpin", "\"address\":%" PRIuPTR ",\"code\":%d", (uintptr_t)address, code); return code;
 }
 static int htod_wrap(uint64_t destination, const void *source, size_t length, void *stream) {
+    if (staging()) emit("htod_begin", "\"source\":%" PRIuPTR ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)source, destination, length, (uintptr_t)stream, 0);
     int code = htod_native(destination, source, length, stream);
     emit("htod", "\"source\":%" PRIuPTR ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)source, destination, length, (uintptr_t)stream, code); return code;
 }
 static int dtoh_wrap(void *destination, uint64_t source, size_t length, void *stream) {
+    if (staging()) emit("dtoh_begin", "\"source\":%" PRIu64 ",\"destination\":%" PRIuPTR ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", source, (uintptr_t)destination, length, (uintptr_t)stream, 0);
     int code = dtoh_native(destination, source, length, stream);
     emit("dtoh", "\"source\":%" PRIu64 ",\"destination\":%" PRIuPTR ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", source, (uintptr_t)destination, length, (uintptr_t)stream, code); return code;
 }
@@ -117,11 +125,42 @@ static int record_wrap(void *event, void *stream) {
     emit("record", "\"event\":%" PRIuPTR ",\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, (uintptr_t)stream, code); return code;
 }
 static int wait_wrap(void *event) {
+    if (staging()) emit("wait_begin", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, 0);
     int code = wait_native(event); emit("wait", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, code); return code;
 }
 static int pop_wrap(void **context) {
     int code = pop_native(context); emit("pop", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)*context, code); return code;
 }
+
+/* Extra lifecycle records are opt-in so the IPC observer keeps its contract. */
+static int staging(void) {
+    const char *value = getenv("ORBITTE_STAGING_OBSERVE");
+    return value && !strcmp(value, "1");
+}
+static int push_wrap(void *context) {
+    int code = push_native(context);
+    if (staging()) emit("push", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)context, code);
+    return code;
+}
+#define CREATE_WRAP(name, field) \
+static int name##_wrap(void **handle, unsigned flags) { \
+    int code = name##_native(handle, flags); \
+    if (staging()) emit(#name, "\"" #field "\":%" PRIuPTR ",\"flags\":%u,\"code\":%d", (uintptr_t)*handle, flags, code); \
+    return code; \
+}
+#define DESTROY_WRAP(name, field) \
+static int name##_wrap(void *handle) { \
+    if (staging()) emit(#name "_begin", "\"" #field "\":%" PRIuPTR ",\"code\":0", (uintptr_t)handle); \
+    int code = name##_native(handle); \
+    if (staging()) emit(#name, "\"" #field "\":%" PRIuPTR ",\"code\":%d", (uintptr_t)handle, code); \
+    return code; \
+}
+CREATE_WRAP(stream_create, stream)
+CREATE_WRAP(event_create, event)
+DESTROY_WRAP(stream_destroy, stream)
+DESTROY_WRAP(event_destroy, event)
+#undef CREATE_WRAP
+#undef DESTROY_WRAP
 
 void *dlsym(void *library, const char *name) {
     pthread_mutex_lock(&lock);
@@ -144,6 +183,11 @@ void *dlsym(void *library, const char *name) {
     WRAP("cuEventRecord", record_native, record_wrap)
     WRAP("cuEventSynchronize", wait_native, wait_wrap)
     WRAP("cuCtxPopCurrent_v2", pop_native, pop_wrap)
+    WRAP("cuCtxPushCurrent_v2", push_native, push_wrap)
+    WRAP("cuStreamCreate", stream_create_native, stream_create_wrap)
+    WRAP("cuEventCreate", event_create_native, event_create_wrap)
+    WRAP("cuStreamDestroy_v2", stream_destroy_native, stream_destroy_wrap)
+    WRAP("cuEventDestroy_v2", event_destroy_native, event_destroy_wrap)
 #undef WRAP
     pthread_mutex_unlock(&lock);
     return result;
