@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::tests::rdma_fixture_with_runtime;
+use crate::transport::rdma::RdmaHostMemory;
 use crate::transport::rdma::tests::{self as fixture, on_requester_close};
 use crate::{MemEntry, MemType, NicEntry, NicType, Topology};
 use std::ffi::{CStr, c_char};

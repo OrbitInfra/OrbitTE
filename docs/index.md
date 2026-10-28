@@ -38,7 +38,7 @@ selection, persistent resources, completion and shutdown.
 ## Development status
 
 CPU/TCP, persistent host RDMA, multirail slicing and synchronized NVIDIA host
-staging with owned copy streams/events are implemented. Native qualification applies to the exact profiles
+staging with owned copy streams/events, and explicit GPU direct RDMA are implemented. Native qualification applies to the exact profiles
 in [qualification](qualification.md). The published alpha reserves the crate
 name; the source implementation remains under development.
 
@@ -50,9 +50,11 @@ two-host READ/WRITE against a separately captured PCI, NUMA and route inventory.
 The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
 fabric qualification before full acceptance. Source and the bounded RoCE profile
 passed independent review with four fresh live repeats; P5 CUDA work now proceeds
-with available hardware. OrbitKV integration remains deferred.
+with available hardware. The [GPU Direct profile](qualification.md#gpudirect-rdma)
+passes 72 installed H20/RoCE cases with an explicit host-wide context inventory
+limit. Next is CUDA IPC/NVLink ownership; OrbitKV integration remains deferred.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
-including GPUDirect RDMA, CUDA IPC/NVLink and full TENT compatibility. For code
+including broader GPU qualification, CUDA IPC/NVLink and full TENT compatibility. For code
 navigation, use the [architecture reading order](architecture.md#source-reading-order).
 
 :::{toctree}

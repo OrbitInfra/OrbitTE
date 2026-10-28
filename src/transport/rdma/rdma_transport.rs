@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{
-    RdmaConfig, RdmaHostMemory, RdmaStats, buffers,
+    RdmaConfig, RdmaStats, buffers,
     context_set::ContextSet,
     events,
     grant::admission::GrantCredits,
@@ -80,7 +80,12 @@ impl RdmaTransport {
         memory: &[RegisteredMemory],
         deadline: Instant,
     ) -> Result<()> {
-        if memory.is_empty() || self.config.host_memory != RdmaHostMemory::Direct {
+        let memory: Vec<_> = memory
+            .iter()
+            .filter(|memory| self.direct(memory))
+            .cloned()
+            .collect();
+        if memory.is_empty() {
             return Ok(());
         }
         let devices = {
@@ -103,7 +108,7 @@ impl RdmaTransport {
             }
             devices
         };
-        self.registrations.publish(&devices, memory, deadline)
+        self.registrations.publish(&devices, &memory, deadline)
     }
 
     pub(crate) fn stats(&self) -> Result<RdmaStats> {
@@ -270,7 +275,7 @@ impl RdmaTransport {
             return Err(Error::Protocol("RDMA slice window limit"));
         }
         let cap = usize::from(remote_limit[0])
-            .min(if self.host_direct(&request.local) {
+            .min(if self.direct(&request.local) {
                 self.config.max_grants
             } else {
                 self.config.max_grants.min(self.config.max_endpoints)
@@ -410,14 +415,14 @@ impl RdmaTransport {
             request.operation,
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
-        let qp_width = if self.host_direct(memory) {
+        let qp_width = if self.direct(memory) && !memory.is_cuda() {
             self.config.num_lanes
         } else {
             0
         };
         let plan = if multi {
             path::write_paths(channel, epoch, &paths, qp_width)?;
-            let grants = if self.host_direct(memory) {
+            let grants = if self.direct(memory) && !memory.is_cuda() {
                 self.config.max_grants
             } else {
                 self.config.max_grants.min(self.config.max_endpoints)

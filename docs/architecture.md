@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v14 messages; moving them into their own module does not make this
+OrbitTE v15 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,11 +121,18 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v14 handshake can attach independent grants to a
+QP creation lock. The public v15 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
 reserves the same fixed array used for established pairs.
+
+GPU source grants use a private PD and exact-range MR because PeerDirect cannot
+bind MWs. Their fresh QPs still use context CQ lanes and transport Workers.
+`cuda/rdma.rs` owns SYNC_MEMOPS preparation, range exclusion and consumer-visible
+completion; `GrantResources` and `ConnectionResources` own native MR/PD teardown.
+See [GPU ownership](rdma-cuda.md#gpudirect-rdma-ownership) for the TENT correspondence
+and the separate source/requester reuse policies.
 
 ## QP receive ownership
 
@@ -268,7 +275,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
-| Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding and NVIDIA staging owners |
+| Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
 
 `rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only
 the slot state and its monitor-driven reclaim. The methods retain their existing
@@ -332,7 +339,9 @@ have bounded qualification and [independent live repetition](qualification.md#p4
 Physical/fabric qualification remains open; the single [P4 queue](completion-plan.md#p4-remaining-delivery)
 keeps them separate. Selected-port address refresh, periodic reclaim and
 fixed-width QP reuse already exist. Broader bandwidth/QoS/retry policy remains
-in P6; GPU direct paths and native wire compatibility remain separate stages.
+in P6. GPU Direct now uses the same context/worker owners with the private-MR
+authority described in [RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership); native
+wire compatibility remains a separate stage.
 
 ## Correspondence and remaining differences
 
@@ -345,7 +354,7 @@ TENT's [transport header][transport], [endpoint implementation][endpoint] and
 | QP arrays | Fixed-width, lazily populated arrays with concurrent grants and native-drain-aware rollback | TENT constructs its whole QP list eagerly and can use one array for both directions/operations; OrbitTE keeps role/capability-specific arrays |
 | Monitor | Unified get/ACK, periodic reclaim, initially paused contexts and automatic GID reselection | TENT also refreshes effective link bandwidth. OrbitTE preserves conservative retained-resource quarantine; focused native recovery passes, with source and bounded RoCE evidence independently accepted |
 | Path metadata | `path.rs` validates frozen NIC/PD descriptions and compatible pairs | Selected-port health lives in `Monitor`/`RdmaContext`; native `RailMonitor` also supplies broader failover/retry policy, which remains open |
-| Grant authority | Exact-range MW and source receipt protocol | Deliberate Rust authority contract, not native TENT wire parity |
+| Grant authority | Exact-range host MW or private GPU PD/MR, and bound source receipt | Deliberate Rust authorization contract; TENT publishes native MR keys. GPU source grants are not cached; this is not native wire parity |
 | CQ layout | Separate SQ/RQ CQ pair per lane | TENT uses a lane CQ for its data QPs; ownership and accounting are preserved with a different CQ layout |
 | Worker load | Unfinished grant charge including retained native work | Priority queues, QoS, retry/failover and deadline policies remain P6 work |
 

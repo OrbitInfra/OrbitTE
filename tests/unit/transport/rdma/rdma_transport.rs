@@ -65,8 +65,8 @@ fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receip
     let source = identity(1, 2, 3);
     let requester = identity(4, 5, 6);
     let request = request(source.epoch, 7);
-    let old = Binding::new(&request, source, requester, 1, false).unwrap();
-    let next = Binding::new(&request, source, requester, 2, false).unwrap();
+    let old = Binding::new(&request, source, requester, 1, 0).unwrap();
+    let next = Binding::new(&request, source, requester, 2, 0).unwrap();
     for phase in [GRANT, DONE, ACK] {
         let (mut sender, mut receiver) = channels();
         old.write(&mut sender, phase).unwrap();
@@ -75,7 +75,7 @@ fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receip
             Err(Error::Protocol(_))
         ));
     }
-    assert!(Binding::new(&request, source, requester, 0, false).is_err());
+    assert!(Binding::new(&request, source, requester, 0, 0).is_err());
     let (mut sender, mut receiver) = channels();
     next.write(&mut sender, DONE).unwrap();
     assert!(matches!(
@@ -133,7 +133,7 @@ fn source_rejects_stale_accept_before_connect_or_bind_and_releases_actual_owners
             .unwrap();
         let request = request(source.source_epoch(), memory.id());
         let (mut channel, local, grant, descriptor) = source_offer(&source, &request);
-        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, false).unwrap();
+        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, 0).unwrap();
         let mut bytes = binding.0;
         let mut phase = ACCEPT;
         match case {
@@ -196,7 +196,7 @@ fn source_done_requires_both_incarnations_request_grant_and_phase_before_staged_
             .unwrap();
         let request = request(source.source_epoch(), memory.id());
         let (mut channel, local, grant, descriptor) = source_offer(&source, &request);
-        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, false).unwrap();
+        let binding = Binding::new(&request, local, identity(9, 8, 7), grant, 0).unwrap();
         binding.write(&mut channel, ACCEPT).unwrap();
         channel.write_all(&descriptor).unwrap();
         assert_eq!(
@@ -332,7 +332,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 return;
             }
             let binding =
-                Binding::accept(&mut channel, &wire, local, hello.requester, grant, false).unwrap();
+                Binding::accept(&mut channel, &wire, local, hello.requester, grant, 0).unwrap();
             channel.read_exact(&mut [0; DESCRIPTOR_SIZE]).unwrap();
             channel
                 .write_all(
@@ -475,7 +475,7 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
             local,
             identity(9, 8, 7),
             u64_at(&offer, IDENTITY_SIZE),
-            false,
+            0,
         )
         .unwrap();
         binding.write(&mut peer, ACCEPT).unwrap();

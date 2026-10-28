@@ -310,7 +310,7 @@ pub(super) fn run() {
                 local,
                 peer,
                 grant.grant_generation().unwrap(),
-                true,
+                1,
             )
             .unwrap();
             super::super::post_receive(grant, &binding.0).unwrap();

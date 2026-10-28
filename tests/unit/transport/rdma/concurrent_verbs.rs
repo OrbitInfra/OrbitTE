@@ -459,9 +459,12 @@ unsafe extern "C" fn send_completion(
     address: u64,
     length: usize,
     rkey: u32,
+    invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
-    let code = unsafe { (sys::REAL.send_completion)(h, memory, id, address, length, rkey, result) };
+    let code = unsafe {
+        (sys::REAL.send_completion)(h, memory, id, address, length, rkey, invalidate, result)
+    };
     if unsafe { (*result).accepted } != 0 {
         assert_eq!(unsafe { (*result).accepted }, 1);
         let mut trace = TRACE.get().unwrap().lock().unwrap();

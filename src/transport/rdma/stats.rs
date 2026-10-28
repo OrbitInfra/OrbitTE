@@ -2,6 +2,10 @@
 /// still own pinned pages or RNIC resources after native teardown failed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RdmaStats {
+    /// Isolated PeerDirect source PDs, owned through QP/MR/RQ cleanup.
+    pub active_grant_pds: usize,
+    pub opened_grant_pds: u64,
+    pub closed_grant_pds: u64,
     /// Shared context/PD owners, including partially constructed retained ones.
     pub active_devices: usize,
     pub retained_devices: usize,

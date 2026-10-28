@@ -430,17 +430,11 @@ fn dma_ranges_fence_aliases_across_engines_without_blocking_disjoint_bytes() {
         let alias = second
             .register_host(Arc::clone(&backing), 4, 16, Permission::RemoteReadWrite)
             .unwrap();
-        let loan = alias.host_dma_lease(2, 6).unwrap().unwrap();
+        let loan = alias.dma_lease(2, 6).unwrap();
         assert_eq!(loan.address().as_ptr() as u64, backing.base_address() + 6);
         assert_eq!(loan.len(), 6);
-        assert!(matches!(
-            full.host_dma_lease(5, 2),
-            Err(Error::Unavailable(_))
-        ));
-        assert!(matches!(
-            full.host_dma_lease(11, 2),
-            Err(Error::Unavailable(_))
-        ));
+        assert!(matches!(full.dma_lease(5, 2), Err(Error::Unavailable(_))));
+        assert!(matches!(full.dma_lease(11, 2), Err(Error::Unavailable(_))));
         assert!(matches!(
             alias.read(1, &mut [0; 2]),
             Err(Error::Unavailable(_))
@@ -449,7 +443,7 @@ fn dma_ranges_fence_aliases_across_engines_without_blocking_disjoint_bytes() {
             backing.write(11, &[0; 2]),
             Err(Error::Unavailable(_))
         ));
-        let disjoint = full.host_dma_lease(12, 4).unwrap().unwrap();
+        let disjoint = full.dma_lease(12, 4).unwrap();
         full.write(0, &[9; 6]).unwrap();
         full.write(16, &[7; 16]).unwrap();
         let mut bytes = [0; 6];
@@ -487,11 +481,11 @@ fn direct_loan_retains_registration_charge_and_actual_external_allocation() {
         .unwrap();
     for (offset, length) in [(0, 0), (7, 2), (usize::MAX, 1)] {
         assert!(matches!(
-            memory.host_dma_lease(offset, length),
+            memory.dma_lease(offset, length),
             Err(Error::InvalidRange)
         ));
     }
-    let loan = memory.host_dma_lease(1, 3).unwrap().unwrap();
+    let loan = memory.dma_lease(1, 3).unwrap();
     registry.unregister(&memory).unwrap();
     drop(memory);
     drop(fixture.memory);

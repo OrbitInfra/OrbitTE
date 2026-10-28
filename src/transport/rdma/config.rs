@@ -1,7 +1,7 @@
 use super::discovery;
 use crate::{Error, Result};
 
-/// Host-memory policy. CUDA allocations continue to use owned host staging.
+/// Host-memory registration policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RdmaHostMemory {
     /// Register the actual host range. Registration errors never select staging.
@@ -9,6 +9,16 @@ pub enum RdmaHostMemory {
     Direct,
     /// Isolate application bytes in private host staging until completion.
     Staged,
+}
+
+/// NVIDIA device-memory policy. Direct requires native GPU registration support.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RdmaCudaMemory {
+    #[default]
+    Staged,
+    /// Register actual device ranges. Failure never silently selects staging.
+    /// Set MLX5_SCATTER_TO_CQE=0 before process startup and keep it unchanged.
+    Direct,
 }
 
 /// Shared CQ progress policy. The frozen TENT polling path remains the default.
@@ -47,6 +57,7 @@ pub struct RdmaConfig {
     pub max_grants: usize,
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
+    pub cuda_memory: RdmaCudaMemory,
     pub max_direct_bytes: usize,
     /// TENT's base slice size. Large requests adapt to a bounded slice count.
     pub block_size: usize,
@@ -81,6 +92,7 @@ impl Default for RdmaConfig {
             max_grants: 64,
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
+            cuda_memory: RdmaCudaMemory::Staged,
             max_direct_bytes: 64 << 20,
             block_size: 64 << 10,
             max_send_wr: 16,
@@ -104,6 +116,14 @@ impl RdmaConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.cuda_memory == RdmaCudaMemory::Direct
+            && std::env::var_os("MLX5_SCATTER_TO_CQE").as_deref() != Some(std::ffi::OsStr::new("0"))
+        {
+            return Err(Error::InvalidConfig(
+                "CUDA direct RDMA requires MLX5_SCATTER_TO_CQE=0 at process startup",
+            ));
+        }
+
         let valid_name = |name: &str| {
             !name.is_empty()
                 && name.len() <= 128

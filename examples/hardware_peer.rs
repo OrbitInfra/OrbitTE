@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbit_te::cuda::{self, CudaMemory};
-use orbit_te::transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaProgressMode};
+use orbit_te::transport::rdma::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
 use orbit_te::{
     BatchState, EngineConfig, Error, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, Result, SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
@@ -82,12 +82,15 @@ fn initial(seed: u64, payload: usize) -> Vec<u8> {
 }
 fn slices(payload: usize) -> Vec<(usize, usize, usize)> {
     let quarter = payload / 4;
+    let length = env::var("ORBITTE_RDMA_SLICE_BYTES")
+        .ok()
+        .map(|value| value.parse::<usize>().expect("slice length"));
     (0..3)
         .map(|i| {
             (
                 GUARD + i * quarter + 5,
                 GUARD + i * quarter + 11,
-                quarter - 23,
+                length.unwrap_or(quarter - 23),
             )
         })
         .collect()
@@ -116,28 +119,44 @@ fn finish(
     if let Some(path) = std::env::var_os("ORBITTE_HARDWARE_MAPS") {
         std::fs::write(path, std::fs::read_to_string("/proc/self/maps")?)?;
     }
-    let expect_direct = transport == Transport::Rdma
+    let gpu_direct = transport == Transport::Rdma
+        && matches!(&backing, Memory::Cuda(_))
+        && env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() == Ok("direct");
+    let host_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
-    let cached = expect_direct;
-    let source_cached = cached;
+    let expect_direct = host_direct || gpu_direct;
+    let contexts = env::var("ORBITTE_RDMA_RAILS").map_or(1, |v| v.split(',').count());
+    let grants = env::var("ORBITTE_EXPECT_GRANTS")
+        .map_or(Ok(6u64), |v| v.parse())
+        .map_err(|_| Error::InvalidConfig("expected grant count"))?;
+    let persistent = contexts * (2 * usize::from(host_direct) + usize::from(gpu_direct));
+    let source_cached = host_direct;
     let idle = engine
         .stats()?
         .rdma
         .ok_or(Error::Internal("missing RDMA counters"))?;
-    let windows = if role == "source" && transport == Transport::Rdma {
-        6
+    let receives = if role == "source" && transport == Transport::Rdma {
+        grants
     } else {
         0
     };
+    let windows = if gpu_direct { 0 } else { receives };
+    let private_pds = if gpu_direct { receives } else { 0 };
+    if idle.active_grant_pds != 0
+        || idle.opened_grant_pds != private_pds
+        || idle.closed_grant_pds != private_pds
+    {
+        return Err(Error::Internal("private GPU grant PD owners did not drain"));
+    }
     let expected_sends = if role == "requester" && transport == Transport::Rdma {
-        6
+        grants
     } else {
         0
     };
     if idle.completed_sends != expected_sends
-        || idle.completed_receives != windows
-        || idle.receive_post_calls != windows
+        || idle.completed_receives != receives
+        || idle.receive_post_calls != receives
         || idle.receive_work_requests != 0
         || idle.retained_receive_work_requests != 0
         || idle.active_message_mrs != 0
@@ -151,20 +170,26 @@ fn finish(
     }
     let reused = env::var("ORBITTE_EXPECT_QP_REUSE").as_deref() == Ok("1");
     let idle_qps = if reused {
-        env::var("ORBITTE_RDMA_MAX_ENDPOINTS").map_or(2, |s| s.parse::<usize>().unwrap_or(0).min(2))
+        env::var("ORBITTE_RDMA_MAX_ENDPOINTS").map_or(2 * contexts, |s| {
+            s.parse::<usize>().unwrap_or(0).min(2 * contexts)
+        })
     } else {
         0
     };
     let opened_qps = if transport == Transport::Rdma {
-        if reused { 2 } else { 6 }
+        if reused {
+            (2 * contexts) as u64
+        } else {
+            grants
+        }
     } else {
         0
     };
     if idle.opened_connections != opened_qps
         || idle.closed_connections != opened_qps - idle_qps as u64
         || idle.idle_endpoints != idle_qps
-        || idle.reused_connections != if reused { 4 } else { 0 }
-        || idle.completed_reusable_grants != if reused { 6 } else { 0 }
+        || idle.reused_connections != if reused { grants - opened_qps } else { 0 }
+        || idle.completed_reusable_grants != if reused { grants } else { 0 }
     {
         return Err(Error::Internal("actual QP reuse counters differ"));
     }
@@ -183,22 +208,27 @@ fn finish(
     {
         return Err(Error::Internal("source MW lifecycle counters differ"));
     }
-    if idle.active_cqs != 2 * usize::from(transport == Transport::Rdma)
-        || idle.opened_cqs != 2 * u64::from(transport == Transport::Rdma)
+    if idle.active_cqs != 2 * contexts * usize::from(transport == Transport::Rdma)
+        || idle.opened_cqs != 2 * contexts as u64 * u64::from(transport == Transport::Rdma)
         || idle.progress_workers != usize::from(transport == Transport::Rdma)
-        || idle.async_event_sources != usize::from(transport == Transport::Rdma)
+        || idle.async_event_sources != contexts * usize::from(transport == Transport::Rdma)
         || idle.progress_failures != 0
-        || idle.persistent_mrs != 2 * usize::from(cached)
-        || idle.persistent_mr_bytes != if cached { 2 * memory.len() } else { 0 }
-        || idle.opened_persistent_mrs != 2 * u64::from(cached)
-        || idle.reused_persistent_mrs != if cached { 6 } else { 0 }
+        || idle.persistent_mrs != persistent
+        || idle.persistent_mr_bytes != persistent * memory.len()
+        || idle.opened_persistent_mrs != persistent as u64
+        || idle.reused_persistent_mrs
+            != if host_direct || (gpu_direct && role == "requester") {
+                grants
+            } else {
+                0
+            }
         || idle.evicted_persistent_mrs != 0
         || idle.retained_persistent_mrs != 0
-        || idle.persistent_source_mrs != usize::from(source_cached)
-        || idle.opened_source_mrs != u64::from(source_cached)
+        || idle.persistent_source_mrs != contexts * usize::from(source_cached)
+        || idle.opened_source_mrs != contexts as u64 * u64::from(source_cached)
         || idle.reused_source_mrs
             != if source_cached && role == "source" {
-                6
+                grants
             } else {
                 0
             }
@@ -255,6 +285,8 @@ fn finish(
         || rdma.retained_persistent_mrs != 0
         || rdma.persistent_source_mrs != 0
         || rdma.retained_source_mrs != 0
+        || rdma.active_grant_pds != 0
+        || rdma.opened_grant_pds != rdma.closed_grant_pds
         || rdma.active_endpoints != 0
         || rdma.idle_endpoints != 0
         || rdma.opened_connections != rdma.closed_connections
@@ -267,10 +299,10 @@ fn finish(
         || rdma.partial_posts != 0
         || rdma.uncertain_posts != 0
         || rdma.completion_errors != 0
-        || rdma.opened_direct_endpoints != if expect_direct { 6 } else { 0 }
+        || rdma.opened_direct_endpoints != if expect_direct { grants } else { 0 }
         || rdma.retained_endpoints != 0
         || rdma.retained_bytes != 0
-        || rdma.opened_devices != u64::from(transport == Transport::Rdma)
+        || rdma.opened_devices != contexts as u64 * u64::from(transport == Transport::Rdma)
     {
         return Err(Error::Internal("resource counters did not drain"));
     }
@@ -283,6 +315,10 @@ fn finish(
     {
         return Err(Error::Internal("receive/message resources were retained"));
     }
+    println!(
+        "ORBITTE_GPU_MR_STATS {{\"direct\":{},\"opened_private_pds\":{},\"closed_private_pds\":{},\"active_private_pds\":{}}}",
+        gpu_direct, rdma.opened_grant_pds, rdma.closed_grant_pds, rdma.active_grant_pds
+    );
     println!(
         "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
         rdma.completed_sends,
@@ -347,9 +383,9 @@ fn finish(
     );
     let event_mode =
         transport == Transport::Rdma && env::var("ORBITTE_RDMA_EVENTS").as_deref() == Ok("1");
-    if idle.active_completion_channels != usize::from(event_mode)
-        || idle.completion_event_sources != usize::from(event_mode)
-        || rdma.opened_completion_channels != u64::from(event_mode)
+    if idle.active_completion_channels != contexts * usize::from(event_mode)
+        || idle.completion_event_sources != contexts * usize::from(event_mode)
+        || rdma.opened_completion_channels != contexts as u64 * u64::from(event_mode)
         || (event_mode && (rdma.completion_events == 0 || rdma.cq_notification_arms < 2))
     {
         return Err(Error::Internal(
@@ -389,6 +425,10 @@ fn finish(
 }
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().collect();
+    if args.len() == 2 && args[1] == "--protocol" {
+        println!("orbitte-hardware-peer-v1");
+        return Ok(());
+    }
     if args.len() != 9 && args.len() != 12 {
         return Err("usage: hardware_peer source|requester BIND RNIC GID cpu|cuda:N|pinned:N PAYLOAD SEED tcp|rdma [PEER EPOCH REMOTE_ADDRESS]".into());
     }
@@ -404,6 +444,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         config.gid_index = Some(args[4].parse()?);
         config
     };
+    if let Ok(rails) = env::var("ORBITTE_RDMA_RAILS") {
+        rdma.device = None;
+        rdma.rdma_whitelist = rails.split(',').map(str::to_owned).collect();
+    }
     rdma.hop_limit = 64;
     rdma.progress_mode = match env::var("ORBITTE_RDMA_EVENTS").as_deref() {
         Ok("1") => RdmaProgressMode::EventDriven,
@@ -414,6 +458,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Ok("staged") => RdmaHostMemory::Staged,
         Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
         _ => return Err("ORBITTE_RDMA_HOST_MEMORY must be direct or staged".into()),
+    };
+    rdma.cuda_memory = match env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() {
+        Ok("direct") => RdmaCudaMemory::Direct,
+        Ok("staged") | Err(env::VarError::NotPresent) => RdmaCudaMemory::Staged,
+        _ => return Err("ORBITTE_RDMA_CUDA_MEMORY must be direct or staged".into()),
     };
     if let Ok(value) = env::var("ORBITTE_RDMA_BLOCK_SIZE") {
         rdma.block_size = value.parse()?;
@@ -452,7 +501,18 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     };
     let backing = Memory::new(kind, &initial_bytes)?;
     let memory = backing.register(&engine)?;
+    println!(
+        "ORBITTE_MEMORY {{\"base\":{},\"length\":{},\"cuda\":{}}}",
+        memory.base_address(),
+        memory.len(),
+        matches!(&backing, Memory::Cuda(_))
+    );
     let entries = slices(payload);
+    if entries.iter().any(|(local, remote, length)| {
+        *length == 0 || local + length > GUARD + payload || remote + length > GUARD + payload
+    }) {
+        return Err("explicit slices exceed payload".into());
+    }
     let transferred: usize = entries.iter().map(|(_, _, length)| *length).sum();
     if role == "source" && args.len() == 9 {
         println!(

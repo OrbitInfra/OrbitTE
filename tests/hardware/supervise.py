@@ -14,6 +14,10 @@ import time
 def fault_scope(environment):
     mode = environment.get('ORBITTE_HOST_MODE')
     role = environment.get('ORBITTE_SHARED_ROLE')
+    if environment.get('ORBITTE_GDR_OBSERVE') == '1':
+        return (mode is None and role in ('source', 'requester')
+                and environment.get('ORBITTE_RDMA_CUDA_MEMORY') == 'direct'
+                and environment.get('MLX5_SCATTER_TO_CQE') == '0')
     if mode == 'installed-memory-cleanup':
         owner = environment.get('ORBITTE_CLEANUP_KIND')
         return (role in ('source', 'requester') and role == environment.get('ORBITTE_CLEANUP_ROLE')

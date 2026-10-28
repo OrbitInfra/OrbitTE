@@ -22,13 +22,15 @@ by RDMA:
 | --- | --- |
 | Host, `RdmaHostMemory::Direct` (default) | Application host range ↔ RC RDMA READ/WRITE ↔ peer registered range |
 | Host, `RdmaHostMemory::Staged` | Application bytes ↔ private registered host staging ↔ RDMA |
-| NVIDIA device, either host policy | Device ↔ owned host staging ↔ TCP or RDMA |
+| NVIDIA device, `RdmaCudaMemory::Staged` (default) | Device ↔ owned host staging ↔ RDMA |
+| NVIDIA device, `RdmaCudaMemory::Direct` | Device MR ↔ RC RDMA READ/WRITE ↔ peer registered range |
+| NVIDIA device over TCP | Device ↔ owned host staging ↔ socket |
 | Host over TCP | Application bytes ↔ owned host buffers ↔ socket |
 
-Either peer can select host Direct or Staged independently. Failed host MR
+Each peer selects its host and device policies independently. Failed direct MR
 registration returns an error; it never changes the request to staging. CUDA
-device pointers always use declared staging. Direct GPU registration,
-GPUDirect RDMA, CUDA IPC and NVLink remain later paths.
+IPC and NVLink are separate future paths. Direct GPU support requires actual
+PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
 ## Device, port, GID and host topology discovery
 
@@ -108,14 +110,15 @@ own deadlines without cancelling the builder or holding store locks across I/O.
 Arrays are scoped by local context, remote process/PD/NIC, role and READ/WRITE
 capability. Concurrent grants share published QPs; successful records can
 retire independently. The physical QP becomes idle only after all affiliated
-records finish. If either peer is staged or device-backed, connections remain
-per-grant and require physical close barriers.
+records finish. A direct GPU requester can reuse a direct host source QP. If either peer uses
+staging, or the source uses direct GPU memory, connections remain per-grant and
+require physical close barriers.
 
-The current OrbitTE protocol is v14. Every phase binds both process and
+The current OrbitTE protocol is v15. Every phase binds both process and
 connection incarnations, the exact request and an independent grant generation.
 This protocol is separate from native TENT API/wire compatibility.
 
-The source binds a one-use Type-2B memory window (MW) to the exact range and
+For host/staged source memory, the source binds a one-use Type-2B memory window (MW) to the exact range and
 direction, consumes its successful BIND completion, and posts a real completion
 receive before publishing the grant. Type-2B MW support is required; a remotely
 enabled parent MR is not a fallback. The PD retains a bounded, non-evicting key
@@ -304,6 +307,85 @@ target/release/examples/cuda_copy 0 1
 The runner checks three unaligned sizes, eight concurrent callers and four
 rounds per caller, then releases all owners. It qualifies local staging only;
 GPUDirect, interprocess GPU sharing and NVLink require their own future gates.
+
+## GPUDirect RDMA ownership
+
+Build with `--features rdma,cuda`, set `MLX5_SCATTER_TO_CQE=0` before process
+startup, and select `RdmaConfig.cuda_memory = RdmaCudaMemory::Direct`. Keep the
+provider environment unchanged while any engine is alive. Initialization rejects
+an absent or different setting: mlx5 scatter-to-CQE can otherwise copy small
+RDMA READ results into the SGE from the CPU. This is incompatible with ordinary
+device pointers ([provider guidance](https://github.com/linux-rdma/perftest#readme)).
+No process-wide environment mutation or automatic staging fallback occurs.
+
+`CudaMemory` validates the device allocation and context. Before native
+registration it sets `CU_POINTER_ATTRIBUTE_SYNC_MEMOPS` once and checks device
+GPUDirect write-ordering/host-flush capabilities. `LocalBufferManager` publishes
+one local-only GPU MR per selected context transactionally, under the owning
+CUDA context. Requester slices borrow these persistent MRs. Allocation-wide
+`DmaLease` ranges reject overlapping copies or grants across registration views
+and engines; they never expose a GPU pointer as a CPU byte slice.
+
+NVIDIA [PeerDirect does not support Memory Windows](https://docs.nvidia.com/networking/display/mlnxofedv23102131201lts/optimized%2Bmemory%2Baccess).
+A GPU source grant therefore owns a fresh PD, exact-range MR with only the
+requested remote permission, and a fresh QP. Its RQ message MR uses that same
+PD. The device context, CQ lanes and transport Workers remain shared. Protocol
+profile 2 binds the separate private-PD connection identity and uses fenced
+ordinary SEND completion; it never pretends that a normal MR supports remote
+invalidation. The public NIC path still selects and validates the device route.
+
+Source ACK follows actual RQ completion and matching DONE, QP destruction,
+payload/message MR deregistration, private PD deallocation, and GPU write
+visibility. Requester completion likewise establishes visibility before
+releasing its DMA range. Hardware owner ordering is used when advertised;
+otherwise `cuFlushGPUDirectRDMAWrites` targets the current owning context.
+Any uncertain native cleanup, flush or context restoration retains the real
+allocation, range loan and associated admission. External producer/consumer
+stream handoff remains the caller's responsibility; SYNC_MEMOPS does not wait
+for arbitrary kernels ([CUDA ordering contract](https://docs.nvidia.com/cuda/gpudirect-rdma/#synchronization-and-memory-ordering)).
+
+This follows frozen TENT's `LocalBufferManager` → `RdmaContext::registerMemReg`
+registration and `Workers`/slice progress boundaries. TENT publishes native MR
+keys; OrbitTE's exact per-request authorization additionally needs private PDs
+for GPU source grants. GPU source MRs/QPs are currently per-grant and are not
+cached. Host source MW/QP reuse is retained; a GPU requester can reuse a pair
+when the source is direct host memory. Registration failure on any context fails
+the batch publication. The [bounded installed H20/RoCE profile](qualification.md#gpudirect-rdma)
+covers two contexts and preserves an unqualified host-wide context inventory
+limit. Other GPU/provider, native GPU fault and performance claims remain open.
+
+The explicit `hardware_peer` gate accepts `ORBITTE_RDMA_CUDA_MEMORY=direct` and
+optional `ORBITTE_RDMA_SLICE_BYTES` for 1/17/32/64-byte controls. The existing
+supervisor owns GPU/RNIC locks and process reaping. Its passive native observer
+records real MR type/flags, QP PD and payload WR addresses; `gdr.py` checks those
+against declared allocations and full-buffer/guard results. Evidence belongs
+outside the checkout; see [qualification](qualification.md).
+
+Build the installed GPU consumer from a clean commit, then pass both its
+manifest and passive observer to the controller:
+
+```sh
+CC=gcc CXX=g++ python3 tests/hardware/build_installed.py --consumer gpu \
+  --toolchain stable --output /external/installed-gpu-stable
+python3 -B tests/hardware/run.py --profile /external/gpu-profile.json \
+  --binary /external/installed-gpu-stable/installed/bin/orbitte-hardware-peer \
+  --installation /external/installed-gpu-stable/manifest.json \
+  --gdr-observer /external/installed-gpu-stable/liborbitte_cq_fault.so \
+  --output /external/runs/gpu-direct-001
+```
+
+Use `--toolchain 1.85.0` and a new output directory for the MSRV consumer. Each
+GPU case declares `cuda_memory: "direct"`, `transport: "rdma"`, and memory
+kinds `cpu`/`cuda:0`, with at least one GPU. The controller sets the required
+scatter environment before spawning the native process. Nodes must have
+distinct pinned hostnames and boot IDs. Small cases use `payload: 4096` and
+`slice_bytes` of 1, 17, 32 or 64. The two-rail folded-tail profile adds `rails`
+and both original NIC locks, `payload: 8388768`, `rdma_block_size: 1048576`,
+and `expected_grants: 12`. Each native process runs three READ requests followed
+by three WRITE requests. Run both physical directions and both values of
+`rdma_events`; preserve failed runs. The observer does not simulate transfers
+or change provider return values. This profile proves correctness and ownership,
+not bandwidth or GPU-native fault recovery.
 
 ## Run a native profile
 

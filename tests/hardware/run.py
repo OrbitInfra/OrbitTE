@@ -14,6 +14,7 @@ import uuid
 
 import cleanup
 import installed
+import gdr
 
 
 def restart_plan(case):
@@ -124,7 +125,7 @@ class Controller:
         target = self.profile['nodes'][node]
         locks = []
         if transport == 'rdma':
-            if self.profile.get('runner') in ('orbitte-multirail', 'orbitte-installed-host'):
+            if self.profile.get('runner') in ('orbitte-multirail', 'orbitte-installed-host') or self.profile.get('rails'):
                 locks.extend(self.rail_locks(node))
             else:
                 locks.append(target['nic_lock'])
@@ -142,6 +143,11 @@ class Controller:
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
                           restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
+        if environment.get('ORBITTE_GDR_OBSERVE') == '1':
+            if self.fault_library is None:
+                raise ValueError('GPU direct gate requires its pinned native observer')
+            environment['LD_PRELOAD'] = self.remote + '/liborbitte_cq_fault.so'
+            config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
         if (environment.get('ORBITTE_HOST_MODE') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-rail-accounting')
                 and environment['ORBITTE_SHARED_ROLE'] == 'requester') or (
                 environment.get('ORBITTE_HOST_MODE') == 'installed-memory-cleanup'
@@ -326,6 +332,30 @@ class Controller:
                     and (case[r + '_kind'] == 'cpu' or case[r + '_kind'].startswith('pinned:'))
                     for r in ['source', 'requester']))),
             }
+            cuda_memory = case.get('cuda_memory', 'staged')
+            if cuda_memory not in ('staged', 'direct'):
+                raise ValueError('CUDA RDMA memory policy must be staged or direct')
+            if cuda_memory == 'direct':
+                if shared or consumer or case['transport'] != 'rdma':
+                    raise ValueError('CUDA direct gate requires the public native peer')
+                environment.update(ORBITTE_RDMA_CUDA_MEMORY='direct', MLX5_SCATTER_TO_CQE='0', ORBITTE_GDR_OBSERVE='1', ORBITTE_SHARED_ROLE=role)
+                environment['ORBITTE_EXPECT_QP_REUSE'] = str(int(
+                    not case['source_kind'].startswith('cuda:') and all(
+                        case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
+                        for r in ('source', 'requester'))))
+            if self.profile.get('rails'):
+                if cuda_memory != 'direct':
+                    raise ValueError('public multirail profile requires explicit CUDA direct policy')
+                environment['ORBITTE_RDMA_RAILS'] = ','.join(self.profile['rails'])
+                count = case.get('expected_grants')
+                if type(count) is not int or not 6 <= count <= 4096:
+                    raise ValueError('multirail profile must pin its expected physical grant count')
+                environment['ORBITTE_EXPECT_GRANTS'] = str(count)
+            if 'slice_bytes' in case:
+                length = case['slice_bytes']
+                if type(length) is not int or not 1 <= length <= case['payload'] // 4 - 23:
+                    raise ValueError('explicit slice length exceeds the payload')
+                environment['ORBITTE_RDMA_SLICE_BYTES'] = str(length)
             for key, variable, limit in [('rdma_block_size', 'ORBITTE_RDMA_BLOCK_SIZE', 64 << 20), ('rdma_max_send_wr', 'ORBITTE_RDMA_MAX_SEND_WR', 64), ('rdma_max_cqes', 'ORBITTE_RDMA_MAX_CQES', 4096), ('rdma_max_endpoints', 'ORBITTE_RDMA_MAX_ENDPOINTS', 4096)]:
                 value = case.get(key)
                 if value is not None:
@@ -463,6 +493,12 @@ class Controller:
             except (ValueError, KeyError, TypeError) as error:
                 passed = False
                 validation_error = str(error)
+        if passed and case.get('cuda_memory') == 'direct':
+            try:
+                gdr.verify(self.profile, case, evidence)
+            except (ValueError, KeyError, TypeError) as error:
+                passed = False
+                validation_error = str(error)
         if passed and case.get('mode') in cleanup.MODES:
             try:
                 cleanup.verify(case, evidence)
@@ -481,13 +517,20 @@ def main():
     parser.add_argument('--profile', required=True, type=Path)
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--installation', type=Path, help='build_installed.py manifest for the installed-host runner')
+    parser.add_argument('--installation', type=Path, help='build_installed.py manifest for the public host/GPU consumer')
+    parser.add_argument('--gdr-observer', type=Path, help='pinned passive native GPU MR/WR observer')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     profile = json.loads(args.profile.read_text())
     controller = Controller(profile, args.binary.resolve(), args.output.resolve())
     manifest = {'profile': profile, 'binary_sha256': controller.sha256, 'remote_root': controller.remote, 'started_unix': time.time(), 'status': 'running', 'performance_measurement': False}
     try:
+        if args.gdr_observer:
+            if profile.get('runner') is not None or not all(case.get('cuda_memory') == 'direct' for case in profile['cases']):
+                raise ValueError('GPU observer requires explicit public direct CUDA cases')
+            gdr.validate_profile(profile)
+            controller.fault_library = args.gdr_observer.resolve()
+            manifest['gdr_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
         if profile.get('runner') == 'orbitte-installed-host':
             installed.validate_nodes(profile)
             if args.installation is None:
@@ -510,7 +553,17 @@ def main():
             if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:
                 raise ValueError('unexpected installed binary protocol')
         elif args.installation is not None:
-            raise ValueError('--installation is reserved for the installed-host runner')
+            installation = json.loads(args.installation.read_text())
+            if (not args.gdr_observer or installation.get('status') != 'passed'
+                    or installation.get('dirty') or installation.get('consumer') != 'gpu'
+                    or installation.get('binary_sha256') != controller.sha256
+                    or installation.get('protocol') != 'orbitte-hardware-peer-v1'
+                    or installation.get('fault_library_sha256') != manifest['gdr_observer_sha256']):
+                raise ValueError('GPU installation is dirty, incomplete or belongs to other inputs')
+            manifest['installation'] = installation
+            manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
+            if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installation['protocol']:
+                raise ValueError('unexpected installed GPU binary protocol')
         native_test = native_peer_test(profile)
         if native_test is not None:
             listing = controller.command([str(args.binary.resolve()), native_test, '--exact', '--list'])

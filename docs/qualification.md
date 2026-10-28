@@ -15,11 +15,69 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery qualifies [automatic discovery](#installed-automatic-discovery)
-against a separately captured host inventory, retaining the full
-[physical rail accounting](#installed-physical-rail-accounting) contract.
+The latest installed delivery qualifies the bounded [GPUDirect RDMA](#gpudirect-rdma)
+profile below with an explicit host-wide context inventory limit. Earlier host
+[automatic discovery](#installed-automatic-discovery) and
+[physical rail accounting](#installed-physical-rail-accounting) retain their own
+artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
+
+## GPUDirect RDMA
+
+Source [`cda0fdf`](https://github.com/OrbitInfra/OrbitTE/commit/cda0fdf16aec7b128e21c60fa860c340c164cf03)
+qualifies explicit Direct RDMA for owned `CudaMemory` on two physical H20 hosts,
+using one
+selected GPU and two locked mlx5 RoCEv2 RNICs per host. Both stable 1.99.1 and
+Rust 1.85 build independent installed consumers from the packaged crate. The
+source passes 243 unit tests, eight integration tests, one doctest, Clippy and
+all eight feature/toolchain CI combinations. Thirty-six controller controls
+include corrupt or missing GPU MR, PD, rail, process and lifetime evidence.
+
+All 72 installed cases pass: each toolchain runs both physical directions for
+host/GPU, GPU/host and GPU/GPU READ plus WRITE. Small requests cover 1/17 bytes
+with polling and 32/64 bytes with event progress. Two-rail cases use three
+parent requests of 2 MiB + 17 bytes per
+operation, a 1 MiB base slice and folded tails, with both polling and event
+progress. Every case checks the complete allocation and guard bytes. Passive
+native witnesses identify actual GPU pointer type, MR flags and range, local
+SGE/lkey/QP PD, remote rkey/permission, and payload work on both selected
+contexts. GPU sources issue no MW operations and use ordinary fenced SEND;
+source private PD counters drain completely.
+
+`native-audit.json` pins the two packages, binary/observer hashes, all 72 case
+files, host/boot/GPU identities and loaded native libraries. Every supervised
+child is reaped and every RNIC/GPU lock is released. Selected-RNIC QP/CQ/MR/PD
+identity sets match their before-run inventories; GPU
+memory returns to zero on both hosts. Two additional installed repeats capture
+eight live `hardware_peer` PID/context identities and prove that all eight
+disappear after exit. B gained six other context entries on selected RNICs and
+three each on two unselected RNICs; their origin remains unassigned. The initial
+failed global inventory check is preserved, and host-wide context non-growth
+is **not qualified**. The final audit records `passed-with-limits`. Mapped CUDA
+compatibility libraries are
+`libcuda.so.590.48.01`, reporting Driver API 13.1, on R535.161.08 hosts.
+This is a Driver API/GPUDirect result, not a CUDA toolkit/kernel compilation test.
+
+Evidence stays outside Git at
+`/root/orbitte-artifacts/gpudirect-rdma-20261027/`: `qualified-stable/` and
+`qualified-msrv/` contain installation manifests; the four corresponding
+`*-small/` and `*-multirail/` directories preserve all process and native
+receipts. Development runs and the first controller rejection remain archived;
+the latter rejected a GPU profile through a host-only validator before any
+remote process started. The final packages include the corrected validator.
+
+Independent review accepts the source and this bounded installed profile; it
+reran the relevant source gates and independently checked the frozen packages
+and native evidence. Its archived reports and checksums are in `reviewer/`.
+Failure retention has integrated CPU ABI controls for partial construction,
+payload/RQ MR and private-PD cleanup, and CUDA restoration/visibility failures.
+Actual GPU teardown
+faults, physical faults, InfiniBand, other GPUs/providers, performance, mixed
+staged/direct workloads, external/managed/IPC allocations, NVLink and external
+producer stream handoff remain
+unqualified or later P5 work. GPU source MR/QP reuse is deliberately absent.
+See the [ownership and reproduction contract](rdma-cuda.md#gpudirect-rdma-ownership).
 
 ## CUDA copy streams and completion events
 

@@ -22,6 +22,14 @@ pub(super) struct Device {
     pub(super) event_destroy_error: AtomicI32,
     pub(super) copy_error: AtomicI32,
     pub(super) sync_error: AtomicI32,
+    #[cfg(feature = "rdma")]
+    pub(super) rdma_ordering: AtomicI32,
+    #[cfg(feature = "rdma")]
+    pub(super) rdma_flush_options: AtomicI32,
+    #[cfg(feature = "rdma")]
+    pub(super) rdma_set_error: AtomicI32,
+    #[cfg(feature = "rdma")]
+    pub(super) rdma_flush_error: AtomicI32,
     pub(super) pop_error: AtomicI32,
     pub(super) pop_after_completion: AtomicBool,
     pub(super) free_error: AtomicI32,
@@ -348,6 +356,12 @@ pub(super) fn driver() -> Arc<Driver> {
         _library: None,
         init,
         device_get: get,
+        #[cfg(feature = "rdma")]
+        device_attribute,
+        #[cfg(feature = "rdma")]
+        set_pointer_attribute,
+        #[cfg(feature = "rdma")]
+        flush_rdma,
         primary_retain: retain,
         primary_release: release,
         push,
@@ -385,6 +399,14 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         event_destroy_error: AtomicI32::new(0),
         copy_error: AtomicI32::new(0),
         sync_error: AtomicI32::new(0),
+        #[cfg(feature = "rdma")]
+        rdma_ordering: AtomicI32::new(0),
+        #[cfg(feature = "rdma")]
+        rdma_flush_options: AtomicI32::new(1),
+        #[cfg(feature = "rdma")]
+        rdma_set_error: AtomicI32::new(0),
+        #[cfg(feature = "rdma")]
+        rdma_flush_error: AtomicI32::new(0),
         pop_error: AtomicI32::new(0),
         pop_after_completion: AtomicBool::new(false),
         free_error: AtomicI32::new(0),
@@ -405,4 +427,58 @@ pub(super) fn memory(device: &Arc<Device>) -> Arc<CudaMemory> {
     Arc::new(
         CudaMemory::register(bytes.as_ptr() as u64, bytes.len(), device.clone(), driver()).unwrap(),
     )
+}
+
+#[cfg(feature = "rdma")]
+unsafe extern "C" fn device_attribute(
+    output: *mut i32,
+    attribute: sys::CUdevice_attribute,
+    _: i32,
+) -> Status {
+    let device = current();
+    let value = match attribute {
+        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING => {
+            device.rdma_ordering.load(Ordering::Acquire)
+        }
+        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS => {
+            device.rdma_flush_options.load(Ordering::Acquire)
+        }
+        _ => return Status::CUDA_ERROR_INVALID_VALUE,
+    };
+    unsafe {
+        *output = value;
+    }
+    SUCCESS
+}
+#[cfg(feature = "rdma")]
+unsafe extern "C" fn set_pointer_attribute(
+    value: *const c_void,
+    attribute: PointerAttribute,
+    address: u64,
+) -> Status {
+    assert_eq!(
+        attribute,
+        PointerAttribute::CU_POINTER_ATTRIBUTE_SYNC_MEMOPS
+    );
+    assert_eq!(unsafe { *value.cast::<u32>() }, 1);
+    let device = device_at(address);
+    assert!(std::ptr::eq(current(), Arc::as_ptr(&device)));
+    event("sync_memops");
+    status(device.rdma_set_error.load(Ordering::Acquire))
+}
+#[cfg(feature = "rdma")]
+unsafe extern "C" fn flush_rdma(
+    target: sys::CUflushGPUDirectRDMAWritesTarget,
+    scope: sys::CUflushGPUDirectRDMAWritesScope,
+) -> Status {
+    assert_eq!(
+        target,
+        sys::CUflushGPUDirectRDMAWritesTarget::CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX
+    );
+    assert_eq!(
+        scope,
+        sys::CUflushGPUDirectRDMAWritesScope::CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER
+    );
+    event("flush_rdma");
+    status(current().rdma_flush_error.load(Ordering::Acquire))
 }

@@ -59,6 +59,7 @@ impl ReceiveQueue {
         credits: ReceiveCredits,
         device: &RdmaContext,
         message_capacity: usize,
+        private_pd: *mut std::ffi::c_void,
     ) -> Result<()> {
         if self.fenced {
             return Err(Error::Unavailable("RDMA QP receive queue is fenced"));
@@ -95,6 +96,7 @@ impl ReceiveQueue {
             &mut slot.message.handles,
             slot.message.memory.address,
             slot.message.memory.length,
+            private_pd,
         );
         slot.message.registered();
         if registered.is_err() {
@@ -204,7 +206,7 @@ impl ReceiveQueue {
         }
         if completion.opcode != 128
             || completion.length != COMPLETION_MESSAGE_SIZE as u32
-            || completion.flags != sys::WITH_INVALIDATE
+            || !matches!(completion.flags, 0 | sys::WITH_INVALIDATE)
         {
             return Err(Error::Protocol("RDMA receive opcode/length/invalidation"));
         }
@@ -216,7 +218,14 @@ impl ReceiveQueue {
             .find(|work| {
                 work.posted()
                     && !work.completed()
-                    && work.rkey == completion.invalidated_rkey
+                    && if work.expected[COMPLETION_MESSAGE_SIZE - 1]
+                        == super::super::protocol::MR_AUTHORITY
+                    {
+                        completion.flags == 0
+                    } else {
+                        completion.flags == sys::WITH_INVALIDATE
+                            && work.rkey == completion.invalidated_rkey
+                    }
                     && work.expected == slot.message.memory.bytes()
             })
             .ok_or(Error::Protocol(

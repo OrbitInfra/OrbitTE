@@ -274,9 +274,11 @@ unsafe extern "C" fn send(
     address: u64,
     length: usize,
     rkey: u32,
+    invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
-    let code = unsafe { (BASE.send_completion)(h, memory, id, address, length, rkey, result) };
+    let code =
+        unsafe { (BASE.send_completion)(h, memory, id, address, length, rkey, invalidate, result) };
     poke_all();
     code
 }

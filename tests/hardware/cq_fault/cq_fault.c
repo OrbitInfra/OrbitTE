@@ -98,6 +98,7 @@ static void deny_commands(int descriptor) {
 #include "memory.c"
 #include "dependency.c"
 #include "accounting.c"
+#include "gdr.c"
 
 static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     pthread_mutex_lock(&lock);
@@ -125,6 +126,7 @@ static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **
     int armed = state.armed;
     pthread_mutex_unlock(&lock);
     int code = context.post(qp, wr, bad);
+    gdr_post(qp, wr, code);
     if (!code && (operation(wr->opcode) || wr->opcode == IBV_WR_BIND_MW)) {
         pthread_mutex_lock(&lock);
         contexts[index].last_qp = qp;

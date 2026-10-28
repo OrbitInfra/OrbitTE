@@ -1,4 +1,4 @@
-//! OrbitTE v14 rendezvous and exact-grant receipts carried by the control service.
+//! OrbitTE v15 rendezvous and exact-grant receipts carried by the control service.
 //! These messages are distinct from TENT's native metadata and wire formats.
 
 use super::DESCRIPTOR_SIZE;
@@ -13,6 +13,7 @@ pub(super) const HELLO_SIZE: usize = 2 + 2 * IDENTITY_SIZE + 16 + 8;
 pub(super) const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE + 1;
 pub(super) const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8 + 1;
 const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
+pub(super) const MR_AUTHORITY: u8 = 2;
 pub(super) const ACCEPT: u8 = 1;
 pub(super) const GRANT: u8 = 2;
 pub(super) const DONE: u8 = 3;
@@ -149,8 +150,11 @@ impl Binding {
         source: Identity,
         requester: Identity,
         grant: u64,
-        cacheable: bool,
+        profile: u8,
     ) -> Result<Self> {
+        if profile > MR_AUTHORITY {
+            return Err(Error::Protocol("RDMA release profile"));
+        }
         if grant == 0 {
             return Err(Error::Protocol("zero RDMA grant generation"));
         }
@@ -160,7 +164,7 @@ impl Binding {
         bytes[REQUEST_SIZE + IDENTITY_SIZE..REQUEST_SIZE + 2 * IDENTITY_SIZE]
             .copy_from_slice(&requester.encode());
         bytes[BINDING_SIZE - 9..BINDING_SIZE - 1].copy_from_slice(&grant.to_be_bytes());
-        bytes[BINDING_SIZE - 1] = u8::from(cacheable);
+        bytes[BINDING_SIZE - 1] = profile;
         Ok(Self(bytes))
     }
 
@@ -170,9 +174,9 @@ impl Binding {
         source: Identity,
         requester: Identity,
         grant: u64,
-        cacheable: bool,
+        profile: u8,
     ) -> Result<Self> {
-        let binding = Self::new(request, source, requester, grant, cacheable)?;
+        let binding = Self::new(request, source, requester, grant, profile)?;
         binding.read(channel, ACCEPT)?;
         Ok(binding)
     }

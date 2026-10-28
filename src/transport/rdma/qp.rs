@@ -38,6 +38,34 @@ pub(super) struct ConnectionResources {
 }
 
 impl ConnectionResources {
+    pub(super) fn close_grant_pd(
+        &mut self,
+        verbs: &sys::Verbs,
+    ) -> std::result::Result<(), (&'static str, i32)> {
+        if self.handles.private_pd.is_null() {
+            return Ok(());
+        }
+        if !self.closed {
+            return Err(("GPU grant PD before QP drain", libc::EBUSY));
+        }
+        let mut device = sys::DeviceHandles {
+            pd: self.handles.private_pd,
+            ..Default::default()
+        };
+        let code = unsafe { (verbs.dealloc_pd)(&mut device) };
+        if code != 0 {
+            return Err(("ibv_dealloc_pd GPU grant", code));
+        }
+        self.handles.private_pd = device.pd;
+        if let Some(lease) = &self.lease {
+            let mut usage = lease.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.active_grant_pds -= 1;
+            usage.closed_grant_pds += 1;
+        }
+        drop(self.lease.take());
+        Ok(())
+    }
+
     pub(super) fn close(
         &mut self,
         verbs: &sys::Verbs,
@@ -67,7 +95,9 @@ impl ConnectionResources {
         self.closed = true;
         self.handles.cq = std::ptr::null_mut();
         self.handles.receive_cq = std::ptr::null_mut();
-        drop(self.lease.take());
+        if self.handles.private_pd.is_null() {
+            drop(self.lease.take());
+        }
         Ok(())
     }
 }

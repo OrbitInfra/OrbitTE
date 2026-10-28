@@ -118,16 +118,16 @@ impl ProgressState {
                 .as_mut()
                 .ok_or(Error::Internal("missing RDMA receive owner"))?
                 .grant_mut()?;
-            if !grant.window_bound || grant.rkey != receipt.rkey {
+            if (!grant.window_bound && !grant.handles.remote_mr) || grant.rkey != receipt.rkey {
                 return Err(Error::Protocol("RDMA receive changed grant authority"));
             }
             grant.window_bound = false;
-            // Publish logical completion only after the named authority is revoked.
-            // A waiter cannot observe the receipt with window_bound still true.
+            // MW authority is already invalidated. An isolated GPU MR is revoked
+            // by QP/MR/PD teardown before the source ACK and loan release.
             receipt.mark_completed();
             let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.completed_receives += 1;
-            usage.completed_window_invalidations += 1;
+            usage.completed_window_invalidations += u64::from(!grant.handles.remote_mr);
             drop(usage);
             drop(request);
             record.changed.notify_all();
