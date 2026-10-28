@@ -15,7 +15,8 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery covers [serial remote CUDA staging](#serial-remote-cuda-staging),
+The latest installed delivery covers the [bounded remote pipeline](#bounded-remote-cuda-pipeline),
+[serial remote CUDA staging](#serial-remote-cuda-staging),
 [local staging chunks](#local-cuda-staging-chunks) and the
 [bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
 building on [local pinned host IPC](#local-pinned-host-cuda-ipc), bounded [subbatches](#bounded-cuda-ipc-subbatches) and the cooperative
@@ -28,26 +29,67 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
-## Bounded remote pipeline source
+## Bounded remote CUDA pipeline
 
-The new P5.5b source path negotiates 1–16 remote slots under the existing pool
-budget. Physical slots retain their CUDA stream/event across sessions. PRE or
-POST can remain pending while another slot crosses TCP/RDMA; every accepted
-copy must drain before slot reuse or final Unpin. Source tests use real control
-sockets and a deterministic native-call shim whose copies remain pending until
-their event is waited. They cover both payload transports, CPU/GPU requesters,
-negotiated widths, tails, safe reuse, partial admission, lost receipts, failed
-waits and context/handle cleanup retention.
+Clean stable 1.99.1 and Rust 1.85.0 installed consumers from
+[`c0f6a9e`](https://github.com/OrbitInfra/OrbitTE/commit/c0f6a9e3517f7b6999b1238e652fb7db77b96d43)
+pass 24 cases on two fresh physical H20 hosts. Each compiler covers TCP/RDMA,
+CPU/GPU requesters, both host directions, asymmetric caps, negotiated widths
+1/2/3/4/16 and a cap shortened by the request's chunk count. Main pipeline
+cases turn the ring more than three times and include a short tail. Each case
+performs three READs and three WRITEs with full-buffer and guard comparisons,
+one source handler and one parent admission slot. Reverse RDMA cases use CQ events.
+Four fresh independent repeats cover both compilers, transports, host directions
+and local memory kinds, including the 16-slot RDMA case. They add 24 sessions,
+696 Delegate/CROSS operations each and 1,296 payload copies on 38 pool
+allocations/frees. Independent review accepts source and this healthy pipeline
+profile; it does not complete P5.5b.
 
-Evidence for this source substage is outside Git at
-`/root/orbitte-artifacts/proxy-pipeline-20261028/`. New hardware qualification is
-**open**. Earlier serial artifacts use wire v17; the current v18 Pin width
-exchange and new pipeline have not inherited that installed acceptance. The
-serial observer's global copy/wait ordering cannot validate a pipeline: the
-next gate must match individual stream/event record generations, bound each
-copy to its actual live allocation and reject reuse/free before completion.
-CPU scheduling overlap makes no claim about physical GPU overlap or throughput.
-Requester-side full-payload staging and broader remote scheduling remain open.
+The passive CUDA ledger matches each stream/event record generation to live
+allocations and requires event wait plus context restoration before slot reuse
+or cleanup entry. It checks setup/readback as well as payload copies, allows
+out-of-order completion across slots, and verifies persistent per-slot handles
+across sessions. The primary matrix records 144 sessions, 2,040 Delegate/CROSS
+operations each and 3,432 payload chunk copies on 120 pool allocations/frees.
+Afterward, all supervised processes are gone, all 16 GPUs report zero allocation
+and no compute processes, locks are reacquirable, and the selected mlx5_3
+context/PD/CQ/QP/MR identity sets match their original baselines.
+
+The unchanged 16-slot RDMA case performs 300 CROSS operations. It exposed
+native MW index reuse exhausting the low-byte key tags. The PD now retains an
+exhausted, never-bound MW while allocating another index; key history remains
+intact and bounded. Both compiler runs show 300 binds/invalidations, one index
+rollover and zero final live/retained windows. This is OrbitTE's authorization
+lifetime mechanism; it is not a claim that TENT uses the same key policy.
+Accepted control sockets also disable Nagle. CROSS setup errors now use the
+nested transport epoch; a socket close may still precede delivery of the error.
+
+Evidence remains outside Git at
+`/root/orbitte-artifacts/proxy-pipeline-qualification-20261028/`.
+`primary-matrix.json` binds the two `installed-qualified-*` manifests, native
+observers, `runs-qualified-*` cases, runtime provider hashes and cleanup audit.
+`independent-review/source-review-c0f6a9e.json` records source review and additional
+partial-allocation/cleanup and partial-WRITE controls.
+`independent-review/live-c0f6a9e/hardware-review.json` binds all 24 primary and four
+fresh review cases to their installed artifacts. Its sibling `runs-stable/`,
+`runs-msrv/` and before/after inventories preserve independent execution and
+cleanup evidence. Final postflight covers primary, review and earlier failed
+runs; `safe-to-release.json` records that the reserved resources can be returned.
+The earlier timeout,
+key-exhaustion and diagnostic failures remain in `runs-stable/`,
+`nodelay-control/` and `diagnostic-control/`; their cleanup is audited too.
+The CI socket-close race and repeated corrected controls are preserved in
+`ci-c0f6a9e-stable-combined.log` and `cross-error-test-race.log`.
+Original pipeline source controls remain in
+`/root/orbitte-artifacts/proxy-pipeline-20261028/`.
+
+This qualifies healthy wire-v18 remote staging on one RoCEv2 rail per host.
+RDMA retirement uses real-provider engine counters, without passive per-WR/CQE
+or deregistration-order receipts. Native CUDA receipts establish lifetime and
+completion, not physical execution overlap or throughput. Physical faults,
+InfiniBand, requester-side bounded staging, broader asynchronous scheduling and
+C++/Rust wire interoperability remain open. Earlier serial v17 evidence retains
+its original artifact boundary. See [the contract and reproduction](staging.md#installed-pipeline-validation).
 
 ## Serial remote CUDA staging
 
@@ -114,8 +156,9 @@ inventories are under `independent-review/live-repeat-plan/`.
 This qualifies the declared healthy serial profile. RDMA completion and private
 MR retirement are checked through the real provider's engine counters and source
 ownership checks, without passive per-WR/CQE or deregistration-order receipts.
-Overlapping pipelines, broader remote scheduling, physical GPU/RNIC faults,
-performance and mixed C++/Rust wire interoperability remain open. See
+The new pipeline has [separate v18 evidence](#bounded-remote-cuda-pipeline).
+Broader remote scheduling, physical GPU/RNIC faults, performance and mixed
+C++/Rust wire interoperability remain open. See
 [the contract and reproduction](staging.md#serial-remote-staging).
 
 ## Local CUDA staging chunks

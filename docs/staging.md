@@ -181,10 +181,14 @@ partial admission, wrong slot/scope, EOF, lost final receipts and failed
 completion/construction/destruction. CROSS setup and PRE drain errors use the
 nested transport's source epoch; Delegate and Unpin use the staging nonce.
 An error after a partial native wire exchange may still require closing the
-connection with an unknown remote effect. Long RDMA sessions rotate exhausted
+connection with an unknown remote effect. A requester still writing CROSS may
+observe a socket error before it can read the source's error receipt. Long RDMA sessions rotate exhausted
 MW key indices through the [PD-owned key domain](rdma-cuda.md).
-The new installed pipeline profile remains unqualified. Scheduling overlap in a native-call shim does not establish GPU
-execution overlap or a performance improvement.
+The new installed pipeline profile passes 24 fresh two-host cases on stable/MSRV
+plus four independent repeats. Source and this healthy profile are accepted;
+see [qualification](qualification.md#bounded-remote-cuda-pipeline).
+Scheduling overlap and native completion receipts do not establish GPU execution
+overlap or a performance improvement.
 
 ## Validation
 
@@ -226,8 +230,9 @@ actual live allocations and completion before cross-thread reuse/free.
 
 Stable/MSRV installed consumers pass 16 two-host H20 cases for this healthy serial
 profile, with four fresh independent repeats. Source and this bounded profile
-are independently accepted. The profile and artifact binding are in [Qualification](qualification.md#serial-remote-cuda-staging); overlapping
-pipeline hardware qualification, physical faults and full ProxyManager parity remain open.
+are independently accepted. The profile and artifact binding are in
+[Qualification](qualification.md#serial-remote-cuda-staging). The pipeline has
+separate evidence below; physical faults and full ProxyManager parity remain open.
 
 ### Installed pipeline validation
 
@@ -250,10 +255,12 @@ destroyed before their pinned allocation is freed. The observer forwards all
 native arguments, outputs and return codes without inserting driver waits.
 
 The frozen bounded profile covers TCP/RDMA, CPU/GPU requesters, both host
-orientations, asymmetric caps, widths 1/2/3/16 and shortening a requested width
-to the chunk count. Main pipeline cases turn the ring more than twice and
+orientations, asymmetric caps, widths 1/2/3/4/16 and shortening a requested width
+to the chunk count. Main pipeline cases turn the ring more than three times and
 include a tail. All six sessions reuse physical slots; setup/readback copies
 are also checked. Tests distinguish unconfirmed submissions from physical DMA
 execution: native receipts do not establish execution overlap or throughput.
-Hardware qualification requires fresh installed artifacts and new node inventory;
-earlier serial evidence remains bound to its original observer and wire version.
+The fresh 24-case installed matrix uses wire v18 and the generation-aware
+observer. Four fresh independent repeats and their cleanup audit also pass;
+earlier serial evidence remains bound to its original observer and wire version. Requester-side bounded staging
+and broader asynchronous remote scheduling remain in P5.5b.

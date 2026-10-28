@@ -267,7 +267,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Public request | `engine.rs`, `batch.rs`, `memory.rs` | Engine, tasks and actual backing |
 | Transport entry | `transport/rdma/rdma_transport.rs` | Registration, parent dispatch and source serving |
 | Context orchestration | `rdma_transport/contexts.rs` | Transport initialization, selection, CQ attachment, recovery and shutdown |
-| Context owners | `context_set.rs`, `context.rs`, `discovery.rs`, `quota.rs` | Stable slots and reclaim, PDs, device discovery and NIC admission |
+| Context owners | `context_set.rs`, `context.rs`, `context/key_domain.rs`, `discovery.rs`, `quota.rs` | Stable slots and reclaim, PD/key history and exhausted MWs, device discovery and NIC admission |
 | Peer rendezvous | `rdma_transport/connections.rs`, `rdma_transport/handshake.rs` | Fixed-width connection claims, grant preparation and bilateral publication |
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |

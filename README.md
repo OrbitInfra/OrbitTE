@@ -99,9 +99,11 @@ staged RDMA; 24 installed H20 cases plus four independent repeats pass for
 that bounded healthy profile. Opt-in [remote Pin/Delegate/Unpin sessions](docs/staging.md#serial-remote-staging)
 pass 16 installed H20 TCP/RDMA cases plus four independent repeats, with scoped
 completion and private MR cleanup. This healthy serial profile is independently
-accepted. An opt-in [bounded remote pipeline](docs/staging.md#bounded-remote-pipeline)
-now supports up to 16 slots, with CPU scheduling and failure controls; its new
-installed GPU/RDMA profile remains unqualified.
+accepted. The opt-in [bounded remote pipeline](docs/staging.md#bounded-remote-pipeline)
+supports up to 16 reusable slots and passes 24 fresh installed H20 TCP/RDMA
+cases plus four independent repeats. Source and this healthy pipeline profile
+are accepted; requester-side bounded staging and broader asynchronous remote
+scheduling remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

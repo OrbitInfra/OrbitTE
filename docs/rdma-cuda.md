@@ -32,11 +32,12 @@ registration returns an error; it never changes the request to staging. CUDA
 IPC and NVLink use a separate [cooperative transport](cuda-ipc.md). Direct GPU support requires actual
 PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
-Opt-in [serial remote CUDA staging](staging.md#serial-remote-staging) coordinates
+Opt-in [remote CUDA staging](staging.md#serial-remote-staging) coordinates
 Pin/Delegate/Unpin over the same control channel, while TCP and RDMA retain
-payload ownership. Its healthy serial profile passes 16 installed H20 cases on
-stable and Rust 1.85; see [qualification](qualification.md#serial-remote-cuda-staging)
-for exact artifacts and limits.
+payload ownership. The serial profile passes 16 installed H20 cases; the bounded
+up-to-16-slot pipeline passes 24 fresh cases on stable and Rust 1.85. See
+[qualification](qualification.md#bounded-remote-cuda-pipeline) for exact artifacts,
+review status and limits.
 
 TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
 GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,

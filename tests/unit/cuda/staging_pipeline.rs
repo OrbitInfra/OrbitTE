@@ -339,10 +339,12 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
             !report.is_complete() && report.locally_drained,
             "{report:?}"
         );
+        // PRE may fail before CROSS is read; socket closure can win the race
+        // with the error receipt. Both outcomes must retain the same DMA owners.
         assert!(
             matches!(
                 report.failure.as_ref().unwrap().error,
-                Error::Backend { .. }
+                Error::Backend { .. } | Error::Io(_)
             ),
             "{report:?}"
         );
