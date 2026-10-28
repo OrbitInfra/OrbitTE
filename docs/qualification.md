@@ -51,9 +51,9 @@ or cleanup entry. It checks setup/readback as well as payload copies, allows
 out-of-order completion across slots, and verifies persistent per-slot handles
 across sessions. The primary matrix records 144 sessions, 2,040 Delegate/CROSS
 operations each and 3,432 payload chunk copies on 120 pool allocations/frees.
-Afterward, all supervised processes are gone, all 16 GPUs report zero allocation
-and no compute processes, locks are reacquirable, and the selected mlx5_3
-context/PD/CQ/QP/MR identity sets match their original baselines.
+Afterward, all supervised processes are gone, `nvidia-smi` reports 0 MiB memory
+used on all 16 GPUs and no compute processes, locks are reacquirable, and the
+selected mlx5_3 context/PD/CQ/QP/MR identity sets match their original baselines.
 
 The unchanged 16-slot RDMA case performs 300 CROSS operations. It exposed
 native MW index reuse exhausting the low-byte key tags. The PD now retains an
