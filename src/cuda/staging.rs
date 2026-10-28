@@ -28,7 +28,16 @@ impl CudaMemory {
             PinnedAllocation::new(&context, size)
         })?;
         if allocation.copy_stream.is_none() {
-            allocation.copy_stream = Some(CopyStream::new(&context)?);
+            match CopyStream::new(&context) {
+                Ok(stream) => allocation.copy_stream = Some(stream),
+                Err(error) => {
+                    if matches!(error, Error::Unquiesced { .. }) {
+                        allocation.uncertain = true;
+                        stage.quarantine();
+                    }
+                    return Err(error);
+                }
+            }
         }
         let mut copied = 0;
         while copied < length {
@@ -83,6 +92,8 @@ pub(crate) struct StagingCopy<'a> {
     allocation: &'a mut DeviceAllocation,
     address: u64,
     length: usize,
+    pending: usize,
+    failed: bool,
 }
 
 impl CudaMemory {
@@ -91,9 +102,10 @@ impl CudaMemory {
         offset: usize,
         length: usize,
         manager: &Arc<crate::runtime::proxy_manager::ProxyManager>,
+        depth: usize,
         operation: impl FnOnce(
             &mut StagingCopy<'_>,
-            crate::runtime::proxy_manager::StageBufferLease,
+            Vec<crate::runtime::proxy_manager::StageBufferLease>,
         ) -> Result<T>,
     ) -> Result<T> {
         let range = checked_range(offset, length, self.length)?;
@@ -104,19 +116,35 @@ impl CudaMemory {
         })?;
         allocation.check_dma(&range)?;
         let context = Arc::clone(&allocation.context);
-        let stage = manager.pin_stage_buffer(context.raw.as_ptr() as usize, |size| {
-            PinnedAllocation::new(&context, size)
-        })?;
-        if allocation.copy_stream.is_none() {
-            allocation.copy_stream = Some(CopyStream::new(&context)?);
+        let mut stages = Vec::with_capacity(depth);
+        for _ in 0..depth {
+            stages.push(
+                manager.pin_stage_buffer(context.raw.as_ptr() as usize, |size| {
+                    PinnedAllocation::new(&context, size)
+                })?,
+            );
+        }
+        if depth == 1 && allocation.copy_stream.is_none() {
+            match CopyStream::new(&context) {
+                Ok(stream) => allocation.copy_stream = Some(stream),
+                Err(error) => {
+                    if matches!(error, Error::Unquiesced { .. }) {
+                        allocation.uncertain = true;
+                        stages[0].quarantine();
+                    }
+                    return Err(error);
+                }
+            }
         }
         operation(
             &mut StagingCopy {
                 allocation: &mut allocation,
                 address: self.address + offset as u64,
                 length,
+                pending: 0,
+                failed: false,
             },
-            stage,
+            stages,
         )
     }
 }
@@ -145,7 +173,8 @@ impl StagingCopy<'_> {
         // also holds HostMemory's access lock, excluding native DMA loans.
         let result =
             unsafe { stream.copy(self.address + offset as u64, address, length, to_device) };
-        self.allocation.uncertain = !stream.quiescent();
+        self.failed |= !stream.quiescent();
+        self.allocation.uncertain = self.failed || self.pending != 0;
         if self.allocation.uncertain || self.allocation.context.poisoned.load(Ordering::Acquire) {
             stage.quarantine();
             return match result {
@@ -160,5 +189,107 @@ impl StagingCopy<'_> {
         result?;
         stage.completed(length);
         Ok(())
+    }
+}
+
+impl StagingCopy<'_> {
+    pub(crate) fn begin(
+        &mut self,
+        stage: &mut crate::runtime::proxy_manager::StageBufferLease,
+        offset: usize,
+        length: usize,
+        to_device: bool,
+    ) -> Result<()> {
+        checked_range(offset, length, self.length)?;
+        let host = stage.buffer()?;
+        checked_range(0, length, host.length)?;
+        host.check_access()?;
+        stage.submitting();
+        let result = (|| {
+            let host = stage.buffer()?;
+            let mut slot = host.copy_stream.lock().map_err(|_| Error::Unquiesced {
+                operation: "CUDA stage stream lock",
+                code: -1,
+            })?;
+            if slot.is_none() {
+                *slot = Some(CopyStream::new(&host.context)?);
+            }
+            let stream = slot
+                .as_mut()
+                .ok_or(Error::Internal("CUDA stage stream missing"))?;
+            // SAFETY: this task retains the GPU guard and pinned lease until
+            // complete, including every failure/EOF path. The private host
+            // registration cannot be crossed or reused while this slot is pending.
+            let result = unsafe {
+                stream.begin_copy(
+                    self.address + offset as u64,
+                    host.address,
+                    length,
+                    to_device,
+                )
+            };
+            if result.is_err() && !stream.quiescent() {
+                return Err(Error::Unquiesced {
+                    operation: "CUDA staged submission",
+                    code: -1,
+                });
+            }
+            result
+        })();
+        match &result {
+            Ok(()) => self.pending += 1,
+            Err(Error::Unquiesced { .. }) => {
+                self.failed = true;
+                stage.quarantine();
+            }
+            Err(_) => stage.drained(),
+        }
+        self.allocation.uncertain = self.failed || self.pending != 0;
+        result
+    }
+
+    pub(crate) fn complete(
+        &mut self,
+        stage: &mut crate::runtime::proxy_manager::StageBufferLease,
+        length: usize,
+    ) -> Result<()> {
+        // A pending slot is intentionally inaccessible to CPU/DMA consumers.
+        // Wait through its stream owner before calling check_access again.
+        let result = (|| {
+            let host = stage.buffer()?;
+            let mut slot = host.copy_stream.lock().map_err(|_| Error::Unquiesced {
+                operation: "CUDA stage stream lock",
+                code: -1,
+            })?;
+            let stream = slot.as_mut().ok_or(Error::Unquiesced {
+                operation: "CUDA stage stream missing",
+                code: -1,
+            })?;
+            let result = stream.complete();
+            if !stream.quiescent() {
+                return Err(Error::Unquiesced {
+                    operation: "CUDA staged completion",
+                    code: -1,
+                });
+            }
+            result
+        })();
+        self.pending -= 1;
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            self.failed = true;
+            stage.quarantine();
+        } else {
+            stage.drained();
+        }
+        self.allocation.uncertain = self.failed || self.pending != 0;
+        result?;
+        stage.completed(length);
+        Ok(())
+    }
+}
+
+impl Drop for StagingCopy<'_> {
+    fn drop(&mut self) {
+        self.allocation.uncertain |= self.failed || self.pending != 0;
     }
 }

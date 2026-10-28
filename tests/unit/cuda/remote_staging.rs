@@ -167,11 +167,14 @@ fn pin(
             .encode(),
         )
         .unwrap();
-    channel.write_all(&[0]).unwrap();
+    channel.write_all(&[0, 1]).unwrap();
     let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
     assert_eq!((reply.status, reply.length), (0, 3));
     let mut nonce = [0; 16];
     channel.read_exact(&mut nonce).unwrap();
+    let mut depth = [0];
+    channel.read_exact(&mut depth).unwrap();
+    assert_eq!(depth, [1]);
     (channel, SourceEpoch(nonce))
 }
 
@@ -403,7 +406,7 @@ fn self_peer_gpu_roundtrip_and_busy_pin_are_bounded() {
             .encode(),
         )
         .unwrap();
-    channel.write_all(&[0]).unwrap();
+    channel.write_all(&[0, 1]).unwrap();
     assert!(matches!(
         Reply::read(&mut channel, engine.source_epoch()),
         Err(Error::ResourceExhausted)
@@ -489,9 +492,14 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
 fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
     use std::io::{Read, copy};
     use std::net::{Shutdown, TcpListener, TcpStream};
-    for operation in [TransferOp::Read, TransferOp::Write] {
-        let source = engine(Transport::Tcp);
-        let requester = engine(Transport::Tcp);
+    for (operation, depth) in [
+        (TransferOp::Read, 1),
+        (TransferOp::Write, 1),
+        (TransferOp::Read, 2),
+        (TransferOp::Write, 2),
+    ] {
+        let source = super::staging_pipeline::engine(Transport::Tcp, depth);
+        let requester = super::staging_pipeline::engine(Transport::Tcp, depth);
         let a = allocation(&[0x57; 12]);
         let gpu = memory(&a);
         let remote = source
@@ -525,7 +533,7 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
             // Pin header/nonce, then exactly three Delegate + CROSS exchanges.
             // This wire-level control reads the real source's final receipt but
             // drops it before the requester can observe it.
-            let preceding = 52
+            let preceding = 53
                 + if operation == TransferOp::Read {
                     3 * 212 + 8
                 } else {
@@ -700,7 +708,7 @@ fn pin_rejects_non_cuda_opt_out_and_source_permission_before_allocation() {
                 .encode(),
             )
             .unwrap();
-        channel.write_all(&[0]).unwrap();
+        channel.write_all(&[0, 1]).unwrap();
         let error = match Reply::read(&mut channel, source.source_epoch()) {
             Err(error) => error,
             Ok(_) => panic!("unexpected Pin grant: {scenario}"),

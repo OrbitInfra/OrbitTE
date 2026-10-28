@@ -28,6 +28,27 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Bounded remote pipeline source
+
+The new P5.5b source path negotiates 1–16 remote slots under the existing pool
+budget. Physical slots retain their CUDA stream/event across sessions. PRE or
+POST can remain pending while another slot crosses TCP/RDMA; every accepted
+copy must drain before slot reuse or final Unpin. Source tests use real control
+sockets and a deterministic native-call shim whose copies remain pending until
+their event is waited. They cover both payload transports, CPU/GPU requesters,
+negotiated widths, tails, safe reuse, partial admission, lost receipts, failed
+waits and context/handle cleanup retention.
+
+Evidence for this source substage is outside Git at
+`/root/orbitte-artifacts/proxy-pipeline-20261028/`. New hardware qualification is
+**open**. Earlier serial artifacts use wire v17; the current v18 Pin width
+exchange and new pipeline have not inherited that installed acceptance. The
+serial observer's global copy/wait ordering cannot validate a pipeline: the
+next gate must match individual stream/event record generations, bound each
+copy to its actual live allocation and reject reuse/free before completion.
+CPU scheduling overlap makes no claim about physical GPU overlap or throughput.
+Requester-side full-payload staging and broader remote scheduling remain open.
+
 ## Serial remote CUDA staging
 
 The opt-in serial P5.5b session is implemented with CPU controls for public

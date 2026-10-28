@@ -2,6 +2,7 @@
 
 mod remote_stage_operation;
 mod stage_registration;
+mod staging_task;
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;

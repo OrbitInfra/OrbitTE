@@ -16,13 +16,18 @@ pub struct EngineConfig {
     /// their whole allocation loan until an explicit native-close receipt.
     #[cfg(feature = "cuda")]
     pub nvlink_cache_entries: usize,
-    /// Per-engine lazy CUDA-pinned staging. Each copy checks out one chunk;
-    /// idle chunks are reused until engine close. Total capacity is at most 1 GiB.
+    /// Per-engine lazy CUDA-pinned staging. Local copies check out one chunk;
+    /// remote pipelines check out their negotiated width. Idle chunks are reused
+    /// until engine close. Total capacity is at most 1 GiB.
     #[cfg(feature = "cuda")]
     pub staging_chunk_size: usize,
     #[cfg(feature = "cuda")]
     pub staging_chunk_count: usize,
-    /// Opt-in serial Pin/Delegate/Unpin sessions for remote CUDA ranges.
+    /// Maximum remote staging slots per session (1..=16), bounded by the pool.
+    /// One preserves serial copies; larger values overlap remote CUDA and CROSS.
+    #[cfg(feature = "cuda")]
+    pub staging_pipeline_depth: usize,
+    /// Opt-in Pin/Delegate/Unpin sessions for remote CUDA ranges.
     /// Both peers must enable this. TCP/RDMA remain the payload transports;
     /// remote host memory and explicit GPU Direct RDMA are rejected.
     #[cfg(feature = "cuda")]
@@ -61,6 +66,8 @@ impl Default for EngineConfig {
             staging_chunk_count: 64,
             #[cfg(feature = "cuda")]
             remote_staging: false,
+            #[cfg(feature = "cuda")]
+            staging_pipeline_depth: 1,
             #[cfg(feature = "rdma")]
             rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
@@ -87,6 +94,14 @@ impl EngineConfig {
         if self.nvlink_cache_entries > 4096 || (self.nvlink_cache_entries != 0 && !self.nvlink) {
             return Err(Error::InvalidConfig(
                 "NVLink cache requires NVLink and at most 4096 entries",
+            ));
+        }
+        #[cfg(feature = "cuda")]
+        if !(1..=16).contains(&self.staging_pipeline_depth)
+            || self.staging_pipeline_depth > self.staging_chunk_count
+        {
+            return Err(Error::InvalidConfig(
+                "staging pipeline depth must be 1..=16 and fit the pool",
             ));
         }
         #[cfg(feature = "rdma")]

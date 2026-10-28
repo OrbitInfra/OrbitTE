@@ -32,6 +32,9 @@ pub(super) struct Device {
     pub(super) ipc_pop_after_open: AtomicBool,
     pub(super) ipc_pop_after_close: AtomicBool,
     pub(super) stream_create_error: AtomicI32,
+    pub(super) stream_partial_create: AtomicBool,
+    pub(super) event_waits: AtomicUsize,
+    pub(super) event_wait_fail_at: AtomicUsize,
     pub(super) event_create_error: AtomicI32,
     pub(super) record_error: AtomicI32,
     pub(super) stream_destroy_error: AtomicI32,
@@ -148,7 +151,7 @@ unsafe extern "C" fn stream_create(output: *mut sys::CUstream, flags: c_uint) ->
     event("stream-create");
     assert_eq!(flags, sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32);
     let error = current().stream_create_error.load(Ordering::Acquire);
-    if error == 0 {
+    if error == 0 || current().stream_partial_create.load(Ordering::Acquire) {
         let handle = current().next_handle.fetch_add(1, Ordering::Relaxed);
         current().streams.lock().unwrap().insert(handle, None);
         unsafe {
@@ -252,7 +255,12 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     }
     let stream = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
-    let result = drain(stream);
+    let ordinal = current().event_waits.fetch_add(1, Ordering::AcqRel) + 1;
+    let result = if ordinal == current().event_wait_fail_at.load(Ordering::Acquire) {
+        status(700)
+    } else {
+        drain(stream)
+    };
     if current().pop_after_completion.load(Ordering::Acquire) {
         current().pop_error.store(201, Ordering::Release);
     }
@@ -444,6 +452,9 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         ipc_pop_after_open: AtomicBool::new(false),
         ipc_pop_after_close: AtomicBool::new(false),
         stream_create_error: AtomicI32::new(0),
+        stream_partial_create: AtomicBool::new(false),
+        event_waits: AtomicUsize::new(0),
+        event_wait_fail_at: AtomicUsize::new(0),
         event_create_error: AtomicI32::new(0),
         record_error: AtomicI32::new(0),
         stream_destroy_error: AtomicI32::new(0),

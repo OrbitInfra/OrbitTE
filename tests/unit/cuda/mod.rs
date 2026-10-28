@@ -15,6 +15,7 @@ mod rdma;
 mod remote_staging;
 mod shim;
 mod staging;
+mod staging_pipeline;
 use shim::*;
 
 #[test]
