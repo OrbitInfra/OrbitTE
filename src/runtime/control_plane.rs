@@ -444,6 +444,9 @@ impl ControlService {
                     while !stopping.load(Ordering::Acquire) {
                         match listener.accept() {
                             Ok((stream, _)) => {
+                                if stream.set_nodelay(true).is_err() {
+                                    continue;
+                                }
                                 let Ok(deadline) = deadline(timeout) else {
                                     continue;
                                 };
