@@ -19,7 +19,7 @@ OrbitTE provides owned, batched data movement across CPU memory, NVIDIA host
 staging and network transports. Its design follows Mooncake TENT's resource
 and runtime boundaries, implemented in Rust without a Mooncake C++ dependency.
 
-The engine owns registration, batches and completion. TCP and RDMA are separate
+The engine owns registration, batches and completion. TCP, RDMA and opt-in CUDA IPC are separate
 payload transports, with a shared control service for peer discovery, grants
 and receipts. Allocations remain owned until native work has drained.
 
@@ -52,9 +52,10 @@ fabric qualification before full acceptance. Source and the bounded RoCE profile
 passed independent review with four fresh live repeats; P5 CUDA work now proceeds
 with available hardware. The [GPU Direct profile](qualification.md#gpudirect-rdma)
 passes 72 installed H20/RoCE cases with an explicit host-wide context inventory
-limit. Next is CUDA IPC/NVLink ownership; OrbitKV integration remains deferred.
+limit. The cooperative [CUDA IPC/NVLink path](cuda-ipc.md) is implemented, with
+48 installed H20 cases passing; OrbitKV integration remains deferred.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
-including broader GPU qualification, CUDA IPC/NVLink and full TENT compatibility. For code
+including broader GPU/IPC qualification and full TENT compatibility. For code
 navigation, use the [architecture reading order](architecture.md#source-reading-order).
 
 :::{toctree}
@@ -73,6 +74,7 @@ capabilities
 cpu-tcp
 async-batches
 rdma-cuda
+cuda-ipc
 :::
 
 :::{toctree}

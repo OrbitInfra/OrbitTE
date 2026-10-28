@@ -18,9 +18,10 @@ def digest(path):
 
 def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     gpu = consumer_kind == "gpu"
-    features = ["rdma", "cuda"] if gpu else ["rdma"]
-    binary_name = "orbitte-hardware-peer" if gpu else "orbitte-rdma-host"
-    protocol = "orbitte-hardware-peer-v1" if gpu else "orbitte-installed-host-v4"
+    nvlink = consumer_kind == "nvlink"
+    features = ["cuda"] if nvlink else ["rdma", "cuda"] if gpu else ["rdma"]
+    binary_name = "orbitte-nvlink" if nvlink else "orbitte-hardware-peer" if gpu else "orbitte-rdma-host"
+    protocol = "orbitte-installed-nvlink-v1" if nvlink else "orbitte-hardware-peer-v1" if gpu else "orbitte-installed-host-v4"
     root, output = root.resolve(), output.resolve()
     if output.is_relative_to(root):
         raise ValueError('installed artifacts must stay outside the source checkout')
@@ -68,53 +69,67 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if len(packages) != 1:
             raise ValueError('expected one package root')
         library = packages[0]
-        fixture_relative = 'examples/hardware_peer.rs' if gpu else 'tests/hardware/rdma_host.rs'
+        fixture_relative = 'tests/hardware/nvlink.rs' if nvlink else 'examples/hardware_peer.rs' if gpu else 'tests/hardware/rdma_host.rs'
         fixture = library / fixture_relative
         if fixture.read_bytes() != (root / fixture_relative).read_bytes():
             raise ValueError('packaged consumer differs from the qualified source')
         fixture_modules = library / 'tests/hardware/rdma_host'
-        fixture_files = [fixture, *([] if gpu else sorted(fixture_modules.rglob('*.rs')))]
+        fixture_files = [fixture, *([] if gpu or nvlink else sorted(fixture_modules.rglob('*.rs')))]
         fixture_hashes = {}
         for path in fixture_files:
             relative = path.relative_to(library)
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        inventory_tool = output / 'discovery_inventory.py'
-        inventory_source = library / 'tests/hardware/discovery_inventory.py'
-        if inventory_source.read_bytes() != (root / 'tests/hardware/discovery_inventory.py').read_bytes():
-            raise ValueError('packaged discovery inventory differs from source')
-        shutil.copy2(inventory_source, inventory_tool)
-        manifest.update(inventory_tool=str(inventory_tool), inventory_tool_sha256=digest(inventory_tool))
-        fixture_hashes['tests/hardware/discovery_inventory.py'] = digest(inventory_tool)
-        fault_sources = library / 'tests/hardware/cq_fault'
-        for path in sorted(fault_sources.glob('*.c')):
-            relative = path.relative_to(library)
-            if path.read_bytes() != (root / relative).read_bytes():
-                raise ValueError('packaged CQ fault tool differs from source')
-            fixture_hashes[str(relative)] = digest(path)
-        compiler = shlex.split(environment.get('CC', 'cc'))
-        manifest['fault_compiler'] = run('fault-compiler', [*compiler, '--version'])
-        flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread']
-        fault_library = output / 'liborbitte_cq_fault.so'
-        run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
-                             str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
-        for name in ('cq_fault', 'inflight', 'memory', 'dependency', 'accounting'):
-            control = output / ('test_' + name)
-            run(name + '-control-build', [*compiler, *flags, str(fault_sources / ('test_' + name + '.c')),
-                                         '-ldl', '-o', str(control)])
-            fault_root = output / (name + '-control')
-            fault_root.mkdir()
-            environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
-            run(name + '-control', [str(control)], cwd=output)
-        environment.pop('ORBITTE_RESTART_ROOT')
-        environment.pop('ORBITTE_RESTART_GENERATION')
-        manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
+        if nvlink:
+            for relative in ('tests/hardware/nvlink_observer.c', 'tests/hardware/nvlink_run.py'):
+                source = library / relative
+                if source.read_bytes() != (root / relative).read_bytes():
+                    raise ValueError('packaged NVLink fixture differs from source')
+                fixture_hashes[relative] = digest(source)
+                shutil.copy2(source, output / source.name)
+            compiler = shlex.split(environment.get('CC', 'cc'))
+            manifest['observer_compiler'] = run('observer-compiler', [*compiler, '--version'])
+            observer = output / 'libnvlink_observer.so'
+            run('observer-build', [*compiler, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread',
+                                   '-fPIC', '-shared', str(output / 'nvlink_observer.c'), '-ldl', '-o', str(observer)])
+            manifest.update(observer=str(observer), observer_sha256=digest(observer))
+        else:
+            inventory_tool = output / 'discovery_inventory.py'
+            inventory_source = library / 'tests/hardware/discovery_inventory.py'
+            if inventory_source.read_bytes() != (root / 'tests/hardware/discovery_inventory.py').read_bytes():
+                raise ValueError('packaged discovery inventory differs from source')
+            shutil.copy2(inventory_source, inventory_tool)
+            manifest.update(inventory_tool=str(inventory_tool), inventory_tool_sha256=digest(inventory_tool))
+            fixture_hashes['tests/hardware/discovery_inventory.py'] = digest(inventory_tool)
+            fault_sources = library / 'tests/hardware/cq_fault'
+            for path in sorted(fault_sources.glob('*.c')):
+                relative = path.relative_to(library)
+                if path.read_bytes() != (root / relative).read_bytes():
+                    raise ValueError('packaged CQ fault tool differs from source')
+                fixture_hashes[str(relative)] = digest(path)
+            compiler = shlex.split(environment.get('CC', 'cc'))
+            manifest['fault_compiler'] = run('fault-compiler', [*compiler, '--version'])
+            flags = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread']
+            fault_library = output / 'liborbitte_cq_fault.so'
+            run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
+                                 str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
+            for name in ('cq_fault', 'inflight', 'memory', 'dependency', 'accounting'):
+                control = output / ('test_' + name)
+                run(name + '-control-build', [*compiler, *flags, str(fault_sources / ('test_' + name + '.c')),
+                                             '-ldl', '-o', str(control)])
+                fault_root = output / (name + '-control')
+                fault_root.mkdir()
+                environment.update(ORBITTE_RESTART_ROOT=str(fault_root), ORBITTE_RESTART_GENERATION='0')
+                run(name + '-control', [str(control)], cwd=output)
+            environment.pop('ORBITTE_RESTART_ROOT')
+            environment.pop('ORBITTE_RESTART_GENERATION')
+            manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
         run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)
         shutil.copy2(fixture, consumer / 'src/main.rs')
-        if not gpu:
+        if not gpu and not nvlink:
             shutil.copytree(fixture_modules, consumer / 'src/rdma_host')
         (consumer / 'Cargo.toml').write_text(
             '[package]\nname = ' + json.dumps(binary_name) + '\nversion = "0.0.0"\n'
@@ -127,7 +142,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if len(dependency) != 1 or Path(dependency[0]['manifest_path']) != library / 'Cargo.toml':
             raise ValueError('consumer resolved an unexpected OrbitTE source')
         features = next(n['features'] for n in metadata['resolve']['nodes'] if n['id'] == dependency[0]['id'])
-        if set(features) != ({'default', 'rdma', 'cuda'} if gpu else {'default', 'rdma'}):
+        if set(features) != ({'default', 'cuda'} if nvlink else {'default', 'rdma', 'cuda'} if gpu else {'default', 'rdma'}):
             raise ValueError('consumer must use only its declared normal dependency features')
         old = tomllib.loads((library / 'Cargo.lock').read_text())['package']
         new = tomllib.loads((consumer / 'Cargo.lock').read_text())['package']
@@ -146,7 +161,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if probe != protocol:
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
-        if 'not found' in linkage or 'libibverbs' not in linkage or 'libcuda' in linkage:
+        if 'not found' in linkage or ('libibverbs' in linkage) == nvlink or 'libcuda' in linkage:
             raise ValueError('installed consumer has unexpected native linkage')
         libraries = {word: digest(Path(word)) for word in linkage.split() if word.startswith('/') and Path(word).is_file()}
         manifest.update(status='passed', native_libraries=libraries, archive=str(archive), archive_sha256=digest(archive),
@@ -167,6 +182,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

@@ -72,6 +72,35 @@ impl CopyStream {
         length: usize,
         to_device: bool,
     ) -> Result<()> {
+        // SAFETY: the caller retains the GPU and pinned host allocations.
+        unsafe {
+            self.submit(|driver, stream| {
+                if to_device {
+                    (driver.to_device)(device, host.as_ptr().cast(), length, stream)
+                } else {
+                    (driver.to_host)(host.as_ptr().cast(), device, length, stream)
+                }
+            })
+        }
+    }
+
+    /// The caller retains both device allocations/mappings through completion.
+    pub(super) unsafe fn copy_device(
+        &mut self,
+        destination: u64,
+        source: u64,
+        length: usize,
+    ) -> Result<()> {
+        // SAFETY: both UVA ranges belong to the retained current context.
+        unsafe {
+            self.submit(|driver, stream| (driver.copy_device)(destination, source, length, stream))
+        }
+    }
+
+    unsafe fn submit(
+        &mut self,
+        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> super::driver::Status,
+    ) -> Result<()> {
         if !self.quiescent() {
             return Err(Error::Unquiesced {
                 operation: "CUDA copy stream",
@@ -85,19 +114,8 @@ impl CopyStream {
             self.pending = true;
             // SAFETY: the caller owns stable GPU/pinned bytes; the mutex prevents
             // event re-recording until this copy completes or poisons reuse.
-            let submitted = unsafe {
-                if to_device {
-                    (context.driver.to_device)(
-                        device,
-                        host.as_ptr().cast(),
-                        length,
-                        stream.as_ptr(),
-                    )
-                } else {
-                    (context.driver.to_host)(host.as_ptr().cast(), device, length, stream.as_ptr())
-                }
-            };
-            let result = check("CUDA staged async copy", submitted).and_then(|()| {
+            let submitted = submit(&context.driver, stream.as_ptr());
+            let result = check("CUDA async copy", submitted).and_then(|()| {
                 // SAFETY: both handles were created in the current context.
                 check("cuEventRecord copy", unsafe {
                     (context.driver.event_record)(event.as_ptr(), stream.as_ptr())

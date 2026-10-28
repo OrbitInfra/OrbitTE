@@ -7,6 +7,7 @@ use crate::{
     BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport,
 };
 
+mod ipc;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod shim;

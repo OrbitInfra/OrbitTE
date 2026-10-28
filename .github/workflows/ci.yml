@@ -80,3 +80,20 @@ jobs:
             ${{ runner.temp }}/orbitte-installed-gpu-${{ matrix.toolchain }}/*.so
             ${{ runner.temp }}/orbitte-installed-gpu-${{ matrix.toolchain }}/consumer/Cargo.lock
             ${{ runner.temp }}/orbitte-installed-gpu-${{ matrix.toolchain }}/installed/bin/orbitte-hardware-peer
+      - name: Install public CUDA IPC consumer from packaged crate
+        if: matrix.features == 'cuda'
+        run: python3 tests/hardware/build_installed.py --consumer nvlink --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-nvlink-$RUSTUP_TOOLCHAIN"
+      - name: Preserve installed CUDA IPC artifact
+        if: always() && matrix.features == 'cuda'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: installed-nvlink-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/manifest.json
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/*.stdout
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/*.stderr
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/*.crate
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/*.so
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/nvlink_run.py
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/consumer/Cargo.lock
+            ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/installed/bin/orbitte-nvlink
