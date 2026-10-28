@@ -1,6 +1,6 @@
-use crate::cuda::CudaMemory;
 use crate::cuda::ipc::IpcMapping;
 use crate::engine::PreparedTransfer;
+use crate::memory::Allocation;
 use crate::{Result, Transport};
 
 use super::budget::MappingPermit;
@@ -12,7 +12,7 @@ pub(super) struct NVLinkSubBatch {
 }
 
 impl NVLinkSubBatch {
-    pub(super) fn new(memory: &CudaMemory, permit: MappingPermit) -> Result<Self> {
+    pub(super) fn new(memory: &Allocation, permit: MappingPermit) -> Result<Self> {
         Ok(Self {
             mapping: IpcMapping::new(memory)?,
             permit: Some(permit),
@@ -41,7 +41,7 @@ pub(super) fn subbatch_len(requests: &[PreparedTransfer], max_bytes: usize) -> u
     let context = |request: &PreparedTransfer| {
         request
             .local
-            .cuda_range(request.local_offset, request.length)?
+            .ipc_range(request.local_offset, request.length)?
             .0
             .ipc_context()
     };

@@ -45,7 +45,8 @@ pub(crate) fn checked_range(offset: usize, length: usize, capacity: usize) -> Re
 /// Stable host backing and its shared access lock. Use the same `Arc<HostMemory>`
 /// for overlapping registrations, including registrations in different engines.
 /// Direct RDMA leases exclude conflicting access until native teardown succeeds.
-/// This owner does not itself pin pages or register them with an RDMA provider.
+/// `HostMemory::new` does not pin pages. CUDA-pinned construction retains its
+/// native allocation; RDMA registration remains a separate provider operation.
 pub struct HostMemory {
     address: u64,
     length: usize,
@@ -54,12 +55,26 @@ pub struct HostMemory {
 
 struct HostAccess {
     bytes: HostBacking,
+    #[cfg(feature = "cuda")]
+    cuda_uncertain: bool,
     #[cfg(feature = "rdma")]
     dma: Vec<Range<usize>>,
 }
 
 impl HostAccess {
     fn check_access(&self, range: &Range<usize>) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        {
+            if self.cuda_uncertain {
+                return Err(Error::Unquiesced {
+                    operation: "CUDA host memory",
+                    code: -1,
+                });
+            }
+            if let HostBacking::CudaPinned(allocation) = &self.bytes {
+                allocation.check_access()?;
+            }
+        }
         #[cfg(feature = "rdma")]
         if self
             .dma
@@ -75,6 +90,8 @@ impl HostAccess {
 }
 
 enum HostBacking {
+    #[cfg(feature = "cuda")]
+    CudaPinned(Arc<crate::cuda::PinnedAllocation>),
     Owned {
         address: NonNull<u8>,
         length: usize,
@@ -89,6 +106,8 @@ impl HostBacking {
     fn address(&self) -> NonNull<u8> {
         match self {
             Self::Owned { address, .. } | Self::External { address, .. } => *address,
+            #[cfg(feature = "cuda")]
+            Self::CudaPinned(allocation) => allocation.address,
         }
     }
 }
@@ -125,6 +144,66 @@ impl fmt::Debug for HostMemory {
 }
 
 impl HostMemory {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn from_cuda_pinned(allocation: Arc<crate::cuda::PinnedAllocation>) -> Self {
+        Self {
+            address: allocation.address.as_ptr() as usize as u64,
+            length: allocation.length,
+            backing: Mutex::new(HostAccess {
+                bytes: HostBacking::CudaPinned(allocation),
+                cuda_uncertain: false,
+                #[cfg(feature = "rdma")]
+                dma: Vec::new(),
+            }),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_pinned(&self) -> Result<Arc<crate::cuda::PinnedAllocation>> {
+        let backing = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.check_access(&(0..self.length))?;
+        match &backing.bytes {
+            HostBacking::CudaPinned(allocation) => Ok(Arc::clone(allocation)),
+            _ => Err(Error::Unavailable(
+                "NVLink host requester requires allocate_pinned_host",
+            )),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn with_cuda_pinned<T>(
+        &self,
+        range: Range<usize>,
+        operation: impl FnOnce(&crate::cuda::PinnedAllocation) -> Result<T>,
+    ) -> Result<T> {
+        let mut backing = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.check_access(&range)?;
+        let result = match &backing.bytes {
+            HostBacking::CudaPinned(allocation) => operation(allocation),
+            _ => Err(Error::Unavailable(
+                "NVLink host requester requires allocate_pinned_host",
+            )),
+        };
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            backing.cuda_uncertain = true;
+        }
+        result
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn fence_cuda(&self) {
+        self.backing
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .cuda_uncertain = true;
+    }
+
     pub fn new(bytes: Box<[u8]>) -> Result<Self> {
         if bytes.is_empty() {
             return Err(Error::InvalidRange);
@@ -136,6 +215,8 @@ impl HostMemory {
             length,
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::Owned { address, length },
+                #[cfg(feature = "cuda")]
+                cuda_uncertain: false,
                 #[cfg(feature = "rdma")]
                 dma: Vec::new(),
             }),
@@ -174,6 +255,8 @@ impl HostMemory {
                     address,
                     _owner: owner,
                 },
+                #[cfg(feature = "cuda")]
+                cuda_uncertain: false,
                 #[cfg(feature = "rdma")]
                 dma: Vec::new(),
             }),
@@ -370,6 +453,12 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn ipc_range(&self, offset: usize, length: usize) -> Result<(Allocation, usize)> {
+        checked_range(offset, length, self.len())?;
+        Ok((self.0.allocation.clone(), self.0.allocation_offset + offset))
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_range(
         &self,
         offset: usize,
@@ -400,7 +489,7 @@ impl RegisteredMemory {
 }
 
 #[derive(Clone)]
-enum Allocation {
+pub(crate) enum Allocation {
     Host(Arc<HostMemory>),
     #[cfg(feature = "cuda")]
     Cuda(Arc<crate::cuda::CudaMemory>),
@@ -414,7 +503,7 @@ impl Allocation {
             Self::Cuda(memory) => memory.base_address(),
         }
     }
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Self::Host(memory) => memory.len(),
             #[cfg(feature = "cuda")]

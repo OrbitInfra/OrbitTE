@@ -1,7 +1,8 @@
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
+use crate::memory::Allocation;
 
-fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
+pub(super) fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
     let memory = memory(device);
     {
         let mut allocation = memory.allocation.lock().unwrap();
@@ -197,10 +198,11 @@ fn ipc_public_requester_retains_real_owners_and_reports_partial_writes() {
 }
 
 fn copy_ipc(local: &Arc<CudaMemory>, handle: [u8; 64], to_remote: bool) -> Result<()> {
-    let mut mapping = IpcMapping::new(local)?;
+    let local = Allocation::Cuda(local.clone());
+    let mut mapping = IpcMapping::new(&local)?;
     let result = mapping
         .open(handle)
-        .and_then(|()| mapping.copy(local, 11, 7, 17, to_remote));
+        .and_then(|()| mapping.copy(&local, 11, 7, 17, to_remote));
     mapping.close()?;
     result
 }
@@ -258,7 +260,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                 _ => (),
             }
             crate::transport::nvlink::tests::subbatch::run_case(
-                local,
+                local.into_iter().map(Allocation::Cuda).collect(),
                 owned(&source, true),
                 case,
                 asynchronous,
@@ -300,9 +302,11 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
         let weak = Arc::downgrade(&local);
         let mut export = IpcExport::new(remote).unwrap();
         export.expose();
-        let mut mapping = IpcMapping::new(&local).unwrap();
+        let mut mapping = IpcMapping::new(&Allocation::Cuda(local.clone())).unwrap();
         mapping.open(export.handle).unwrap();
-        mapping.copy(&local, 11, 7, 17, false).unwrap();
+        mapping
+            .copy(&Allocation::Cuda(local.clone()), 11, 7, 17, false)
+            .unwrap();
         drop(local);
         assert!(weak.upgrade().is_some());
         if fail_close {

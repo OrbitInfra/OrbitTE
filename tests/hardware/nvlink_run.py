@@ -20,7 +20,38 @@ def records(path):
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
-def validate_native(source, requester, payload, mode, source_pid, requester_pid):
+def validate_pins(rows, retain):
+    active, imported = {}, None
+    for row in rows:
+        kind = row['kind']
+        if kind == 'pin':
+            address, length = row['address'], row['length']
+            assert row['flags'] == 1 and 0 < address < address+length <= 1 << 64, 'invalid pinned allocation'
+            assert all(address+length <= a or a+r['length'] <= address for a,r in active.items()), 'overlapping pinned owners'
+            active[address] = row
+        elif kind in ('htod', 'dtoh'):
+            address = row['source' if kind == 'htod' else 'destination']
+            assert any(a <= address < address+row['length'] <= a+r['length'] for a,r in active.items()), 'copy host pointer is not owned pinned memory'
+        elif kind == 'unpin':
+            pin = active.pop(row['address'], None)
+            assert pin, 'unpin without live owner'
+            for copy in rows[pin['seq']:row['seq']-1]:
+                if copy['kind'] not in ('htod', 'dtoh'): continue
+                address = copy['source' if copy['kind'] == 'htod' else 'destination']
+                if not pin['address'] <= address < pin['address']+pin['length']: continue
+                events = [r for r in rows[copy['seq']:row['seq']-1] if r['kind']=='record' and r['stream']==copy['stream']]
+                assert events, 'unpin before copy record'
+                event = events[0]
+                waits = [r for r in rows[event['seq']:row['seq']-1] if r['kind']=='wait' and r['event']==event['event']]
+                assert waits, 'unpin before physical completion'
+                assert any(r['kind']=='pop' and r['tid']==copy['tid'] for r in rows[waits[0]['seq']:row['seq']-1]), 'unpin before copy context restored'
+        elif kind == 'open' and imported is None:
+            imported = list(active.values())
+    assert retain or not active, 'pinned allocation leaked'
+    return imported or []
+
+
+def validate_native(source, requester, payload, mode, source_pid, requester_pid, memory="device"):
     batched = mode.startswith("batch-")
     mode = mode.removeprefix("batch-")
     for rows, pid in [(source, source_pid), (requester, requester_pid)]:
@@ -28,8 +59,13 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
         assert all(row['pid'] == pid and row['code'] == 0 for row in rows), 'native PID/driver result'
     select = lambda rows, kind: [row for row in rows if row['kind'] == kind]
     expected = 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
-    exports, imports, copies = select(source, 'export'), select(requester, 'open'), select(requester, 'copy')
-    assert len(exports) == len(imports) == expected and len(copies) == expected*(3 if batched else 1), 'native IPC/copy count'
+    exports, imports = select(source, 'export'), select(requester, 'open')
+    assert len(exports) == len(imports) == expected, 'native IPC count'
+    validate_pins(source, False)
+    pins = validate_pins(requester, mode == 'requester-exit')
+    expected_pins = (2 if batched else 1) if memory == 'host' else 1 if memory == 'mixed' else 0
+    assert len(pins) == (0 if mode == 'stale' else expected_pins), 'persistent pinned requester count'
+    copies = []
     source_alloc = select(source, 'allocate')
     assert len(source_alloc) == 1 and source_alloc[0]['length'] == ((payload + 134 + (2 << 20)-1) & ~((2 << 20)-1)), 'export allocation extent'
     initialized = select(source, 'memset')
@@ -42,7 +78,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
     assert all(row['address'] == source_alloc[0]['address'] for row in exports), 'export base'
     assert [row['handle'] for row in exports] == [row['handle'] for row in imports], 'IPC handle pairing'
     assert all(row['flags'] == 1 for row in imports), 'lazy peer flag'
-    local = select(requester, 'allocate')
+    local = sorted(select(requester, 'allocate') + pins, key=lambda row: row['seq'])
     assert len(local) == (2 if batched else int(mode != 'stale')), 'requester allocation count'
     if local:
         assert all(row['length'] == payload+134 for row in local), 'requester allocation extent'
@@ -56,7 +92,11 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
     for index, opened in enumerate(imports):
         boundary = imports[index+1]['seq'] if index+1 < len(imports) else len(requester)+1
         cycle = [row for row in requester if opened['seq'] <= row['seq'] < boundary]
-        cycle_copies = select(cycle, 'copy')
+        end = closes[index]['seq'] if mode != 'requester-exit' else boundary
+        interval = [row for row in cycle if row['seq'] < end]
+        assert not any(r['kind'] in ('pin','allocate') for r in interval), 'temporary allocation inside IPC copy cycle'
+        cycle_copies = [r for r in interval if r['kind'] in ('copy','htod','dtoh')]
+        copies.extend(cycle_copies)
         assert len(cycle_copies) == (3 if batched else 1), 'copies outside their import cycle'
         read = mode == 'healthy' and index == 0
         width = payload//3
@@ -66,6 +106,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
             assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
             allocation = local[part % len(local)]
+            assert copy['kind'] == ('dtoh' if read else 'htod') if allocation['kind']=='pin' else copy['kind']=='copy', 'wrong native copy API'
             assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
             remote, own = opened['address']+67+offset, allocation['address']+67+offset
             assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
@@ -86,15 +127,21 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
                 assert close['tid'] == copy['tid'], 'close/import thread mismatch'
                 after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
                 assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
-    for rows, allocations in [(source, source_alloc), (requester, local)]:
+    assert len(copies) == expected*(3 if batched else 1), 'native IPC copy count'
+    assert len(select(requester,'copy')) == len(select(copies,'copy')), 'device copy outside IPC cycle'
+    for pin in pins:
+        frees = [r for r in select(requester,'unpin') if r['address']==pin['address'] and r['seq'] > pin['seq']]
+        assert len(frees) == int(mode != 'requester-exit'), 'pinned requester release/retention'
+        if frees: assert closes[-1]['seq'] < frees[0]['seq'], 'pinned requester freed before import closed'
+    for rows, allocations in [(source, source_alloc), (requester, select(local,'allocate'))]:
         frees = select(rows, 'free')
         assert len(frees) == (0 if mode == 'requester-exit' else len(allocations)), 'native allocation release/retention'
         assert not frees or sorted(free['address'] for free in frees) == sorted(a['address'] for a in allocations), 'free owner mismatch'
         if frees:
-            assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'record', 'wait', 'close')), 'allocation freed before its last native use'
+            assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'htod', 'dtoh', 'record', 'wait', 'close')), 'allocation freed before its last native use'
             if rows is requester and closes:
                 assert any(closes[-1]['seq'] < pop['seq'] < frees[0]['seq'] for pop in select(rows, 'pop')), 'requester allocation freed before close context restoration'
-    return {'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes)}
+    return {'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes), 'host_copies': sum(r['kind']!='copy' for r in copies), 'pinned_requesters': len(pins)}
 
 
 def run(args):
@@ -103,7 +150,7 @@ def run(args):
     if (checkout / 'Cargo.toml').is_file() and root.is_relative_to(checkout):
         raise ValueError('results must stay outside the source checkout')
     root.mkdir(parents=True, exist_ok=False)
-    manifest = {'status': 'running', 'mode': args.mode, 'payload': args.payload,
+    manifest = {'status': 'running', 'mode': args.mode, 'memory': args.memory, 'payload': args.payload,
                 'host': socket.gethostname(), 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                 'binary_sha256': digest(args.binary), 'observer_sha256': digest(args.observer),
                 'started_unix': time.time(), 'children': [], 'performance_measurement': False}
@@ -127,7 +174,7 @@ def run(args):
         env = {**os.environ, 'CUDA_VISIBLE_DEVICES': ','.join(manifest['gpu_uuids']),
                'LD_PRELOAD': str(args.observer.resolve()), 'ORBITTE_IPC_LOG': str(root/(role+'.native.jsonl'))}
         if role == 'requester' and mode != 'stale': env['ORBITTE_IPC_HOLD'] = str(root/'release-close')
-        command = [str(args.binary.resolve()), role, str(ordinal), str(args.payload), str(root), args.mode]
+        command = [str(args.binary.resolve()), role, str(ordinal), str(args.payload), str(root), args.mode, args.memory]
         output = (root/(role+'.stdout')).open('w'); error = (root/(role+'.stderr')).open('w')
         files.extend([output,error])
         child = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=error)
@@ -185,7 +232,7 @@ def run(args):
             paths = {line.split()[-1] for line in maps.read_text().splitlines() if 'libcuda.so' in line}
             assert len(paths) == 1, 'missing or mixed CUDA driver mapping'
             manifest['loaded_cuda'][role] = {path: digest(path) for path in paths}
-        manifest['native'] = validate_native(records(root/'source.native.jsonl'), records(root/'requester.native.jsonl'), args.payload, args.mode, source.pid, requester.pid)
+        manifest['native'] = validate_native(records(root/'source.native.jsonl'), records(root/'requester.native.jsonl'), args.payload, args.mode, source.pid, requester.pid, args.memory)
         for _ in range(50):
             after = inventory('gpu-after.csv')
             if all(after[index] == before[index] for index in devices): break
@@ -215,6 +262,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('binary', 'observer', 'output', 'lock-root'): parser.add_argument('--'+name, required=True, type=Path)
     for name in ('binary-sha256', 'observer-sha256', 'devices'): parser.add_argument('--'+name, required=True)
+    parser.add_argument('--memory', choices=('device','host','mixed'), default='device')
     parser.add_argument('--payload', type=int, required=True)
     parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit'), default='healthy')
     run(parser.parse_args())

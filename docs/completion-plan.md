@@ -521,7 +521,12 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   cancel/cleanup failures. Installed consumers pass 28 H20 cases on stable/MSRV,
   covering two local allocations and three ordered copies per import. Four fresh
   independent repeats pass; source and bounded hardware evidence are accepted.
-  Host IPC directions, cross-submission
+  **P5.4c — local pinned host directions (Implemented):** local owned pinned
+  host READ/WRITE and mixed host/GPU groups reuse the same native context,
+  subbatch import and close protocol. CPU access/RDMA leases share the host
+  owner; failed completion retains and fences actual pinned backing. Source
+  gates and installed hardware qualification are recorded separately.
+  Remote host exports, cross-submission
   import-cache ownership and broader stream scheduling remain open; exporter-crash safety is
   explicitly unqualified. See [the transport contract](cuda-ipc.md).
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
@@ -781,7 +786,8 @@ explicit host-context inventory limit in [qualification](qualification.md#gpudir
 The cooperative P5.4 GPU/GPU IPC substage is independently accepted with
 48 installed cases and four fresh repeats. P5.4b bounded subbatch reuse passes
 28 installed H20 cases plus four fresh repeats and is independently accepted
-for that profile. Next address host directions and cross-submission
+for that profile. P5.4c implements local owned pinned host directions; installed qualification
+and independent acceptance precede cross-submission
 import reuse with explicit exporter lifetime owners. Proxy/staging scheduling
 follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

@@ -5,10 +5,11 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use crate::cuda::CudaMemory;
+use crate::memory::Allocation;
 use crate::{RemoteRegion, TaskState, TransferRequest, Transport};
 
 pub(crate) fn run_case(
-    local: Vec<Arc<CudaMemory>>,
+    local: Vec<Allocation>,
     remote: Arc<CudaMemory>,
     case: &str,
     asynchronous: bool,
@@ -35,16 +36,28 @@ pub(crate) fn run_case(
         })
         .unwrap(),
     );
-    let registrations = engine
-        .register_cuda_memory_batch(
-            &local
-                .iter()
-                .map(|m| (m.clone(), 5, 100))
-                .collect::<Vec<_>>(),
-            Permission::LocalOnly,
-        )
-        .unwrap();
-    let weak: Vec<_> = local.iter().map(Arc::downgrade).collect();
+    let registrations: Vec<_> = local
+        .iter()
+        .map(|memory| match memory {
+            Allocation::Cuda(memory) => engine
+                .register_cuda_memory_batch(&[(memory.clone(), 5, 100)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0),
+            Allocation::Host(memory) => engine
+                .register_host_memory(memory.clone(), 5, 100, Permission::LocalOnly)
+                .unwrap(),
+        })
+        .collect();
+    let weak: Vec<_> = local
+        .iter()
+        .map(|memory| {
+            let owner: Arc<dyn Send + Sync> = match memory {
+                Allocation::Cuda(memory) => memory.clone(),
+                Allocation::Host(memory) => memory.clone(),
+            };
+            Arc::downgrade(&owner)
+        })
+        .collect();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let epoch = SourceEpoch([0x55; 16]);
@@ -392,7 +405,7 @@ pub(crate) fn run_case(
         );
     } else {
         assert!(remote.read(0, &mut [0; 1]).is_err());
-        for memory in local.iter().take(if cancelled {
+        for memory in registrations.iter().take(if cancelled {
             1
         } else if case == "close" {
             3

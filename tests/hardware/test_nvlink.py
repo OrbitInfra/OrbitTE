@@ -11,7 +11,7 @@ import nvlink_run
 
 
 class NativeEvidence(unittest.TestCase):
-    def evidence(self, mode='healthy'):
+    def evidence(self, mode='healthy', memory='device'):
         batched = mode.startswith("batch-")
         mode = mode.removeprefix("batch-")
         source, requester = [], []
@@ -47,7 +47,36 @@ class NativeEvidence(unittest.TestCase):
             if count:
                 add(requester, 'free', address=2000)
                 if batched: add(requester, 'free', address=4000)
+        if memory != 'device':
+            for row in requester:
+                host = memory=='host' or row.get('address')==2000 or any(2000 <= row.get(k,0) < 2151 for k in ('source','destination'))
+                if host and row['kind']=='allocate': row.update(kind='pin',flags=1)
+                elif host and row['kind']=='free': row['kind']='unpin'
+                elif host and row['kind']=='copy': row['kind']='dtoh' if 3000 <= row['source'] < 3200 else 'htod'
         return source, requester
+
+    def test_host_and_mixed_need_actual_pinned_owners_and_direct_copy_apis(self):
+        for memory in ('host','mixed'):
+            for mode in ('batch-healthy','batch-graceful','batch-requester-exit'):
+                nvlink_run.validate_native(*self.evidence(mode,memory),17,mode,101,102,memory)
+            for fault in ('pageable','missing-unpin','unpin-owner','wrong-direction','wrong-api','early-unpin','temporary-staging'):
+                rows = self.evidence('batch-healthy',memory)
+                requester=rows[1]
+                if fault=='pageable': next(r for r in requester if r['kind']=='pin')['kind']='allocate'
+                elif fault=='missing-unpin': next(r for r in requester if r['kind']=='unpin')['kind']='ignored'
+                elif fault=='unpin-owner': next(r for r in requester if r['kind']=='unpin')['address']=9999
+                elif fault in ('wrong-direction','wrong-api'):
+                    next(r for r in requester if r['kind']=='dtoh')['kind']='htod' if fault=='wrong-direction' else 'copy'
+                elif fault=='early-unpin':
+                    row=next(r for r in requester if r['kind']=='unpin');requester.remove(row)
+                    requester.insert(next(i for i,r in enumerate(requester) if r['kind']=='wait'),row)
+                else:
+                    where=next(i for i,r in enumerate(requester) if r['kind']=='dtoh')
+                    requester.insert(where,dict(kind='pin',code=0,tid=1,pid=102,address=6000,length=151,flags=1))
+                    requester.insert(where+1,dict(kind='unpin',code=0,tid=1,pid=102,address=6000))
+                for i,row in enumerate(requester):row['seq']=i+1
+                with self.subTest(memory=memory,fault=fault),self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(*rows,17,'batch-healthy',101,102,memory)
 
     def test_exact_ranges_initialization_drain_and_cleanup_are_required(self):
         for mode in ('healthy', 'graceful', 'requester-exit', 'stale', 'batch-healthy', 'batch-graceful', 'batch-requester-exit'):
@@ -155,12 +184,15 @@ class NativeEvidence(unittest.TestCase):
             result = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library), 'ORBITTE_IPC_LOG': str(log)}, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual([(r['kind'],r['code']) for r in rows], [('allocate',0),('memset',0),('sync',0),('export',0),('open',0),('open',0),('copy',1),('record',1),('wait',700),('close',0),('close',1),('pop',201),('free',1)])
+            self.assertEqual([(r['kind'],r['code']) for r in rows], [('allocate',0),('memset',0),('sync',0),('export',0),('open',0),('open',0),('copy',1),('record',1),('wait',700),('close',0),('close',1),('pop',201),('free',1),('pin',0),('htod',1),('dtoh',700),('unpin',1)])
             self.assertEqual(rows[4]['address'], rows[5]['address'])
             self.assertEqual(rows[4]['handle'], rows[3]['handle'])
             self.assertEqual(rows[6]['source'], 123)
             self.assertEqual(rows[6]['destination'], 456)
             self.assertEqual(rows[6]['length'], 17)
+            self.assertEqual(rows[-4]['address'], 0x123456789abc)
+            self.assertEqual(rows[-3]['source'], rows[-2]['destination'])
+            self.assertEqual(rows[-1]['address'], 0x123456789abc)
 
 
 if __name__ == '__main__':
