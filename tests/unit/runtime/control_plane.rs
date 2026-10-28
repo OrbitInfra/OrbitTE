@@ -94,6 +94,8 @@ fn source_validates_untrusted_ranges_permissions_epochs_and_budgets() {
         (Operation::RdmaWriteSlices, memory.id(), 0, 4, 3),
         (Operation::RdmaReadSlices, memory.id(), 7, 2, 4),
         (Operation::RdmaReadSlices, memory.id(), 0, 9, 6),
+        (Operation::NvlinkRead, memory.id(), 0, 4, 10),
+        (Operation::NvlinkWrite, memory.id(), 0, 4, 3),
     ] {
         let mut channel = wire_request(&engine, operation, id, offset, length);
         let mut bytes = [0; REPLY_SIZE];

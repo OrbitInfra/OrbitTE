@@ -3,6 +3,7 @@
 #![allow(unsafe_code)]
 
 use std::fmt;
+use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,7 @@ use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
 mod driver;
+pub(crate) mod ipc;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod stream;
@@ -23,11 +25,15 @@ static RETAINED_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_PINNED: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_STREAM: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_EVENT: AtomicUsize = AtomicUsize::new(0);
+static RETAINED_IPC: AtomicUsize = AtomicUsize::new(0);
+static RETAINED_EXPORT: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_CONTEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug)]
 pub struct RetainedResources {
     pub device_allocations: usize,
+    pub ipc_mappings: usize,
+    pub ipc_exports: usize,
     pub pinned_allocations: usize,
     pub contexts: usize,
     pub streams: usize,
@@ -38,6 +44,8 @@ pub struct RetainedResources {
 pub fn retained_resources() -> RetainedResources {
     RetainedResources {
         device_allocations: RETAINED_DEVICE.load(Ordering::Acquire),
+        ipc_mappings: RETAINED_IPC.load(Ordering::Acquire),
+        ipc_exports: RETAINED_EXPORT.load(Ordering::Acquire),
         pinned_allocations: RETAINED_PINNED.load(Ordering::Acquire),
         contexts: RETAINED_CONTEXT.load(Ordering::Acquire),
         streams: RETAINED_STREAM.load(Ordering::Acquire),
@@ -132,10 +140,34 @@ struct DeviceAllocation {
     owner: Option<Arc<dyn Send + Sync>>,
     uncertain: bool,
     copy_stream: Option<CopyStream>,
-    #[cfg(feature = "rdma")]
     dma: Vec<std::ops::Range<usize>>,
+    ipc_extent: Option<usize>,
     #[cfg(feature = "rdma")]
     rdma: Option<rdma::Ordering>,
+}
+
+impl DeviceAllocation {
+    pub(super) fn check_dma(&self, range: &Range<usize>) -> Result<()> {
+        if self.uncertain
+            || self
+                .context
+                .poisoned
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Error::Unquiesced {
+                operation: "CUDA DMA ownership",
+                code: -1,
+            });
+        }
+        if self
+            .dma
+            .iter()
+            .any(|loan| range.start < loan.end && loan.start < range.end)
+        {
+            return Err(Error::Unavailable("CUDA range has an active transfer loan"));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for DeviceAllocation {
@@ -267,7 +299,29 @@ impl fmt::Debug for CudaMemory {
 
 impl CudaMemory {
     pub fn allocate(device: i32, length: usize) -> Result<Self> {
+        Self::allocate_owned(device, length, false)
+    }
+
+    /// Explicitly allow cooperative CUDA IPC export of this whole allocation.
+    /// The physical allocation is rounded to 2 MiB and zeroed, including padding.
+    /// IPC cannot enforce range permissions or revoke a previously shared handle.
+    pub fn allocate_ipc(device: i32, length: usize) -> Result<Self> {
+        Self::allocate_owned(device, length, true)
+    }
+
+    fn allocate_owned(device: i32, length: usize, ipc: bool) -> Result<Self> {
         if length == 0 || length > isize::MAX as usize {
+            return Err(Error::InvalidRange);
+        }
+        let physical_length = if ipc {
+            length
+                .checked_add((2 << 20) - 1)
+                .ok_or(Error::InvalidRange)?
+                & !((2 << 20) - 1)
+        } else {
+            length
+        };
+        if physical_length > isize::MAX as usize {
             return Err(Error::InvalidRange);
         }
         let context = Context::primary(device)?;
@@ -278,17 +332,18 @@ impl CudaMemory {
             owner: None,
             uncertain: false,
             copy_stream: None,
-            #[cfg(feature = "rdma")]
             dma: Vec::new(),
+            ipc_extent: ipc.then_some(physical_length),
             #[cfg(feature = "rdma")]
             rdma: None,
         };
         context.current(|| {
             // SAFETY: the owner is installed before allocation/init can fail.
             check("cuMemAlloc", unsafe {
-                (context.driver.allocate)(&mut allocation.address, length)
+                (context.driver.allocate)(&mut allocation.address, physical_length)
             })?;
-            let initialized = unsafe { (context.driver.memset)(allocation.address, 0, length) };
+            let initialized =
+                unsafe { (context.driver.memset)(allocation.address, 0, physical_length) };
             let synced = unsafe { (context.driver.synchronize)() };
             allocation.uncertain = synced != SUCCESS;
             if synced != SUCCESS {
@@ -398,8 +453,8 @@ impl CudaMemory {
                 owner: Some(owner),
                 uncertain: false,
                 copy_stream: None,
-                #[cfg(feature = "rdma")]
                 dma: Vec::new(),
+                ipc_extent: None,
                 #[cfg(feature = "rdma")]
                 rdma: None,
             }),
@@ -440,7 +495,6 @@ impl CudaMemory {
                 code: -1,
             });
         }
-        #[cfg(feature = "rdma")]
         allocation.check_dma(&(offset..offset + length))?;
         let context = Arc::clone(&allocation.context);
         let mut staging = PinnedAllocation::new(&context, length)?;

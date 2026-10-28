@@ -369,6 +369,21 @@ impl RegisteredMemory {
         })
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_range(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<(Arc<crate::cuda::CudaMemory>, usize)> {
+        checked_range(offset, length, self.len())?;
+        match &self.0.allocation {
+            Allocation::Cuda(memory) => Ok((Arc::clone(memory), self.0.allocation_offset + offset)),
+            Allocation::Host(_) => {
+                Err(Error::Unavailable("NVLink IPC requires CUDA device memory"))
+            }
+        }
+    }
+
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
         checked_range(offset, destination.len(), self.len())?;
         self.0

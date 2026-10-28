@@ -29,7 +29,7 @@ by RDMA:
 
 Each peer selects its host and device policies independently. Failed direct MR
 registration returns an error; it never changes the request to staging. CUDA
-IPC and NVLink are separate future paths. Direct GPU support requires actual
+IPC and NVLink use a separate [cooperative transport](cuda-ipc.md). Direct GPU support requires actual
 PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
 ## Device, port, GID and host topology discovery
@@ -306,7 +306,7 @@ target/release/examples/cuda_copy 0 1
 
 The runner checks three unaligned sizes, eight concurrent callers and four
 rounds per caller, then releases all owners. It qualifies local staging only;
-GPUDirect, interprocess GPU sharing and NVLink require their own future gates.
+GPUDirect and interprocess GPU sharing use their own separate installed gates.
 
 ## GPUDirect RDMA ownership
 

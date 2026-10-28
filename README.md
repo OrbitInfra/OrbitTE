@@ -23,7 +23,7 @@ across machines. It follows Mooncake TENT's engine, topology, context, buffer,
 endpoint and worker architecture, with resource ownership and transfer state
 machines implemented in Rust. The runtime has no Mooncake C++ dependency.
 
-TCP and RDMA are separate payload transports. A shared control service handles
+TCP, RDMA and opt-in CUDA IPC are separate payload transports. A shared control service handles
 peer discovery, memory grants and receipts. Applications own cache identity,
 recovery policy and replica placement.
 
@@ -45,6 +45,7 @@ recovery policy and replica placement.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
   Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
   with allocation-range ownership and consumer visibility before completion.
+  Cooperative same-host GPU IPC adds explicit export ownership and close receipts.
 
 ## Quick Start
 
@@ -81,8 +82,10 @@ with the available hardware; see the fixed
 
 OrbitTE remains under development. The [bounded GPU Direct profile](docs/qualification.md#gpudirect-rdma)
 passes 72 installed H20/RoCE cases on stable and Rust 1.85, with an explicit
-host-wide context inventory limit. Direct mode has provider prerequisites. CUDA
-IPC/NVLink, optional SSD transports and full TENT API/wire parity remain open.
+host-wide context inventory limit. Direct mode has provider prerequisites. The
+[cooperative CUDA IPC/NVLink path](docs/cuda-ipc.md) is implemented; its installed
+qualification is in progress. Broader IPC parity, optional SSD transports and
+full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
 [qualification](docs/qualification.md) records exact artifacts and limits.
 
@@ -94,7 +97,7 @@ checkout for the implementation described here.
 | Topic | Guides |
 | --- | --- |
 | Getting started | [Quick Start](docs/getting-started.md), [Build](docs/build.md), [Capabilities](docs/capabilities.md) |
-| Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md) |
+| Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md), [CUDA IPC](docs/cuda-ipc.md) |
 | Design and API | [Architecture](docs/architecture.md), [Rust API](docs/rust-api.md), [Frozen TENT reference](docs/tent-parity.md) |
 | Development | [Contributing](docs/contributing.md), [Qualification](docs/qualification.md), [Completion plan](docs/completion-plan.md) |
 | Operations | [Troubleshooting](docs/troubleshooting.md), [Installed host validation](docs/installed-host.md), [Native cleanup](docs/native-cleanup.md) |

@@ -31,6 +31,8 @@ pub(crate) enum Operation {
     RdmaWrite = 5,
     RdmaReadSlices = 6,
     RdmaWriteSlices = 7,
+    NvlinkRead = 8,
+    NvlinkWrite = 9,
 }
 
 pub(crate) struct Request {
@@ -65,6 +67,8 @@ impl Request {
             5 => Operation::RdmaWrite,
             6 => Operation::RdmaReadSlices,
             7 => Operation::RdmaWriteSlices,
+            8 => Operation::NvlinkRead,
+            9 => Operation::NvlinkWrite,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -150,7 +154,9 @@ impl Reply {
             6 => Err(Error::ResourceExhausted),
             7 => Err(Error::Protocol("request rejected by source")),
             8 => Err(Error::Internal("source handler failed")),
-            10 => Err(Error::Unavailable("remote RDMA is not configured/compiled")),
+            10 => Err(Error::Unavailable(
+                "remote transport is not configured/compiled",
+            )),
             11 => Err(Error::Backend {
                 operation: "remote backend",
                 code: -1,
@@ -530,7 +536,10 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         checked_range(offset, length, memory.len())?;
         if !memory.0.descriptor.permission.allows(matches!(
             request.operation,
-            Operation::TcpWrite | Operation::RdmaWrite | Operation::RdmaWriteSlices
+            Operation::TcpWrite
+                | Operation::RdmaWrite
+                | Operation::RdmaWriteSlices
+                | Operation::NvlinkWrite
         )) {
             return Err(Error::PermissionDenied);
         }
@@ -547,6 +556,16 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 offset,
                 length,
             ),
+            Operation::NvlinkRead | Operation::NvlinkWrite => {
+                #[cfg(feature = "cuda")]
+                return source
+                    .nvlink
+                    .as_ref()
+                    .ok_or(Error::Unavailable("NVLink is not configured"))?
+                    .serve(channel, source.epoch, &request, memory, offset, length);
+                #[cfg(not(feature = "cuda"))]
+                return Err(Error::Unavailable("build with --features cuda"));
+            }
             Operation::RdmaRead
             | Operation::RdmaWrite
             | Operation::RdmaReadSlices

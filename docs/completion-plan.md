@@ -508,6 +508,12 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   close/drain. Qualify independent producer/consumer processes on two local
   NVIDIA GPUs, including failed imports, stale generations and early shutdown.
   MNNVL fabric import/export and EGM remain separate topology profiles.
+  The first cooperative owned GPU/GPU path is implemented: explicit whole-
+  allocation export, physical mapping quota, event drain and matching import-
+  close receipts, with synchronous/async failure retention controls. Installed
+  stable/MSRV qualification is in progress. Host IPC directions, import-cache
+  ownership and broader stream scheduling remain open; exporter-crash safety is
+  explicitly unqualified. See [the transport contract](cuda-ipc.md).
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
   Delegate/Pin/Unpin operations, nested admission and owned proxy shutdown.
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
@@ -762,7 +768,9 @@ The independent review accepts source and bounded RoCE evidence at `121ab95`,
 including four fresh live repeats. Under the user's 2026-10-27 sequencing decision,
 P5.3 source and bounded GPU Direct evidence are independently accepted with the
 explicit host-context inventory limit in [qualification](qualification.md#gpudirect-rdma).
-Proceed to P5.4 CUDA IPC/NVLink handle ownership and completion. Proxy/staging scheduling
+Finish installed qualification and independent review of the implemented
+cooperative P5.4 GPU/GPU IPC substage, then address host directions and import
+reuse with explicit lifetime owners. Proxy/staging scheduling
 follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

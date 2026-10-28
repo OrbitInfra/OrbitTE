@@ -51,6 +51,9 @@ pub use batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskS
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+#[cfg(feature = "cuda")]
+pub use transport::nvlink::NVLinkStats;
+
 pub use config::EngineConfig;
 pub use engine::{
     BatchReport, EngineStats, RemoteEffect, TransferEngine, TransferFailure, TransferOp,

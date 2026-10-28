@@ -15,6 +15,12 @@ pub(super) struct Device {
     pub(super) streams: Mutex<BTreeMap<usize, Option<PendingCopy>>>,
     pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
     next_handle: AtomicUsize,
+    pub(super) imports: Mutex<BTreeMap<u64, usize>>,
+    pub(super) ipc_open_error: AtomicI32,
+    pub(super) ipc_close_error: AtomicI32,
+    pub(super) ipc_partial_open: AtomicBool,
+    pub(super) ipc_pop_after_open: AtomicBool,
+    pub(super) ipc_pop_after_close: AtomicBool,
     pub(super) stream_create_error: AtomicI32,
     pub(super) event_create_error: AtomicI32,
     pub(super) record_error: AtomicI32,
@@ -119,7 +125,8 @@ unsafe extern "C" fn allocate(_: *mut u64, _: usize) -> Status {
     unreachable!()
 }
 unsafe extern "C" fn free(_: u64) -> Status {
-    unreachable!()
+    event("free");
+    status(current().free_error.load(Ordering::Acquire))
 }
 unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> Status {
     unreachable!()
@@ -370,6 +377,10 @@ pub(super) fn driver() -> Arc<Driver> {
         allocate,
         free,
         memset,
+        ipc_export,
+        ipc_open,
+        ipc_close,
+        copy_device,
         to_host,
         to_device,
         stream_create,
@@ -392,6 +403,12 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         streams: Mutex::default(),
         completions: Mutex::default(),
         next_handle: AtomicUsize::new(1),
+        imports: Mutex::default(),
+        ipc_open_error: AtomicI32::new(0),
+        ipc_close_error: AtomicI32::new(0),
+        ipc_partial_open: AtomicBool::new(false),
+        ipc_pop_after_open: AtomicBool::new(false),
+        ipc_pop_after_close: AtomicBool::new(false),
         stream_create_error: AtomicI32::new(0),
         event_create_error: AtomicI32::new(0),
         record_error: AtomicI32::new(0),
@@ -481,4 +498,102 @@ unsafe extern "C" fn flush_rdma(
     );
     event("flush_rdma");
     status(current().rdma_flush_error.load(Ordering::Acquire))
+}
+
+unsafe extern "C" fn ipc_export(output: *mut sys::CUipcMemHandle, address: u64) -> Status {
+    event("ipc-export");
+    let mut bytes = [0u8; 64];
+    bytes[..8].copy_from_slice(&address.to_ne_bytes());
+    unsafe {
+        *output = sys::CUipcMemHandle {
+            reserved: bytes.map(|b| b as _),
+        };
+    }
+    SUCCESS
+}
+
+unsafe extern "C" fn ipc_open(
+    output: *mut u64,
+    handle: sys::CUipcMemHandle,
+    flags: c_uint,
+) -> Status {
+    event("ipc-open");
+    assert_eq!(
+        flags,
+        sys::CUipcMem_flags::CU_IPC_MEM_LAZY_ENABLE_PEER_ACCESS as u32
+    );
+    let mut bytes = [0u8; 8];
+    for (out, byte) in bytes.iter_mut().zip(handle.reserved) {
+        *out = byte as u8;
+    }
+    let address = u64::from_ne_bytes(bytes);
+    let error = current().ipc_open_error.load(Ordering::Acquire);
+    if error == 0 || current().ipc_partial_open.load(Ordering::Acquire) {
+        assert!(
+            DEVICES
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .get(&address)
+                .and_then(Weak::upgrade)
+                .is_some()
+        );
+        *current()
+            .imports
+            .lock()
+            .unwrap()
+            .entry(address)
+            .or_default() += 1;
+        unsafe {
+            *output = address;
+        }
+    }
+    if current().ipc_pop_after_open.load(Ordering::Acquire) {
+        current().pop_error.store(201, Ordering::Release);
+    }
+    status(error)
+}
+
+unsafe extern "C" fn ipc_close(address: u64) -> Status {
+    event("ipc-close");
+    assert!(
+        current()
+            .streams
+            .lock()
+            .unwrap()
+            .values()
+            .all(Option::is_none),
+        "close is not a DMA receipt"
+    );
+    let error = current().ipc_close_error.load(Ordering::Acquire);
+    if error == 0 {
+        let mut imports = current().imports.lock().unwrap();
+        let count = imports.get_mut(&address).unwrap();
+        *count -= 1;
+        if *count == 0 {
+            imports.remove(&address);
+        }
+        if current().ipc_pop_after_close.load(Ordering::Acquire) {
+            current().pop_error.store(201, Ordering::Release);
+        }
+    }
+    status(error)
+}
+
+unsafe extern "C" fn copy_device(
+    destination: u64,
+    source: u64,
+    length: usize,
+    stream: sys::CUstream,
+) -> Status {
+    event("DtoD");
+    let error = current().copy_error.load(Ordering::Acquire);
+    enqueue(
+        stream,
+        source as usize,
+        destination as usize,
+        if error == 0 { length } else { length.min(1) },
+    );
+    status(error)
 }

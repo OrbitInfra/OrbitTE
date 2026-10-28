@@ -383,8 +383,22 @@ This follows the frozen TENT
 pattern of lazy nonblocking streams and owning handles, and
 [NVLinkTransport](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
 records an event after async copy work. OrbitTE currently reuses one stream/event
-per serialized allocation, rather than implementing TENT's device-wide pool or
-NVLink transport here. External producers still synchronize before handing over
+per serialized allocation. The separate NVLink transport shares this completion
+owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation
 zeroing still synchronizes its context. Transport-level scheduling and caller
 stream readiness remain P5 work.
+
+## CUDA IPC transport ownership
+
+`transport/nvlink.rs::NVLinkTransport` owns same-host identity checks, grant/close
+bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
+`cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
+one imported native reference and its context. `cuda/stream.rs` owns actual
+copy completion. ControlService dispatches IPC grants and retains uncertain
+source handlers; Engine/Batch retain uncertain requester admissions.
+
+This corresponds to TENT's NVLink allocation export, address relocation and
+stream/event completion. Per-grant import/close and explicit source receipts
+are the initial cooperative Rust ownership contract. See [CUDA IPC](cuda-ipc.md)
+for whole-allocation permission, exporter lifetime and remaining parity limits.

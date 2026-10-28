@@ -6,6 +6,10 @@ use crate::{Error, Result};
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Cooperative same-host CUDA IPC. Both processes must opt in and keep the
+    /// exporter alive until imports close. Handles authorize whole allocations.
+    #[cfg(feature = "cuda")]
+    pub nvlink: bool,
     #[cfg(feature = "rdma")]
     pub rdma: Option<crate::transport::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
@@ -30,6 +34,8 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "cuda")]
+            nvlink: false,
             #[cfg(feature = "rdma")]
             rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),

@@ -23,6 +23,7 @@ pub enum TransferOp {
 pub enum Transport {
     Tcp,
     Rdma,
+    Nvlink,
 }
 
 /// Absolute host/device addresses within active local and epoch-fenced peer ranges.
@@ -83,6 +84,8 @@ impl BatchReport {
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineStats {
+    #[cfg(feature = "cuda")]
+    pub nvlink: Option<crate::NVLinkStats>,
     pub allocated_batches: usize,
     pub allocated_requests: usize,
     pub requester_workers: usize,
@@ -118,8 +121,15 @@ impl TransferEngine {
             .clone()
             .map(crate::transport::rdma::RdmaTransport::new)
             .transpose()?;
+        #[cfg(feature = "cuda")]
+        let nvlink = config
+            .nvlink
+            .then(|| crate::transport::nvlink::NVLinkTransport::new(config.max_inflight_bytes))
+            .transpose()?;
         let source = Arc::new(Source {
             epoch,
+            #[cfg(feature = "cuda")]
+            nvlink,
             #[cfg(feature = "rdma")]
             rdma,
             registry: MemoryRegistry::new(
@@ -184,6 +194,13 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            #[cfg(feature = "cuda")]
+            nvlink: self
+                .source
+                .nvlink
+                .as_ref()
+                .map(|transport| transport.stats())
+                .transpose()?,
             allocated_batches: allocated.0,
             allocated_requests: allocated.1,
             requester_workers: allocated.2,
@@ -333,7 +350,9 @@ impl TransferEngine {
     /// Validates the entire batch before sending any request. Admission and
     /// validation failures return `Err`; execution failures are in the report.
     /// TCP/staged READ commits a local request after its complete response.
-    /// Direct RDMA can change bytes before a final receipt, including on failure.
+    /// Direct RDMA and CUDA IPC can change READ destinations or remote WRITE
+    /// bytes before a final receipt, including on failure. Inspect locally_drained
+    /// and remote_effect before releasing owners or considering a retry.
     /// WRITE success requires source acknowledgement. No automatic retries.
     pub fn submit_and_wait(
         &self,
@@ -409,6 +428,21 @@ impl TransferEngine {
                 .source
                 .registry
                 .resolve_address(request.local_address, request.length)?;
+            if request.transport == Transport::Nvlink {
+                #[cfg(feature = "cuda")]
+                {
+                    self.source
+                        .nvlink
+                        .as_ref()
+                        .ok_or(Error::Unavailable("NVLink is not configured"))?;
+                    local
+                        .cuda_range(local_offset, request.length)?
+                        .0
+                        .validate_ipc_requester()?;
+                }
+                #[cfg(not(feature = "cuda"))]
+                return Err(Error::Unavailable("build with --features cuda"));
+            }
             let (remote, remote_offset) =
                 peer.resolve_address(request.remote_address, request.length)?;
             if !remote.permission.allows(operation == TransferOp::Write) {
@@ -492,6 +526,31 @@ impl TransferEngine {
             }
             let result = match request.transport {
                 Transport::Tcp => TcpTransport::transfer(*operation, peer, request, *deadline),
+                Transport::Nvlink => {
+                    #[cfg(feature = "cuda")]
+                    {
+                        match &self.source.nvlink {
+                            Some(transport) => transport.transfer(
+                                *operation,
+                                peer,
+                                request,
+                                self.source.epoch,
+                                *deadline,
+                            ),
+                            None => Err((
+                                Error::Unavailable("NVLink is not configured"),
+                                RemoteEffect::None,
+                            )),
+                        }
+                    }
+                    #[cfg(not(feature = "cuda"))]
+                    {
+                        Err((
+                            Error::Unavailable("build with --features cuda"),
+                            RemoteEffect::None,
+                        ))
+                    }
+                }
                 Transport::Rdma => {
                     #[cfg(feature = "rdma")]
                     {
@@ -763,6 +822,8 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
+    #[cfg(feature = "cuda")]
+    pub(crate) nvlink: Option<crate::transport::nvlink::NVLinkTransport>,
     pub(crate) epoch: SourceEpoch,
     pub(crate) registry: MemoryRegistry,
     pub(crate) notifications: NotificationInbox,

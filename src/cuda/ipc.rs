@@ -1,0 +1,220 @@
+//! Cooperative whole-allocation exports and owned CUDA IPC imports.
+
+use super::*;
+
+pub(crate) struct IpcExport {
+    memory: Option<Arc<CudaMemory>>,
+    pub(crate) handle: [u8; 64],
+    pub(crate) extent: usize,
+    exposed: bool,
+}
+
+impl IpcExport {
+    pub(crate) fn new(memory: Arc<CudaMemory>) -> Result<Self> {
+        let mut allocation = memory
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        let extent = allocation
+            .ipc_extent
+            .ok_or(Error::Unavailable("CUDA IPC export requires allocate_ipc"))?;
+        allocation.check_dma(&(0..memory.length))?;
+        allocation
+            .dma
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        let mut handle = sys::CUipcMemHandle { reserved: [0; 64] };
+        allocation.context.current(|| {
+            // SAFETY: only an initialized cuMemAlloc base with explicit export
+            // consent reaches here; the whole allocation remains owned.
+            check("cuIpcGetMemHandle", unsafe {
+                (allocation.context.driver.ipc_export)(&mut handle, allocation.address)
+            })
+        })?;
+        allocation.dma.push(0..memory.length);
+        drop(allocation);
+        Ok(Self {
+            memory: Some(memory),
+            handle: handle.reserved.map(|b| b as u8),
+            extent,
+            exposed: false,
+        })
+    }
+
+    /// Call before the first socket write that can reveal any handle bytes.
+    pub(crate) fn expose(&mut self) {
+        self.exposed = true;
+    }
+
+    /// The peer receipt proves its matching import was closed after physical drain.
+    pub(crate) fn finish(mut self) {
+        self.exposed = false;
+    }
+}
+
+impl Drop for IpcExport {
+    fn drop(&mut self) {
+        if let Some(memory) = self.memory.take() {
+            if self.exposed {
+                RETAINED_EXPORT.fetch_add(1, Ordering::AcqRel);
+                std::mem::forget(memory);
+            } else {
+                memory
+                    .allocation
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .dma
+                    .retain(|range| *range != (0..memory.length));
+            }
+        }
+    }
+}
+
+struct IpcMapping {
+    context: Arc<Context>,
+    address: u64,
+    pending: bool,
+}
+
+impl IpcMapping {
+    fn open(&mut self, handle: [u8; 64]) -> Result<()> {
+        let context = Arc::clone(&self.context);
+        context.current(|| {
+            // SAFETY: the cooperative exporter retains this allocation until
+            // our close receipt. Install the output before checking restoration.
+            check("cuIpcOpenMemHandle", unsafe {
+                (context.driver.ipc_open)(
+                    &mut self.address,
+                    sys::CUipcMemHandle {
+                        reserved: handle.map(|b| b as _),
+                    },
+                    sys::CUipcMem_flags::CU_IPC_MEM_LAZY_ENABLE_PEER_ACCESS as u32,
+                )
+            })?;
+            if self.address == 0 {
+                return Err(Error::Internal("CUDA returned a null IPC mapping"));
+            }
+            Ok(())
+        })
+    }
+
+    fn close(&mut self) -> Result<()> {
+        if self.pending || self.context.poisoned.load(Ordering::Acquire) {
+            return Err(Error::Unquiesced {
+                operation: "CUDA IPC mapping",
+                code: -1,
+            });
+        }
+        if self.address == 0 {
+            return Ok(());
+        }
+        let context = Arc::clone(&self.context);
+        context
+            .current(|| {
+                // SAFETY: this owns exactly one successful open reference. No copy
+                // remains; successful close is distinct from the copy completion.
+                check("cuIpcCloseMemHandle", unsafe {
+                    (context.driver.ipc_close)(self.address)
+                })?;
+                self.address = 0;
+                Ok(())
+            })
+            .map_err(|error| match error {
+                Error::Backend { operation, code } | Error::Unquiesced { operation, code } => {
+                    Error::Unquiesced { operation, code }
+                }
+                _ => Error::Unquiesced {
+                    operation: "CUDA IPC close",
+                    code: -1,
+                },
+            })
+    }
+}
+
+impl Drop for IpcMapping {
+    fn drop(&mut self) {
+        // An explicit close is required before sending a receipt. Drop cannot
+        // turn an uncertain import or copy into a successful release.
+        if self.address != 0 {
+            RETAINED_IPC.fetch_add(1, Ordering::AcqRel);
+            std::mem::forget(Arc::clone(&self.context));
+        }
+    }
+}
+
+impl CudaMemory {
+    pub(crate) fn validate_ipc_requester(&self) -> Result<()> {
+        let allocation = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        if !allocation.owned {
+            return Err(Error::Unavailable(
+                "CUDA IPC requester requires owned CudaMemory",
+            ));
+        }
+        allocation.check_dma(&(0..self.length))
+    }
+
+    pub(crate) fn copy_ipc(
+        &self,
+        handle: [u8; 64],
+        remote_offset: usize,
+        local_offset: usize,
+        length: usize,
+        to_remote: bool,
+    ) -> Result<()> {
+        let range = checked_range(local_offset, length, self.length)?;
+        let mut allocation = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        if !allocation.owned {
+            return Err(Error::Unavailable(
+                "CUDA IPC requester requires owned CudaMemory",
+            ));
+        }
+        allocation.check_dma(&range)?;
+        let context = Arc::clone(&allocation.context);
+        let mut mapping = IpcMapping {
+            context: Arc::clone(&context),
+            address: 0,
+            pending: false,
+        };
+        let result = (|| {
+            mapping.open(handle)?;
+            let remote = mapping
+                .address
+                .checked_add(remote_offset as u64)
+                .ok_or(Error::InvalidRange)?;
+            remote
+                .checked_add(length as u64)
+                .ok_or(Error::InvalidRange)?;
+            if allocation.copy_stream.is_none() {
+                allocation.copy_stream = Some(CopyStream::new(&context)?);
+            }
+            let stream = allocation
+                .copy_stream
+                .as_mut()
+                .ok_or(Error::Internal("CUDA stream missing"))?;
+            let local = self.address + local_offset as u64;
+            let (destination, source) = if to_remote {
+                (remote, local)
+            } else {
+                (local, remote)
+            };
+            mapping.pending = true;
+            // SAFETY: this lock owns local bytes, and the mapping retains remote
+            // bytes via the source grant. Neither is released before completion.
+            let result = unsafe { stream.copy_device(destination, source, length) };
+            mapping.pending = !stream.quiescent();
+            result
+        })();
+        let closed = mapping.close();
+        if closed.is_err() {
+            allocation.uncertain = true;
+        }
+        closed?;
+        result
+    }
+}

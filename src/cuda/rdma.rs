@@ -10,28 +10,6 @@ pub(super) enum Ordering {
 }
 
 impl DeviceAllocation {
-    pub(super) fn check_dma(&self, range: &Range<usize>) -> Result<()> {
-        if self.uncertain
-            || self
-                .context
-                .poisoned
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err(Error::Unquiesced {
-                operation: "CUDA DMA ownership",
-                code: -1,
-            });
-        }
-        if self
-            .dma
-            .iter()
-            .any(|loan| range.start < loan.end && loan.start < range.end)
-        {
-            return Err(Error::Unavailable("CUDA range is owned by RDMA"));
-        }
-        Ok(())
-    }
-
     fn prepare_rdma(&mut self) -> Result<()> {
         if self.rdma.is_some() {
             return Ok(());
