@@ -6,6 +6,12 @@ from gdr import require, records
 def validate_case(case):
     require(case.get('transport') in ('tcp', 'rdma') and case.get('cuda_memory', 'staged') == 'staged'
             and case.get('source') != case.get('requester'), 'invalid staging transport scope')
+    remote = case.get('remote_staging', False)
+    require(type(remote) is bool, 'remote_staging must be boolean')
+    if remote:
+        require(case.get('source_kind') == 'cuda:0' and case.get('host_memory', 'direct') == 'direct'
+                and case.get('staging_chunk_size', 0) <= case.get('rdma_block_size', 64 << 10)
+                and not case.get('rails'), 'remote staging gate requires remote GPU and one RDMA slice per chunk')
     kinds = [case.get(role + '_kind') for role in ('source', 'requester')]
     require(all(kind in ('cpu', 'cuda:0') for kind in kinds) and 'cuda:0' in kinds, 'invalid staging memory kind')
     chunk = case.get('staging_chunk_size')
@@ -24,6 +30,10 @@ def verify(case, evidence):
         result = json.loads(proof['result.json'])
         require(result['status'] == 'passed' and result['child_reaped'] and result['resource_locks_released']
                 and result.get('fault_library_sha256'), role + ': supervised owner cleanup missing')
+        if case.get('remote_staging', False):
+            remote = records(proof, 'ORBITTE_REMOTE_STAGE_STATS ')
+            expected = dict(pins=6, delegates=6 * len(sizes), crosses=6 * len(sizes), unpins=6) if role == 'source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
+            require(remote == [expected], role + ': remote staging operations missing or incomplete')
         stats = records(proof, 'ORBITTE_STAGING_STATS ')
         require(len(stats) == 1, role + ': missing staging counters')
         if case[role + '_kind'] == 'cpu':

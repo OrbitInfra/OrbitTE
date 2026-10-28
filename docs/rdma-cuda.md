@@ -32,6 +32,10 @@ registration returns an error; it never changes the request to staging. CUDA
 IPC and NVLink use a separate [cooperative transport](cuda-ipc.md). Direct GPU support requires actual
 PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
+Opt-in [serial remote CUDA staging](staging.md#serial-remote-staging) coordinates
+Pin/Delegate/Unpin over the same control channel, while TCP and RDMA retain
+payload ownership. This new path remains hardware-unqualified.
+
 TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
 GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,
 MRs and RDMA quotas keep their own lifetimes.
@@ -118,7 +122,7 @@ records finish. A direct GPU requester can reuse a direct host source QP. If eit
 staging, or the source uses direct GPU memory, connections remain per-grant and
 require physical close barriers.
 
-The current OrbitTE protocol is v16. Every phase binds both process and
+The current OrbitTE protocol is v17. Every phase binds both process and
 connection incarnations, the exact request and an independent grant generation.
 This protocol is separate from native TENT API/wire compatibility.
 

@@ -1029,6 +1029,9 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
     );
     if device.mode.ends_with("close1")
         || device.mode == "mr_close"
+        || (device.mode == "copy_stage_close"
+            && state.local_only
+            && state.length < COMPLETION_MESSAGE_SIZE)
         || (device.mode == "gpu_payload_close" && !state.private_pd.is_null() && !state.local_only)
         || (device.mode == "gpu_rq_close" && !state.private_pd.is_null() && state.local_only)
         || (device.mode == "message_close"

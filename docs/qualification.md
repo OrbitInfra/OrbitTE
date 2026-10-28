@@ -27,6 +27,31 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Serial remote CUDA staging
+
+The opt-in serial P5.5b session is implemented with CPU controls for public
+TCP/RDMA execution, byte guards, one handler/batch/chunk, source permissions,
+scoped phase ordering, CUDA/MR failure retention, self-peer/opposite-direction
+operations and loss of the final Unpin reply. Independent review found that
+nonce-only replies could accept a repeated prior receipt as final completion;
+success replies now echo the full operation and range. The retained failing
+control and current source-gate evidence live outside Git in
+`/root/orbitte-artifacts/proxy-remote-20261028/`. Independent review accepts source
+correctness at [`64c9899`](https://github.com/OrbitInfra/OrbitTE/commit/64c9899fa088898b01000fe87ccb924bed356c32),
+including a fresh real TCP relay control that repeats the previous phase receipt
+while withholding Unpin. Both directions reject early completion. The review
+record is `independent-review/final-source-review.json` in that artifact root.
+Clean stable and Rust 1.85 installed consumers build from that same commit;
+package provenance and source acceptance do not qualify device execution.
+
+Installed consumer inputs extend the existing staging gate with
+`remote_staging: true`, remote GPU ranges, explicit source operation counts and
+private MR retirement. The new installed GPU/RDMA profile is **unqualified**
+until actual execution succeeds. The previous P5.5a healthy profile does not
+qualify these remote operations. Overlapping pipelines, broader remote
+scheduling, physical GPU faults and mixed C++/Rust wire interoperability remain
+open. See [the contract and reproduction](staging.md#serial-remote-staging).
+
 ## Local CUDA staging chunks
 
 Production source [`37e99ae`](https://github.com/OrbitInfra/OrbitTE/commit/37e99ae7bb5f2415a0a4fdd3f77bc25c9ffea477)

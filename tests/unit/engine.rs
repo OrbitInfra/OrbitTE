@@ -133,6 +133,8 @@ pub(crate) fn rdma_fixture_with_config(
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         #[cfg(feature = "cuda")]
+        remote_staging: config.remote_staging,
+        #[cfg(feature = "cuda")]
         proxy: Arc::clone(&runtime.proxy),
         #[cfg(feature = "cuda")]
         nvlink: None,

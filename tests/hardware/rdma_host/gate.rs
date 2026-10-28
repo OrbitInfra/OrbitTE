@@ -1,4 +1,4 @@
-//! Test-only wire-v16 relay. Hold READY after the source posts its completion RQ.
+//! Test-only wire-v17 relay. Hold READY after the source posts its completion RQ.
 //! Payload opcodes are rejected; RDMA bytes never pass through this listener.
 
 use std::net::Shutdown;
@@ -162,8 +162,8 @@ fn frame<const N: usize>(stream: &mut TcpStream) -> Result<[u8; N]> {
 }
 
 fn header(bytes: &[u8]) -> Result<(u8, usize)> {
-    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != 16u16.to_be_bytes() || bytes[11] != 0 {
-        return Err("relay only supports the frozen wire-v16 header".into());
+    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != 17u16.to_be_bytes() || bytes[11] != 0 {
+        return Err("relay only supports the frozen wire-v17 header".into());
     }
     Ok((
         bytes[10],

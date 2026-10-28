@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v16 messages; moving them into their own module does not make this
+OrbitTE v17 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,7 +121,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v16 handshake can attach independent grants to a
+QP creation lock. The public v17 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
@@ -275,7 +275,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
-| Local staging | `runtime/proxy_manager.rs`, `cuda/staging.rs` | Shared pinned chunk capacity, context reuse and local CUDA copy/drain |
+| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, serial remote operation/registration owners and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
 
 `rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only

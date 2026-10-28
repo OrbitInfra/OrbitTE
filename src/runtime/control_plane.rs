@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 16;
+const VERSION: u16 = 17;
 pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -36,6 +36,11 @@ pub(crate) enum Operation {
     NvlinkReadCached = 10,
     NvlinkWriteCached = 11,
     NvlinkClose = 12,
+    PinRead = 13,
+    PinWrite = 14,
+    Delegate = 15,
+    Cross = 16,
+    Unpin = 17,
 }
 
 pub(crate) struct Request {
@@ -59,7 +64,7 @@ impl Request {
         bytes
     }
 
-    fn decode(bytes: &[u8; REQUEST_SIZE]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8; REQUEST_SIZE]) -> Result<Self> {
         validate_prefix(bytes)?;
         let operation = match bytes[10] {
             0 => Operation::Describe,
@@ -75,6 +80,11 @@ impl Request {
             10 => Operation::NvlinkReadCached,
             11 => Operation::NvlinkWriteCached,
             12 => Operation::NvlinkClose,
+            13 => Operation::PinRead,
+            14 => Operation::PinWrite,
+            15 => Operation::Delegate,
+            16 => Operation::Cross,
+            17 => Operation::Unpin,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -172,7 +182,7 @@ impl Reply {
     }
 }
 
-fn error_status(error: &Error) -> u8 {
+pub(crate) fn error_status(error: &Error) -> u8 {
     match error {
         Error::EpochMismatch => 1,
         Error::RegionNotFound => 2,
@@ -506,6 +516,8 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         }
     };
     let mut retained_memory = None;
+    #[allow(unused_mut)]
+    let mut proxy_reply = false;
     let prepared = (|| {
         if request.operation == Operation::Describe {
             let regions = source.registry.descriptors()?;
@@ -563,6 +575,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 | Operation::RdmaWriteSlices
                 | Operation::NvlinkWrite
                 | Operation::NvlinkWriteCached
+                | Operation::PinWrite
         )) {
             return Err(Error::PermissionDenied);
         }
@@ -571,6 +584,15 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             .as_ref()
             .ok_or(Error::Internal("missing source memory"))?;
         match request.operation {
+            Operation::PinRead | Operation::PinWrite => {
+                #[cfg(feature = "cuda")]
+                {
+                    proxy_reply = true;
+                    source.proxy.serve_remote(channel, source, &request, memory)
+                }
+                #[cfg(not(feature = "cuda"))]
+                return Err(Error::Unavailable("build with --features cuda"));
+            }
             Operation::TcpRead | Operation::TcpWrite => crate::transport::tcp::TcpTransport::serve(
                 channel,
                 source.epoch,
@@ -617,7 +639,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             std::mem::forget((retained_memory, Arc::clone(source), admission));
         }
         // After an I/O error the connection cannot safely carry another frame.
-        if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
+        if !proxy_reply && !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
             channel.reply(source.epoch, error_status(&error), 0)?;
         }
     }
