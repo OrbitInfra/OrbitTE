@@ -112,7 +112,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         if cached and mode == 'healthy': slices *= 5
         for part, (copy, (offset, length)) in enumerate(zip(cycle_copies, slices)):
             if cached: read = mode == 'healthy' and part < 12
-            next_copy = cycle_copies[part+1]['seq'] if part+1 < len(cycle_copies) else boundary
+            next_copy = next((r['seq'] for r in cycle if r['seq'] > copy['seq'] and r['tid'] == copy['tid'] and r['kind'] in ('copy','htod','dtoh')), boundary)
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
             if not cached: assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
             allocation = local[(part % 3 if cached else part) % len(local)]
@@ -132,7 +132,8 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             assert not any(copy['seq'] < r['seq'] < event['seq'] and r['kind'] in ('copy','htod','dtoh') for r in cycle), 'completion event belongs to a later copy'
             assert not any(copy['seq'] < r['seq'] < wait['seq'] and r['kind'] in ('pin','allocate','unpin','free') for r in cycle), 'allocation changed before payload drain'
             assert not any(copy['seq'] < p['seq'] < event['seq'] for p in pops), 'copy escaped owning context before event record'
-            assert any(wait['seq'] < p['seq'] < next_copy for p in pops), 'copy context not restored before next slice'
+            restored = [r for r in cycle if r['seq'] > wait['seq'] and r['tid'] == copy['tid']]
+            assert restored and restored[0]['kind'] == 'pop' and restored[0]['seq'] < next_copy, 'copy context not immediately restored'
             if mode != 'requester-exit':
                 close = closes[index]
                 assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'

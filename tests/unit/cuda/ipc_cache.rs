@@ -148,10 +148,13 @@ fn relay(mut client: TcpStream, source: SocketAddr, fault: &AtomicUsize) -> std:
     client.write_all(&reply)
 }
 fn engine() -> Arc<TransferEngine> {
+    engine_with_limit(2)
+}
+fn engine_with_limit(limit: usize) -> Arc<TransferEngine> {
     Arc::new(
         TransferEngine::new(EngineConfig {
             nvlink: true,
-            nvlink_cache_entries: 2,
+            nvlink_cache_entries: limit,
             handler_timeout: Duration::from_millis(500),
             ..EngineConfig::default()
         })
@@ -487,71 +490,77 @@ fn mutually_cached_engines_close_outgoing_imports_before_incoming_exports() {
 
 #[test]
 fn cached_ipc_entry_limit_rejects_before_export_and_native_close_is_not_retried() {
-    let dst = allocation(&[0xa5; 128]);
-    let local = owned(&dst, false);
-    let source = engine();
-    let requester = engine();
-    let registered = register(&requester, &local);
-    let relay = Relay::new(source.endpoint());
-    let remotes: Vec<_> = (0..3)
-        .map(|_| {
-            let owner = allocation(&[0x5a; 128]);
-            let memory = owned(&owner, true);
-            let region = register(&source, &memory);
-            (owner, memory, region)
-        })
-        .collect();
-    for (i, (_, _, region)) in remotes.iter().enumerate() {
-        let result = requester
-            .submit_and_wait(
-                TransferOp::Read,
-                &relay.peer(&source, region),
-                &[request(&registered, region)],
-                TIMEOUT,
-            )
-            .unwrap();
-        assert_eq!(result.is_complete(), i < 2);
-        if i == 2 {
-            assert!(matches!(
-                result.failure.unwrap().error,
-                Error::ResourceExhausted
-            ));
+    for source_limit in [1, 2] {
+        let dst = allocation(&[0xa5; 128]);
+        let local = owned(&dst, false);
+        let source = engine_with_limit(source_limit);
+        let requester = engine();
+        let registered = register(&requester, &local);
+        let relay = Relay::new(source.endpoint());
+        let remotes: Vec<_> = (0..3)
+            .map(|_| {
+                let owner = allocation(&[0x5a; 128]);
+                let memory = owned(&owner, true);
+                let region = register(&source, &memory);
+                (owner, memory, region)
+            })
+            .collect();
+        for (i, (_, _, region)) in remotes.iter().enumerate() {
+            let result = requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &relay.peer(&source, region),
+                    &[request(&registered, region)],
+                    TIMEOUT,
+                )
+                .unwrap();
+            assert_eq!(result.is_complete(), i < source_limit);
+            if i >= source_limit {
+                assert!(matches!(
+                    result.failure.unwrap().error,
+                    Error::ResourceExhausted
+                ));
+            }
         }
+        assert_eq!(event_count(&dst, "ipc-open"), source_limit);
+        assert_eq!(
+            source.stats().unwrap().nvlink.unwrap().exports,
+            source_limit
+        );
+        let weak = Arc::downgrade(&local);
+        requester.unregister_memory(&registered).unwrap();
+        drop(registered);
+        drop(local);
+        assert!(
+            weak.upgrade().is_none(),
+            "idle caches retained historical local allocation"
+        );
+        dst.ipc_close_error.store(1, Ordering::Release);
+        assert!(matches!(
+            requester.close_requester(TIMEOUT),
+            Err(Error::Unquiesced { .. })
+        ));
+        assert_eq!(event_count(&dst, "ipc-close"), source_limit);
+        dst.ipc_close_error.store(0, Ordering::Release);
+        assert!(matches!(
+            requester.close_requester(TIMEOUT),
+            Err(Error::Unquiesced { .. })
+        ));
+        assert_eq!(
+            event_count(&dst, "ipc-close"),
+            source_limit,
+            "retried uncertain native close"
+        );
+        assert_eq!(
+            requester.stats().unwrap().nvlink.unwrap().retained_imports,
+            source_limit
+        );
+        assert!(matches!(
+            source.close_source(Duration::from_millis(5)),
+            Err(Error::Timeout)
+        ));
+        assert_eq!(event_count(&remotes[source_limit].0, "ipc-export"), 0);
     }
-    assert_eq!(event_count(&dst, "ipc-open"), 2);
-    assert_eq!(source.stats().unwrap().nvlink.unwrap().exports, 2);
-    let weak = Arc::downgrade(&local);
-    requester.unregister_memory(&registered).unwrap();
-    drop(registered);
-    drop(local);
-    assert!(
-        weak.upgrade().is_none(),
-        "idle caches retained historical local allocation"
-    );
-    dst.ipc_close_error.store(1, Ordering::Release);
-    assert!(matches!(
-        requester.close_requester(TIMEOUT),
-        Err(Error::Unquiesced { .. })
-    ));
-    assert_eq!(event_count(&dst, "ipc-close"), 2);
-    dst.ipc_close_error.store(0, Ordering::Release);
-    assert!(matches!(
-        requester.close_requester(TIMEOUT),
-        Err(Error::Unquiesced { .. })
-    ));
-    assert_eq!(
-        event_count(&dst, "ipc-close"),
-        2,
-        "retried uncertain native close"
-    );
-    assert_eq!(
-        requester.stats().unwrap().nvlink.unwrap().retained_imports,
-        2
-    );
-    assert!(matches!(
-        source.close_source(Duration::from_millis(5)),
-        Err(Error::Timeout)
-    ));
 }
 
 #[test]
@@ -739,5 +748,69 @@ fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
             requester.stats().unwrap().nvlink.unwrap().allocation_bytes,
             0
         );
+    }
+}
+
+#[test]
+fn cached_export_keeps_actual_registration_and_allocation_until_close_receipt() {
+    for drop_source in [false, true] {
+        let src = allocation(&[0x5a; 128]);
+        let dst = allocation(&[0xa5; 128]);
+        let remote = owned(&src, true);
+        let local = owned(&dst, false);
+        let source = engine();
+        let requester = engine();
+        let exported = register(&source, &remote);
+        let registered = register(&requester, &local);
+        let relay = Relay::new(source.endpoint());
+        let peer = relay.peer(&source, &exported);
+        assert!(
+            requester
+                .submit_and_wait(
+                    TransferOp::Read,
+                    &peer,
+                    &[request(&registered, &exported)],
+                    TIMEOUT
+                )
+                .unwrap()
+                .is_complete()
+        );
+        let memory = Arc::downgrade(&remote);
+        let registration = Arc::downgrade(&exported.0);
+        source.unregister_memory(&exported).unwrap();
+        drop(exported);
+        drop(remote);
+        assert!(memory.upgrade().is_some());
+        assert!(registration.upgrade().is_some());
+        assert_eq!(event_count(&src, "free"), 0);
+        if drop_source {
+            assert!(matches!(
+                source.close_source(Duration::from_millis(5)),
+                Err(Error::Timeout)
+            ));
+            drop(source);
+            drop(relay);
+            assert!(
+                requester
+                    .close_requester(Duration::from_millis(30))
+                    .is_err()
+            );
+            drop(requester);
+            assert!(
+                memory.upgrade().is_some(),
+                "engine drop freed a live exported allocation"
+            );
+            assert!(
+                registration.upgrade().is_some(),
+                "engine drop lost the actual registration"
+            );
+            assert_eq!(event_count(&src, "free"), 0);
+        } else {
+            requester.close_requester(TIMEOUT).unwrap();
+            source.close_source(TIMEOUT).unwrap();
+            assert!(memory.upgrade().is_none());
+            assert!(registration.upgrade().is_none());
+            assert_eq!(event_count(&src, "free"), 1);
+        }
     }
 }

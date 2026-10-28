@@ -84,6 +84,24 @@ class NativeEvidence(unittest.TestCase):
                 with self.subTest(memory=memory,fault=fault), self.assertRaises(AssertionError):
                     nvlink_run.validate_native(source,requester,17,'cache-healthy',101,102,memory)
 
+    def test_cached_payload_cannot_borrow_completion_from_owned_device_readback(self):
+        for missing in ('record', 'wait', 'pop'):
+            source, requester = self.evidence('cache-healthy')
+            close = next(i for i, row in enumerate(requester) if row['kind'] == 'close')
+            readback = [dict(kind='pin', address=6000, length=151, flags=1),
+                        dict(kind='dtoh', source=2000, destination=6000, length=151, stream=4),
+                        dict(kind='record', event=5, stream=4), dict(kind='pop'),
+                        dict(kind='wait', event=5), dict(kind='pop'),
+                        dict(kind='unpin', address=6000)]
+            requester[close:close] = [dict(pid=102, tid=1, code=0, **row) for row in readback]
+            for i, row in enumerate(requester): row['seq'] = i+1
+            nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
+            index = max(i for i, row in enumerate(requester[:close]) if row['kind'] == missing)
+            requester.pop(index)
+            for i, row in enumerate(requester): row['seq'] = i+1
+            with self.subTest(missing=missing), self.assertRaises(AssertionError):
+                nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
+
     def test_host_and_mixed_need_actual_pinned_owners_and_direct_copy_apis(self):
         for memory in ('host','mixed'):
             for mode in ('batch-healthy','batch-graceful','batch-requester-exit'):
