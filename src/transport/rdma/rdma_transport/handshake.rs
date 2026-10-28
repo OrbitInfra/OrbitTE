@@ -206,8 +206,7 @@ impl RdmaTransport {
         let epoch = SourceEpoch::generate()?;
         let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
         if let Err(error) = endpoint.open(permission, psn) {
-            endpoint.close()?;
-            return Err(error);
+            return Err(endpoint.abort(error));
         }
         if is_direct {
             self.usage
@@ -346,7 +345,12 @@ impl RdmaTransport {
         let cached = endpoint.cached_peer;
         let prepared = (|| {
             if operation == TransferOp::Write {
-                endpoint.fill(&request.local, request.local_offset)?;
+                endpoint.fill(
+                    &request.local,
+                    request.local_offset,
+                    #[cfg(feature = "cuda")]
+                    &self.proxy,
+                )?;
             }
             Hello {
                 requester: Identity::local(&endpoint, epoch)?,
@@ -447,9 +451,14 @@ impl RdmaTransport {
                 peer,
                 offset: request.local_offset,
             })),
-            result => {
+            Ok(None) => {
                 endpoint.close()?;
-                result.map(|_| None)
+                Ok(None)
+            }
+            Err(error) => {
+                #[cfg(all(test, feature = "cuda"))]
+                crate::transport::rdma::cq_lane::tests::before_staging_abort(self, &endpoint);
+                Err(endpoint.abort(error))
             }
         }
     }
@@ -479,7 +488,12 @@ impl RdmaTransport {
             endpoint.cache(slice.peer)?;
         } else if slice.peer.operation == TransferOp::Read {
             remaining(channel.deadline)?;
-            endpoint.copy_back(memory, slice.offset)?;
+            endpoint.copy_back(
+                memory,
+                slice.offset,
+                #[cfg(feature = "cuda")]
+                &self.proxy,
+            )?;
         }
         drop(endpoint.output.take());
         Ok(())
@@ -584,7 +598,12 @@ impl RdmaTransport {
         )?;
         let prepared = (|| {
             if !writing {
-                endpoint.fill(memory, offset)?;
+                endpoint.fill(
+                    memory,
+                    offset,
+                    #[cfg(feature = "cuda")]
+                    &self.proxy,
+                )?;
             }
             let identity = Identity::local(&endpoint, epoch)?;
             let grant = endpoint.grant_generation()?;
@@ -637,8 +656,9 @@ impl RdmaTransport {
                 offset,
             })),
             Err(error) => {
-                endpoint.close()?;
-                Err(error)
+                #[cfg(all(test, feature = "cuda"))]
+                crate::transport::rdma::cq_lane::tests::before_staging_abort(self, &endpoint);
+                Err(endpoint.abort(error))
             }
         }
     }
@@ -660,7 +680,12 @@ impl RdmaTransport {
             endpoint.close()?;
             if slice.peer.operation == TransferOp::Write {
                 remaining(channel.deadline)?;
-                endpoint.copy_back(memory, slice.offset)?;
+                endpoint.copy_back(
+                    memory,
+                    slice.offset,
+                    #[cfg(feature = "cuda")]
+                    &self.proxy,
+                )?;
             }
             drop(endpoint.output.take());
         }

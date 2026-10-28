@@ -32,6 +32,10 @@ registration returns an error; it never changes the request to staging. CUDA
 IPC and NVLink use a separate [cooperative transport](cuda-ipc.md). Direct GPU support requires actual
 PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
+TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
+GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,
+MRs and RDMA quotas keep their own lifetimes.
+
 ## Device, port, GID and host topology discovery
 
 Set `EngineConfig.rdma` to a configured `RdmaConfig`:

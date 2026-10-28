@@ -589,4 +589,4 @@ mod submit;
 
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/rdma/cq_lane.rs"]
-mod tests;
+pub(super) mod tests;

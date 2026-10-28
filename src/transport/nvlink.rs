@@ -137,7 +137,7 @@ impl NVLinkTransport {
             let mut result = (|| {
                 let (memory, _) = requests[0]
                     .local
-                    .ipc_range(requests[0].local_offset, requests[0].length)?;
+                    .allocation_range(requests[0].local_offset, requests[0].length)?;
                 let context = memory.ipc_context()?;
                 let cached = self.imports.limit != 0;
                 if cached {
@@ -257,7 +257,7 @@ impl NVLinkTransport {
                             attempted = index + 1;
                             let (memory, offset) = request
                                 .local
-                                .ipc_range(request.local_offset, request.length)?;
+                                .allocation_range(request.local_offset, request.length)?;
                             batch.mapping.copy(
                                 &memory,
                                 remote_offset + (request.remote_offset - start),

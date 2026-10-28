@@ -1280,6 +1280,11 @@ static ASYNC_VERBS: sys::Verbs = sys::Verbs {
     ..VERBS
 };
 
+#[cfg(feature = "cuda")]
+pub(crate) fn proxy() -> Arc<crate::runtime::proxy_manager::ProxyManager> {
+    crate::runtime::proxy_manager::ProxyManager::new(4 << 20, 64).unwrap()
+}
+
 pub(crate) fn runtime(mode: &str) -> RdmaTransport {
     let (host_memory, mode) = match mode.strip_prefix("direct:") {
         Some(mode) => (RdmaHostMemory::Direct, mode),
@@ -1302,6 +1307,8 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
     };
     let registrations = buffers::LocalBufferManager::new(&config, Arc::clone(&usage), verbs);
     RdmaTransport {
+        #[cfg(feature = "cuda")]
+        proxy: crate::transport::rdma::tests::proxy(),
         config,
         usage,
         counters: Arc::default(),
@@ -1504,7 +1511,16 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
                     crate::Permission::LocalOnly,
                 )
                 .unwrap();
-            assert!(endpoint.copy_back(&output, 0).is_err());
+            assert!(
+                endpoint
+                    .copy_back(
+                        &output,
+                        0,
+                        #[cfg(feature = "cuda")]
+                        &runtime.proxy
+                    )
+                    .is_err()
+            );
             let descriptor = endpoint.descriptor();
             let result = endpoint.connect(&descriptor).and_then(|()| {
                 endpoint.transfer(
@@ -1520,12 +1536,28 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
                 "{mode}: {closed:?}"
             );
             if mode == "ok" || mode == "connect" {
-                endpoint.copy_back(&output, 0).unwrap();
+                endpoint
+                    .copy_back(
+                        &output,
+                        0,
+                        #[cfg(feature = "cuda")]
+                        &runtime.proxy,
+                    )
+                    .unwrap();
                 let mut observed = [0; 8];
                 output.read(0, &mut observed).unwrap();
                 assert_eq!(observed, [0; 8]);
             } else {
-                assert!(endpoint.copy_back(&output, 0).is_err());
+                assert!(
+                    endpoint
+                        .copy_back(
+                            &output,
+                            0,
+                            #[cfg(feature = "cuda")]
+                            &runtime.proxy
+                        )
+                        .is_err()
+                );
             }
         });
         assert_eq!(result.is_ok(), mode != "open", "{mode}");

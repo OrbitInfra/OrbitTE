@@ -76,6 +76,7 @@ cpu-tcp
 async-batches
 rdma-cuda
 cuda-ipc
+staging
 :::
 
 :::{toctree}

@@ -7,6 +7,9 @@ pub(crate) struct PinnedAllocation {
     pub(crate) address: NonNull<u8>,
     pub(crate) length: usize,
     pub(super) copy_stream: Mutex<Option<CopyStream>>,
+    cleanup_attempted: bool,
+    released: bool,
+    native_freed: bool,
 }
 // SAFETY: stable CUDA-pinned host bytes are only exposed through the shared
 // HostMemory lock or privately owned staging. The allocation never reallocates.
@@ -48,7 +51,17 @@ impl PinnedAllocation {
                 RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
                 std::mem::forget(Arc::clone(context));
             }
-            return Err(error);
+            return Err(if address.is_null() {
+                error
+            } else {
+                Error::Unquiesced {
+                    operation: "CUDA partial pinned allocation",
+                    code: match error {
+                        Error::Backend { code, .. } | Error::Unquiesced { code, .. } => code,
+                        _ => -1,
+                    },
+                }
+            });
         }
         let address = NonNull::new(address.cast())
             .ok_or(Error::Internal("CUDA returned null host memory"))?;
@@ -61,43 +74,92 @@ impl PinnedAllocation {
             address,
             length,
             copy_stream: Mutex::new(None),
+            cleanup_attempted: false,
+            released: false,
+            native_freed: false,
         })
     }
-    pub(super) fn bytes(&self) -> &[u8] {
+    pub(crate) fn bytes(&self) -> &[u8] {
         // SAFETY: initialized stable bytes, no DMA remains at callers of this method.
         unsafe { std::slice::from_raw_parts(self.address.as_ptr(), self.length) }
     }
-    pub(super) fn bytes_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn bytes_mut(&mut self) -> &mut [u8] {
         // SAFETY: exclusive staging before DMA submission.
         unsafe { std::slice::from_raw_parts_mut(self.address.as_ptr(), self.length) }
     }
 }
 
-impl Drop for PinnedAllocation {
-    fn drop(&mut self) {
+impl PinnedAllocation {
+    pub(crate) fn context_id(&self) -> usize {
+        self.context.raw.as_ptr() as usize
+    }
+
+    pub(crate) fn retain(self) {
+        RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
+        std::mem::forget(self);
+    }
+
+    pub(crate) fn close(mut self) -> Result<()> {
+        self.release()
+    }
+
+    fn release(&mut self) -> Result<()> {
+        if self.cleanup_attempted {
+            return if self.released {
+                Ok(())
+            } else {
+                Err(Error::Unquiesced {
+                    operation: "CUDA pinned cleanup",
+                    code: -1,
+                })
+            };
+        }
+        // Mark the attempt before the native call: even a successful free with
+        // failed context restoration is never retried by close or Drop.
+        self.cleanup_attempted = true;
         let quiescent = self
             .copy_stream
             .get_mut()
             .is_ok_and(|stream| stream.as_ref().is_none_or(CopyStream::quiescent));
-        if !quiescent || self.context.poisoned.load(Ordering::Acquire) {
-            RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
-            std::mem::forget(Arc::clone(&self.context));
-            return;
-        }
-        if self
-            .context
-            .current(|| {
-                // SAFETY: the last owner frees only physically quiescent staging.
-                check("cuMemFreeHost", unsafe {
-                    (self.context.driver.host_free)(self.address.as_ptr().cast())
-                })
+        let result = if !quiescent || self.context.poisoned.load(Ordering::Acquire) {
+            Err(Error::Unquiesced {
+                operation: "CUDA pinned memory",
+                code: -1,
             })
-            .is_err()
-        {
+        } else {
+            self.context.current(|| {
+                // Record native release before restoring the caller context.
+                let status =
+                    unsafe { (self.context.driver.host_free)(self.address.as_ptr().cast()) };
+                self.native_freed = status == SUCCESS;
+                check("cuMemFreeHost", status)
+            })
+        };
+        if result.is_ok() {
+            self.released = true;
+            Ok(())
+        } else {
             self.context.poisoned.store(true, Ordering::Release);
             RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(Arc::clone(&self.context));
+            Err(Error::Unquiesced {
+                operation: if self.native_freed {
+                    "CUDA pinned cleanup context restoration"
+                } else {
+                    "CUDA pinned cleanup"
+                },
+                code: match result {
+                    Err(Error::Backend { code, .. } | Error::Unquiesced { code, .. }) => code,
+                    _ => -1,
+                },
+            })
         }
+    }
+}
+
+impl Drop for PinnedAllocation {
+    fn drop(&mut self) {
+        let _ = self.release();
     }
 }
 

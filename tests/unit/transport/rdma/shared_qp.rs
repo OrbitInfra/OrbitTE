@@ -204,7 +204,12 @@ pub(super) fn run() {
     config.block_size = payload;
     config.max_direct_bytes = length;
     config.max_cached_mr_bytes = length;
-    let mut runtime = RdmaTransport::new(config).unwrap();
+    let mut runtime = RdmaTransport::new(
+        config,
+        #[cfg(feature = "cuda")]
+        crate::transport::rdma::tests::proxy(),
+    )
+    .unwrap();
     // Use the normal owners and native provider with observable post/poll/close boundaries.
     let state = Arc::get_mut(&mut runtime).unwrap();
     state.verbs = &SHARED_VERBS;

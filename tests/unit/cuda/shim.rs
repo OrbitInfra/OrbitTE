@@ -49,6 +49,9 @@ pub(super) struct Device {
     pub(super) pop_error: AtomicI32,
     pub(super) pop_after_completion: AtomicBool,
     pub(super) free_error: AtomicI32,
+    pub(super) pin_error: AtomicI32,
+    pub(super) pop_after_pin: AtomicBool,
+    pub(super) pop_after_unpin: AtomicBool,
     pub(super) memory_type: AtomicI32,
     pub(super) managed: AtomicI32,
     pub(super) events: Mutex<Vec<&'static str>>,
@@ -320,7 +323,10 @@ unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c
     unsafe {
         *output = pointer.cast();
     }
-    SUCCESS
+    if current().pop_after_pin.load(Ordering::Acquire) {
+        current().pop_error.store(201, Ordering::Release);
+    }
+    status(current().pin_error.load(Ordering::Acquire))
 }
 unsafe extern "C" fn host_free(pointer: *mut c_void) -> Status {
     event("unpin");
@@ -343,6 +349,9 @@ unsafe extern "C" fn host_free(pointer: *mut c_void) -> Status {
                 .remove(&(pointer as usize))
                 .is_some()
         );
+    }
+    if current().pop_after_unpin.load(Ordering::Acquire) {
+        current().pop_error.store(201, Ordering::Release);
     }
     status(error)
 }
@@ -452,6 +461,9 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         pop_error: AtomicI32::new(0),
         pop_after_completion: AtomicBool::new(false),
         free_error: AtomicI32::new(0),
+        pin_error: AtomicI32::new(0),
+        pop_after_pin: AtomicBool::new(false),
+        pop_after_unpin: AtomicBool::new(false),
         memory_type: AtomicI32::new(2),
         managed: AtomicI32::new(0),
         events: Mutex::default(),

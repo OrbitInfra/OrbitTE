@@ -84,8 +84,15 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
             host_memory: RdmaHostMemory::Direct,
             ..Default::default()
         };
-        let mut transport = Arc::try_unwrap(RdmaTransport::new(config).unwrap())
-            .unwrap_or_else(|_| panic!("new transport unexpectedly shared"));
+        let mut transport = Arc::try_unwrap(
+            RdmaTransport::new(
+                config,
+                #[cfg(feature = "cuda")]
+                crate::transport::rdma::tests::proxy(),
+            )
+            .unwrap(),
+        )
+        .unwrap_or_else(|_| panic!("new transport unexpectedly shared"));
         transport.verbs = &VERBS;
         transport.registrations = buffers::LocalBufferManager::new(
             &transport.config,

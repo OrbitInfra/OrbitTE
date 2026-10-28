@@ -578,6 +578,8 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 memory,
                 offset,
                 length,
+                #[cfg(feature = "cuda")]
+                &source.proxy,
             ),
             Operation::NvlinkRead
             | Operation::NvlinkWrite

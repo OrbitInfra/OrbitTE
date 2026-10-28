@@ -361,7 +361,12 @@ impl RdmaGrant {
         )
     }
 
-    pub(crate) fn fill(&mut self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
+    pub(crate) fn fill(
+        &mut self,
+        memory: &RegisteredMemory,
+        offset: usize,
+        #[cfg(feature = "cuda")] proxy: &Arc<crate::runtime::proxy_manager::ProxyManager>,
+    ) -> Result<()> {
         self.record.require_live()?;
         let mut state = self.lock()?;
         self.record.require_live()?;
@@ -376,12 +381,26 @@ impl RdmaGrant {
             .grant_mut()?
             .buffer
         {
-            Buffer::Staged(bytes) => memory.read(offset, bytes.bytes_mut()),
+            Buffer::Staged(bytes) => {
+                #[cfg(feature = "cuda")]
+                {
+                    proxy.read(memory, offset, bytes.bytes_mut(), self.deadline)
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    memory.read(offset, bytes.bytes_mut())
+                }
+            }
             Buffer::Direct { .. } => Ok(()),
         }
     }
 
-    pub(crate) fn copy_back(&self, memory: &RegisteredMemory, offset: usize) -> Result<()> {
+    pub(crate) fn copy_back(
+        &self,
+        memory: &RegisteredMemory,
+        offset: usize,
+        #[cfg(feature = "cuda")] proxy: &Arc<crate::runtime::proxy_manager::ProxyManager>,
+    ) -> Result<()> {
         let state = self.lock()?;
         state.check()?;
         if state.phase != Phase::Closed {
@@ -393,7 +412,16 @@ impl RdmaGrant {
             .ok_or(Error::Internal("missing RDMA buffer"))?
             .buffer
         {
-            Buffer::Staged(bytes) => memory.write(offset, bytes.bytes()),
+            Buffer::Staged(bytes) => {
+                #[cfg(feature = "cuda")]
+                {
+                    proxy.write(memory, offset, bytes.bytes(), self.deadline)
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    memory.write(offset, bytes.bytes())
+                }
+            }
             Buffer::Direct { .. } => Ok(()),
         }
     }
@@ -496,6 +524,16 @@ impl RdmaGrant {
     pub(super) fn retire_idle(&self) -> Result<()> {
         self.progress
             .retire_idle(&self.record, self.claim, self.deadline)
+    }
+
+    pub(super) fn abort(&mut self, error: Error) -> Error {
+        let closed = self.close();
+        // A drained RDMA error cannot prove an earlier CUDA DMA has quiesced.
+        if matches!(error, Error::Unquiesced { .. }) {
+            error
+        } else {
+            closed.err().unwrap_or(error)
+        }
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {

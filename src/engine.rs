@@ -90,6 +90,8 @@ impl BatchReport {
 pub struct EngineStats {
     #[cfg(feature = "cuda")]
     pub nvlink: Option<crate::NVLinkStats>,
+    #[cfg(feature = "cuda")]
+    pub staging: crate::StagingStats,
     pub allocated_batches: usize,
     pub allocated_requests: usize,
     pub requester_workers: usize,
@@ -119,11 +121,22 @@ impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
         let epoch = SourceEpoch::generate()?;
+        #[cfg(feature = "cuda")]
+        let proxy = crate::runtime::proxy_manager::ProxyManager::new(
+            config.staging_chunk_size,
+            config.staging_chunk_count,
+        )?;
         #[cfg(feature = "rdma")]
         let rdma = config
             .rdma
             .clone()
-            .map(crate::transport::rdma::RdmaTransport::new)
+            .map(|config| {
+                crate::transport::rdma::RdmaTransport::new(
+                    config,
+                    #[cfg(feature = "cuda")]
+                    Arc::clone(&proxy),
+                )
+            })
             .transpose()?;
         #[cfg(feature = "cuda")]
         let nvlink = config
@@ -137,6 +150,8 @@ impl TransferEngine {
             .transpose()?;
         let source = Arc::new(Source {
             epoch,
+            #[cfg(feature = "cuda")]
+            proxy,
             #[cfg(feature = "cuda")]
             nvlink,
             #[cfg(feature = "rdma")]
@@ -203,6 +218,8 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            #[cfg(feature = "cuda")]
+            staging: self.source.proxy.stats()?,
             #[cfg(feature = "cuda")]
             nvlink: self
                 .source
@@ -445,7 +462,7 @@ impl TransferEngine {
                         .as_ref()
                         .ok_or(Error::Unavailable("NVLink is not configured"))?;
                     local
-                        .ipc_range(local_offset, request.length)?
+                        .allocation_range(local_offset, request.length)?
                         .0
                         .ipc_context()?;
                 }
@@ -547,9 +564,14 @@ impl TransferEngine {
                     })
             };
             let result = match request.transport {
-                Transport::Tcp => {
-                    single(TcpTransport::transfer(*operation, peer, request, *deadline))
-                }
+                Transport::Tcp => single(TcpTransport::transfer(
+                    *operation,
+                    peer,
+                    request,
+                    *deadline,
+                    #[cfg(feature = "cuda")]
+                    &self.source.proxy,
+                )),
                 Transport::Nvlink => {
                     #[cfg(feature = "cuda")]
                     {
@@ -814,6 +836,8 @@ impl TransferEngine {
         // waiting for incoming exports, keeping close receipts serviceable.
         self.close_requester_until(deadline)?;
         self.close_source_until(deadline)?;
+        #[cfg(feature = "cuda")]
+        self.source.proxy.close(deadline)?;
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
             runtime.close(deadline)?;
@@ -868,6 +892,8 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 pub(crate) struct Source {
     #[cfg(feature = "cuda")]
     pub(crate) nvlink: Option<crate::transport::nvlink::NVLinkTransport>,
+    #[cfg(feature = "cuda")]
+    pub(crate) proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
     pub(crate) epoch: SourceEpoch,
     pub(crate) registry: MemoryRegistry,
     pub(crate) notifications: NotificationInbox,

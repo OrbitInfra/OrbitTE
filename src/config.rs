@@ -16,6 +16,12 @@ pub struct EngineConfig {
     /// their whole allocation loan until an explicit native-close receipt.
     #[cfg(feature = "cuda")]
     pub nvlink_cache_entries: usize,
+    /// Per-engine lazy CUDA-pinned staging. Each copy checks out one chunk;
+    /// idle chunks are reused until engine close. Total capacity is at most 1 GiB.
+    #[cfg(feature = "cuda")]
+    pub staging_chunk_size: usize,
+    #[cfg(feature = "cuda")]
+    pub staging_chunk_count: usize,
     #[cfg(feature = "rdma")]
     pub rdma: Option<crate::transport::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
@@ -44,6 +50,10 @@ impl Default for EngineConfig {
             nvlink: false,
             #[cfg(feature = "cuda")]
             nvlink_cache_entries: 0,
+            #[cfg(feature = "cuda")]
+            staging_chunk_size: 4 << 20,
+            #[cfg(feature = "cuda")]
+            staging_chunk_count: 64,
             #[cfg(feature = "rdma")]
             rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),

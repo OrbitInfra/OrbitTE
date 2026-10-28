@@ -14,6 +14,11 @@ import time
 def fault_scope(environment):
     mode = environment.get('ORBITTE_HOST_MODE')
     role = environment.get('ORBITTE_SHARED_ROLE')
+    if environment.get('ORBITTE_STAGING_OBSERVE') == '1':
+        return (mode is None and role in ('source', 'requester')
+                and environment.get('ORBITTE_STAGING_CHUNK_COUNT') == '1'
+                and environment.get('ORBITTE_GDR_OBSERVE') is None
+                and environment.get('ORBITTE_IPC_HOLD') is None)
     if environment.get('ORBITTE_GDR_OBSERVE') == '1':
         return (mode is None and role in ('source', 'requester')
                 and environment.get('ORBITTE_RDMA_CUDA_MEMORY') == 'direct'

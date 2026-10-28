@@ -256,7 +256,45 @@ fn finish(
             attrs["rdma.net_device_index"]
         );
     }
+    engine.close_requester(TIMEOUT)?;
+    engine.close_source(TIMEOUT)?;
+    let staging = engine.stats()?.staging;
+    if env::var("ORBITTE_STAGING_OBSERVE").as_deref() == Ok("1") {
+        let expected = u64::from(matches!(&backing, Memory::Cuda(_)) && !gpu_direct);
+        let chunk: usize = env::var("ORBITTE_STAGING_CHUNK_SIZE")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let chunks: usize = slices(payload)
+            .iter()
+            .map(|(_, _, length)| length.div_ceil(chunk))
+            .sum();
+        if staging.allocations != expected
+            || staging.reuses != 5 * expected
+            || staging.copied_bytes != (bytes * 2) as u64 * expected
+            || staging.completed_chunks != (chunks * 2) as u64 * expected
+            || staging.idle_chunks != expected as usize
+            || staging.active_chunks != 0
+            || staging.retained_chunks != 0
+            || staging.reserved_bytes != chunk * expected as usize
+        {
+            return Err(Error::Internal(
+                "staging chunk ownership or byte accounting",
+            ));
+        }
+        println!(
+            "ORBITTE_STAGING_STATS {{\"allocations\":{},\"reuses\":{},\"chunks\":{},\"bytes\":{},\"reserved_bytes\":{}}}",
+            staging.allocations,
+            staging.reuses,
+            staging.completed_chunks,
+            staging.copied_bytes,
+            staging.reserved_bytes
+        );
+    }
     engine.close(TIMEOUT)?;
+    if engine.stats()?.staging.reserved_chunks != 0 {
+        return Err(Error::Internal("staging pool did not close"));
+    }
     engine.unregister_memory(&memory)?;
     drop(memory);
     drop(backing);
@@ -489,6 +527,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     };
     let engine = Arc::new(TransferEngine::new(EngineConfig {
         bind_addr,
+        staging_chunk_size: env::var("ORBITTE_STAGING_CHUNK_SIZE")
+            .map_or(Ok(4 << 20), |s| s.parse())?,
+        staging_chunk_count: env::var("ORBITTE_STAGING_CHUNK_COUNT")
+            .map_or(Ok(64), |s| s.parse())?,
         rdma: Some(rdma),
         handler_timeout: TIMEOUT,
         ..EngineConfig::default()

@@ -241,6 +241,8 @@ fn shared_cq_peer() {
     config.max_send_wr = window;
     let usage = Arc::default();
     let runtime = RdmaTransport {
+        #[cfg(feature = "cuda")]
+        proxy: crate::transport::rdma::tests::proxy(),
         registrations: buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &VERBS),
         config,
         usage,
@@ -613,7 +615,12 @@ fn source_window_peer() {
     config.max_cqes = if fragmented { 3 } else { 1 };
     config.max_send_wr = if fragmented { 3 } else { 1 };
     config.block_size = 4096;
-    let mut runtime = RdmaTransport::new(config).unwrap();
+    let mut runtime = RdmaTransport::new(
+        config,
+        #[cfg(feature = "cuda")]
+        crate::transport::rdma::tests::proxy(),
+    )
+    .unwrap();
     if fragmented && !source {
         Arc::get_mut(&mut runtime).unwrap().verbs = if partial {
             &partial::VERBS
@@ -1001,7 +1008,12 @@ fn duplex_completion_peer() {
     config.block_size = 4096;
     config.max_cqes = capacity;
     config.max_send_wr = 1;
-    let runtime = RdmaTransport::new(config).unwrap();
+    let runtime = RdmaTransport::new(
+        config,
+        #[cfg(feature = "cuda")]
+        crate::transport::rdma::tests::proxy(),
+    )
+    .unwrap();
     let registry = MemoryRegistry::new(SourceEpoch::generate().unwrap(), 1, length);
     let mut expected = vec![0xa5; length];
     for slot in 0..COUNT {

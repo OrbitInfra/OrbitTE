@@ -47,7 +47,8 @@ recovery policy and replica placement.
   with allocation-range ownership and consumer visibility before completion.
   Cooperative same-host GPU IPC adds explicit export ownership and close receipts;
   local owned pinned host READ/WRITE and bounded cross-submission import reuse
-  are also available.
+  are also available. TCP and staged RDMA share bounded, reusable local CUDA
+  staging chunks.
 
 ## Quick Start
 
@@ -93,6 +94,8 @@ repeats. These bounded profiles are independently accepted. Optional
 cross-submission import caching passes 34 installed cases plus four independent
 repeats, with bounded mappings and explicit exporter close receipts. It supports
 a fixed working set until requester shutdown; source allocations stay loaned.
+[Local staging chunks](docs/staging.md) implement the first ProxyManager
+substage; remote Delegate/Pin/Unpin and pipelines remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
@@ -106,7 +109,7 @@ checkout for the implementation described here.
 | Topic | Guides |
 | --- | --- |
 | Getting started | [Quick Start](docs/getting-started.md), [Build](docs/build.md), [Capabilities](docs/capabilities.md) |
-| Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md), [CUDA IPC](docs/cuda-ipc.md) |
+| Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md), [CUDA IPC](docs/cuda-ipc.md), [Local staging](docs/staging.md) |
 | Design and API | [Architecture](docs/architecture.md), [Rust API](docs/rust-api.md), [Frozen TENT reference](docs/tent-parity.md) |
 | Development | [Contributing](docs/contributing.md), [Qualification](docs/qualification.md), [Completion plan](docs/completion-plan.md) |
 | Operations | [Troubleshooting](docs/troubleshooting.md), [Installed host validation](docs/installed-host.md), [Native cleanup](docs/native-cleanup.md) |

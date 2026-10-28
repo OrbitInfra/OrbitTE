@@ -15,11 +15,17 @@ impl TcpTransport {
         peer: &RemoteSegment,
         request: &PreparedTransfer,
         deadline: Instant,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
             let mut bytes = buffer(request.length)?;
             if operation == TransferOp::Write {
+                #[cfg(feature = "cuda")]
+                proxy.read(&request.local, request.local_offset, &mut bytes, deadline)?;
+                #[cfg(not(feature = "cuda"))]
                 request.local.read(request.local_offset, &mut bytes)?;
             }
             let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
@@ -45,6 +51,9 @@ impl TcpTransport {
                 }
                 channel.read_exact(&mut bytes)?;
                 remaining(deadline)?;
+                #[cfg(feature = "cuda")]
+                proxy.write(&request.local, request.local_offset, &bytes, deadline)?;
+                #[cfg(not(feature = "cuda"))]
                 request.local.write(request.local_offset, &bytes)?;
             } else {
                 if reply.status != 9 {
@@ -69,10 +78,16 @@ impl TcpTransport {
         memory: &RegisteredMemory,
         offset: usize,
         length: usize,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
     ) -> Result<()> {
         let mut payload = buffer(length)?;
         match request.operation {
             Operation::TcpRead => {
+                #[cfg(feature = "cuda")]
+                proxy.read(memory, offset, &mut payload, channel.deadline)?;
+                #[cfg(not(feature = "cuda"))]
                 memory.read(offset, &mut payload)?;
                 channel.reply(epoch, 0, length as u64)?;
                 channel.write_all(&payload)
@@ -81,6 +96,9 @@ impl TcpTransport {
                 channel.reply(epoch, 9, 0)?;
                 channel.read_exact(&mut payload)?;
                 remaining(channel.deadline)?;
+                #[cfg(feature = "cuda")]
+                proxy.write(memory, offset, &payload, channel.deadline)?;
+                #[cfg(not(feature = "cuda"))]
                 memory.write(offset, &payload)?;
                 channel.reply(epoch, 0, 0)
             }
