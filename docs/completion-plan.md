@@ -543,12 +543,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Cache eviction/continuing flush, remote host exports and broader stream
   scheduling remain open; exporter-crash safety is
   explicitly unqualified. See [the transport contract](cuda-ipc.md).
-- [x] **P5.5a — local staging chunks (Implemented; qualification pending).**
+- [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
   Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
   requester and contexts. TCP and staged RDMA consume the same owner; full-range
   GPU locking, tail copies, deadline boundaries, retained failures and explicit
   whole-engine close preserve physical lifetime. CPU controls cover cancellation,
-  capacity/close races and combined CUDA/CQ errors. See [local staging](staging.md).
+  capacity/close races and combined CUDA/CQ errors. Stable/MSRV installed
+  consumers pass 24 H20 TCP/staged-RDMA cases plus four fresh independent
+  repeats. Source and this bounded healthy profile are accepted; physical CUDA
+  faults and default-capacity stress remain unqualified. See [local staging](staging.md).
 - [ ] **P5.5b — remote staging operations.** Implement Delegate/Pin/Unpin,
   nested admission and owned proxy shutdown using the local chunk owner;
   complete PRE/CROSS/POST pipeline behavior before claiming full ProxyManager parity.
@@ -811,10 +814,12 @@ for that profile. P5.4c local owned pinned host directions and mixed groups
 pass 30 installed cases plus four independent repeats and are accepted.
 P5.4d bounded cross-submission caching and explicit exporter lifetime owners
 pass 34 installed cases plus four fresh independent repeats and are accepted
-for the fixed-working-set profile. P5.5a implements local shared staging chunks;
-finish its installed and independent gates, then implement P5.5b remote
+for the fixed-working-set profile. P5.5a local shared staging chunks pass
+24 installed TCP/staged-RDMA cases plus four fresh independent repeats; source
+and this bounded healthy profile are accepted. Next implement P5.5b remote
 Delegate/Pin/Unpin and nested admission using that owner. Validate partial
-completion and failure retention before adding broader scheduling. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
+completion and failure retention before adding broader scheduling. OrbitKV
+linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
 Do not reopen completed source work or repeat unaffected matrices.

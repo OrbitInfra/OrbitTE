@@ -15,7 +15,8 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery covers the [bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
+The latest installed delivery covers [local CUDA staging chunks](#local-cuda-staging-chunks)
+and the [bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
 building on [local pinned host IPC](#local-pinned-host-cuda-ipc), bounded [subbatches](#bounded-cuda-ipc-subbatches) and the cooperative
 [GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
 below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
@@ -25,6 +26,68 @@ explicit host-wide context inventory limit. Earlier host
 artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
+
+## Local CUDA staging chunks
+
+Production source [`37e99ae`](https://github.com/OrbitInfra/OrbitTE/commit/37e99ae7bb5f2415a0a4fdd3f77bc25c9ffea477)
+introduces one engine-owned `ProxyManager` pool shared by TCP and staged RDMA.
+Clean installed consumers from
+[`e44a6d1`](https://github.com/OrbitInfra/OrbitTE/commit/e44a6d117a18f2770984f0da41bb2419dd6782cf)
+include corrected fixture accounting and native-ledger lifetime validation;
+production code is unchanged between those commits.
+
+Stable 1.99.1 and Rust 1.85.0 consumers pass 24 cases across two physical H20
+hosts. Each compiler covers TCP and staged RDMA, GPU/host, host/GPU and GPU/GPU,
+with both source/requester orientations. READ and WRITE each contain three
+logical requests. The smaller profile uses 257-byte chunks and 1,001-byte
+requests; the reverse profile uses 65,536-byte chunks and 524,304-byte requests.
+Both end in a short chunk. RDMA uses one physical RoCEv2 RNIC, polling on the
+first orientation and CQ events on the reverse orientation. The runtime maps
+compatibility `libcuda.so.590.48.01` on R535.161.08.
+
+The primary native ledgers bind 32 persistent chunk allocations to 160 reuses,
+1,248 chunk copies and 32 successful frees. Every copy is bounded by its actual
+pin/free lifetime and matched stream, event wait and caller-context restoration.
+CPU peers consume no CUDA chunks. Both peers compare full buffers and guards;
+all supervised children are reaped and resource locks released. These are
+Driver API correctness results, without a performance claim.
+
+Independent source gates pass the stable four-feature matrix and MSRV combined
+Clippy/tests: combined features have 273 unit tests, eight integration tests
+and one doctest, with six explicit hardware/subprocess skips. Source controls
+cover held events, capacity, cancellation, partial deadline effects, native
+context replacement and failed pin/copy/free cleanup. The public source and
+requester tests also reproduce and reject early admission release when CUDA
+`Unquiesced` coincides with an ordinary RDMA CQ cleanup error. The 47 Python
+controller controls include wrong stream/event, copy-after-free and double-free
+negative controls.
+
+Four fresh independent repeats pass across both hosts and compilers, adding
+six GPU peers, 264 chunk copies and six native chunk frees. The independent
+ledger audit also binds every payload copy to the actual GPU allocation and
+expected slice offsets. Post-run checks find all test and supervisor PIDs gone,
+all 16 GPUs at zero allocation with no compute processes, and GPU/RNIC locks
+reacquirable. Independent review accepts source and this bounded healthy profile.
+
+Evidence remains outside Git at
+`/root/orbitte-artifacts/proxy-staging-20261028/`. `primary-matrix.json` binds
+the two clean package, binary and observer hashes to all 24 case records and
+the exact profile. `installed-final-stable/`, `installed-final-msrv/` and
+`independent-review/` retain packages, raw ledgers, reviews and controls.
+`independent-review/frozen-e44a6d1/` contains the fresh repeats, independent
+`raw-ledger-audit.json`, package bindings and both post-run inventories.
+The first stable run passed its six forward cases, then rejected an invalid
+reverse-TCP event-mode profile before launching the next case. Its failed
+manifest is preserved; the six corrected reverse cases are separate results.
+The earlier fixture-count failure and missing-toolchain-component build failure
+also remain preserved, without being counted as passes.
+
+This profile uses one chunk per engine and one GPU per host. Default-capacity
+stress, physical CUDA failures and broader context scheduling remain
+unqualified. Cross-transport reuse, capacity exhaustion and failed native
+cleanup are covered by CPU controls. Remote Delegate/Pin/Unpin, nested
+admission and PRE/CROSS/POST pipelines remain P5.5b; this local subset does not
+complete P5 or full TENT ProxyManager parity. See [local staging](staging.md).
 
 ## Bounded cross-submission CUDA IPC cache
 

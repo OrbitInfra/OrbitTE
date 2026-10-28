@@ -8,12 +8,16 @@ fn deadline() -> Instant {
 
 #[test]
 fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
-    let transports = [
-        Transport::Tcp,
+    let routes = [
+        [Transport::Tcp, Transport::Tcp],
         #[cfg(feature = "rdma")]
-        Transport::Rdma,
+        [Transport::Rdma, Transport::Rdma],
+        #[cfg(feature = "rdma")]
+        [Transport::Tcp, Transport::Rdma],
+        #[cfg(feature = "rdma")]
+        [Transport::Rdma, Transport::Tcp],
     ];
-    for transport in transports {
+    for route in routes {
         let config = EngineConfig {
             staging_chunk_size: 3,
             staging_chunk_count: 1,
@@ -21,7 +25,7 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
         };
         let engine = || {
             #[cfg(feature = "rdma")]
-            if transport == Transport::Rdma {
+            if route.contains(&Transport::Rdma) {
                 let mut runtime = crate::transport::rdma::tests::runtime("copy");
                 runtime.proxy = ProxyManager::new(3, 1).unwrap();
                 return crate::engine::tests::rdma_fixture_with_config(runtime, config.clone());
@@ -49,14 +53,15 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
                 Duration::from_secs(2),
             )
             .unwrap();
-        let request = TransferRequest {
-            transport,
+        let mut request = TransferRequest {
+            transport: route[0],
             local_address: local.base_address() + 2,
             remote_address: remote.base_address() + 1,
             length: 8,
         };
         let pattern = [3, 19, 21, 29, 37, 43, 51, 61];
-        for op in [TransferOp::Read, TransferOp::Write] {
+        for (op, transport) in [TransferOp::Read, TransferOp::Write].into_iter().zip(route) {
+            request.transport = transport;
             if op == TransferOp::Write {
                 requester_gpu.write(3, &pattern).unwrap();
             }

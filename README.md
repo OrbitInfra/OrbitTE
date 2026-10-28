@@ -94,8 +94,9 @@ repeats. These bounded profiles are independently accepted. Optional
 cross-submission import caching passes 34 installed cases plus four independent
 repeats, with bounded mappings and explicit exporter close receipts. It supports
 a fixed working set until requester shutdown; source allocations stay loaned.
-[Local staging chunks](docs/staging.md) implement the first ProxyManager
-substage; remote Delegate/Pin/Unpin and pipelines remain open.
+[Local staging chunks](docs/staging.md) share pinned buffers across TCP and
+staged RDMA; 24 installed H20 cases plus four independent repeats pass for
+that bounded healthy profile. Remote Delegate/Pin/Unpin and pipelines remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

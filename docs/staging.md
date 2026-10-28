@@ -79,5 +79,9 @@ chunk copies, event waits, context pops and frees; it never fabricates CUDA
 completion. Both peers compare full buffers and guards, close all owners, and
 run under inventoried GPU/RNIC locks and process supervision.
 
-See [Qualification](qualification.md) for executed artifacts and limits.
+The installed stable/MSRV profile passes 24 two-host H20 cases and four fresh
+independent repeats, with native chunk allocation, copy and free receipts.
+Source and this bounded healthy profile are independently accepted. See
+[Qualification](qualification.md#local-cuda-staging-chunks) for the exact
+artifacts and limits.
 CPU failure controls do not qualify physical GPU faults or remote proxy staging.
