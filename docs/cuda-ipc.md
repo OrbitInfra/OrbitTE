@@ -104,4 +104,5 @@ full logical bytes/guards, native allocation initialization, exact imported
 handles/copy ranges, matched event drain and IPC close, process reaping, lock
 release and GPU allocation baselines. The observer forwards real Driver API
 results; CPU negative controls check its transparency and reject incomplete
-evidence. See [qualification](qualification.md) for exact accepted artifacts.
+evidence. See [qualification](qualification.md#cooperative-cuda-ipc-and-nvlink) for
+exact artifacts and profile limits.

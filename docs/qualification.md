@@ -15,13 +15,75 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery qualifies the bounded [GPUDirect RDMA](#gpudirect-rdma)
-profile below with an explicit host-wide context inventory limit. Earlier host
+The latest installed delivery qualifies the cooperative [GPU IPC](#cooperative-cuda-ipc-and-nvlink)
+profile below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
+explicit host-wide context inventory limit. Earlier host
 [automatic discovery](#installed-automatic-discovery) and
 [physical rail accounting](#installed-physical-rail-accounting) retain their own
 artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
+
+## Cooperative CUDA IPC and NVLink
+
+Source [`e19b3a5`](https://github.com/OrbitInfra/OrbitTE/commit/e19b3a5100f9eac37852db2d47437f6321b5862f)
+qualifies the initial cooperative, owned GPU/GPU path on two physical H20 hosts.
+Each host runs separate exporter/requester processes on its local GPU 0/1,
+in both directions; their topology reports NV18. No cross-host GPU IPC or
+measured NVLink bandwidth is claimed. Both installed consumers are built from
+a clean packaged crate on stable 1.99.1 and Rust 1.85, with only the `cuda`
+feature. They have no linked CUDA runtime, RDMA or Mooncake library dependency.
+Runtime maps the recorded CUDA compatibility driver `libcuda.so.590.48.01`
+on R535.161.08. This is Driver API qualification, not a toolkit/kernel test.
+
+All 48 installed cases pass: 24 healthy READ/WRITE cases at 17, 4,133 and
+2,097,171 bytes, eight source-close waits with an import still open, eight
+requester exits before native import close, and eight stale-epoch rejections.
+Each healthy case compares the entire logical allocation and guards. Native
+evidence checks physical 2/4 MiB allocation initialization, exact export/import
+handle pairing, relocated copy offsets, event completion, matched native close
+and calling-context restoration before cleanup. Requester-exit cases kill the
+importer after its copy drained but before close; they establish missing-close
+retention, **not** in-flight GPU DMA termination or exporter-crash safety.
+
+The 2,680 native records contain 64 exports/imports/copies and 56 closes. Eight
+lost-close cases intentionally retain source allocation/admission until process
+exit. All supervised children are reaped, all GPU UUID locks are released, and
+the four selected GPUs return to their zero-allocation baseline. Loaded driver
+paths and hashes, process identities, host/boot identities and every case file
+are pinned in the external audit.
+
+Independent review passes stable/MSRV × four-feature Clippy/test gates. The
+combined build passes 249 unit tests, eight integration tests and one doctest;
+six hardware/subprocess fixtures remain explicitly ignored in that CPU gate.
+Thirty-nine controller controls and strict documentation checks pass. The review
+found two evidence-validator gaps: early allocation frees and borrowing a later
+cycle's context restoration. Commits `d2c8200` and `177a84f` fix those checks and
+add counterexamples; all 48 original ledgers pass the strengthened validator.
+These commits leave production code, installed consumer and native observer
+unchanged. Four fresh independent hardware repeats also pass: stable and MSRV
+healthy/graceful-close cases on both physical hosts. The eight review child PIDs
+are gone, selected locks can be reacquired, and both hosts report zero GPU
+allocations/no compute processes. Independent review accepts this bounded
+cooperative profile; full P5.4 remains open.
+
+Evidence stays outside Git at `/root/orbitte-artifacts/cuda-ipc-20261028/`:
+`qualified-stable/` and `qualified-msrv/` hold installation manifests,
+`matrix-profile.json` freezes the 48 cases, `matrix/` contains their raw process
+and native logs, and `native-audit.json` binds the artifacts and validation
+revision. Independent source/evidence reviews and counterexamples live at
+`independent-review/` under the same artifact root (original workspace:
+`/tmp/orbitte-ipc-review-20261028/`). Failed controls are preserved.
+
+This profile requires trusted peers and a live exporter process/context until
+every import closes. Legacy IPC handles authorize whole allocations, without
+per-range hardware permissions or global revocation. Host/GPU IPC, external or
+managed allocations, cached import ownership, broader stream scheduling,
+MNNVL/VMM and forced-exporter-death safety remain unqualified or unimplemented.
+Native import/copy/close failure retention has CPU controls only; physical GPU
+cleanup faults and recovery remain unqualified.
+See [the transport contract and reproduction method](cuda-ipc.md). P5.4 remains
+open for those requirements; this substage does not establish full TENT parity.
 
 ## GPUDirect RDMA
 

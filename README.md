@@ -83,8 +83,8 @@ with the available hardware; see the fixed
 OrbitTE remains under development. The [bounded GPU Direct profile](docs/qualification.md#gpudirect-rdma)
 passes 72 installed H20/RoCE cases on stable and Rust 1.85, with an explicit
 host-wide context inventory limit. Direct mode has provider prerequisites. The
-[cooperative CUDA IPC/NVLink path](docs/cuda-ipc.md) is implemented; its installed
-qualification is in progress. Broader IPC parity, optional SSD transports and
+[cooperative CUDA IPC/NVLink path](docs/cuda-ipc.md) passes 48 installed H20 cases
+with explicit exporter-lifetime limits. Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
 [qualification](docs/qualification.md) records exact artifacts and limits.
