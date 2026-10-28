@@ -23,6 +23,7 @@ pub(super) struct CachedMapping {
     pub token: SourceEpoch,
     pub mapping: Option<OpenedMapping>,
     pub grant: Option<([u8; 64], usize, usize, Identity)>,
+    pub may_be_exposed: bool,
     pub closing: bool,
     pub uncertain: bool,
 }
@@ -33,6 +34,7 @@ impl CachedMapping {
             token: SourceEpoch::generate()?,
             mapping: None,
             grant: None,
+            may_be_exposed: false,
             closing: false,
             uncertain: false,
         })
@@ -46,6 +48,11 @@ impl CachedMapping {
         deadline: Instant,
     ) -> Result<()> {
         self.closing = true;
+        // Without an answer to the first no-handle offer, dropping the original
+        // socket is sufficient: any late reservation cannot become exposed.
+        if !self.may_be_exposed {
+            return Ok(());
+        }
         if self.uncertain {
             return Err(Error::Unquiesced {
                 operation: "CUDA IPC cached import",

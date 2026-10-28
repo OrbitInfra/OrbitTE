@@ -202,6 +202,12 @@ impl NVLinkTransport {
                     if reply.status != 12 || reply.length != 0 {
                         return Err(Error::Protocol("NVLink cache offer"));
                     }
+                    // Even a partial ready write may let the source expose.
+                    lease
+                        .as_mut()
+                        .and_then(|lease| lease.entry.as_mut())
+                        .ok_or(Error::Internal("missing offered relocation"))?
+                        .may_be_exposed = true;
                     channel.write_all(&[0])?;
                     reply = Reply::read(&mut channel, peer.epoch)?;
                 }

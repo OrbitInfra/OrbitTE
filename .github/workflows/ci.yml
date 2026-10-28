@@ -40,6 +40,9 @@ jobs:
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Test CPU TCP and ownership
         run: cargo test --locked --features "$ORBITTE_FEATURES"
+      - name: RDMA interruption relay protocol boundary
+        if: contains(matrix.features, 'rdma')
+        run: cargo test --locked --features "$ORBITTE_FEATURES" --example rdma_host relay_tracks_the_public_engines_current_wire
       - name: CPU trace fixture and comparator controls
         run: python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbitte-cpu-trace-${{ matrix.toolchain }}"
       - name: Native peer supervision ownership control

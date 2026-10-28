@@ -690,3 +690,54 @@ fn close_receipt_overtaking_initial_hello_cannot_leave_a_late_export() {
     assert_eq!(stats.nvlink.unwrap().allocation_bytes, 0);
     remote.read(0, &mut [0; 1]).unwrap();
 }
+
+#[test]
+fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
+    for case in ["disabled", "epoch", "connect"] {
+        let src = allocation(&[0x5a; 128]);
+        let dst = allocation(&[0xa5; 128]);
+        let remote = owned(&src, true);
+        let local = owned(&dst, false);
+        let source = TransferEngine::new(EngineConfig {
+            nvlink: true,
+            nvlink_cache_entries: if case == "disabled" { 0 } else { 2 },
+            ..EngineConfig::default()
+        })
+        .unwrap();
+        let requester = engine();
+        let exported = register(&source, &remote);
+        let registered = register(&requester, &local);
+        let relay = Relay::new(source.endpoint());
+        let mut peer = relay.peer(&source, &exported);
+        if case == "epoch" {
+            peer.epoch = crate::SourceEpoch([0x55; 16]);
+            peer.regions[0].epoch = peer.epoch;
+        }
+        if case == "connect" {
+            let unavailable = TcpListener::bind("127.0.0.1:0").unwrap();
+            peer.endpoint = unavailable.local_addr().unwrap();
+            drop(unavailable);
+        }
+        let report = requester
+            .submit_and_wait(
+                TransferOp::Read,
+                &peer,
+                &[request(&registered, &exported)],
+                TIMEOUT,
+            )
+            .unwrap();
+        assert!(
+            report.failure.is_some() && report.locally_drained,
+            "{case}: {report:?}"
+        );
+        requester.close_requester(TIMEOUT).unwrap();
+        requester.close_requester(TIMEOUT).unwrap();
+        source.close_source(TIMEOUT).unwrap();
+        assert_eq!(event_count(&dst, "ipc-open"), 0);
+        assert_eq!(source.stats().unwrap().nvlink.unwrap().allocation_bytes, 0);
+        assert_eq!(
+            requester.stats().unwrap().nvlink.unwrap().allocation_bytes,
+            0
+        );
+    }
+}

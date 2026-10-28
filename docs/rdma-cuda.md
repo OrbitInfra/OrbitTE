@@ -114,7 +114,7 @@ records finish. A direct GPU requester can reuse a direct host source QP. If eit
 staging, or the source uses direct GPU memory, connections remain per-grant and
 require physical close barriers.
 
-The current OrbitTE protocol is v15. Every phase binds both process and
+The current OrbitTE protocol is v16. Every phase binds both process and
 connection incarnations, the exact request and an independent grant generation.
 This protocol is separate from native TENT API/wire compatibility.
 

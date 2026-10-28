@@ -12,7 +12,7 @@ for the exact artifacts and profiles behind each result.
 | Async batches and notifications | Implemented | CPU cancellation, detached handles, bounded admission and receipt controls |
 | Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 READ/WRITE profiles; InfiniBand remains unqualified |
 | Persistent host MRs and multi-context publication | Implemented | Scoped two-RNIC atomic publication, rollback and retirement; paused-context MR preparation and recovery pass the focused native PD/MR/QP gate |
-| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, public v15 multiplexing, exact WR/receipt dispatch and shared physical SQ/RQ limits |
+| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, public v16 multiplexing, exact WR/receipt dispatch and shared physical SQ/RQ limits |
 | Multirail slices and shared quotas | Implemented | Selected folded-tail and concurrent-parent profiles verify bytes, whole-parent admission and native drain. The installed two-physical-rail profile joins every payload WR/CQE and verifies shared-QP contention/accounting; bandwidth/fairness policy remains P6 |
 | Transport workers, CQ lanes and NUMA binding | Implemented | Scoped native worker/lane routing, CPU-mask and polling/event profiles; broader scheduling policy remains later work |
 | Discovery and periodic recovery | Implemented | Scoped process-local query-failure recovery; initially paused contexts and automatic/strict GID recovery pass the focused one-RNIC native gate. Installed two-host automatic discovery matches a separate sysfs inventory, including strict-pin rejection and NUMA ranks. Independent review includes four fresh live RoCE repeats; physical loss remains open |

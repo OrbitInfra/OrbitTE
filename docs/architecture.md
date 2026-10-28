@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v15 messages; moving them into their own module does not make this
+OrbitTE v16 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,7 +121,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v15 handshake can attach independent grants to a
+QP creation lock. The public v16 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
