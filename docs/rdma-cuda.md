@@ -133,6 +133,14 @@ direction, consumes its successful BIND completion, and posts a real completion
 receive before publishing the grant. Type-2B MW support is required; a remotely
 enabled parent MR is not a fallback. The PD retains a bounded, non-evicting key
 history so an old grant key cannot regain authority within that domain.
+When a native MW index has no fresh low-byte tag, the context keeps that newly
+allocated, never-bound MW alive and allocates a replacement from the same PD.
+Keeping the exhausted index allocated prevents immediate provider reuse without
+clearing key history. One parked MW per index and the historical index count
+are both bounded by `max_window_key_indices`; duplicate live indices, exhausted
+capacity or allocation failure reject admission. `exhausted_windows` counts
+these PD-owned MWs inside `active_windows`. Close destroys them before the PD;
+failed destruction retains the remaining MWs and PD without a Drop retry.
 
 The requester submits bounded, signaled READ/WRITE work. After every payload
 CQE succeeds, it posts a fenced `SEND_WITH_INV` on the same QP. The source must
@@ -172,7 +180,7 @@ second. Native data work and fallible destruction stay with the data owners.
 | `max_cqes` | 1024 | Each CQ's capacity; aggregate SQ and RQ debt are bounded separately |
 | `max_direct_bytes`, `max_staging_bytes` | 64 MiB each | Active direct loans and private staging respectively |
 | `max_cached_mrs`, `max_cached_mr_bytes` | 64 / 64 MiB | All full-view physical MR copies across contexts and capabilities |
-| `max_window_key_indices` | 65,536 | Historical MW key indices in each PD domain |
+| `max_window_key_indices` | 65,536 | Historical MW key indices and parked exhausted MWs in each PD domain |
 
 Creating, closing and retained resources remain charged. Native CQ completion
 repays its exact WR debt; receive admission remains charged until the actual

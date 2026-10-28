@@ -100,26 +100,43 @@ pub(super) unsafe extern "C" fn prepare_grant(
             }
         }
         if permission != 0 {
-            let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
-            let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
-            if code != 0 {
-                return code;
-            }
-            if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
-                return libc::EOPNOTSUPP;
-            }
-            let context = &*device.context.cast::<ffi::ibv_context>();
-            let Some(allocate) = context.ops.alloc_mw else {
-                return libc::EOPNOTSUPP;
-            };
-            memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
-            if memory.mw.is_null() {
-                return failure();
-            }
-            let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
-            // RdmaContext selects and permanently burns a fresh full key in its PD.
-            memory.window_key = key;
+            return allocate_window(memory, device);
         }
+        0
+    }
+}
+
+pub(super) unsafe extern "C" fn allocate_window(
+    memory: *mut MemoryHandles,
+    device: *const DeviceHandles,
+) -> c_int {
+    // SAFETY: the caller owns the empty slot and retains its PD. A newly
+    // allocated, never-bound MW has no parent MR or QP dependency.
+    unsafe {
+        let memory = &mut *memory;
+        let device = &*device;
+        if !memory.mw.is_null() {
+            return libc::EINVAL;
+        }
+        let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
+        let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
+        if code != 0 {
+            return code;
+        }
+        if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
+            return libc::EOPNOTSUPP;
+        }
+        let context = &*device.context.cast::<ffi::ibv_context>();
+        let Some(allocate) = context.ops.alloc_mw else {
+            return libc::EOPNOTSUPP;
+        };
+        memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
+        if memory.mw.is_null() {
+            return failure();
+        }
+        let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
+        // RdmaContext selects and permanently burns a fresh full key in its PD.
+        memory.window_key = key;
         0
     }
 }

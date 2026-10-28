@@ -287,7 +287,7 @@ fn pipeline_cross_and_abort_drain_other_slots_without_reusing_the_wrong_generati
                 assert_eq!(source.stats().unwrap().staging.remote_delegates, 1);
             } else {
                 assert!(matches!(
-                    Reply::read(&mut channel, nonce),
+                    Reply::read(&mut channel, source.source_epoch()),
                     Err(Error::Protocol(_))
                 ));
             }
@@ -337,6 +337,13 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
             .unwrap();
         assert!(
             !report.is_complete() && report.locally_drained,
+            "{report:?}"
+        );
+        assert!(
+            matches!(
+                report.failure.as_ref().unwrap().error,
+                Error::Backend { .. }
+            ),
             "{report:?}"
         );
         assert_eq!(pending(&a), 1);
@@ -536,4 +543,74 @@ fn pipeline_recovered_submit_failure_drains_accepted_pre_and_releases_admission(
     drop(next);
     source.close(Duration::from_secs(3)).unwrap();
     assert!(a.pins.lock().unwrap().is_empty());
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
+    for op in [TransferOp::Read, TransferOp::Write] {
+        let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
+        runtime.proxy = ProxyManager::new(3, 2).unwrap();
+        for _ in 0..254 {
+            runtime.staging_endpoint(3, 1).unwrap().close().unwrap();
+        }
+        let source = crate::engine::tests::rdma_fixture_with_config(runtime, config(2));
+        let requester = engine(Transport::Rdma, 2);
+        let a = allocation(&[0x57; 64]);
+        let remote = register(&source, memory(&a));
+        let local = requester
+            .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(
+                source.endpoint(),
+                source.source_epoch(),
+                Duration::from_secs(3),
+            )
+            .unwrap();
+        let report = requester
+            .submit_and_wait(
+                op,
+                &peer,
+                &[TransferRequest {
+                    transport: Transport::Rdma,
+                    local_address: local.base_address(),
+                    remote_address: remote.base_address(),
+                    length: 8,
+                }],
+                Duration::from_secs(3),
+            )
+            .unwrap();
+        assert!(
+            !report.is_complete() && report.locally_drained,
+            "{report:?}"
+        );
+        let failure = report.failure.unwrap();
+        assert!(
+            matches!(failure.error, Error::ResourceExhausted),
+            "{failure:?}"
+        );
+        assert_eq!(
+            failure.remote_effect,
+            if op == TransferOp::Write {
+                crate::RemoteEffect::Unknown
+            } else {
+                crate::RemoteEffect::None
+            }
+        );
+        source.close_source(Duration::from_secs(3)).unwrap();
+        assert_eq!(pending(&a), 0);
+        assert_eq!(source.stats().unwrap().staging.retained_chunks, 0);
+        assert_eq!(
+            source.stats().unwrap().rdma.unwrap().window_key_exhaustions,
+            1
+        );
+        let mut bytes = [0; 8];
+        local.read(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [0xcc; 8]);
+        requester.close(Duration::from_secs(3)).unwrap();
+        source.close(Duration::from_secs(3)).unwrap();
+        assert_eq!(source.stats().unwrap().rdma.unwrap().active_windows, 0);
+        assert!(a.pins.lock().unwrap().is_empty());
+    }
 }

@@ -226,9 +226,10 @@ fn finish(
     if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != idle_qps {
         return Err(Error::Internal("connection/grant owners did not drain"));
     }
-    if idle.active_windows != 0
+    if idle.active_windows != idle.exhausted_windows
+        || idle.exhausted_windows as u64 != idle.window_key_rollovers
         || idle.retained_windows != 0
-        || idle.opened_windows != windows
+        || idle.opened_windows != windows + idle.window_key_rollovers
         || idle.completed_window_binds != windows
         || idle.completed_window_invalidations != windows
         || idle.burned_window_keys != windows
@@ -356,6 +357,7 @@ fn finish(
         || stats.requester_workers != 0
         || stats.active_source_operations != 0
         || rdma.active_windows != 0
+        || rdma.exhausted_windows != 0
         || rdma.retained_windows != 0
         || rdma.active_completion_channels != 0
         || rdma.retained_completion_channels != 0
@@ -459,11 +461,14 @@ fn finish(
         rdma.completed_reusable_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{},\"rollovers\":{},\"idle_exhausted_windows\":{},\"exhausted_windows\":{}}}",
         idle.window_key_indices,
         rdma.window_key_indices,
         rdma.burned_window_keys,
-        rdma.window_key_exhaustions
+        rdma.window_key_exhaustions,
+        rdma.window_key_rollovers,
+        idle.exhausted_windows,
+        rdma.exhausted_windows
     );
     println!(
         "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",

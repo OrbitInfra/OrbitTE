@@ -250,7 +250,10 @@ fn pin_scope_order_and_abandoned_host_write_cannot_modify_gpu() {
             // A CROSS host ACK does not authorize a delegated GPU write.
         } else {
             assert!(
-                matches!(Reply::read(&mut channel, nonce), Err(Error::Protocol(_))),
+                matches!(
+                    Reply::read(&mut channel, source.source_epoch()),
+                    Err(Error::Protocol(_))
+                ),
                 "{fault}"
             );
         }

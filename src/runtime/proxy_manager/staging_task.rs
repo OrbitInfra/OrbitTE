@@ -222,6 +222,7 @@ impl ProxyManager {
                 }
                 let mut offset = 0;
                 while offset < total {
+                    *reply_epoch = source.epoch;
                     let slot = (offset / length) % depth;
                     let count = length.min(total - offset);
                     let chunk = &mut chunks[slot];
@@ -263,6 +264,7 @@ impl ProxyManager {
                         }
                         _ => return Err(Error::Protocol("Pin transport")),
                     }
+                    *reply_epoch = remote.nonce;
                     self.completed_remote(Operation::Cross);
                     remote.respond(channel, Operation::Cross, offset, count)?;
                     if operation == TransferOp::Write {

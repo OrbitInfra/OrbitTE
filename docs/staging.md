@@ -178,8 +178,12 @@ is required.
 This source implementation has deterministic CPU controls for multiple pending
 copies during network progress, depth negotiation, short tails, stream reuse,
 partial admission, wrong slot/scope, EOF, lost final receipts and failed
-completion/construction/destruction. The new installed pipeline profile remains
-unqualified. Scheduling overlap in a native-call shim does not establish GPU
+completion/construction/destruction. CROSS setup and PRE drain errors use the
+nested transport's source epoch; Delegate and Unpin use the staging nonce.
+An error after a partial native wire exchange may still require closing the
+connection with an unknown remote effect. Long RDMA sessions rotate exhausted
+MW key indices through the [PD-owned key domain](rdma-cuda.md).
+The new installed pipeline profile remains unqualified. Scheduling overlap in a native-call shim does not establish GPU
 execution overlap or a performance improvement.
 
 ## Validation

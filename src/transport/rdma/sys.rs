@@ -24,7 +24,7 @@ use cq::{
 };
 pub(super) use device::devices;
 use device::{ack_async_event, get_async_event, open_device, query_address};
-use memory::{dealloc_window, prepare_grant, register_memory, window};
+use memory::{allocate_window, dealloc_window, prepare_grant, register_memory, window};
 use qp::{connect, open, post, post_receive, send_completion};
 
 #[repr(C)]
@@ -269,6 +269,7 @@ pub(super) struct Verbs {
         bool,
         *mut PostResult,
     ) -> c_int,
+    pub allocate_window: unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles) -> c_int,
     pub dealloc_window: CloseMemory,
     pub poll: unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
     pub destroy_qp: CloseConnection,
@@ -343,6 +344,7 @@ pub(super) static REAL: Verbs = Verbs {
     window,
     post_receive,
     send_completion,
+    allocate_window,
     dealloc_window,
     poll,
     destroy_qp,
