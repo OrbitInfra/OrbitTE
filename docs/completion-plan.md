@@ -827,8 +827,8 @@ and this bounded healthy profile are accepted. P5.5b serial remote
 Delegate/Pin/Unpin and nested admission pass 16 installed H20 TCP/RDMA cases
 plus four fresh independent repeats; source and this bounded healthy profile
 are accepted. Next complete overlapping PRE/CROSS/POST pipelines and remote
-scheduling within P5.5b. New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV
-linkage remains deferred. Keep the physical/fabric requirements in
+scheduling within P5.5b. New hardware evidence must name fresh nodes; unavailable
+gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
 Do not reopen completed source work or repeat unaffected matrices.

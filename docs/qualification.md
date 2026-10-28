@@ -57,14 +57,15 @@ RDMA, and READ/WRITE in both host orientations. The first orientation uses
 257-byte chunks with 1,001-byte requests; the reverse uses 65,536-byte chunks
 with 524,304-byte requests. Both have short tails. RDMA uses one RoCEv2 rail,
 with polling in the first orientation and CQ events in the reverse. Each peer
-has one handler, one parent batch slot and one pinned chunk.
+has one handler and one parent batch slot. Each GPU peer uses one pinned chunk;
+a CPU requester uses none.
 
 The source counters record 96 completed Pin/Unpin sessions and 624 Delegate/CROSS
 operations each. Native CUDA receipts bind 936 payload chunk copies to 24 actual
 pool allocations and successful frees. Full buffers and guards match. The
 runtime maps and provider hashes bind compatibility `libcuda.so.590.48.01` on
 R535.161.08, `libibverbs` and `libmlx5`. After all runs, test/supervisor PIDs are
-gone, all 16 GPUs have zero allocation and no compute processes, and the original
+gone, `nvidia-smi` reports 0 MiB and no compute processes for all 16 GPUs, and the original
 GPU/RNIC locks are reacquirable. The 48 Python controls include wrong GPU offsets
 and cross-thread frees before setup/readback completion.
 
@@ -85,7 +86,9 @@ contain the successful final runs. Source review remains in the previous artifac
 root above; validator review is under `independent-review/frozen-9f2ad39/`.
 `independent-review/hardware-evidence-review.json` independently binds all 20
 raw case records to the exact installed artifacts and runtime providers; fresh
-runs and before/after inventories are under `independent-review/live-repeat-plan/`.
+runs are under `independent-review/live-repeat-stable-1/` and
+`independent-review/live-repeat-msrv-1/`; profiles, commands and before/after
+inventories are under `independent-review/live-repeat-plan/`.
 
 This qualifies the declared healthy serial profile. RDMA completion and private
 MR retirement are checked through the real provider's engine counters and source
