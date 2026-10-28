@@ -51,13 +51,22 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
         #[cfg(feature = "rdma")]
         Transport::Rdma,
     ] {
-        for (source_depth, requested, length) in
-            [(2, 3, 14usize), (3, 2, 8), (16, 16, 50), (2, 3, 1)]
-        {
+        for (source_depth, requested, length) in [
+            (2, 3, 14usize),
+            (3, 2, 8),
+            (3, 3, 23),
+            (16, 16, 50),
+            (2, 3, 1),
+        ] {
             for local_gpu in [false, true] {
                 let source = engine(transport, source_depth);
                 let requester = Arc::new(engine(transport, requested));
-                let a = allocation(&[0x57; 64]);
+                let source_bytes: [u8; 64] =
+                    std::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(0x57));
+                let write_bytes: Vec<u8> = (0..length)
+                    .map(|i| (i as u8).wrapping_mul(19).wrapping_add(0x29))
+                    .collect();
+                let a = allocation(&source_bytes);
                 let b = allocation(&[0xcc; 64]);
                 let gpu = memory(&a);
                 let remote = register(&source, gpu.clone());
@@ -85,7 +94,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                     .enumerate()
                 {
                     if op == TransferOp::Write {
-                        local.write(1, &vec![0x29; length]).unwrap();
+                        local.write(1, &write_bytes).unwrap();
                     }
                     let (entered, waiting) = std::sync::mpsc::sync_channel(0);
                     let (resume, blocked) = std::sync::mpsc::sync_channel(0);
@@ -130,7 +139,11 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                     let mut observed = [0; 64];
                     local.read(0, &mut observed).unwrap();
                     let mut expected = [0xcc; 64];
-                    expected[1..1 + length].fill(if op == TransferOp::Read { 0x57 } else { 0x29 });
+                    expected[1..1 + length].copy_from_slice(if op == TransferOp::Read {
+                        &source_bytes[2..2 + length]
+                    } else {
+                        &write_bytes
+                    });
                     assert_eq!(observed, expected);
                 }
                 let stats = source.stats().unwrap().staging;
@@ -149,8 +162,8 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                 assert_eq!(a.streams.lock().unwrap().len(), depth);
                 let mut observed = [0; 64];
                 gpu.read(0, &mut observed).unwrap();
-                let mut expected = [0x57; 64];
-                expected[2..2 + length].fill(0x29);
+                let mut expected = source_bytes;
+                expected[2..2 + length].copy_from_slice(&write_bytes);
                 assert_eq!(observed, expected);
                 requester.close(Duration::from_secs(10)).unwrap();
                 source.close(Duration::from_secs(10)).unwrap();
