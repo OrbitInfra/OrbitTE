@@ -8,7 +8,7 @@ MRs, grants and completion receipts.
 ## Configuration and lifetime
 
 With the `cuda` feature, `EngineConfig.staging_chunk_size` defaults to 4 MiB and
-`staging_chunk_count` to 64. Allocation is lazy: one logical GPU copy checks out
+`staging_chunk_count` to 64. Allocation is lazy: one local logical GPU copy checks out
 one chunk and processes its full range, including the final short chunk. The
 actual `CudaMemory` allocation lock remains held across all chunks. Public
 `CudaMemory::read/write` retain their existing one-shot staging behavior.
@@ -59,13 +59,22 @@ independent budget per location. `cuda/staging.rs` owns the local copy loop;
 `cuda/stream.rs` retains the allocation's stream/event completion authority.
 There is no extra Proxy worker pool in this substage.
 
-P5.5b now adds an opt-in serial remote operation. The names and phases follow
+P5.5b adds an opt-in remote operation with serial and bounded pipeline modes. The names and phases follow
 TENT's `pinStageBuffer`, `delegateAsync`, `submitCrossStage` and
 `RemoteStageOperation`: the latter distinguishes an observed remote result from
 an unconfirmed operation before deferred cleanup. OrbitTE uses scoped receipts
 and an inline source handler to preserve that distinction with bounded resources.
-Native TENT's overlapping pipeline, location selection and asynchronous remote
-operation scheduler remain in the existing P5/P6 queue.
+The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
+stage buffers (`id % kStageBuffers`). `staging_task.rs` owns the source task and
+its private `Chunk` registrations; `remote_stage_operation.rs` owns scoped
+messages and requester scheduling. Per-slot CUDA completion supplies the
+PRE/POST completion boundary, while TCP/RDMA still own CROSS.
+
+The current implementation overlaps remote CUDA work with CROSS in one source
+handler. TENT's full event loop also schedules the requester's local stage and
+tracks asynchronous remote operations across chunks. Requester-side bounded
+pipelines, location selection and broader asynchronous remote scheduling remain
+in the existing P5/P6 queue. This is a scoped step toward that architecture.
 
 ## Serial remote staging
 
@@ -101,10 +110,12 @@ a second full-request allocation. WRITE releases its local GPU lock before
 Pin; READ acquires its local GPU lock only after confirmed Unpin. The source
 uses a nonblocking allocation lock and fails busy admission with
 `ResourceExhausted`. This avoids self-peer and opposite-direction GPU lock cycles.
-The current serial implementation is a correctness boundary, not a bounded-chunk
-pipeline or a performance-parity claim.
+The default depth of one preserves this serial contract. The requester still
+uses a full-request private payload when the remote pipeline below is enabled.
 
-Wire version 17 adds PinRead/PinWrite, Delegate, CROSS and Unpin operations.
+Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin.
+Current version 18 adds requested/negotiated pipeline width to the Pin exchange;
+both peers must use version 18. Older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
@@ -126,6 +137,50 @@ chunk to the pool before its reply; native host unpin normally occurs when the
 pool closes.
 A lost reply can coexist with a completed source Unpin. These observations do
 not replace requester completion receipts.
+
+## Bounded remote pipeline
+
+Set `EngineConfig.staging_pipeline_depth` to 2–16 on both peers to opt in.
+It defaults to 1 and cannot exceed `staging_chunk_count`. Pin selects the minimum
+of the two depths and the request's chunk count. The source checks out that
+entire width before acknowledging Pin. Insufficient capacity fails with
+`ResourceExhausted`; it never silently narrows the negotiated window. A short
+request may negotiate one slot and use the synchronous path.
+
+Each slot owns its pinned allocation, a persistent CUDA stream/event and a
+private registration for the current session. Logical chunk `i` uses slot
+`i % depth`. Scoped CROSS grants also bind that slot. Registrations retire at
+Unpin; the drained native allocation and stream/event remain in the pool for
+later sessions. Full engine close destroys those handles before freeing the
+pin. Failed construction or destruction remains charged without a Drop retry.
+
+| Direction | Scheduling and completion |
+| --- | --- |
+| READ | Delegate initially queues PRE for each slot. CROSS waits for its slot's CUDA event, then transfers bytes. The freed slot queues the next PRE while other chunks are in flight. |
+| WRITE | CROSS fills a drained slot. Delegate queues POST and returns an acceptance receipt. The next CROSS may use another slot; reuse of the same slot waits for its earlier POST. |
+| Final Unpin | Drain every accepted PRE/POST, retire private registrations/MRs and release the GPU guard before replying. READ commits its requester payload only after this reply. |
+
+A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
+`remote_delegates` and completed-chunk counters advance only after event wait and
+context restoration succeed. `remote_crosses` still follows actual transport
+cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
+`RemoteEffect::Unknown` before sending Delegate and is never automatically
+replayed after an ambiguous reply.
+
+EOF, a protocol error or deadline expiry stops new work but drains every accepted
+copy once. The GPU allocation tracks the aggregate pending count and a sticky
+uncertain flag; a later slot's success cannot clear another slot's failed wait
+or context restore. A recovered submission error can release resources after
+all other slots drain. Unproven completion retains the actual native buffers,
+registrations and responsible admission. No extra handler or nested batch slot
+is required.
+
+This source implementation has deterministic CPU controls for multiple pending
+copies during network progress, depth negotiation, short tails, stream reuse,
+partial admission, wrong slot/scope, EOF, lost final receipts and failed
+completion/construction/destruction. The new installed pipeline profile remains
+unqualified. Scheduling overlap in a native-call shim does not establish GPU
+execution overlap or a performance improvement.
 
 ## Validation
 
@@ -168,4 +223,4 @@ actual live allocations and completion before cross-thread reuse/free.
 Stable/MSRV installed consumers pass 16 two-host H20 cases for this healthy serial
 profile, with four fresh independent repeats. Source and this bounded profile
 are independently accepted. The profile and artifact binding are in [Qualification](qualification.md#serial-remote-cuda-staging); overlapping
-pipelines, physical faults and full ProxyManager parity remain open.
+pipeline hardware qualification, physical faults and full ProxyManager parity remain open.

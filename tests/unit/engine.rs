@@ -135,6 +135,8 @@ pub(crate) fn rdma_fixture_with_config(
         #[cfg(feature = "cuda")]
         remote_staging: config.remote_staging,
         #[cfg(feature = "cuda")]
+        staging_pipeline_depth: config.staging_pipeline_depth,
+        #[cfg(feature = "cuda")]
         proxy: Arc::clone(&runtime.proxy),
         #[cfg(feature = "cuda")]
         nvlink: None,

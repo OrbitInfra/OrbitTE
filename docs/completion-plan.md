@@ -560,8 +560,13 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Independent review accepts the serial source boundary at `64c9899`. Clean
   stable/MSRV consumers at `9f2ad39` pass 16 H20 TCP/RDMA cases plus four fresh
   independent repeats; source and this bounded healthy profile are accepted.
-  Complete overlapping PRE/CROSS/POST pipelines and remote scheduling before
-  claiming full ProxyManager parity. See [the contract](staging.md#serial-remote-staging).
+  A bounded remote PRE/CROSS or CROSS/POST pipeline is now implemented: Pin
+  negotiates up to 16 slots, each physical slot retains its own CUDA stream/event,
+  and all accepted copies drain before private MR retirement/Unpin. CPU controls
+  cover multiple pending copies, tails, scope and failure retention. Its new
+  installed hardware profile is unqualified. Next qualify it on fresh nodes,
+  then complete requester-side bounded staging and broader remote scheduling
+  before claiming full ProxyManager parity. See [the contract](staging.md#serial-remote-staging).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
 
@@ -826,8 +831,12 @@ for the fixed-working-set profile. P5.5a local shared staging chunks pass
 and this bounded healthy profile are accepted. P5.5b serial remote
 Delegate/Pin/Unpin and nested admission pass 16 installed H20 TCP/RDMA cases
 plus four fresh independent repeats; source and this bounded healthy profile
-are accepted. Next complete overlapping PRE/CROSS/POST pipelines and remote
-scheduling within P5.5b. New hardware evidence must name fresh nodes; unavailable
+are accepted. The next P5.5b substage implements a bounded remote pipeline with
+per-pool-slot stream/event ownership and CPU controls. Its hardware qualification
+is still open: first update the installed observer/validator to match each
+stream/event record generation and freeze the new profile, then run it on fresh
+nodes. Do not reuse serial-only evidence for the new scheduling. Requester-side
+bounded staging and broader remote scheduling follow this boundary. New hardware evidence must name fresh nodes; unavailable
 gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

@@ -151,6 +151,8 @@ impl TransferEngine {
         let source = Arc::new(Source {
             #[cfg(feature = "cuda")]
             remote_staging: config.remote_staging,
+            #[cfg(feature = "cuda")]
+            staging_pipeline_depth: config.staging_pipeline_depth,
             epoch,
             #[cfg(feature = "cuda")]
             proxy,
@@ -904,6 +906,8 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 pub(crate) struct Source {
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
+    #[cfg(feature = "cuda")]
+    pub(crate) staging_pipeline_depth: usize,
     #[cfg(feature = "cuda")]
     pub(crate) nvlink: Option<crate::transport::nvlink::NVLinkTransport>,
     #[cfg(feature = "cuda")]

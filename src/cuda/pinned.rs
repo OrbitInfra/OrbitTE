@@ -127,12 +127,22 @@ impl PinnedAllocation {
                 code: -1,
             })
         } else {
-            self.context.current(|| {
-                // Record native release before restoring the caller context.
-                let status =
-                    unsafe { (self.context.driver.host_free)(self.address.as_ptr().cast()) };
-                self.native_freed = status == SUCCESS;
-                check("cuMemFreeHost", status)
+            let streams_closed = self
+                .copy_stream
+                .get_mut()
+                .map_err(|_| Error::Unquiesced {
+                    operation: "CUDA pinned stream cleanup",
+                    code: -1,
+                })
+                .and_then(|slot| slot.as_mut().map_or(Ok(()), CopyStream::close));
+            streams_closed.and_then(|()| {
+                self.context.current(|| {
+                    // Record native release before restoring the caller context.
+                    let status =
+                        unsafe { (self.context.driver.host_free)(self.address.as_ptr().cast()) };
+                    self.native_freed = status == SUCCESS;
+                    check("cuMemFreeHost", status)
+                })
             })
         };
         if result.is_ok() {
