@@ -27,11 +27,27 @@ def verify(case, evidence):
         stats = records(proof, 'ORBITTE_STAGING_STATS ')
         require(len(stats) == 1, role + ': missing staging counters')
         if case[role + '_kind'] == 'cpu':
-            require(all(value == 0 for value in stats[0].values()), role + ': CPU path spent CUDA chunks')
+            require(all(value == 0 for value in stats[0].values()) and not proof.get('cuda-staging.jsonl'), role + ': CPU path spent CUDA chunks')
             continue
         require(stats[0] == dict(allocations=1, reuses=5, chunks=6 * len(sizes), bytes=6 * length, reserved_bytes=chunk), role + ': chunk accounting mismatch')
         native = [json.loads(line) for line in proof['cuda-staging.jsonl'].splitlines()]
         require(native and all(row['pid'] == result['native_pid'] and row['code'] == 0 for row in native), role + ': failed or foreign CUDA receipt')
+        live = {}
+        previous = 0
+        for row in native:
+            require(row['seq'] > previous, role + ': native sequence is not ordered')
+            previous = row['seq']
+            if row['kind'] == 'pin':
+                address, size = row['address'], row['length']
+                require(address > 0 and size > 0 and all(address + size <= start or start + count <= address for start, count in live.items()), role + ': duplicate/overlapping live pin')
+                live[address] = size
+            elif row['kind'] == 'unpin':
+                require(row['address'] in live, role + ': unpin without a live allocation')
+                del live[row['address']]
+            elif row['kind'] in ('htod', 'dtoh'):
+                address = row['source'] if row['kind'] == 'htod' else row['destination']
+                require(any(start <= address and address + row['length'] <= start + count for start, count in live.items()), role + ': copy outside live pinned memory')
+        require(not live, role + ': pinned allocations remain after shutdown')
         pins = [row for row in native if row['kind'] == 'pin' and row['length'] == chunk]
         require(len(pins) == 1, role + ': missing persistent physical chunk')
         pin = pins[0]

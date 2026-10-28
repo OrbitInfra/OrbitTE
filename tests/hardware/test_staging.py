@@ -26,7 +26,7 @@ def fixture():
 
 class StagingProof(unittest.TestCase):
     def test_native_owner_receipts_and_negative_controls(self):
-        for fault in (None, 'tail', 'pop', 'free', 'pid', 'reuse', 'record-stream', 'wait-event'):
+        for fault in (None, 'tail', 'pop', 'free', 'pid', 'reuse', 'record-stream', 'wait-event', 'copy-after-free', 'double-free'):
             with self.subTest(fault=fault):
                 case, evidence, native = fixture()
                 if fault == 'tail': native[9]['length'] = 4
@@ -36,6 +36,11 @@ class StagingProof(unittest.TestCase):
                 if fault == 'record-stream': native[2]['stream'] = 999
                 if fault == 'wait-event': native[3]['event'] = 999
                 if fault == 'reuse': native.insert(1, copy.deepcopy(native[0]))
+                if fault in ('copy-after-free', 'double-free'):
+                    extra = copy.deepcopy(native[1:5] if fault == 'copy-after-free' else native[-1:])
+                    for row in extra:
+                        row['seq'] = len(native) + 1
+                        native.append(row)
                 evidence['source']['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)
                 if fault:
                     with self.assertRaises(ValueError): staging.verify(case, evidence)

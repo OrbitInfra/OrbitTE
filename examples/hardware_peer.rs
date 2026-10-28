@@ -271,7 +271,7 @@ fn finish(
             .sum();
         if staging.allocations != expected
             || staging.reuses != 5 * expected
-            || staging.copied_bytes != (bytes * 2) as u64 * expected
+            || staging.copied_bytes != bytes as u64 * expected
             || staging.completed_chunks != (chunks * 2) as u64 * expected
             || staging.idle_chunks != expected as usize
             || staging.active_chunks != 0
@@ -525,6 +525,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "rdma" => Transport::Rdma,
         _ => return Err("transport must be tcp or rdma".into()),
     };
+    if transport == Transport::Tcp {
+        rdma.host_memory = RdmaHostMemory::Staged;
+    }
     let engine = Arc::new(TransferEngine::new(EngineConfig {
         bind_addr,
         staging_chunk_size: env::var("ORBITTE_STAGING_CHUNK_SIZE")
