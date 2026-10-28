@@ -47,23 +47,30 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
     closes = select(requester, 'close')
     assert len(closes) == (0 if mode == 'requester-exit' else expected), 'mapping close count'
     for index, (opened, copy) in enumerate(zip(imports, copies)):
+        boundary = imports[index+1]['seq'] if index+1 < len(imports) else len(requester)+1
+        cycle = [row for row in requester if opened['seq'] <= row['seq'] < boundary]
+        assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
+        assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
         read = mode == 'healthy' and index == 0
         remote, own = opened['address']+67, local[0]['address']+67
         assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, payload) if read else (own, remote, payload)), 'copy range/direction'
         assert opened['seq'] < copy['seq'], 'copy before import'
-        events = [r for r in select(requester, 'record') if r['seq'] > copy['seq'] and r['stream'] == copy['stream']]
+        events = [r for r in select(cycle, 'record') if r['seq'] > copy['seq'] and r['stream'] == copy['stream']]
         assert events, 'copy has no completion event'
         event = events[0]
-        waits = [r for r in select(requester, 'wait') if r['seq'] > event['seq'] and r['event'] == event['event']]
+        waits = [r for r in select(cycle, 'wait') if r['seq'] > event['seq'] and r['event'] == event['event']]
         assert waits, 'copy has no completed event'
         wait = waits[0]
-        pops = select(requester, 'pop')
+        pops = [row for row in select(cycle, 'pop') if row['tid'] == copy['tid']]
+        assert event['tid'] == wait['tid'] == copy['tid'], 'completion thread mismatch'
         assert any(copy['seq'] < p['seq'] < event['seq'] for p in pops) is False, 'copy escaped owning context before event record'
         if mode != 'requester-exit':
             close = closes[index]
-            assert close['address'] == opened['address'] and wait['seq'] < close['seq'], 'close before matching DMA drain'
+            assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'
             assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'copy context not restored'
-            assert any(p['seq'] > close['seq'] for p in pops), 'close context not restored'
+            assert close['tid'] == copy['tid'], 'close/import thread mismatch'
+            after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
+            assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
     for rows, allocations in [(source, source_alloc), (requester, local)]:
         frees = select(rows, 'free')
         assert len(frees) == (0 if mode == 'requester-exit' else len(allocations)), 'native allocation release/retention'

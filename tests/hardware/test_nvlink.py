@@ -15,7 +15,7 @@ class NativeEvidence(unittest.TestCase):
         source, requester = [], []
 
         def add(rows, kind, **values):
-            rows.append(dict(kind=kind, code=0, seq=len(rows)+1,
+            rows.append(dict(kind=kind, code=0, tid=1, seq=len(rows)+1,
                              pid=101 if rows is source else 102, **values))
 
         add(source, 'allocate', address=1000, length=2 << 20)
@@ -54,6 +54,7 @@ class NativeEvidence(unittest.TestCase):
             ('lazy-peer-missing', 1, 'open', {'flags': 0}),
             ('wrong-range', 1, 'copy', {'length': 18}),
             ('wrong-mapping', 1, 'copy', {'source': 1067}),
+            ('other-thread', 1, 'record', {'tid': 2}),
             ('other-stream', 1, 'record', {'stream': 3}),
             ('other-event', 1, 'wait', {'event': 6}),
             ('missing-drain', 1, 'wait', {'kind': 'ignored'}),
@@ -80,6 +81,14 @@ class NativeEvidence(unittest.TestCase):
                 row['seq'] = index+1
             with self.subTest(side=side), self.assertRaises(AssertionError):
                 nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
+        rows = self.evidence()
+        first_close = next(row['seq'] for row in rows[1] if row['kind'] == 'close')
+        pop = next(row for row in rows[1] if row['kind'] == 'pop' and row['seq'] > first_close)
+        rows[1].remove(pop)
+        for index, row in enumerate(rows[1]):
+            row['seq'] = index+1
+        with self.assertRaises(AssertionError):
+            nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
         rows = self.evidence()
         last_close = max(row['seq'] for row in rows[1] if row['kind'] == 'close')
         next(row for row in rows[1] if row['kind'] == 'pop' and row['seq'] > last_close)['kind'] = 'ignored'
