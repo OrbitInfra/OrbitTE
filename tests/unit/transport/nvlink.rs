@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{EngineConfig, Permission, TransferEngine};
+use crate::{EngineConfig, Permission, RemoteSegment, TransferEngine};
 
 #[test]
 fn ipc_mapping_budget_charges_physical_extent_and_retains_failed_closes() {
@@ -373,3 +373,6 @@ pub(crate) fn requester_case(
         "actual owner after dropping public handles: {case}"
     );
 }
+
+#[path = "nvlink/subbatch.rs"]
+pub(crate) mod subbatch;

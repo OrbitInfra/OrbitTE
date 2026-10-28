@@ -84,7 +84,9 @@ OrbitTE remains under development. The [bounded GPU Direct profile](docs/qualifi
 passes 72 installed H20/RoCE cases on stable and Rust 1.85, with an explicit
 host-wide context inventory limit. Direct mode has provider prerequisites. The
 [cooperative CUDA IPC/NVLink path](docs/cuda-ipc.md) passes 48 installed H20 cases
-with explicit exporter-lifetime limits. Broader IPC parity, optional SSD transports and
+with explicit exporter-lifetime limits. Bounded subbatch import reuse passes
+28 additional installed cases on two H20 hosts.
+Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
 [qualification](docs/qualification.md) records exact artifacts and limits.

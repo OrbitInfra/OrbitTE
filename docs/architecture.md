@@ -394,11 +394,15 @@ stream readiness remain P5 work.
 `transport/nvlink.rs::NVLinkTransport` owns same-host identity checks, grant/close
 bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
 `cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
-one imported native reference and its context. `cuda/stream.rs` owns actual
+one imported native reference, its context and every touched local allocation.
+`transport/nvlink/subbatch.rs::NVLinkSubBatch` owns the mapping charge and explicit
+close boundary for consecutive same-region/context requests. `cuda/stream.rs` owns actual
 copy completion. ControlService dispatches IPC grants and retains uncertain
 source handlers; Engine/Batch retain uncertain requester admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
-stream/event completion. Per-grant import/close and explicit source receipts
-are the initial cooperative Rust ownership contract. See [CUDA IPC](cuda-ipc.md)
+stream/event completion. One grant now covers a bounded group, with per-slice
+events and one final import close/source receipt. Shared cleanup failure has an
+explicit affected task span. Native TENT keeps a transport-wide relocation cache;
+OrbitTE currently releases the mapping at the subbatch boundary. See [CUDA IPC](cuda-ipc.md)
 for whole-allocation permission, exporter lifetime and remaining parity limits.

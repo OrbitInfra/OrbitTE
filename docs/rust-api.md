@@ -63,6 +63,10 @@ before transfer effects.
 failure information, notification status and local drain status. The completed
 prefix is not a transaction. `RemoteEffect::Unknown` means an attempted WRITE
 may have changed peer bytes; a failed report does not authorize automatic replay.
+`TransferFailure.affected_requests` is the number of consecutive tasks sharing
+the failure from `request_index`. Shared NVLink import close/ACK failure excludes
+the entire attempted group from the completed prefix; async tasks in this span
+are failed, not skipped. Only later requests were never attempted.
 For a cross-rail request, all slice receipts must complete before its one request
 and full byte count are added. Earlier slices may already have changed bytes if
 a later slice fails, including source-staged WRITE slices copied back after

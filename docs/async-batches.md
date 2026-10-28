@@ -48,8 +48,12 @@ from bypassing the thread or retained-owner limits.
 
 Tasks expose waiting/running/completed/failed/cancelled/skipped states, exact
 completed bytes, cancellation requests and a retained structured failure. Failure
-indices are public batch task indices. A failed or cancelled task stops its
-group; later tasks in that group are skipped/cancelled without I/O. Other accepted
+indices are public batch task indices. `request_index` identifies the first
+failed task; `affected_requests` gives the consecutive failure span. A shared
+NVLink close/ACK failure can cover several already attempted tasks. Every task
+in that span shares the failure and drain status; only subsequent tasks are
+skipped/cancelled without I/O. A clean copy/cancel failure followed by a source
+ACK preserves the copied prefix. Other accepted
 groups still run. Submission reports preserve each group's completed prefix and
 independent `NotificationStatus`; successful data can coexist with notification
 failure. Empty or failed groups do not send attached messages.

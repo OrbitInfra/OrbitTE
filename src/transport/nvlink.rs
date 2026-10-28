@@ -3,16 +3,17 @@
 use std::sync::{Arc, OnceLock};
 
 mod budget;
+mod subbatch;
 use budget::MappingBudget;
 pub use budget::NVLinkStats;
-use std::time::Instant;
+use subbatch::{NVLinkSubBatch, subbatch_len};
 
 use crate::cuda::ipc::IpcExport;
-use crate::engine::{PreparedTransfer, remaining};
+use crate::engine::{PreparedSubmission, remaining};
 use crate::memory::checked_range;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::{
-    Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
+    Error, RegisteredMemory, RemoteEffect, Result, SourceEpoch, TransferFailure, TransferOp,
 };
 
 const HELLO_SIZE: usize = 52;
@@ -97,79 +98,135 @@ impl NVLinkTransport {
 
     pub(crate) fn transfer(
         &self,
-        operation: TransferOp,
-        peer: &RemoteSegment,
-        request: &PreparedTransfer,
+        submission: &PreparedSubmission,
+        first: usize,
         requester: SourceEpoch,
-        deadline: Instant,
-    ) -> std::result::Result<(), (Error, RemoteEffect)> {
-        let mut effect = RemoteEffect::None;
-        let result = (|| {
-            let (memory, offset) = request
-                .local
-                .cuda_range(request.local_offset, request.length)?;
-            memory.validate_ipc_requester()?;
-            let wire = Request {
-                operation: if operation == TransferOp::Read {
-                    Operation::NvlinkRead
+        max_bytes: usize,
+        mut begin: impl FnMut(usize) -> bool,
+    ) -> std::result::Result<usize, TransferFailure> {
+        let requests = &submission.requests[first..];
+        let mut count = subbatch_len(requests, max_bytes);
+        loop {
+            let mut retry_single = false;
+            let requests = &requests[..count];
+            let operation = submission.operation;
+            let peer = &submission.peer;
+            let deadline = submission.deadline;
+            let start = requests.iter().map(|r| r.remote_offset).min().unwrap_or(0);
+            let end = requests
+                .iter()
+                .map(|r| r.remote_offset + r.length)
+                .max()
+                .unwrap_or(0);
+            let mut effect = RemoteEffect::None;
+            let mut copied = 0;
+            let mut attempted = 0;
+            let mut acknowledged = false;
+            let result = (|| {
+                let (memory, _) = requests[0]
+                    .local
+                    .cuda_range(requests[0].local_offset, requests[0].length)?;
+                memory.validate_ipc_requester()?;
+                let wire = Request {
+                    operation: if operation == TransferOp::Read {
+                        Operation::NvlinkRead
+                    } else {
+                        Operation::NvlinkWrite
+                    },
+                    epoch: peer.epoch,
+                    region: requests[0].remote.id,
+                    offset: start as u64,
+                    length: (end - start) as u64,
+                };
+                let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
+                channel.write_all(&wire.encode())?;
+                let mut hello = [0; HELLO_SIZE];
+                hello[..4].copy_from_slice(b"NVL1");
+                self.identity.encode(&mut hello[4..36]);
+                hello[36..].copy_from_slice(&requester.0);
+                channel.write_all(&hello)?;
+                let reply = match Reply::read(&mut channel, peer.epoch) {
+                    Err(Error::ResourceExhausted) if count > 1 => {
+                        // A typed rejection before any grant cannot have exposed a
+                        // mapping or copied bytes. The peer may have a smaller cap.
+                        retry_single = true;
+                        return Err(Error::ResourceExhausted);
+                    }
+                    other => other?,
+                };
+                if reply.status != 0 || reply.length != GRANT_SIZE as u64 {
+                    return Err(Error::Protocol("NVLink grant size/status"));
+                }
+                let mut grant = [0; GRANT_SIZE];
+                channel.read_exact(&mut grant)?;
+                let (binding, handle, remote_offset, extent) =
+                    self.validate_grant(&grant, &wire, requester)?;
+                let copy = (|| {
+                    remaining(deadline)?;
+                    let permit = self.budget.reserve(extent, false)?;
+                    if operation == TransferOp::Write {
+                        effect = RemoteEffect::Unknown;
+                    }
+                    let mut batch = NVLinkSubBatch::new(&memory, permit)?;
+                    let copied_result = (|| {
+                        batch.mapping.open(handle)?;
+                        for (index, request) in requests.iter().enumerate() {
+                            // The engine began the first task before acquiring the grant.
+                            if index != 0 && !begin(index) {
+                                return Err(Error::Cancelled);
+                            }
+                            remaining(deadline)?;
+                            attempted = index + 1;
+                            let (memory, offset) = request
+                                .local
+                                .cuda_range(request.local_offset, request.length)?;
+                            batch.mapping.copy(
+                                &memory,
+                                remote_offset + (request.remote_offset - start),
+                                offset,
+                                request.length,
+                                operation == TransferOp::Write,
+                            )?;
+                            copied += 1;
+                        }
+                        Ok(())
+                    })();
+                    // Closing the single import proves completion of every touched
+                    // local owner. A failure retains the import and its entire charge.
+                    batch.close()?;
+                    copied_result
+                })();
+                if matches!(copy, Err(Error::Unquiesced { .. })) {
+                    return copy;
+                }
+                let mut receipt = [0; RECEIPT_SIZE];
+                receipt[..BINDING_SIZE].copy_from_slice(&binding);
+                receipt[BINDING_SIZE] = u8::from(copy.is_err());
+                channel.write_all(&receipt)?;
+                let reply = Reply::read(&mut channel, peer.epoch)?;
+                if reply.status != 0 || reply.length != 0 {
+                    return Err(Error::Protocol("NVLink close acknowledgement"));
+                }
+                acknowledged = true;
+                copy
+            })();
+            if retry_single {
+                count = 1;
+                continue;
+            }
+            return result.map(|()| count).map_err(|error| TransferFailure {
+                // Without the shared close ACK, none of this group's attempted
+                // requests is confirmed. Never call an already copied WRITE skipped.
+                request_index: if acknowledged { copied } else { 0 },
+                affected_requests: if acknowledged { 1 } else { attempted.max(1) },
+                remote_effect: if acknowledged && matches!(error, Error::Cancelled) {
+                    RemoteEffect::None
                 } else {
-                    Operation::NvlinkWrite
+                    effect
                 },
-                epoch: peer.epoch,
-                region: request.remote.id,
-                offset: request.remote_offset as u64,
-                length: request.length as u64,
-            };
-            let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
-            channel.write_all(&wire.encode())?;
-            let mut hello = [0; HELLO_SIZE];
-            hello[..4].copy_from_slice(b"NVL1");
-            self.identity.encode(&mut hello[4..36]);
-            hello[36..].copy_from_slice(&requester.0);
-            channel.write_all(&hello)?;
-            let reply = Reply::read(&mut channel, peer.epoch)?;
-            if reply.status != 0 || reply.length != GRANT_SIZE as u64 {
-                return Err(Error::Protocol("NVLink grant size/status"));
-            }
-            let mut grant = [0; GRANT_SIZE];
-            channel.read_exact(&mut grant)?;
-            let (binding, handle, remote_offset, extent) =
-                self.validate_grant(&grant, &wire, requester)?;
-            // Once a grant is received, every clean failure sends a close/abort
-            // receipt. No import occurs on an expired deadline.
-            let copy = remaining(deadline).and_then(|_| {
-                let permit = self.budget.reserve(extent, false)?;
-                if operation == TransferOp::Write {
-                    effect = RemoteEffect::Unknown;
-                }
-                let result = memory.copy_ipc(
-                    handle,
-                    remote_offset,
-                    offset,
-                    request.length,
-                    operation == TransferOp::Write,
-                );
-                if matches!(result, Err(Error::Unquiesced { .. })) {
-                    permit.retain();
-                }
-                result
+                error,
             });
-            if matches!(copy, Err(Error::Unquiesced { .. })) {
-                return copy;
-            }
-            let mut receipt = [0; RECEIPT_SIZE];
-            receipt[..BINDING_SIZE].copy_from_slice(&binding);
-            receipt[BINDING_SIZE] = u8::from(copy.is_err());
-            // The ordinary I/O deadline remains authoritative. If it expired,
-            // the exporter conservatively retains its grant instead of freeing.
-            channel.write_all(&receipt)?;
-            let reply = Reply::read(&mut channel, peer.epoch)?;
-            if reply.status != 0 || reply.length != 0 {
-                return Err(Error::Protocol("NVLink close acknowledgement"));
-            }
-            copy
-        })();
-        result.map_err(|error| (error, effect))
+        }
     }
 
     fn validate_grant(

@@ -12,6 +12,8 @@ import nvlink_run
 
 class NativeEvidence(unittest.TestCase):
     def evidence(self, mode='healthy'):
+        batched = mode.startswith("batch-")
+        mode = mode.removeprefix("batch-")
         source, requester = [], []
 
         def add(rows, kind, **values):
@@ -24,16 +26,19 @@ class NativeEvidence(unittest.TestCase):
         count = 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
         if count:
             add(requester, 'allocate', address=2000, length=151)
+            if batched: add(requester, 'allocate', address=4000, length=151)
         for index in range(count):
             add(source, 'export', address=1000, handle=1234)
             add(requester, 'open', address=3000, handle=1234, flags=1)
             read = mode == 'healthy' and index == 0
-            add(requester, 'copy', source=3067 if read else 2067,
-                destination=2067 if read else 3067, length=17, stream=4)
-            add(requester, 'record', event=5, stream=4)
-            add(requester, 'pop')
-            add(requester, 'wait', event=5)
-            add(requester, 'pop')
+            for part, (offset,length) in enumerate([(10,7),(0,5),(5,5)] if batched else [(0,17)]):
+                remote, own = 3067+offset, (2000 if part%2 == 0 else 4000)+67+offset
+                add(requester, 'copy', source=remote if read else own,
+                    destination=own if read else remote, length=length, stream=4)
+                add(requester, 'record', event=5, stream=4)
+                add(requester, 'pop')
+                add(requester, 'wait', event=5)
+                add(requester, 'pop')
             if mode != 'requester-exit':
                 add(requester, 'close', address=3000)
                 add(requester, 'pop')
@@ -41,10 +46,11 @@ class NativeEvidence(unittest.TestCase):
             add(source, 'free', address=1000)
             if count:
                 add(requester, 'free', address=2000)
+                if batched: add(requester, 'free', address=4000)
         return source, requester
 
     def test_exact_ranges_initialization_drain_and_cleanup_are_required(self):
-        for mode in ('healthy', 'graceful', 'requester-exit', 'stale'):
+        for mode in ('healthy', 'graceful', 'requester-exit', 'stale', 'batch-healthy', 'batch-graceful', 'batch-requester-exit'):
             with self.subTest(mode=mode):
                 nvlink_run.validate_native(*self.evidence(mode), 17, mode, 101, 102)
         controls = [
@@ -94,6 +100,49 @@ class NativeEvidence(unittest.TestCase):
         next(row for row in rows[1] if row['kind'] == 'pop' and row['seq'] > last_close)['kind'] = 'ignored'
         with self.assertRaises(AssertionError):
             nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
+
+    def test_subbatch_needs_each_slice_drain_and_both_local_owners(self):
+        for fault in ('missing-middle-wait', 'wrong-second-owner', 'close-before-last', 'duplicate-free'):
+            source, requester = self.evidence('batch-healthy')
+            if fault == 'missing-middle-wait':
+                [r for r in requester if r['kind']=='wait'][1]['kind']='ignored'
+            elif fault == 'wrong-second-owner':
+                [r for r in requester if r['kind']=='copy'][1]['destination']=2067
+            elif fault == 'duplicate-free':
+                [r for r in requester if r['kind']=='free'][1]['address']=2000
+            else:
+                close=next(r for r in requester if r['kind']=='close')
+                requester.remove(close)
+                last=[r for r in requester if r['kind']=='copy'][2]
+                requester.insert(requester.index(last),close)
+                for index,row in enumerate(requester): row['seq']=index+1
+            with self.subTest(fault=fault), self.assertRaises(AssertionError):
+                nvlink_run.validate_native(source,requester,17,'batch-healthy',101,102)
+
+    def test_live_requester_allocations_precede_copies_and_do_not_overlap(self):
+        for mode in ('graceful', 'batch-graceful'):
+            for fault in ('late', 'zero', 'negative', 'overflow', 'alias', 'overlap'):
+                if fault in ('alias', 'overlap') and not mode.startswith('batch-'):
+                    continue
+                source, requester = self.evidence(mode)
+                allocation = [r for r in requester if r['kind'] == 'allocate'][-1]
+                if fault == 'late':
+                    requester.remove(allocation)
+                    close = next(r for r in requester if r['kind'] == 'close')
+                    requester.insert(requester.index(close), allocation)
+                    for index, row in enumerate(requester): row['seq'] = index+1
+                else:
+                    old = allocation['address']
+                    new = {'zero': 0, 'negative': -1, 'overflow': (1 << 64)-100,
+                           'alias': 2000, 'overlap': 2100}[fault]
+                    allocation['address'] = new
+                    for row in requester:
+                        if row['kind'] == 'free' and row['address'] == old:
+                            row['address'] = new
+                        elif row['kind'] == 'copy' and old <= row['source'] < old+151:
+                            row['source'] += new-old
+                with self.subTest(mode=mode, fault=fault), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, requester, 17, mode, 101, 102)
 
     def test_observer_forwards_arguments_outputs_and_native_failures(self):
         root = Path(__file__).resolve().parent

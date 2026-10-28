@@ -16,6 +16,10 @@ pub(super) struct Device {
     pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
     next_handle: AtomicUsize,
     pub(super) imports: Mutex<BTreeMap<u64, usize>>,
+    pub(super) ipc_copies: AtomicUsize,
+    pub(super) ipc_copy_fail_at: AtomicUsize,
+    pub(super) ipc_wait_fail_at: AtomicUsize,
+    pub(super) ipc_pop_fail_at: AtomicUsize,
     pub(super) ipc_open_error: AtomicI32,
     pub(super) ipc_close_error: AtomicI32,
     pub(super) ipc_partial_open: AtomicBool,
@@ -404,6 +408,10 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         completions: Mutex::default(),
         next_handle: AtomicUsize::new(1),
         imports: Mutex::default(),
+        ipc_copies: AtomicUsize::new(0),
+        ipc_copy_fail_at: AtomicUsize::new(0),
+        ipc_wait_fail_at: AtomicUsize::new(0),
+        ipc_pop_fail_at: AtomicUsize::new(0),
         ipc_open_error: AtomicI32::new(0),
         ipc_close_error: AtomicI32::new(0),
         ipc_partial_open: AtomicBool::new(false),
@@ -588,6 +596,18 @@ unsafe extern "C" fn copy_device(
     stream: sys::CUstream,
 ) -> Status {
     event("DtoD");
+    let count = current().ipc_copies.fetch_add(1, Ordering::AcqRel) + 1;
+    if count == current().ipc_copy_fail_at.load(Ordering::Acquire) {
+        current().copy_error.store(1, Ordering::Release);
+    }
+    if count == current().ipc_wait_fail_at.load(Ordering::Acquire) {
+        current().sync_error.store(700, Ordering::Release);
+    }
+    if count == current().ipc_pop_fail_at.load(Ordering::Acquire) {
+        current()
+            .pop_after_completion
+            .store(true, Ordering::Release);
+    }
     let error = current().copy_error.load(Ordering::Acquire);
     enqueue(
         stream,
