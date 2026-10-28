@@ -11,7 +11,15 @@ def fixture(gpu_role='source'):
     native = []
     def emit(kind, **values):
         native.append(dict(seq=len(native)+1, pid=7, tid=9, kind=kind, code=0, **values))
+    def copy_full(direction, host):
+        emit('pin', address=host, length=256)
+        emit(direction, source=host if direction == 'htod' else 200, destination=host if direction == 'dtoh' else 200, length=256, stream=3)
+        emit('record', event=4, stream=3)
+        emit('wait', event=4)
+        emit('pop', context=5)
+        emit('unpin', address=host)
     emit('allocate', address=200, length=256)
+    copy_full('htod', 2000)
     emit('pin', address=100, length=4)
     for direction in ('dtoh', 'htod'):
         for index in range(3):
@@ -22,6 +30,7 @@ def fixture(gpu_role='source'):
                 emit('wait', event=4)
                 emit('pop', context=5)
     emit('unpin', address=100)
+    copy_full('dtoh', 3000)
     emit('free', address=200)
     proof = {'result.json': json.dumps(dict(status='passed', child_reaped=True, resource_locks_released=True, fault_library_sha256='abc', native_pid=7))}
     evidence = {}
@@ -36,7 +45,8 @@ class StagingProof(unittest.TestCase):
     def test_native_owner_receipts_and_negative_controls(self):
         faults = (None, 'tail', 'pop', 'free', 'pid', 'reuse', 'record-stream', 'wait-event',
                   'copy-after-free', 'double-free', 'gpu-range', 'gpu-slice', 'gpu-free-early',
-                  'gpu-free-missing', 'gpu-double-free', 'gpu-allocation', 'missing-memory')
+                  'gpu-free-missing', 'gpu-double-free', 'gpu-allocation', 'missing-memory',
+                  'gpu-free-before-readback-wait', 'host-free-before-readback-wait')
         for role in ('source', 'requester'):
             for fault in faults:
                 with self.subTest(role=role, fault=fault):
@@ -51,14 +61,20 @@ class StagingProof(unittest.TestCase):
                     if fault == 'wait-event': first('wait')['event'] = 999
                     if fault == 'reuse': native.insert(2, copy.deepcopy(first('pin')))
                     if fault == 'gpu-range': first('dtoh')['source'] = 0
-                    if fault == 'gpu-slice': first('htod')['destination'] += 1
+                    if fault == 'gpu-slice': next(row for row in native if row['kind'] == 'htod' and row['source'] == 100)['destination'] += 1
                     if fault == 'gpu-free-early': native.insert(2, native.pop())
                     if fault == 'gpu-free-missing': native.pop()
+                    if fault in ('gpu-free-before-readback-wait', 'host-free-before-readback-wait'):
+                        freed = native.pop(-1 if fault.startswith('gpu') else -2)
+                        freed['tid'] = 99
+                        wait = max(index for index, row in enumerate(native) if row['kind'] == 'wait')
+                        native.insert(wait, freed)
                     if fault == 'gpu-allocation': first('allocate')['length'] += 1
                     if fault == 'missing-memory':
                         evidence[role]['stdout.log'] = evidence[role]['stdout.log'].split('\n', 1)[1]
                     if fault in ('copy-after-free', 'double-free', 'gpu-double-free'):
-                        extra = native[2:6] if fault == 'copy-after-free' else [first('unpin' if fault == 'double-free' else 'free')]
+                        copy_index = next(index for index, row in enumerate(native) if row['kind'] == 'dtoh')
+                        extra = native[copy_index:copy_index+4] if fault == 'copy-after-free' else [first('unpin' if fault == 'double-free' else 'free')]
                         native.extend(copy.deepcopy(extra))
                     for index, row in enumerate(native):
                         row['seq'] = index + 1

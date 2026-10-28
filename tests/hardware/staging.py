@@ -52,6 +52,7 @@ def verify(case, evidence):
                 and allocations[0]['length'] == owner['length'], role + ': GPU allocation differs from registered owner')
         live = {}
         devices = {}
+        transfers = []
         previous = 0
         for row in native:
             require(row['seq'] > previous, role + ': native sequence is not ordered')
@@ -71,11 +72,25 @@ def verify(case, evidence):
                 del live[row['address']]
             elif row['kind'] in ('htod', 'dtoh'):
                 address = row['source'] if row['kind'] == 'htod' else row['destination']
-                require(row['length'] > 0 and any(start <= address and address + row['length'] <= start + count for start, count in live.items()), role + ': copy outside live pinned memory')
+                hosts = [start for start, count in live.items() if start <= address and address + row['length'] <= start + count]
+                require(row['length'] > 0 and len(hosts) == 1, role + ': copy outside live pinned memory')
                 device = row['destination'] if row['kind'] == 'htod' else row['source']
                 require(any(start <= device and device + row['length'] <= start + count for start, count in devices.items()),
                         role + ': copy outside live GPU allocation')
+                transfers.append((row, hosts[0]))
         require(not live and not devices, role + ': native allocations remain after shutdown')
+        device_free = next(row['seq'] for row in native if row['kind'] == 'free' and row['address'] == owner['base'])
+        for index, (copy, host) in enumerate(transfers):
+            host_free = next(row['seq'] for row in native if row['kind'] == 'unpin'
+                             and row['address'] == host and row['seq'] > copy['seq'])
+            next_copy = transfers[index + 1][0]['seq'] if index + 1 < len(transfers) else device_free
+            end = min(next_copy, host_free, device_free)
+            following = [row for row in native if copy['seq'] < row['seq'] < end and row['tid'] == copy['tid']]
+            require([row['kind'] for row in following[:3]] == ['record', 'wait', 'pop'],
+                    role + ': native reuse/free before event wait/context restore')
+            record, wait, _ = following[:3]
+            require(record['stream'] == copy['stream'] and record['event'] != 0 and wait['event'] == record['event'],
+                    role + ': completion belongs to a different stream/event')
         pins = [row for row in native if row['kind'] == 'pin' and row['length'] == chunk]
         require(len(pins) == 1, role + ': missing persistent physical chunk')
         pin = pins[0]
@@ -95,10 +110,3 @@ def verify(case, evidence):
             require(actual_copies == expected_copies,
                     role + ': native ' + direction + ' GPU range/chunk/tail mismatch')
         require(len({row['stream'] for row in copies}) == 1, role + ': allocation copy stream changed')
-        for index, copy in enumerate(copies):
-            end = copies[index + 1]['seq'] if index + 1 < len(copies) else free['seq']
-            following = [row for row in native if copy['seq'] < row['seq'] < end and row['tid'] == copy['tid']]
-            require([row['kind'] for row in following[:3]] == ['record', 'wait', 'pop'], role + ': reuse before event wait/context restore')
-            record, wait, _ = following[:3]
-            require(record['stream'] == copy['stream'] and record['event'] != 0 and wait['event'] == record['event'],
-                    role + ': completion belongs to a different stream/event')
