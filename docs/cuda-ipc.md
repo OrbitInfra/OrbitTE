@@ -178,6 +178,7 @@ results, including exact pinned allocation/free and HtoD/DtoH pointer ABIs.
 Host/mixed controls require native pinned owners and no temporary allocation
 inside an import/copy cycle; initialization/readback staging outside the cycle
 is accounted separately. CPU negative controls check its transparency and reject incomplete
-evidence. See [subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
+evidence. See [local pinned host qualification](qualification.md#local-pinned-host-cuda-ipc),
+[subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
 and [the initial profile](qualification.md#cooperative-cuda-ipc-and-nvlink) for
 exact artifacts and profile limits.

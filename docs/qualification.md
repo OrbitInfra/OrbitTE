@@ -15,8 +15,9 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery qualifies bounded [CUDA IPC subbatches](#bounded-cuda-ipc-subbatches),
-building on the cooperative [GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
+The latest installed delivery qualifies [local pinned host IPC](#local-pinned-host-cuda-ipc),
+building on bounded [subbatches](#bounded-cuda-ipc-subbatches) and the cooperative
+[GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
 below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
 explicit host-wide context inventory limit. Earlier host
 [automatic discovery](#installed-automatic-discovery) and
@@ -24,6 +25,57 @@ explicit host-wide context inventory limit. Earlier host
 artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
+
+## Local pinned host CUDA IPC
+
+Source [`9adf5a5`](https://github.com/OrbitInfra/OrbitTE/commit/9adf5a5eabb8bb5b8dce312ba10d77275da75ab1)
+qualifies local owned pinned host READ/WRITE against remote owned GPU exports,
+including mixed host/GPU requester groups on one native context. It follows
+frozen TENT's local DRAM/GPU and remote CUDA-only distinction. Ordinary/external
+host backing and remote host exports are outside this ownership profile.
+
+Clean packaged consumers built with stable 1.99.1 and Rust 1.85 pass 30 cases
+on two physical H20 hosts with NV18 topology, using compatibility
+`libcuda.so.590.48.01` on R535.161.08. Sixteen host READ/WRITE cases cover both
+GPU-context directions and 17 / 2,097,171-byte payloads. Four mixed healthy,
+four host source-close waits and four mixed requester-exit cases use 4,133 bytes;
+two GPU/GPU cases retain the earlier behavior. Healthy/graceful cases compare
+full logical bytes, gaps and guards. Requester exit occurs after native event
+drain, before import close; it proves retained source ownership, without final
+payload readback or termination during GPU DMA.
+
+The native ledger records 52 imports, 156 payload copies (132 HtoD/DtoH),
+48 closes and 48 persistent pinned requester owners. Exact pointer ABIs,
+physical allocation initialization, each slice's event drain, context restoration
+before release and absence of temporary allocation inside IPC cycles are checked.
+Every child is reaped, locks are released and GPU allocation baselines restored.
+This is Driver API correctness evidence; it does not measure NVLink bandwidth.
+
+Independent source review passes stable four-feature and MSRV combined
+Clippy/test gates, including 255 unit tests, eight integration tests and one
+doctest for combined features. Six hardware/subprocess fixtures remain ignored
+in that CPU gate. Validator-only commit `3b59f66` rejects out-of-cycle host copies
+and pinned frees before close-context restoration. The original rejected
+controls, 43 Python controller tests and 22 independent classification controls
+are preserved; the production code, installed consumer and observer stay at
+`9adf5a5`. Four fresh independent repeats pass host/mixed healthy,
+source-close and requester-exit cases across both hosts and compilers: 18 payload
+copies, including 15 host APIs, with six imports and five closes. Independent
+post-run checks find all child PIDs gone, all 16 GPUs at zero allocation with no
+compute processes, and selected UUID locks reacquirable. Source and this bounded
+installed profile are independently accepted.
+
+Evidence stays outside Git at `/root/orbitte-artifacts/cuda-ipc-host-20261028/`:
+`installed-stable/`, `installed-msrv/`, `qualification-inputs.json`,
+`matrix-result.json`, `native-audit.json`, `runs/*/evidence/` and
+`controller-frozen.py` bind package,
+controller, process/native records and host/boot/GPU identities.
+`independent-review/` preserves reviews, controls and separate repeat artifacts.
+
+Trusted live exporters remain required. Remote host exports, cross-submission
+import caches, broader stream scheduling, MNNVL/VMM, exporter crashes and native
+GPU cleanup faults remain open. See [the contract](cuda-ipc.md) and
+[the execution queue](completion-plan.md); this profile does not complete P5.
 
 ## Bounded CUDA IPC subbatches
 
@@ -79,8 +131,10 @@ controls. The first review's temporary files were externally removed during a
 build; that interruption is retained and affected checks were rerun in the
 persistent artifact directory.
 
-Trusted peers and a live exporter process/context remain required. Host IPC,
-external/managed allocations, transport-wide idle import caches, device-wide
+Trusted peers and a live exporter process/context remain required. In this
+historical GPU/GPU profile, host directions were not included; current local
+pinned host evidence is recorded above. External/managed allocations,
+transport-wide idle import caches, device-wide
 stream scheduling, MNNVL/VMM, native GPU cleanup faults and complete P5 remain
 open. See [the ownership contract](cuda-ipc.md) and the
 [completion plan](completion-plan.md).
