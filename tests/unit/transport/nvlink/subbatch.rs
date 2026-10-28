@@ -65,7 +65,11 @@ pub(crate) fn run_case(
             permission: Permission::RemoteReadWrite,
         });
     }
-    let offsets = [43, 11, 67];
+    let offsets = if case == "overlap" {
+        [11, 18, 11]
+    } else {
+        [43, 11, 67]
+    };
     let requests: Vec<_> = (0..3)
         .map(|i| TransferRequest {
             transport: Transport::Nvlink,
@@ -86,6 +90,7 @@ pub(crate) fn run_case(
         ],
         "context" => vec![(7, 11, 49, false), (7, 67, 17, false)],
         "region" => vec![(7, 11, 49, false), (8, 3, 17, false)],
+        "overlap" => vec![(7, 11, 24, false)],
         _ => vec![(7, 11, 73, false)],
     };
     let requester_epoch = engine.source_epoch();
@@ -180,6 +185,10 @@ pub(crate) fn run_case(
                 assert_eq!(receipt[..BINDING_SIZE], grant[36..120]);
                 assert_eq!(receipt[BINDING_SIZE], u8::from(clean_failure));
                 export.finish();
+                if case_owned == "ack-hold" {
+                    ready_tx.send(()).unwrap();
+                    release_rx.recv_timeout(timeout).unwrap();
+                }
                 if case_owned == "ack-loss" || (case_owned == "prefix-ack-loss" && group == 1) {
                     continue;
                 }
@@ -217,6 +226,22 @@ pub(crate) fn run_case(
             batch.cancel(1).unwrap();
         }
         release_tx.send(()).unwrap();
+        if case == "ack-hold" {
+            ready_rx.recv_timeout(timeout).unwrap();
+            assert!(
+                batch
+                    .task_statuses()
+                    .unwrap()
+                    .iter()
+                    .all(|task| task.state == TaskState::Running && task.transferred_bytes == 0)
+            );
+            assert_eq!(engine.stats().unwrap().inflight_bytes, 51);
+            assert!(matches!(
+                engine.close_requester(Duration::from_millis(10)),
+                Err(Error::Timeout)
+            ));
+            release_tx.send(()).unwrap();
+        }
         let status = batch.wait(timeout).unwrap();
         let submission = batch.submissions().unwrap().remove(0);
         assert_eq!(

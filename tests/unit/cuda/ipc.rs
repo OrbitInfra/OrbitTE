@@ -221,8 +221,10 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             "context",
             "region",
             "cancel-second",
+            "overlap",
+            "ack-hold",
         ] {
-            if case == "cancel-second" && !asynchronous {
+            if matches!(case, "cancel-second" | "ack-hold") && !asynchronous {
                 continue;
             }
             let source = allocation(&[0x5a; 128]);
