@@ -404,5 +404,12 @@ This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant now covers a bounded group, with per-slice
 events and one final import close/source receipt. Shared cleanup failure has an
 explicit affected task span. Native TENT keeps a transport-wide relocation cache;
-OrbitTE currently releases the mapping at the subbatch boundary. See [CUDA IPC](cuda-ipc.md)
+OrbitTE releases the mapping at the subbatch boundary.
+
+`cuda/pinned.rs::PinnedAllocation` owns real host allocation, primary context,
+and reusable copy stream/event. `HostMemory` holds its access lock through native
+copy/event/context completion and fences CPU/RDMA access on uncertainty.
+`IpcMapping` retains the existing `Allocation::Host` / `Allocation::Cuda` owners;
+mixed groups still share only their actual native context and remote GPU grant.
+See [CUDA IPC](cuda-ipc.md)
 for whole-allocation permission, exporter lifetime and remaining parity limits.

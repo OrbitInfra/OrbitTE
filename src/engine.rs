@@ -440,9 +440,9 @@ impl TransferEngine {
                         .as_ref()
                         .ok_or(Error::Unavailable("NVLink is not configured"))?;
                     local
-                        .cuda_range(local_offset, request.length)?
+                        .ipc_range(local_offset, request.length)?
                         .0
-                        .validate_ipc_requester()?;
+                        .ipc_context()?;
                 }
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));

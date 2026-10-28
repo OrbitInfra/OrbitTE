@@ -5,9 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orbit_te::cuda::{CudaMemory, retained_resources};
+use orbit_te::cuda::{CudaMemory, allocate_pinned_host, retained_resources};
 use orbit_te::{
-    EngineConfig, Error, Permission, Result, TransferEngine, TransferOp, TransferRequest, Transport,
+    EngineConfig, Error, HostMemory, Permission, RegisteredMemory, Result, TransferEngine,
+    TransferOp, TransferRequest, Transport,
 };
 
 const GUARD: usize = 67;
@@ -31,6 +32,42 @@ fn verify(memory: &CudaMemory, payload: usize, salt: usize) -> Result<()> {
         return Err(Error::Internal("NVLink full allocation/guard mismatch"));
     }
     Ok(())
+}
+
+enum LocalMemory {
+    Device(Arc<CudaMemory>),
+    Host(Arc<HostMemory>),
+}
+
+impl LocalMemory {
+    fn len(&self) -> usize {
+        match self {
+            Self::Device(m) => m.len(),
+            Self::Host(m) => m.len(),
+        }
+    }
+    fn read(&self, bytes: &mut [u8]) -> Result<()> {
+        match self {
+            Self::Device(m) => m.read(0, bytes),
+            Self::Host(m) => m.read(0, bytes),
+        }
+    }
+    fn write(&self, offset: usize, bytes: &[u8]) -> Result<()> {
+        match self {
+            Self::Device(m) => m.write(offset, bytes),
+            Self::Host(m) => m.write(offset, bytes),
+        }
+    }
+    fn register(&self, engine: &TransferEngine) -> Result<RegisteredMemory> {
+        match self {
+            Self::Device(m) => Ok(engine
+                .register_cuda_memory_batch(&[(m.clone(), 0, m.len())], Permission::LocalOnly)?
+                .remove(0)),
+            Self::Host(m) => {
+                engine.register_host_memory(m.clone(), 0, m.len(), Permission::LocalOnly)
+            }
+        }
+    }
 }
 
 fn released(engine: &TransferEngine) -> Result<()> {
@@ -153,7 +190,13 @@ fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
     Ok(())
 }
 
-fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
+fn requester(
+    device: i32,
+    payload: usize,
+    root: &Path,
+    mode: &str,
+    memory_kind: &str,
+) -> Result<()> {
     let batched = mode.starts_with("batch-");
     let mode = mode.strip_prefix("batch-").unwrap_or(mode);
     let ready = fs::read_to_string(root.join("ready"))?;
@@ -186,20 +229,28 @@ fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()>
         return Ok(());
     }
     let peer = engine.open_segment(endpoint, epoch, TIMEOUT)?;
-    let mut memories = vec![Arc::new(CudaMemory::allocate(device, payload + 2 * GUARD)?)];
-    if batched {
-        memories.push(Arc::new(CudaMemory::allocate(device, payload + 2 * GUARD)?));
-    }
+    let memories: Vec<_> = (0..if batched { 2 } else { 1 })
+        .map(|index| {
+            if memory_kind == "host" || (memory_kind == "mixed" && index == 0) {
+                Ok(LocalMemory::Host(allocate_pinned_host(
+                    device,
+                    payload + 2 * GUARD,
+                )?))
+            } else {
+                Ok(LocalMemory::Device(Arc::new(CudaMemory::allocate(
+                    device,
+                    payload + 2 * GUARD,
+                )?)))
+            }
+        })
+        .collect::<Result<_>>()?;
     for memory in &memories {
         memory.write(0, &vec![0xa5; memory.len()])?;
     }
-    let registered = engine.register_cuda_memory_batch(
-        &memories
-            .iter()
-            .map(|m| (m.clone(), 0, m.len()))
-            .collect::<Vec<_>>(),
-        Permission::LocalOnly,
-    )?;
+    let registered: Vec<_> = memories
+        .iter()
+        .map(|m| m.register(&engine))
+        .collect::<Result<_>>()?;
     let third = payload / 3;
     let slices = if batched {
         vec![(2 * third, payload - 2 * third), (0, third), (third, third)]
@@ -232,7 +283,7 @@ fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()>
                 }
             }
             let mut actual = vec![0; memory.len()];
-            memory.read(0, &mut actual)?;
+            memory.read(&mut actual)?;
             if actual != expected {
                 return Err(Error::Internal("NVLink READ slices/gaps/guards mismatch"));
             }
@@ -247,7 +298,16 @@ fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()>
         return Err(Error::Internal("NVLink WRITE incomplete"));
     }
     for memory in &memories {
-        verify(memory, payload, 53)?;
+        let mut bytes = vec![0; memory.len()];
+        memory.read(&mut bytes)?;
+        if bytes[GUARD..GUARD + payload] != pattern(payload, 53)
+            || bytes[..GUARD]
+                .iter()
+                .chain(bytes[GUARD + payload..].iter())
+                .any(|&b| b != 0xa5)
+        {
+            return Err(Error::Internal("requester WRITE changed source/guards"));
+        }
     }
     engine.close(TIMEOUT)?;
     for region in &registered {
@@ -269,8 +329,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         println!("orbitte-installed-nvlink-v1");
         return Ok(());
     }
-    if args.len() != 5 {
-        return Err("nvlink source|requester <device> <payload> <external-root> healthy|graceful|requester-exit|stale".into());
+    if args.len() != 6 {
+        return Err("nvlink source|requester <device> <payload> <external-root> healthy|graceful|requester-exit|stale device|host|mixed".into());
     }
     let device = args[1].parse()?;
     let payload: usize = args[2].parse()?;
@@ -294,9 +354,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if mode.starts_with("batch-") && payload < 3 {
         return Err("batch requires at least three bytes".into());
     }
+    let memory_kind = args[5].as_str();
+    if !["device", "host", "mixed"].contains(&memory_kind)
+        || (memory_kind == "mixed" && !mode.starts_with("batch-"))
+    {
+        return Err("invalid requester memory profile".into());
+    }
     match args[0].as_str() {
         "source" => source(device, payload, Path::new(&args[3]), mode)?,
-        "requester" => requester(device, payload, Path::new(&args[3]), mode)?,
+        "requester" => requester(device, payload, Path::new(&args[3]), mode, memory_kind)?,
         _ => return Err("unknown role".into()),
     }
     Ok(())

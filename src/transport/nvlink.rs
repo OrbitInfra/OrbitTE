@@ -125,8 +125,8 @@ impl NVLinkTransport {
             let result = (|| {
                 let (memory, _) = requests[0]
                     .local
-                    .cuda_range(requests[0].local_offset, requests[0].length)?;
-                memory.validate_ipc_requester()?;
+                    .ipc_range(requests[0].local_offset, requests[0].length)?;
+                memory.ipc_context()?;
                 let wire = Request {
                     operation: if operation == TransferOp::Read {
                         Operation::NvlinkRead
@@ -179,7 +179,7 @@ impl NVLinkTransport {
                             attempted = index + 1;
                             let (memory, offset) = request
                                 .local
-                                .cuda_range(request.local_offset, request.length)?;
+                                .ipc_range(request.local_offset, request.length)?;
                             batch.mapping.copy(
                                 &memory,
                                 remote_offset + (request.remote_offset - start),

@@ -17,6 +17,10 @@ int cuEventRecord(void *event, void *stream) { assert(event == (void *)3 && stre
 int cuEventSynchronize(void *event) { assert(event == (void *)3); return 700; }
 int cuCtxPopCurrent_v2(void **out) { *out = (void *)4; return 201; }
 int cuMemFree_v2(uint64_t ptr) { assert(ptr == 123); return 1; }
+int cuMemHostAlloc(void **out, size_t size, unsigned flags) { assert(size == 151 && flags == 1); *out = (void *)0x123456789abc; return 0; }
+int cuMemFreeHost(void *ptr) { assert(ptr == (void *)0x123456789abc); return 1; }
+int cuMemcpyHtoDAsync_v2(uint64_t dst, const void *src, size_t size, void *stream) { assert(dst == 456 && src == (void *)0x123456789abc && size == 17 && stream == (void *)2); return 1; }
+int cuMemcpyDtoHAsync_v2(void *dst, uint64_t src, size_t size, void *stream) { assert(dst == (void *)0x123456789abc && src == 456 && size == 17 && stream == (void *)2); return 700; }
 #define LOAD(name) __typeof__(&name) name##_fn = (__typeof__(&name))dlsym(library, #name); assert(name##_fn)
 int main(void) {
     void *library = dlopen(NULL, RTLD_NOW); assert(library);
@@ -34,6 +38,12 @@ int main(void) {
     assert(cuIpcCloseMemHandle_fn(mapped)==0 && cuIpcCloseMemHandle_fn(mapped)==1);
     assert(cuCtxPopCurrent_v2_fn(&context)==201 && context==(void *)4);
     assert(cuMemFree_v2_fn(ptr)==1);
+    LOAD(cuMemHostAlloc); LOAD(cuMemFreeHost); LOAD(cuMemcpyHtoDAsync_v2); LOAD(cuMemcpyDtoHAsync_v2);
+    void *host=NULL;
+    assert(cuMemHostAlloc_fn(&host,151,1)==0 && host==(void *)0x123456789abc);
+    assert(cuMemcpyHtoDAsync_v2_fn(456,host,17,(void *)2)==1);
+    assert(cuMemcpyDtoHAsync_v2_fn(host,456,17,(void *)2)==700);
+    assert(cuMemFreeHost_fn(host)==1);
     assert(dlclose(library)==0);
     return 0;
 }

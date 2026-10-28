@@ -10,6 +10,12 @@ use driver::Status;
 // The shim owns actual host backing and records Driver API boundaries. These
 // tests prove CPU ownership contracts, not GPU execution or memory ordering.
 pub(super) struct Device {
+    pub(super) event_gate: Mutex<
+        Option<(
+            std::sync::mpsc::SyncSender<()>,
+            std::sync::mpsc::Receiver<()>,
+        )>,
+    >,
     pub(super) bytes: UnsafeCell<Box<[u8]>>,
     pub(super) pins: Mutex<BTreeMap<usize, Box<[u8]>>>,
     pub(super) streams: Mutex<BTreeMap<usize, Option<PendingCopy>>>,
@@ -237,6 +243,10 @@ unsafe extern "C" fn stream_synchronize(stream: sys::CUstream) -> Status {
 }
 unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     event("event-sync");
+    if let Some((entered, resume)) = current().event_gate.lock().unwrap().take() {
+        entered.send(()).unwrap();
+        resume.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
     let stream = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
     let result = drain(stream);
@@ -266,6 +276,9 @@ unsafe extern "C" fn to_host(
     stream: sys::CUstream,
 ) -> Status {
     event("DtoH");
+    if !current().imports.lock().unwrap().is_empty() {
+        ipc_copy_control();
+    }
     let error = current().copy_error.load(Ordering::Acquire);
     enqueue(
         stream,
@@ -282,6 +295,9 @@ unsafe extern "C" fn to_device(
     stream: sys::CUstream,
 ) -> Status {
     event("HtoD");
+    if !current().imports.lock().unwrap().is_empty() {
+        ipc_copy_control();
+    }
     let error = current().copy_error.load(Ordering::Acquire);
     // Even a failed enqueue may leave a prefix scheduled. Drain is not rollback.
     enqueue(
@@ -402,6 +418,7 @@ pub(super) fn driver() -> Arc<Driver> {
 }
 pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
     let device = Arc::new(Device {
+        event_gate: Mutex::new(None),
         bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
         pins: Mutex::default(),
         streams: Mutex::default(),
@@ -596,6 +613,18 @@ unsafe extern "C" fn copy_device(
     stream: sys::CUstream,
 ) -> Status {
     event("DtoD");
+    ipc_copy_control();
+    let error = current().copy_error.load(Ordering::Acquire);
+    enqueue(
+        stream,
+        source as usize,
+        destination as usize,
+        if error == 0 { length } else { length.min(1) },
+    );
+    status(error)
+}
+
+fn ipc_copy_control() {
     let count = current().ipc_copies.fetch_add(1, Ordering::AcqRel) + 1;
     if count == current().ipc_copy_fail_at.load(Ordering::Acquire) {
         current().copy_error.store(1, Ordering::Release);
@@ -608,12 +637,4 @@ unsafe extern "C" fn copy_device(
             .pop_after_completion
             .store(true, Ordering::Release);
     }
-    let error = current().copy_error.load(Ordering::Acquire);
-    enqueue(
-        stream,
-        source as usize,
-        destination as usize,
-        if error == 0 { length } else { length.min(1) },
-    );
-    status(error)
 }

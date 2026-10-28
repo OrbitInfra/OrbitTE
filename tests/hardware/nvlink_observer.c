@@ -22,6 +22,10 @@ static int log_fd = -1, held;
 static void *(*lookup)(void *, const char *);
 static _Atomic(int (*)(uint64_t *, size_t)) allocate_native;
 static _Atomic(int (*)(uint64_t)) free_native;
+static _Atomic(int (*)(void **, size_t, unsigned)) pin_native;
+static _Atomic(int (*)(void *)) unpin_native;
+static _Atomic(int (*)(uint64_t, const void *, size_t, void *)) htod_native;
+static _Atomic(int (*)(void *, uint64_t, size_t, void *)) dtoh_native;
 static _Atomic(int (*)(ipc_handle *, uint64_t)) export_native;
 static _Atomic(int (*)(uint64_t *, ipc_handle, unsigned)) open_native;
 static _Atomic(int (*)(uint64_t)) close_native;
@@ -65,6 +69,22 @@ static int sync_wrap(void) {
 }
 static int free_wrap(uint64_t address) {
     int code = free_native(address); emit("free", "\"address\":%" PRIu64 ",\"code\":%d", address, code); return code;
+}
+static int pin_wrap(void **address, size_t length, unsigned flags) {
+    int code = pin_native(address, length, flags);
+    emit("pin", "\"address\":%" PRIuPTR ",\"length\":%zu,\"flags\":%u,\"code\":%d", (uintptr_t)*address, length, flags, code); return code;
+}
+static int unpin_wrap(void *address) {
+    int code = unpin_native(address);
+    emit("unpin", "\"address\":%" PRIuPTR ",\"code\":%d", (uintptr_t)address, code); return code;
+}
+static int htod_wrap(uint64_t destination, const void *source, size_t length, void *stream) {
+    int code = htod_native(destination, source, length, stream);
+    emit("htod", "\"source\":%" PRIuPTR ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)source, destination, length, (uintptr_t)stream, code); return code;
+}
+static int dtoh_wrap(void *destination, uint64_t source, size_t length, void *stream) {
+    int code = dtoh_native(destination, source, length, stream);
+    emit("dtoh", "\"source\":%" PRIu64 ",\"destination\":%" PRIuPTR ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", source, (uintptr_t)destination, length, (uintptr_t)stream, code); return code;
 }
 static int export_wrap(ipc_handle *handle, uint64_t address) {
     int code = export_native(handle, address);
@@ -111,6 +131,10 @@ void *dlsym(void *library, const char *name) {
 #define WRAP(symbol, field, wrapper) if (result && !strcmp(name, symbol)) { __typeof__(atomic_load(&field)) target; memcpy(&target, &result, sizeof(target)); atomic_store(&field, target); result = (void *)(wrapper); }
     WRAP("cuMemAlloc_v2", allocate_native, allocate_wrap)
     WRAP("cuMemFree_v2", free_native, free_wrap)
+    WRAP("cuMemHostAlloc", pin_native, pin_wrap)
+    WRAP("cuMemFreeHost", unpin_native, unpin_wrap)
+    WRAP("cuMemcpyHtoDAsync_v2", htod_native, htod_wrap)
+    WRAP("cuMemcpyDtoHAsync_v2", dtoh_native, dtoh_wrap)
     WRAP("cuMemsetD8_v2", memset_native, memset_wrap)
     WRAP("cuCtxSynchronize", sync_native, sync_wrap)
     WRAP("cuIpcGetMemHandle", export_native, export_wrap)

@@ -3,7 +3,7 @@
 Build with `--features cuda`, set `EngineConfig { nvlink: true, ..Default::default() }`,
 and select `Transport::Nvlink`. This is a separate payload transport alongside
 TCP and RDMA. The shared control socket exchanges descriptors, CUDA handles and
-receipts; device bytes use CUDA peer copies. It requires different cooperating
+receipts; payload bytes use CUDA device/device or pinned host/device copies. It requires different cooperating
 processes on the same physical host, with compatible NVIDIA devices and driver.
 
 ## Memory and permission contract
@@ -12,14 +12,16 @@ The source explicitly opts in with `CudaMemory::allocate_ipc(device, length)`.
 Register that allocation with `register_cuda_memory_batch`, publish its engine
 endpoint/epoch through your application's trusted discovery, and open that
 segment from the requester. The requester uses owned `CudaMemory::allocate`
-or `allocate_ipc`. Requests use absolute registered addresses and retain the
+or `allocate_ipc`, or `cuda::allocate_pinned_host` registered through
+`register_host_memory` / `register_host_memory_batch`. Requests use absolute
+registered addresses and retain the
 existing READ/WRITE bounds and permissions.
 
 An exported legacy CUDA IPC handle grants access to its **whole underlying
 allocation**. Driver hardware does not enforce a registered subrange or a
 READ-only grant, and a receipt cannot revoke a copied handle. This interface
 requires trusted, cooperating peers that obey the protocol. It is not an
-isolation boundary. External/managed allocations and host IPC are unsupported
+isolation boundary. External/managed GPU allocations and remote host exports are unsupported
 in this profile. The exporter process and context must remain alive until every
 import is closed. Killing the exporter with a live import is unqualified;
 generation checks do not make that CUDA operation safe.
@@ -34,11 +36,32 @@ budget, bounded by `max_inflight_bytes`, separately from normal request-byte
 admission. A 17-byte transfer from a 2 MiB allocation therefore charges 2 MiB of
 mapping quota. Configure enough space for the simultaneous mappings you allow.
 
+## Local pinned host directions
+
+A local owned pinned allocation can READ from or WRITE to the remote GPU export.
+READ uses `cuMemcpyDtoHAsync_v2`; WRITE uses `cuMemcpyHtoDAsync_v2`. The actual
+host pointer is copied directly, with no temporary staging allocation. The
+allocation retains the primary context selected by `allocate_pinned_host` and
+an allocation-owned reusable copy stream/event. Ordinary/pageable and externally
+supplied `HostMemory` are rejected by this bounded profile; there is no implicit
+registration or staging fallback. This is an OrbitTE ownership restriction,
+not a claim that CUDA or native TENT always rejects pageable memory.
+
+The `HostMemory` access lock stays held through copy, event drain and context
+restoration. CPU access and new RDMA leases wait for that critical section.
+Requester preflight conservatively rejects any existing RDMA loan on that host
+allocation, including disjoint ranges, as the existing device requester does.
+The actual slice is checked again at copy time. Uncertain completion or cleanup
+fences the whole host owner against subsequent CPU and RDMA access; dropping
+an unrelated RDMA lease cannot remove that fence. The native pinned allocation,
+context and transport charges remain retained when drain cannot be proven.
+
 ## Subbatch import reuse
 
 Consecutive requests in one submission reuse an import when they name the same
 remote region and the same local **native CUDA context**. Separate `CudaMemory`
-allocations on the same primary context can share it. The transport preserves
+and pinned `HostMemory` allocations on the same primary context can share it,
+including a mixed host/GPU group. The transport preserves
 input order, including overlapping or out-of-order ranges; each copy drains its
 allocation-owned event before the next begins. It does not reorder addresses.
 
@@ -62,7 +85,8 @@ requiring a new remote revocation protocol. Cross-submission caching remains ope
 2. The requester validates a grant binding the operation/range, source and
    requester epochs, and fresh grant token. It opens the handle in its local
    primary context with lazy peer access, then relocates the granted offset.
-3. Each slice's allocation-owned stream issues `cuMemcpyAsync`, records and waits for a
+3. Each slice's allocation-owned stream issues `cuMemcpyAsync` for device/device
+   or the direction-specific host/device API above, records and waits for a
    completion event, and restores the calling context. The mapping retains all
    touched local allocations until close. Both READ and WRITE may
    modify destination bytes before their final report, including on failure.
@@ -111,9 +135,15 @@ map, while `NVLinkSubBatch` owns task streams/events. OrbitTE's
 bounded group and `cuda/ipc.rs::IpcMapping` owns the native reference, context and
 touched allocations. Each local allocation reuses its existing stream/event.
 TENT's longer-lived cache and device-wide stream pool remain separate work;
-this implementation does not claim their full scheduling behavior. Host/GPU IPC
-directions, cross-submission import-cache ownership, MNNVL/VMM and exporter-crash
-safety remain open in P5.4.
+this implementation does not claim their full scheduling behavior.
+
+TENT advertises DRAM/GPU directions and optionally registers local host buffers
+(`transports/nvlink/host_register`, default false), but its remote relocation
+accepts only CUDA buffers. OrbitTE follows that distinction: `cuda/pinned.rs`
+owns local pinned backing/stream, `HostMemory` owns CPU/RDMA exclusion, and
+`IpcMapping` retains the concrete host or device allocation. Remote grants
+remain GPU-only. Remote host exports, cross-submission import-cache ownership,
+MNNVL/VMM and exporter-crash safety remain open in P5.4.
 These limits follow the native
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
@@ -130,7 +160,8 @@ The package needs neither RDMA libraries nor the CUDA toolkit. Runtime needs the
 CUDA driver. The output includes an installed binary, native observer, bounded
 controller and manifest with hashes. On an allocated host, run `nvlink_run.py`
 with explicit `--binary`, `--observer`, their manifest hashes, `--devices 0,1`,
-`--lock-root`, `--output`, `--payload`, and `--mode`. Output must stay outside the
+`--lock-root`, `--output`, `--payload`, `--mode` and
+`--memory device|host|mixed` (mixed requires a batch mode). Output must stay outside the
 source checkout. The controller locks the selected GPU UUIDs and requires an
 NVLink topology edge; it never claims measured fabric bandwidth from that fact.
 
@@ -143,7 +174,11 @@ allocations before use and a separate matching event drain for every slice. Chec
 full logical bytes/guards, native allocation initialization, exact imported
 handles/copy ranges, matched event drain and IPC close, process reaping, lock
 release and GPU allocation baselines. The observer forwards real Driver API
-results; CPU negative controls check its transparency and reject incomplete
-evidence. See [subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
+results, including exact pinned allocation/free and HtoD/DtoH pointer ABIs.
+Host/mixed controls require native pinned owners and no temporary allocation
+inside an import/copy cycle; initialization/readback staging outside the cycle
+is accounted separately. CPU negative controls check its transparency and reject incomplete
+evidence. See [local pinned host qualification](qualification.md#local-pinned-host-cuda-ipc),
+[subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
 and [the initial profile](qualification.md#cooperative-cuda-ipc-and-nvlink) for
 exact artifacts and profile limits.
