@@ -138,11 +138,12 @@ Modes cover healthy READ/WRITE, source-close waiting for an open import,
 requester exit before close, and stale source identity rejection. The
 `batch-healthy`, `batch-graceful` and `batch-requester-exit` modes use three
 out-of-order slices across two requester allocations on one native context.
-They require one native import per group and a separate matching event drain
-for every slice. Checks include
+They require one native import per group, distinct nonoverlapping local
+allocations before use and a separate matching event drain for every slice. Checks include
 full logical bytes/guards, native allocation initialization, exact imported
 handles/copy ranges, matched event drain and IPC close, process reaping, lock
 release and GPU allocation baselines. The observer forwards real Driver API
 results; CPU negative controls check its transparency and reject incomplete
-evidence. See [qualification](qualification.md#cooperative-cuda-ipc-and-nvlink) for
+evidence. See [subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
+and [the initial profile](qualification.md#cooperative-cuda-ipc-and-nvlink) for
 exact artifacts and profile limits.

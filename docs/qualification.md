@@ -15,14 +15,75 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery qualifies the cooperative [GPU IPC](#cooperative-cuda-ipc-and-nvlink)
-profile below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
+The latest installed delivery qualifies bounded [CUDA IPC subbatches](#bounded-cuda-ipc-subbatches),
+building on the cooperative [GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
+below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
 explicit host-wide context inventory limit. Earlier host
 [automatic discovery](#installed-automatic-discovery) and
 [physical rail accounting](#installed-physical-rail-accounting) retain their own
 artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
+
+## Bounded CUDA IPC subbatches
+
+Source [`818b53e`](https://github.com/OrbitInfra/OrbitTE/commit/818b53ebac70b1e53257c5e82161b927f4c4bb63)
+qualifies reuse of one import by consecutive requests in a single submission.
+Two distinct owned requester allocations sharing one native CUDA context issue
+three slices in input order. Each slice drains its own event; native import
+close and the source receipt/ACK precede confirmed success. Cross-submission
+caching is outside this profile.
+
+Clean packaged consumers on stable 1.99.1 and Rust 1.85 pass 28 installed cases
+on two physical H20 hosts, using each host's GPU 0/1 with NV18 topology:
+16 three-slice READ/WRITE cases cover both directions and 17 / 2,097,171-byte
+payloads; four source-close waits, four requester exits before import close,
+and four original single-request READ/WRITE regressions use 4,133 bytes.
+The runtime maps compatibility `libcuda.so.590.48.01` on R535.161.08. This is
+Driver API correctness evidence, not a CUDA toolkit/kernel or bandwidth result.
+
+The 2,744 native records contain 48 exports/imports, 128 copies and 44 closes.
+Healthy and graceful-close cases verify touched bytes, gaps and guards.
+Requester-exit cases prove native copy drain and ownership retention; they do
+not read back final payload bytes while the source loan remains retained.
+The ledger requires distinct live
+local allocations before use, the exact relocated offsets, a separate completed
+event for each slice and close after all copies drain. Four lost-close cases
+retain source export ownership until process exit. Every child is reaped, GPU
+UUID locks are released and selected GPU allocations return to zero. Requester
+termination happens after copies drain; it does not qualify termination during
+GPU DMA or exporter-crash safety.
+
+Independent source review passes stable/MSRV × four-feature Clippy/test gates;
+the combined build passes 251 unit tests, eight integration tests and one
+doctest, with six hardware/subprocess fixtures explicitly ignored. The review
+also checks packaged-source and dependency provenance. Test-only commits
+`72373d5` and `e8f2d4d` extend overlap, held-ACK, nonzero submission-index and
+cancel/cleanup controls without changing production code, the installed
+consumer or native observer. The final validator passes 41 Python controls,
+including independent late-allocation and aliased-owner counterexamples.
+Four fresh independent repeats also pass: each host runs stable and MSRV
+three-slice healthy/source-close cases, totaling 408 native records, six imports,
+18 copies and six closes. Independent post-run checks find all original and new
+child PIDs gone, all GPUs at zero allocations with no compute processes, and
+selected locks reacquirable. Independent review accepts the source and this
+bounded installed profile with the limits below.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/cuda-ipc-batch-20261028/`: `installed-stable/` and
+`installed-msrv/` contain packaged-consumer manifests; `matrix.json`,
+`runs/*/evidence/` and `native-audit.json` bind all case logs, native calls,
+host/boot/GPU identities and hashes to source `818b53e` and validator
+`e8f2d4d`. `independent-review/` preserves source checks and original rejected
+controls. The first review's temporary files were externally removed during a
+build; that interruption is retained and affected checks were rerun in the
+persistent artifact directory.
+
+Trusted peers and a live exporter process/context remain required. Host IPC,
+external/managed allocations, transport-wide idle import caches, device-wide
+stream scheduling, MNNVL/VMM, native GPU cleanup faults and complete P5 remain
+open. See [the ownership contract](cuda-ipc.md) and the
+[completion plan](completion-plan.md#p5-cuda-gpudirect-and-staged-transfers).
 
 ## Cooperative CUDA IPC and NVLink
 

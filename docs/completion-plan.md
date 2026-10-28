@@ -118,7 +118,7 @@ remains the target; the current order does not reduce the required scope.
 | P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
-| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | P5.3 source and bounded H20/RoCE profile accepted with an explicit global-context inventory limit; full P5 open |
+| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct and cooperative IPC/subbatch profiles accepted with explicit limits; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
@@ -513,12 +513,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   close receipts, with synchronous/async failure retention controls. Installed
   stable/MSRV qualification passes 48 H20 cases plus four fresh independent
   repeats; source and the bounded cooperative profile are independently accepted.
-  **P5.4b — bounded subbatch reuse (Implemented; qualification pending):**
+  **P5.4b — bounded subbatch reuse (Accepted for the declared profile):**
   consecutive same-region/native-context requests share one import and physical
   charge; copied local owners survive through close. Exact envelope relocation,
   typed pre-grant rejection fallback, per-slice cancellation and shared failure
-  spans have CPU controls. Installed consumers now cover two local allocations
-  and three ordered copies per import. Host IPC directions, cross-submission
+  spans have CPU controls, including nonzero submission indices and combined
+  cancel/cleanup failures. Installed consumers pass 28 H20 cases on stable/MSRV,
+  covering two local allocations and three ordered copies per import. Four fresh
+  independent repeats pass; source and bounded hardware evidence are accepted.
+  Host IPC directions, cross-submission
   import-cache ownership and broader stream scheduling remain open; exporter-crash safety is
   explicitly unqualified. See [the transport contract](cuda-ipc.md).
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
@@ -776,9 +779,9 @@ including four fresh live repeats. Under the user's 2026-10-27 sequencing decisi
 P5.3 source and bounded GPU Direct evidence are independently accepted with the
 explicit host-context inventory limit in [qualification](qualification.md#gpudirect-rdma).
 The cooperative P5.4 GPU/GPU IPC substage is independently accepted with
-48 installed cases and four fresh repeats. P5.4b bounded subbatch reuse is
-implemented; freeze and independently qualify its new source and installed
-consumer before accepting it. Then address host directions and cross-submission
+48 installed cases and four fresh repeats. P5.4b bounded subbatch reuse passes
+28 installed H20 cases plus four fresh repeats and is independently accepted
+for that profile. Next address host directions and cross-submission
 import reuse with explicit exporter lifetime owners. Proxy/staging scheduling
 follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
