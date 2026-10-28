@@ -1,5 +1,5 @@
 use super::*;
-use crate::cuda::ipc::IpcExport;
+use crate::cuda::ipc::{IpcExport, IpcMapping};
 
 fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
     let memory = memory(device);
@@ -31,7 +31,7 @@ fn ipc_explicit_export_blocks_whole_allocation_and_reuses_copy_stream() {
     );
     assert!(IpcExport::new(remote.clone()).is_err());
     for to_remote in [false, true, false] {
-        local.copy_ipc(export.handle, 11, 7, 17, to_remote).unwrap();
+        copy_ipc(&local, export.handle, to_remote).unwrap();
         assert!(destination.imports.lock().unwrap().is_empty());
     }
     let mut bytes = [0; 128];
@@ -101,7 +101,7 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
                 .store(true, Ordering::Release),
             _ => unreachable!(),
         }
-        let result = local.copy_ipc(export.handle, 11, 7, 17, true);
+        let result = copy_ipc(&local, export.handle, true);
         let uncertain = matches!(
             case,
             "wait" | "close" | "restore-open" | "restore-copy" | "restore-close"
@@ -118,7 +118,7 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
             "{case}"
         );
         if uncertain {
-            assert!(local.allocation.lock().unwrap().uncertain);
+            assert!(local.validate_ipc_requester().is_err());
             drop(export);
             assert!(remote.read(100, &mut [0; 1]).is_err());
             if !matches!(case, "close" | "restore-close") {
@@ -192,6 +192,119 @@ fn ipc_public_requester_retains_real_owners_and_reports_partial_writes() {
                 "{case}"
             );
             STACK.with(|stack| stack.borrow_mut().clear());
+        }
+    }
+}
+
+fn copy_ipc(local: &Arc<CudaMemory>, handle: [u8; 64], to_remote: bool) -> Result<()> {
+    let mut mapping = IpcMapping::new(local)?;
+    let result = mapping
+        .open(handle)
+        .and_then(|()| mapping.copy(local, 11, 7, 17, to_remote));
+    mapping.close()?;
+    result
+}
+
+#[test]
+fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
+    for asynchronous in [false, true] {
+        for case in [
+            "success",
+            "copy-second",
+            "wait-second",
+            "pop-second",
+            "close",
+            "ack-loss",
+            "prefix-ack-loss",
+            "cap",
+            "source-cap",
+            "context",
+            "region",
+            "cancel-second",
+        ] {
+            if case == "cancel-second" && !asynchronous {
+                continue;
+            }
+            let source = allocation(&[0x5a; 128]);
+            let owners: Vec<_> = (1..=3).map(|value| allocation(&[value; 128])).collect();
+            let local: Vec<_> = owners.iter().map(|owner| owned(owner, false)).collect();
+            let context = local[0].allocation.lock().unwrap().context.clone();
+            for (index, memory) in local.iter().enumerate().skip(1) {
+                if case == "context" && index == 2 {
+                    continue;
+                }
+                memory.allocation.lock().unwrap().context = Arc::new(Context {
+                    driver: context.driver.clone(),
+                    raw: context.raw,
+                    device: context.device,
+                    primary: false,
+                    owner: Some(context.clone()),
+                    poisoned: AtomicBool::new(false),
+                });
+            }
+            match case {
+                "copy-second" => owners[0].ipc_copy_fail_at.store(2, Ordering::Release),
+                "wait-second" => owners[0].ipc_wait_fail_at.store(2, Ordering::Release),
+                "pop-second" => owners[0].ipc_pop_fail_at.store(2, Ordering::Release),
+                "close" => owners[0].ipc_close_error.store(1, Ordering::Release),
+                _ => (),
+            }
+            crate::transport::nvlink::tests::subbatch::run_case(
+                local,
+                owned(&source, true),
+                case,
+                asynchronous,
+            );
+            let events = owners[0].events.lock().unwrap();
+            let expected = match case {
+                "cap" | "source-cap" => 3,
+                "region" | "prefix-ack-loss" => 2,
+                _ => 1,
+            };
+            assert_eq!(
+                events.iter().filter(|&&e| e == "ipc-open").count(),
+                expected,
+                "{case}"
+            );
+            let closes = if matches!(case, "wait-second" | "pop-second") {
+                0
+            } else {
+                expected
+            };
+            assert_eq!(
+                events.iter().filter(|&&e| e == "ipc-close").count(),
+                closes,
+                "{case}"
+            );
+            drop(events);
+            STACK.with(|stack| stack.borrow_mut().clear());
+        }
+    }
+}
+
+#[test]
+fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
+    for fail_close in [false, true] {
+        let source = allocation(&[0x5a; 128]);
+        let destination = allocation(&[0xa5; 128]);
+        let remote = owned(&source, true);
+        let local = owned(&destination, false);
+        let weak = Arc::downgrade(&local);
+        let mut export = IpcExport::new(remote).unwrap();
+        export.expose();
+        let mut mapping = IpcMapping::new(&local).unwrap();
+        mapping.open(export.handle).unwrap();
+        mapping.copy(&local, 11, 7, 17, false).unwrap();
+        drop(local);
+        assert!(weak.upgrade().is_some());
+        if fail_close {
+            destination.ipc_close_error.store(1, Ordering::Release);
+        }
+        assert_eq!(mapping.close().is_err(), fail_close);
+        drop(mapping);
+        assert_eq!(weak.upgrade().is_some(), fail_close);
+        if !fail_close {
+            export.finish();
         }
     }
 }

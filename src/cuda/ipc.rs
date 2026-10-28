@@ -70,14 +70,34 @@ impl Drop for IpcExport {
     }
 }
 
-struct IpcMapping {
+pub(crate) struct IpcMapping {
     context: Arc<Context>,
     address: u64,
     pending: bool,
+    uncertain: bool,
+    memories: Vec<Arc<CudaMemory>>,
 }
 
 impl IpcMapping {
-    fn open(&mut self, handle: [u8; 64]) -> Result<()> {
+    pub(crate) fn new(memory: &CudaMemory) -> Result<Self> {
+        memory.validate_ipc_requester()?;
+        let allocation = memory
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        Ok(Self {
+            context: Arc::clone(&allocation.context),
+            address: 0,
+            pending: false,
+            uncertain: false,
+            memories: Vec::new(),
+        })
+    }
+
+    pub(crate) fn open(&mut self, handle: [u8; 64]) -> Result<()> {
+        if self.address != 0 || self.uncertain {
+            return Err(Error::Internal("CUDA IPC mapping already opened"));
+        }
         let context = Arc::clone(&self.context);
         context.current(|| {
             // SAFETY: the cooperative exporter retains this allocation until
@@ -98,8 +118,18 @@ impl IpcMapping {
         })
     }
 
-    fn close(&mut self) -> Result<()> {
-        if self.pending || self.context.poisoned.load(Ordering::Acquire) {
+    pub(crate) fn close(&mut self) -> Result<()> {
+        let result = self.close_mapping();
+        if result.is_err() {
+            self.uncertain = true;
+        } else {
+            self.memories.clear();
+        }
+        result
+    }
+
+    fn close_mapping(&mut self) -> Result<()> {
+        if self.pending || self.uncertain || self.context.poisoned.load(Ordering::Acquire) {
             return Err(Error::Unquiesced {
                 operation: "CUDA IPC mapping",
                 code: -1,
@@ -135,14 +165,33 @@ impl Drop for IpcMapping {
     fn drop(&mut self) {
         // An explicit close is required before sending a receipt. Drop cannot
         // turn an uncertain import or copy into a successful release.
-        if self.address != 0 {
-            RETAINED_IPC.fetch_add(1, Ordering::AcqRel);
+        if self.address != 0 || self.uncertain {
+            if self.address != 0 {
+                RETAINED_IPC.fetch_add(1, Ordering::AcqRel);
+            }
+            for memory in &self.memories {
+                memory
+                    .allocation
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .uncertain = true;
+            }
+            std::mem::forget(std::mem::take(&mut self.memories));
             std::mem::forget(Arc::clone(&self.context));
         }
     }
 }
 
 impl CudaMemory {
+    /// A retained primary context cannot be destroyed/reused while this memory lives.
+    pub(crate) fn ipc_context(&self) -> Result<usize> {
+        let allocation = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        Ok(allocation.context.raw.as_ptr() as usize)
+    }
+
     pub(crate) fn validate_ipc_requester(&self) -> Result<()> {
         let allocation = self
             .allocation
@@ -155,17 +204,19 @@ impl CudaMemory {
         }
         allocation.check_dma(&(0..self.length))
     }
+}
 
-    pub(crate) fn copy_ipc(
-        &self,
-        handle: [u8; 64],
+impl IpcMapping {
+    pub(crate) fn copy(
+        &mut self,
+        memory: &Arc<CudaMemory>,
         remote_offset: usize,
         local_offset: usize,
         length: usize,
         to_remote: bool,
     ) -> Result<()> {
-        let range = checked_range(local_offset, length, self.length)?;
-        let mut allocation = self
+        let range = checked_range(local_offset, length, memory.length)?;
+        let mut allocation = memory
             .allocation
             .lock()
             .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
@@ -175,15 +226,21 @@ impl CudaMemory {
             ));
         }
         allocation.check_dma(&range)?;
+        if allocation.context.raw != self.context.raw {
+            return Err(Error::Unavailable(
+                "CUDA IPC import belongs to another context",
+            ));
+        }
+        if self.address == 0 || self.pending || self.uncertain {
+            return Err(Error::Unavailable("CUDA IPC import is not ready"));
+        }
+        self.memories
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        self.memories.push(Arc::clone(memory));
         let context = Arc::clone(&allocation.context);
-        let mut mapping = IpcMapping {
-            context: Arc::clone(&context),
-            address: 0,
-            pending: false,
-        };
         let result = (|| {
-            mapping.open(handle)?;
-            let remote = mapping
+            let remote = self
                 .address
                 .checked_add(remote_offset as u64)
                 .ok_or(Error::InvalidRange)?;
@@ -197,24 +254,23 @@ impl CudaMemory {
                 .copy_stream
                 .as_mut()
                 .ok_or(Error::Internal("CUDA stream missing"))?;
-            let local = self.address + local_offset as u64;
+            let local = memory.address + local_offset as u64;
             let (destination, source) = if to_remote {
                 (remote, local)
             } else {
                 (local, remote)
             };
-            mapping.pending = true;
+            self.pending = true;
             // SAFETY: this lock owns local bytes, and the mapping retains remote
             // bytes via the source grant. Neither is released before completion.
             let result = unsafe { stream.copy_device(destination, source, length) };
-            mapping.pending = !stream.quiescent();
+            self.pending = !stream.quiescent();
             result
         })();
-        let closed = mapping.close();
-        if closed.is_err() {
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            self.uncertain = true;
             allocation.uncertain = true;
         }
-        closed?;
         result
     }
 }

@@ -21,13 +21,15 @@ def records(path):
 
 
 def validate_native(source, requester, payload, mode, source_pid, requester_pid):
+    batched = mode.startswith("batch-")
+    mode = mode.removeprefix("batch-")
     for rows, pid in [(source, source_pid), (requester, requester_pid)]:
         assert [row['seq'] for row in rows] == list(range(1, len(rows)+1)), 'native sequence gap'
         assert all(row['pid'] == pid and row['code'] == 0 for row in rows), 'native PID/driver result'
     select = lambda rows, kind: [row for row in rows if row['kind'] == kind]
     expected = 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
     exports, imports, copies = select(source, 'export'), select(requester, 'open'), select(requester, 'copy')
-    assert len(exports) == len(imports) == len(copies) == expected, 'native IPC/copy count'
+    assert len(exports) == len(imports) == expected and len(copies) == expected*(3 if batched else 1), 'native IPC/copy count'
     source_alloc = select(source, 'allocate')
     assert len(source_alloc) == 1 and source_alloc[0]['length'] == ((payload + 134 + (2 << 20)-1) & ~((2 << 20)-1)), 'export allocation extent'
     initialized = select(source, 'memset')
@@ -41,40 +43,46 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
     assert [row['handle'] for row in exports] == [row['handle'] for row in imports], 'IPC handle pairing'
     assert all(row['flags'] == 1 for row in imports), 'lazy peer flag'
     local = select(requester, 'allocate')
-    assert len(local) == int(mode != 'stale'), 'requester allocation count'
+    assert len(local) == (2 if batched else int(mode != 'stale')), 'requester allocation count'
     if local:
-        assert local[0]['length'] == payload+134, 'requester allocation extent'
+        assert all(row['length'] == payload+134 for row in local), 'requester allocation extent'
     closes = select(requester, 'close')
     assert len(closes) == (0 if mode == 'requester-exit' else expected), 'mapping close count'
-    for index, (opened, copy) in enumerate(zip(imports, copies)):
+    for index, opened in enumerate(imports):
         boundary = imports[index+1]['seq'] if index+1 < len(imports) else len(requester)+1
         cycle = [row for row in requester if opened['seq'] <= row['seq'] < boundary]
-        assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
-        assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
+        cycle_copies = select(cycle, 'copy')
+        assert len(cycle_copies) == (3 if batched else 1), 'copies outside their import cycle'
         read = mode == 'healthy' and index == 0
-        remote, own = opened['address']+67, local[0]['address']+67
-        assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, payload) if read else (own, remote, payload)), 'copy range/direction'
-        assert opened['seq'] < copy['seq'], 'copy before import'
-        events = [r for r in select(cycle, 'record') if r['seq'] > copy['seq'] and r['stream'] == copy['stream']]
-        assert events, 'copy has no completion event'
-        event = events[0]
-        waits = [r for r in select(cycle, 'wait') if r['seq'] > event['seq'] and r['event'] == event['event']]
-        assert waits, 'copy has no completed event'
-        wait = waits[0]
-        pops = [row for row in select(cycle, 'pop') if row['tid'] == copy['tid']]
-        assert event['tid'] == wait['tid'] == copy['tid'], 'completion thread mismatch'
-        assert any(copy['seq'] < p['seq'] < event['seq'] for p in pops) is False, 'copy escaped owning context before event record'
-        if mode != 'requester-exit':
-            close = closes[index]
-            assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'
-            assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'copy context not restored'
-            assert close['tid'] == copy['tid'], 'close/import thread mismatch'
-            after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
-            assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
+        width = payload//3
+        slices = [(2*width, payload-2*width), (0,width), (width,width)] if batched else [(0,payload)]
+        for part, (copy, (offset, length)) in enumerate(zip(cycle_copies, slices)):
+            next_copy = cycle_copies[part+1]['seq'] if part+1 < len(cycle_copies) else boundary
+            assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
+            assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
+            remote, own = opened['address']+67+offset, local[part % len(local)]['address']+67+offset
+            assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
+            events = [r for r in select(cycle, 'record') if copy['seq'] < r['seq'] < next_copy and r['stream'] == copy['stream']]
+            assert events, 'copy has no completion event'
+            event = events[0]
+            waits = [r for r in select(cycle, 'wait') if event['seq'] < r['seq'] < next_copy and r['event'] == event['event']]
+            assert waits, 'copy has no completed event'
+            wait = waits[0]
+            pops = [row for row in select(cycle, 'pop') if row['tid'] == copy['tid']]
+            assert event['tid'] == wait['tid'] == copy['tid'], 'completion thread mismatch'
+            assert not any(copy['seq'] < p['seq'] < event['seq'] for p in pops), 'copy escaped owning context before event record'
+            assert any(wait['seq'] < p['seq'] < next_copy for p in pops), 'copy context not restored before next slice'
+            if mode != 'requester-exit':
+                close = closes[index]
+                assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'
+                assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'copy context not restored'
+                assert close['tid'] == copy['tid'], 'close/import thread mismatch'
+                after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
+                assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
     for rows, allocations in [(source, source_alloc), (requester, local)]:
         frees = select(rows, 'free')
         assert len(frees) == (0 if mode == 'requester-exit' else len(allocations)), 'native allocation release/retention'
-        assert all(free['address'] in [a['address'] for a in allocations] for free in frees), 'free owner mismatch'
+        assert not frees or sorted(free['address'] for free in frees) == sorted(a['address'] for a in allocations), 'free owner mismatch'
         if frees:
             assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'record', 'wait', 'close')), 'allocation freed before its last native use'
             if rows is requester and closes:
@@ -93,6 +101,7 @@ def run(args):
                 'binary_sha256': digest(args.binary), 'observer_sha256': digest(args.observer),
                 'started_unix': time.time(), 'children': [], 'performance_measurement': False}
     locks, children, files = [], [], []
+    mode = args.mode.removeprefix("batch-")
 
     def inventory(name):
         result = subprocess.run(['nvidia-smi', '--query-gpu=index,uuid,memory.used', '--format=csv,noheader,nounits'], text=True, capture_output=True, check=True, timeout=15)
@@ -110,7 +119,7 @@ def run(args):
     def start(role, ordinal):
         env = {**os.environ, 'CUDA_VISIBLE_DEVICES': ','.join(manifest['gpu_uuids']),
                'LD_PRELOAD': str(args.observer.resolve()), 'ORBITTE_IPC_LOG': str(root/(role+'.native.jsonl'))}
-        if role == 'requester' and args.mode != 'stale': env['ORBITTE_IPC_HOLD'] = str(root/'release-close')
+        if role == 'requester' and mode != 'stale': env['ORBITTE_IPC_HOLD'] = str(root/'release-close')
         command = [str(args.binary.resolve()), role, str(ordinal), str(args.payload), str(root), args.mode]
         output = (root/(role+'.stdout')).open('w'); error = (root/(role+'.stderr')).open('w')
         files.extend([output,error])
@@ -144,27 +153,27 @@ def run(args):
         assert int((root/'ready').read_text().splitlines()[0]) == source.pid, 'source PID identity'
         (root/'source.maps').write_text(Path(f'/proc/{source.pid}/maps').read_text())
         requester = start('requester', 1)
-        if args.mode != 'stale':
+        if mode != 'stale':
             wait_file('release-close.ready')
             (root/'requester.maps').write_text(Path(f'/proc/{requester.pid}/maps').read_text())
-            if args.mode == 'graceful':
+            if mode == 'graceful':
                 (root/'close-source').write_text('close\n'); wait_file('close-pending')
-            if args.mode == 'requester-exit': requester.kill()
+            if mode == 'requester-exit': requester.kill()
             else: (root/'release-close').write_text('release\n')
         code = requester.wait(timeout=35)
-        assert code == (-9 if args.mode == 'requester-exit' else 0), f'requester exit {code}'
+        assert code == (-9 if mode == 'requester-exit' else 0), f'requester exit {code}'
         (root/'finish').write_text('requester reaped\n')
         assert source.wait(timeout=35) == 0, 'source failed'
         for entry, child in zip(manifest['children'], children): entry['exit_code'] = child.returncode
         source_log = (root/'source.stdout').read_text()
-        assert ('NVLINK_SOURCE_RETAINED' if args.mode == 'requester-exit' else 'NVLINK_SOURCE_OK') in source_log
-        if args.mode != 'requester-exit':
-            assert ('NVLINK_STALE_REJECTED' if args.mode == 'stale' else 'NVLINK_REQUESTER_OK') in (root/'requester.stdout').read_text()
+        assert ('NVLINK_SOURCE_RETAINED' if mode == 'requester-exit' else 'NVLINK_SOURCE_OK') in source_log
+        if mode != 'requester-exit':
+            assert ('NVLINK_STALE_REJECTED' if mode == 'stale' else 'NVLINK_REQUESTER_OK') in (root/'requester.stdout').read_text()
         manifest['loaded_cuda'] = {}
         for role in ('source', 'requester'):
             maps = root/(role+'.maps')
             if not maps.exists():
-                assert role == 'requester' and args.mode == 'stale'
+                assert role == 'requester' and mode == 'stale'
                 continue
             paths = {line.split()[-1] for line in maps.read_text().splitlines() if 'libcuda.so' in line}
             assert len(paths) == 1, 'missing or mixed CUDA driver mapping'
@@ -200,5 +209,5 @@ if __name__ == '__main__':
     for name in ('binary', 'observer', 'output', 'lock-root'): parser.add_argument('--'+name, required=True, type=Path)
     for name in ('binary-sha256', 'observer-sha256', 'devices'): parser.add_argument('--'+name, required=True)
     parser.add_argument('--payload', type=int, required=True)
-    parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale'), default='healthy')
+    parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit'), default='healthy')
     run(parser.parse_args())

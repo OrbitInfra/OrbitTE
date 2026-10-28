@@ -57,12 +57,16 @@ pub enum RemoteEffect {
 #[derive(Debug)]
 pub struct TransferFailure {
     pub request_index: usize,
+    /// Consecutive requests sharing this failure, beginning at request_index.
+    /// These may have executed; only requests after this span were skipped.
+    pub affected_requests: usize,
     pub error: Error,
     pub remote_effect: RemoteEffect,
 }
 
 /// Requests run in order and stop on the first failure. Earlier completed
-/// requests remain committed; later requests were never attempted.
+/// requests remain committed. A shared transport failure covers its explicit
+/// affected span; only later requests were never attempted.
 #[derive(Debug)]
 pub struct BatchReport {
     pub completed_requests: usize,
@@ -513,48 +517,67 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
-        for (index, request) in requests.iter().enumerate() {
+        let mut index = 0;
+        while index < requests.len() {
+            let request = &requests[index];
             if let Some((progress, first_task)) = progress {
                 if !progress.begin_task(first_task + index) {
                     report.failure = Some(TransferFailure {
                         request_index: index,
+                        affected_requests: 1,
                         error: Error::Cancelled,
                         remote_effect: RemoteEffect::None,
                     });
                     break;
                 }
             }
+            let single = |result: std::result::Result<(), (Error, RemoteEffect)>| {
+                result
+                    .map(|()| 1)
+                    .map_err(|(error, remote_effect)| TransferFailure {
+                        request_index: 0,
+                        affected_requests: 1,
+                        error,
+                        remote_effect,
+                    })
+            };
             let result = match request.transport {
-                Transport::Tcp => TcpTransport::transfer(*operation, peer, request, *deadline),
+                Transport::Tcp => {
+                    single(TcpTransport::transfer(*operation, peer, request, *deadline))
+                }
                 Transport::Nvlink => {
                     #[cfg(feature = "cuda")]
                     {
                         match &self.source.nvlink {
                             Some(transport) => transport.transfer(
-                                *operation,
-                                peer,
-                                request,
+                                submission,
+                                index,
                                 self.source.epoch,
-                                *deadline,
+                                self.config.max_transfer_bytes,
+                                |next| {
+                                    progress.is_none_or(|(progress, first_task)| {
+                                        progress.begin_task(first_task + index + next)
+                                    })
+                                },
                             ),
-                            None => Err((
+                            None => single(Err((
                                 Error::Unavailable("NVLink is not configured"),
                                 RemoteEffect::None,
-                            )),
+                            ))),
                         }
                     }
                     #[cfg(not(feature = "cuda"))]
                     {
-                        Err((
+                        single(Err((
                             Error::Unavailable("build with --features cuda"),
                             RemoteEffect::None,
-                        ))
+                        )))
                     }
                 }
                 Transport::Rdma => {
                     #[cfg(feature = "rdma")]
                     {
-                        match &self.source.rdma {
+                        single(match &self.source.rdma {
                             Some(transport) => transport.transfer(
                                 *operation,
                                 peer,
@@ -566,31 +589,35 @@ impl TransferEngine {
                                 Error::Unavailable("RDMA is not configured"),
                                 RemoteEffect::None,
                             )),
-                        }
+                        })
                     }
                     #[cfg(not(feature = "rdma"))]
                     {
-                        Err((
+                        single(Err((
                             Error::Unavailable("build with --features rdma"),
                             RemoteEffect::None,
-                        ))
+                        )))
                     }
                 }
             };
-            if let Err((error, remote_effect)) = result {
-                report.locally_drained = !matches!(error, Error::Unquiesced { .. });
-                report.failure = Some(TransferFailure {
-                    request_index: index,
-                    error,
-                    remote_effect,
-                });
+            let completed = match &result {
+                Ok(count) => *count,
+                Err(failure) => failure.request_index,
+            };
+            for (next, request) in requests[index..index + completed].iter().enumerate() {
+                report.completed_requests += 1;
+                report.transferred_bytes += request.length;
+                if let Some((progress, first_task)) = progress {
+                    progress.complete_task(first_task + index + next, request.length);
+                }
+            }
+            if let Err(mut failure) = result {
+                report.locally_drained = !matches!(failure.error, Error::Unquiesced { .. });
+                failure.request_index += index;
+                report.failure = Some(failure);
                 break;
             }
-            report.completed_requests += 1;
-            report.transferred_bytes += request.length;
-            if let Some((progress, first_task)) = progress {
-                progress.complete_task(first_task + index, request.length);
-            }
+            index += completed;
         }
         if report.is_complete() && !requests.is_empty() {
             if let Some(notification) = notification {
@@ -873,7 +900,7 @@ pub(crate) struct PreparedSubmission {
     pub(crate) peer: RemoteSegment,
     pub(crate) requests: Vec<PreparedTransfer>,
     pub(crate) notification: Option<Notification>,
-    deadline: Instant,
+    pub(crate) deadline: Instant,
     _admission: BatchPermit,
 }
 

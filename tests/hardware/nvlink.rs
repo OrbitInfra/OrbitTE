@@ -59,6 +59,7 @@ fn released(engine: &TransferEngine) -> Result<()> {
 }
 
 fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
+    let mode = mode.strip_prefix("batch-").unwrap_or(mode);
     let engine = TransferEngine::new(EngineConfig {
         nvlink: true,
         handler_timeout: TIMEOUT,
@@ -153,6 +154,8 @@ fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
 }
 
 fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
+    let batched = mode.starts_with("batch-");
+    let mode = mode.strip_prefix("batch-").unwrap_or(mode);
     let ready = fs::read_to_string(root.join("ready"))?;
     let fields: Vec<_> = ready.lines().collect();
     if fields.len() != 5 {
@@ -183,40 +186,75 @@ fn requester(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()>
         return Ok(());
     }
     let peer = engine.open_segment(endpoint, epoch, TIMEOUT)?;
-    let memory = Arc::new(CudaMemory::allocate(device, payload + 2 * GUARD)?);
-    memory.write(0, &vec![0xa5; memory.len()])?;
-    let registered = engine
-        .register_cuda_memory_batch(&[(memory.clone(), 0, memory.len())], Permission::LocalOnly)?
-        .remove(0);
-    let request = TransferRequest {
-        transport: Transport::Nvlink,
-        local_address: registered.base_address() + GUARD as u64,
-        remote_address: address + GUARD as u64,
-        length: payload,
+    let mut memories = vec![Arc::new(CudaMemory::allocate(device, payload + 2 * GUARD)?)];
+    if batched {
+        memories.push(Arc::new(CudaMemory::allocate(device, payload + 2 * GUARD)?));
+    }
+    for memory in &memories {
+        memory.write(0, &vec![0xa5; memory.len()])?;
+    }
+    let registered = engine.register_cuda_memory_batch(
+        &memories
+            .iter()
+            .map(|m| (m.clone(), 0, m.len()))
+            .collect::<Vec<_>>(),
+        Permission::LocalOnly,
+    )?;
+    let third = payload / 3;
+    let slices = if batched {
+        vec![(2 * third, payload - 2 * third), (0, third), (third, third)]
+    } else {
+        vec![(0, payload)]
     };
+    let requests: Vec<_> = slices
+        .iter()
+        .enumerate()
+        .map(|(index, &(offset, length))| TransferRequest {
+            transport: Transport::Nvlink,
+            local_address: registered[index % memories.len()].base_address()
+                + (GUARD + offset) as u64,
+            remote_address: address + (GUARD + offset) as u64,
+            length,
+        })
+        .collect();
     if mode == "healthy" {
-        let report = engine.submit_and_wait(
-            TransferOp::Read,
-            &peer,
-            std::slice::from_ref(&request),
-            TIMEOUT,
-        )?;
+        let report = engine.submit_and_wait(TransferOp::Read, &peer, &requests, TIMEOUT)?;
         if !report.is_complete() || !report.locally_drained {
             return Err(Error::Internal("NVLink READ incomplete"));
         }
-        verify(&memory, payload, 11)?;
+        for (storage, memory) in memories.iter().enumerate() {
+            let mut expected = vec![0xa5; memory.len()];
+            let data = pattern(payload, 11);
+            for (index, &(offset, length)) in slices.iter().enumerate() {
+                if index % memories.len() == storage {
+                    expected[GUARD + offset..GUARD + offset + length]
+                        .copy_from_slice(&data[offset..offset + length]);
+                }
+            }
+            let mut actual = vec![0; memory.len()];
+            memory.read(0, &mut actual)?;
+            if actual != expected {
+                return Err(Error::Internal("NVLink READ slices/gaps/guards mismatch"));
+            }
+        }
     }
-    memory.write(GUARD, &pattern(payload, 53))?;
-    let report = engine.submit_and_wait(TransferOp::Write, &peer, &[request], TIMEOUT)?;
+    for memory in &memories {
+        memory.write(GUARD, &pattern(payload, 53))?;
+    }
+    let report = engine.submit_and_wait(TransferOp::Write, &peer, &requests, TIMEOUT)?;
     if !report.is_complete() || !report.locally_drained {
         eprintln!("NVLink WRITE report: {report:?}");
         return Err(Error::Internal("NVLink WRITE incomplete"));
     }
-    verify(&memory, payload, 53)?;
+    for memory in &memories {
+        verify(memory, payload, 53)?;
+    }
     engine.close(TIMEOUT)?;
-    engine.unregister_memory(&registered)?;
+    for region in &registered {
+        engine.unregister_memory(region)?;
+    }
     drop(registered);
-    drop(memory);
+    drop(memories);
     released(&engine)?;
     println!(
         "NVLINK_REQUESTER_OK pid={} payload={payload} retained=0",
@@ -240,8 +278,21 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         return Err("payload out of bounds".into());
     }
     let mode = args[4].as_str();
-    if !["healthy", "graceful", "requester-exit", "stale"].contains(&mode) {
+    if ![
+        "healthy",
+        "graceful",
+        "requester-exit",
+        "stale",
+        "batch-healthy",
+        "batch-graceful",
+        "batch-requester-exit",
+    ]
+    .contains(&mode)
+    {
         return Err("unknown mode".into());
+    }
+    if mode.starts_with("batch-") && payload < 3 {
+        return Err("batch requires at least three bytes".into());
     }
     match args[0].as_str() {
         "source" => source(device, payload, Path::new(&args[3]), mode)?,

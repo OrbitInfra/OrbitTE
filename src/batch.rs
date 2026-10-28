@@ -447,7 +447,7 @@ impl BatchProgress {
         if let Some(failure) = &failure {
             for task_index in failure.request_index..range.end {
                 let task = &mut state.tasks[task_index];
-                task.state = if task_index == failure.request_index {
+                task.state = if task_index < failure.request_index + failure.affected_requests {
                     if matches!(failure.error, Error::Cancelled) {
                         TaskState::Cancelled
                     } else {
@@ -458,9 +458,10 @@ impl BatchProgress {
                 } else {
                     TaskState::Skipped
                 };
-                task.locally_drained =
-                    task_index != failure.request_index || report.locally_drained;
-                if task_index == failure.request_index {
+                task.locally_drained = task_index
+                    >= failure.request_index + failure.affected_requests
+                    || report.locally_drained;
+                if task_index < failure.request_index + failure.affected_requests {
                     task.failure = Some(Arc::clone(failure));
                 }
             }
@@ -505,6 +506,7 @@ impl Drop for WorkerExit {
                     }
                     let failure = Arc::new(TransferFailure {
                         request_index: task_index,
+                        affected_requests: 1,
                         error: Error::Internal("batch worker stopped before normal completion"),
                         remote_effect: if task.operation == TransferOp::Write
                             && task.state == TaskState::Running

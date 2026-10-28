@@ -513,8 +513,13 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   close receipts, with synchronous/async failure retention controls. Installed
   stable/MSRV qualification passes 48 H20 cases plus four fresh independent
   repeats; source and the bounded cooperative profile are independently accepted.
-  Host IPC directions, import-cache
-  ownership and broader stream scheduling remain open; exporter-crash safety is
+  **P5.4b — bounded subbatch reuse (Implemented; qualification pending):**
+  consecutive same-region/native-context requests share one import and physical
+  charge; copied local owners survive through close. Exact envelope relocation,
+  typed pre-grant rejection fallback, per-slice cancellation and shared failure
+  spans have CPU controls. Installed consumers now cover two local allocations
+  and three ordered copies per import. Host IPC directions, cross-submission
+  import-cache ownership and broader stream scheduling remain open; exporter-crash safety is
   explicitly unqualified. See [the transport contract](cuda-ipc.md).
 - [ ] Implement ProxyManager-equivalent chunk/staging ownership, local/remote
   Delegate/Pin/Unpin operations, nested admission and owned proxy shutdown.
@@ -771,8 +776,10 @@ including four fresh live repeats. Under the user's 2026-10-27 sequencing decisi
 P5.3 source and bounded GPU Direct evidence are independently accepted with the
 explicit host-context inventory limit in [qualification](qualification.md#gpudirect-rdma).
 The cooperative P5.4 GPU/GPU IPC substage is independently accepted with
-48 installed cases and four fresh repeats. Next address host directions and
-import reuse with explicit lifetime owners. Proxy/staging scheduling
+48 installed cases and four fresh repeats. P5.4b bounded subbatch reuse is
+implemented; freeze and independently qualify its new source and installed
+consumer before accepting it. Then address host directions and cross-submission
+import reuse with explicit exporter lifetime owners. Proxy/staging scheduling
 follows that boundary; OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
