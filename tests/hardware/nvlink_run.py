@@ -46,6 +46,11 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
     assert len(local) == (2 if batched else int(mode != 'stale')), 'requester allocation count'
     if local:
         assert all(row['length'] == payload+134 for row in local), 'requester allocation extent'
+    for allocation in source_alloc+local:
+        assert 0 < allocation['address'] < allocation['address']+allocation['length'] <= 1 << 64, 'invalid allocation address range'
+    for index, allocation in enumerate(local):
+        for other in local[index+1:]:
+            assert allocation['address']+allocation['length'] <= other['address'] or other['address']+other['length'] <= allocation['address'], 'overlapping live requester allocations'
     closes = select(requester, 'close')
     assert len(closes) == (0 if mode == 'requester-exit' else expected), 'mapping close count'
     for index, opened in enumerate(imports):
@@ -60,7 +65,9 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid)
             next_copy = cycle_copies[part+1]['seq'] if part+1 < len(cycle_copies) else boundary
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
             assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
-            remote, own = opened['address']+67+offset, local[part % len(local)]['address']+67+offset
+            allocation = local[part % len(local)]
+            assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
+            remote, own = opened['address']+67+offset, allocation['address']+67+offset
             assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
             events = [r for r in select(cycle, 'record') if copy['seq'] < r['seq'] < next_copy and r['stream'] == copy['stream']]
             assert events, 'copy has no completion event'

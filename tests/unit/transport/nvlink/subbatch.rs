@@ -14,9 +14,13 @@ pub(crate) fn run_case(
     asynchronous: bool,
 ) {
     let timeout = Duration::from_secs(3);
-    let uncertain = matches!(case, "wait-second" | "pop-second" | "close");
-    let clean_failure = matches!(case, "copy-second" | "cancel-second");
-    let loss = matches!(case, "ack-loss" | "prefix-ack-loss");
+    let cancelled = case.starts_with("cancel-");
+    let uncertain = matches!(
+        case,
+        "wait-second" | "pop-second" | "close" | "cancel-close" | "cancel-restore-close"
+    );
+    let clean_failure = case == "copy-second" || cancelled;
+    let loss = matches!(case, "ack-loss" | "prefix-ack-loss" | "cancel-ack-loss");
     let complete = !uncertain && !clean_failure && !loss;
     let engine = Arc::new(
         TransferEngine::new(EngineConfig {
@@ -189,7 +193,9 @@ pub(crate) fn run_case(
                     ready_tx.send(()).unwrap();
                     release_rx.recv_timeout(timeout).unwrap();
                 }
-                if case_owned == "ack-loss" || (case_owned == "prefix-ack-loss" && group == 1) {
+                if matches!(case_owned.as_str(), "ack-loss" | "cancel-ack-loss")
+                    || (case_owned == "prefix-ack-loss" && group == 1)
+                {
                     continue;
                 }
                 socket
@@ -205,7 +211,7 @@ pub(crate) fn run_case(
             }
         }
     });
-    let prefix = if clean_failure || case == "prefix-ack-loss" {
+    let prefix = if (clean_failure && !uncertain && !loss) || case == "prefix-ack-loss" {
         1
     } else {
         0
@@ -218,24 +224,67 @@ pub(crate) fn run_case(
         1
     };
     if asynchronous {
-        let mut batch = engine
-            .submit_async(TransferOp::Write, &peer, &requests, None, timeout)
+        let tcp_source = TransferEngine::new(EngineConfig::default()).unwrap();
+        let tcp_remote = tcp_source
+            .register_memory(vec![0x39; 1].into_boxed_slice(), Permission::RemoteRead)
             .unwrap();
+        let tcp_local = engine
+            .register_memory(vec![0; 1].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let tcp_peer = engine
+            .open_segment(tcp_source.endpoint(), tcp_source.source_epoch(), timeout)
+            .unwrap();
+        let tcp_request = TransferRequest {
+            transport: Transport::Tcp,
+            local_address: tcp_local.base_address(),
+            remote_address: tcp_remote.base_address(),
+            length: 1,
+        };
+        let mut batch = engine.allocate_batch(5).unwrap();
+        assert_eq!(
+            batch
+                .submit(
+                    TransferOp::Read,
+                    &tcp_peer,
+                    std::slice::from_ref(&tcp_request),
+                    None,
+                    timeout
+                )
+                .unwrap(),
+            0..1
+        );
+        assert_eq!(
+            batch
+                .submit(TransferOp::Write, &peer, &requests, None, timeout)
+                .unwrap(),
+            1..4
+        );
+        assert_eq!(
+            batch
+                .submit(
+                    TransferOp::Read,
+                    &tcp_peer,
+                    std::slice::from_ref(&tcp_request),
+                    None,
+                    timeout
+                )
+                .unwrap(),
+            4..5
+        );
+        batch.seal().unwrap();
         ready_rx.recv_timeout(timeout).unwrap();
-        if case == "cancel-second" {
-            batch.cancel(1).unwrap();
+        if cancelled {
+            batch.cancel(2).unwrap();
         }
         release_tx.send(()).unwrap();
         if case == "ack-hold" {
             ready_rx.recv_timeout(timeout).unwrap();
             assert!(
-                batch
-                    .task_statuses()
-                    .unwrap()
+                batch.task_statuses().unwrap()[1..4]
                     .iter()
                     .all(|task| task.state == TaskState::Running && task.transferred_bytes == 0)
             );
-            assert_eq!(engine.stats().unwrap().inflight_bytes, 51);
+            assert_eq!(engine.stats().unwrap().inflight_bytes, 52);
             assert!(matches!(
                 engine.close_requester(Duration::from_millis(10)),
                 Err(Error::Timeout)
@@ -243,7 +292,7 @@ pub(crate) fn run_case(
             release_tx.send(()).unwrap();
         }
         let status = batch.wait(timeout).unwrap();
-        let submission = batch.submissions().unwrap().remove(0);
+        let submission = batch.submissions().unwrap().remove(1);
         assert_eq!(
             submission.completed_requests,
             if complete { 3 } else { prefix },
@@ -251,15 +300,20 @@ pub(crate) fn run_case(
         );
         assert_eq!(status.locally_drained, !uncertain, "{case}");
         let tasks = batch.task_statuses().unwrap();
-        for (i, task) in tasks.iter().enumerate() {
+        assert_eq!(tasks[0].state, TaskState::Completed);
+        assert_eq!(tasks[4].state, TaskState::Completed);
+        assert_eq!(tasks[0].transferred_bytes + tasks[4].transferred_bytes, 2);
+        for (i, task) in tasks[1..4].iter().enumerate() {
             let expected = if complete || i < prefix {
                 TaskState::Completed
             } else if i < prefix + affected {
-                if case == "cancel-second" {
+                if cancelled && !uncertain && !loss {
                     TaskState::Cancelled
                 } else {
                     TaskState::Failed
                 }
+            } else if task.cancel_requested {
+                TaskState::Cancelled
             } else {
                 TaskState::Skipped
             };
@@ -271,6 +325,11 @@ pub(crate) fn run_case(
             );
             if expected == TaskState::Failed {
                 assert_eq!(task.failure.as_ref().unwrap().affected_requests, affected);
+                assert_eq!(task.failure.as_ref().unwrap().request_index, 1 + prefix);
+                assert!(Arc::ptr_eq(
+                    task.failure.as_ref().unwrap(),
+                    submission.failure.as_ref().unwrap()
+                ));
                 assert_eq!(
                     task.failure.as_ref().unwrap().remote_effect,
                     RemoteEffect::Unknown
@@ -333,7 +392,13 @@ pub(crate) fn run_case(
         );
     } else {
         assert!(remote.read(0, &mut [0; 1]).is_err());
-        for memory in local.iter().take(if case == "close" { 3 } else { 2 }) {
+        for memory in local.iter().take(if cancelled {
+            1
+        } else if case == "close" {
+            3
+        } else {
+            2
+        }) {
             assert!(memory.read(0, &mut [0; 1]).is_err());
         }
     }

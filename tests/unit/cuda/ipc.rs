@@ -221,10 +221,13 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             "context",
             "region",
             "cancel-second",
+            "cancel-close",
+            "cancel-restore-close",
+            "cancel-ack-loss",
             "overlap",
             "ack-hold",
         ] {
-            if matches!(case, "cancel-second" | "ack-hold") && !asynchronous {
+            if (case.starts_with("cancel-") || case == "ack-hold") && !asynchronous {
                 continue;
             }
             let source = allocation(&[0x5a; 128]);
@@ -248,7 +251,10 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                 "copy-second" => owners[0].ipc_copy_fail_at.store(2, Ordering::Release),
                 "wait-second" => owners[0].ipc_wait_fail_at.store(2, Ordering::Release),
                 "pop-second" => owners[0].ipc_pop_fail_at.store(2, Ordering::Release),
-                "close" => owners[0].ipc_close_error.store(1, Ordering::Release),
+                "close" | "cancel-close" => owners[0].ipc_close_error.store(1, Ordering::Release),
+                "cancel-restore-close" => {
+                    owners[0].ipc_pop_after_close.store(true, Ordering::Release)
+                }
                 _ => (),
             }
             crate::transport::nvlink::tests::subbatch::run_case(

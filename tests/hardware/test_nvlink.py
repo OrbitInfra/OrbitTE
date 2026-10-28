@@ -119,6 +119,31 @@ class NativeEvidence(unittest.TestCase):
             with self.subTest(fault=fault), self.assertRaises(AssertionError):
                 nvlink_run.validate_native(source,requester,17,'batch-healthy',101,102)
 
+    def test_live_requester_allocations_precede_copies_and_do_not_overlap(self):
+        for mode in ('graceful', 'batch-graceful'):
+            for fault in ('late', 'zero', 'negative', 'overflow', 'alias', 'overlap'):
+                if fault in ('alias', 'overlap') and not mode.startswith('batch-'):
+                    continue
+                source, requester = self.evidence(mode)
+                allocation = [r for r in requester if r['kind'] == 'allocate'][-1]
+                if fault == 'late':
+                    requester.remove(allocation)
+                    close = next(r for r in requester if r['kind'] == 'close')
+                    requester.insert(requester.index(close), allocation)
+                    for index, row in enumerate(requester): row['seq'] = index+1
+                else:
+                    old = allocation['address']
+                    new = {'zero': 0, 'negative': -1, 'overflow': (1 << 64)-100,
+                           'alias': 2000, 'overlap': 2100}[fault]
+                    allocation['address'] = new
+                    for row in requester:
+                        if row['kind'] == 'free' and row['address'] == old:
+                            row['address'] = new
+                        elif row['kind'] == 'copy' and old <= row['source'] < old+151:
+                            row['source'] += new-old
+                with self.subTest(mode=mode, fault=fault), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, requester, 17, mode, 101, 102)
+
     def test_observer_forwards_arguments_outputs_and_native_failures(self):
         root = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as directory:
