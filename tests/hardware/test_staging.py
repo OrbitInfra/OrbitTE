@@ -42,13 +42,17 @@ def fixture(gpu_role='source', depth=1, cap=None):
         once('pin', address=host, length=size)
         transfer(direction, host, 10000, size, 3, 4)
         once('unpin', address=host)
-    once('allocate', address=10000, length=size)
+    enter()
+    call('allocate', address=10000, length=size)
+    call('memset', address=10000, length=size, value=0)
+    call('sync')
+    leave()
     handles(3, 4)
     full('htod', 20000)
     for slot in range(width):
         once('pin', address=100+slot*8, length=4)
         if width > 1: handles(10+slot, 30+slot)
-    for direction in ('dtoh', 'htod'):
+    for direction in (('dtoh', 'htod') if gpu_role == 'source' else ('htod', 'dtoh')):
         for index in range(3):
             pending = []
             for step, offset in enumerate(range(0, length, 4)):
@@ -61,6 +65,12 @@ def fixture(gpu_role='source', depth=1, cap=None):
                 if width > 1: pending.append(slot)
             # Reverse completion order is legal across distinct slots.
             for slot in reversed(pending): once('wait', event=30+slot)
+        if gpu_role == 'requester' and direction == 'htod':
+            full('dtoh', 20000)
+            for index in range(3):
+                once('pin', address=20000, length=length)
+                transfer('htod', 20000, 10000+64+index*(case['payload']//4)+5, length, 3, 4)
+                once('unpin', address=20000)
     for slot in range(width):
         if width > 1: handles(10+slot, 30+slot, True)
         once('unpin', address=100+slot*8)
@@ -100,7 +110,8 @@ class StagingProof(unittest.TestCase):
                   'wait-event', 'old-wait', 'record-thread', 'wait-thread', 'context', 'gpu-slice',
                   'free-missing', 'handle-missing', 'double-free', 'free-before-wait', 'free-before-pop',
                   'destroy-before-wait', 'slot-reuse', 'event-reuse', 'missing-return', 'missing-entry',
-                  'return-arguments', 'width', 'stats', 'unpin-count', 'missing-memory')
+                  'return-arguments', 'width', 'stats', 'unpin-count', 'missing-memory',
+                  'host-tail', 'extra-conflicting-copy', 'extra-disjoint-copy', 'extra-memset', 'extra-sync')
         for depth in (1, 3):
             for fault in faults:
                 with self.subTest(depth=depth, fault=fault):
@@ -109,6 +120,26 @@ class StagingProof(unittest.TestCase):
                     def at(kind): return next(i for i in range(pos,len(native)) if native[i]['kind']==kind)
                     def first(kind): return native[at(kind)]
                     if fault == 'tail': next(r for r in native[pos:] if r.get('length')==1)['length']=4
+                    if fault == 'host-tail':
+                        for row in native:
+                            if row['kind'] in ('dtoh_begin', 'dtoh') and row['length']==1: row['destination']+=1
+                    if fault in ('extra-conflicting-copy', 'extra-disjoint-copy'):
+                        begin = next(i for i,r in enumerate(native) if r['kind']=='pin' and r['address']==20000)-1
+                        end = next(i for i,r in enumerate(native) if r['kind']=='unpin' and r['address']==20000)+2
+                        extra = copy.deepcopy(native[begin:end])
+                        for row in extra:
+                            row['tid']=99
+                            if row['kind']=='pin': row['length']=8
+                            if row['kind'] in ('htod_begin','htod'):
+                                row['destination']=first('dtoh')['source'] if fault=='extra-conflicting-copy' else 10000
+                                row['length']=4
+                        where=at('pop')+1
+                        native[where:where]=extra
+                    if fault in ('extra-memset','extra-sync'):
+                        values = dict(address=first('dtoh')['source'], length=4, value=0) if fault=='extra-memset' else {}
+                        where=at('pop')+1
+                        native[where:where]=[dict(seq=0,pid=7,tid=99,code=0,**row) for row in (
+                            dict(kind='push',context=5), dict(kind=fault.removeprefix('extra-'),**values),dict(kind='pop',context=5))]
                     if fault == 'missing-record': native.pop(at('record'))
                     if fault == 'submission-pop': native.pop(at('pop'))
                     if fault == 'completion-pop': native.pop(next(i for i in range(at('wait'),len(native)) if native[i]['kind']=='pop'))

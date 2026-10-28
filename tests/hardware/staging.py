@@ -78,6 +78,22 @@ def verify(case, evidence):
             actual = [(c['row']['destination'] if direction == 'htod' else c['row']['source'], c['row']['length'])
                       for c in copies if c['row']['kind'] == direction]
             require(actual == expected_copies, role + ': native GPU range/chunk/tail mismatch')
+        for copy in ledger['copies']:
+            row = copy['row']
+            require((row['source'] if row['kind'] == 'htod' else row['destination']) == copy['host']['address'],
+                    role + ': host copy offset differs from actual slot/private buffer base')
+        full = (owner['base'], owner['length'])
+        expected = [('htod', *full, 'private')]
+        first, second = ('dtoh', 'htod') if role == 'source' else ('htod', 'dtoh')
+        expected += [(first, address, count, 'slot') for address, count in expected_copies]
+        if role == 'requester':
+            expected += [('dtoh', *full, 'private')]
+            expected += [('htod', owner['base'] + 64 + i * (case['payload'] // 4) + 5, length, 'private') for i in range(3)]
+        expected += [(second, address, count, 'slot') for address, count in expected_copies]
+        expected += [('dtoh', *full, 'private')]
+        actual = [(c['row']['kind'], c['row']['destination'] if c['row']['kind'] == 'htod' else c['row']['source'],
+                   c['row']['length'], 'slot' if c['host'] in pins else 'private') for c in ledger['copies']]
+        require(actual == expected, role + ': copy outside exact consumer setup/payload/update/readback phases')
         require(len({c['stream_owner']['seq'] for c in copies}) == width,
                 role + ': persistent copy stream count differs from negotiated depth')
         require(len([h for h in ledger['handles'] if h['kind'] == 'stream_create']) == (width + 1 if width > 1 else 1)

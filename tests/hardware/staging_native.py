@@ -28,13 +28,16 @@ def validate(native, pid):
         stack = stacks.setdefault(row['tid'], [])
         if kind == 'push':
             require(row['context'] > 0, 'null context push')
-            stack.append(dict(context=row['context'], copies=[], waits=[]))
+            stack.append(dict(context=row['context'], copies=[], waits=[], initializing=[]))
             continue
         require(stack, 'CUDA operation outside observed owning context')
         frame = stack[-1]
         context = frame['context']
         if kind == 'pop':
             require(row['context'] == context, 'restored a different context')
+            for owner in frame['initializing']:
+                require(owner.get('synced'), 'allocation escaped before initialization synchronized')
+                owner['initialized'] = True
             for copy in frame['copies']:
                 require(copy.get('event'), 'copy escaped context before recording completion')
                 copy['submitted'] = True
@@ -53,10 +56,12 @@ def validate(native, pid):
                     'duplicate/overlapping live allocation')
             table[address] = dict(row, context=context)
             if kind == 'pin': pins.append(table[address])
+            else: frame['initializing'].append(table[address])
         elif kind in ('free_begin', 'unpin_begin'):
             table = hosts if kind == 'unpin_begin' else devices
             owner = table.get(row['address'])
             require(owner and owner['context'] == context, 'free without its live context owner')
+            require(kind == 'unpin_begin' or owner.get('initialized'), 'device freed before initialization restored')
             key = 'host' if kind == 'unpin_begin' else 'device'
             idle((c[key] is owner for c in pending), 'free before matching wait/context restore')
             require(not owner.get('closing'), 'duplicate free invocation')
@@ -98,8 +103,16 @@ def validate(native, pid):
                     'copy on foreign, destroyed or pending stream')
             host = allocation(hosts, row['source'] if kind == 'htod_begin' else row['destination'], row['length'])
             device = allocation(devices, row['destination'] if kind == 'htod_begin' else row['source'], row['length'])
-            require(host['context'] == device['context'] == context, 'copy context differs from allocation owner')
+            require(host['context'] == device['context'] == context and device.get('initialized'), 'copy context differs from allocation owner')
             idle((c['host'] is host for c in pending), 'pinned slot reused before its copy drained')
+            address = row['destination'] if kind == 'htod_begin' else row['source']
+            for other in pending:
+                previous = other['row']
+                previous_address = previous['destination'] if previous['kind'] == 'htod' else previous['source']
+                overlaps = address < previous_address + previous['length'] and previous_address < address + row['length']
+                require(not (other['device'] is device and overlaps
+                             and (kind == 'htod_begin' or previous['kind'] == 'htod')),
+                        'GPU range has a pending conflicting write')
             copy = dict(row={**row, 'kind': kind.removesuffix('_begin')}, host=host, device=device, stream_owner=stream, submitted=False)
             stream['pending'] = copy
             pending.append(copy)
@@ -138,8 +151,18 @@ def validate(native, pid):
             require(copy and copy in frame['waits'] and not copy.get('waited'),
                     'wait return lacks matching invocation/generation/thread')
             copy['waited'] = seq
+        elif kind == 'memset':
+            owner = devices.get(row['address'])
+            require(owner and owner in frame['initializing'] and not owner.get('zeroed')
+                    and row['length'] == owner['length'] and row['value'] == 0,
+                    'memset outside fresh allocation initialization')
+            owner['zeroed'] = True
+        elif kind == 'sync':
+            require(frame['initializing'] and all(o.get('zeroed') and not o.get('synced') for o in frame['initializing']),
+                    'context sync outside fresh allocation initialization')
+            for owner in frame['initializing']: owner['synced'] = True
         else:
-            require(kind in ('memset', 'sync'), 'unexpected native operation in staging profile')
+            require(False, 'unexpected native operation in staging profile')
     require(not pending and not hosts and not devices and not streams and not events
             and all(not stack for stack in stacks.values()), 'native owners or contexts remain after shutdown')
     return dict(copies=copies, pins=pins, handles=handles, peak_unconfirmed=peak)
