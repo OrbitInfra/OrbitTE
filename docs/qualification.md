@@ -15,8 +15,9 @@ A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
 or performance. Earlier hardware results retain their original revisions and
 do not automatically qualify subsequent changes.
 
-The latest installed delivery covers [local CUDA staging chunks](#local-cuda-staging-chunks)
-and the [bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
+The latest installed delivery covers [serial remote CUDA staging](#serial-remote-cuda-staging),
+[local staging chunks](#local-cuda-staging-chunks) and the
+[bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
 building on [local pinned host IPC](#local-pinned-host-cuda-ipc), bounded [subbatches](#bounded-cuda-ipc-subbatches) and the cooperative
 [GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
 below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
@@ -41,16 +42,57 @@ correctness at [`64c9899`](https://github.com/OrbitInfra/OrbitTE/commit/64c9899f
 including a fresh real TCP relay control that repeats the previous phase receipt
 while withholding Unpin. Both directions reject early completion. The review
 record is `independent-review/final-source-review.json` in that artifact root.
-Clean stable and Rust 1.85 installed consumers build from that same commit;
-package provenance and source acceptance do not qualify device execution.
+Production code is unchanged in the clean installed consumers from
+[`9f2ad39`](https://github.com/OrbitInfra/OrbitTE/commit/9f2ad3967ee9d12f16c13a87050c41a71268e567).
+The consumer now waits for its first submission to drain before reusing the
+single batch admission slot. An earlier run correctly returned
+`ResourceExhausted` when the fixture overlapped two submissions; that failed
+attempt is retained. The CUDA validator now binds all asynchronous copies,
+including setup/readback, to the live GPU and pinned host allocations, expected
+slice offsets, event wait and context restoration before reuse or free.
 
-Installed consumer inputs extend the existing staging gate with
-`remote_staging: true`, remote GPU ranges, explicit source operation counts and
-private MR retirement. The new installed GPU/RDMA profile is **unqualified**
-until actual execution succeeds. The previous P5.5a healthy profile does not
-qualify these remote operations. Overlapping pipelines, broader remote
-scheduling, physical GPU faults and mixed C++/Rust wire interoperability remain
-open. See [the contract and reproduction](staging.md#serial-remote-staging).
+Stable 1.99.1 and Rust 1.85.0 consumers pass 16 installed cases on two physical
+H20 hosts. Each compiler covers remote GPU/local CPU and GPU/GPU, TCP and staged
+RDMA, and READ/WRITE in both host orientations. The first orientation uses
+257-byte chunks with 1,001-byte requests; the reverse uses 65,536-byte chunks
+with 524,304-byte requests. Both have short tails. RDMA uses one RoCEv2 rail,
+with polling in the first orientation and CQ events in the reverse. Each peer
+has one handler, one parent batch slot and one pinned chunk.
+
+The source counters record 96 completed Pin/Unpin sessions and 624 Delegate/CROSS
+operations each. Native CUDA receipts bind 936 payload chunk copies to 24 actual
+pool allocations and successful frees. Full buffers and guards match. The
+runtime maps and provider hashes bind compatibility `libcuda.so.590.48.01` on
+R535.161.08, `libibverbs` and `libmlx5`. After all runs, test/supervisor PIDs are
+gone, all 16 GPUs have zero allocation and no compute processes, and the original
+GPU/RNIC locks are reacquirable. The 48 Python controls include wrong GPU offsets
+and cross-thread frees before setup/readback completion.
+
+Four fresh independent repeats reverse the primary size/orientation pairing,
+covering both compilers, transports and local memory kinds. They add 24 sessions,
+156 Delegate/CROSS operations each and 234 chunk copies on six actual pool
+allocations/frees. Independent postflight confirms process exit, zero GPU use,
+reacquired locks and the original selected-device context/PD/CQ/QP/MR identity
+sets. Background QP packet counters may naturally advance. Independent review
+accepts source and this bounded healthy serial profile.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/proxy-remote-qualification-20261028/`.
+`primary-matrix.json` binds the two clean packages, binaries and observers to the
+profile, all case records, loaded libraries and post-run cleanup. `runs-stable/`
+retains the failed admission fixture; `runs-final-stable/` and `runs-final-msrv/`
+contain the successful final runs. Source review remains in the previous artifact
+root above; validator review is under `independent-review/frozen-9f2ad39/`.
+`independent-review/hardware-evidence-review.json` independently binds all 20
+raw case records to the exact installed artifacts and runtime providers; fresh
+runs and before/after inventories are under `independent-review/live-repeat-plan/`.
+
+This qualifies the declared healthy serial profile. RDMA completion and private
+MR retirement are checked through the real provider's engine counters and source
+ownership checks, without passive per-WR/CQE or deregistration-order receipts.
+Overlapping pipelines, broader remote scheduling, physical GPU/RNIC faults,
+performance and mixed C++/Rust wire interoperability remain open. See
+[the contract and reproduction](staging.md#serial-remote-staging).
 
 ## Local CUDA staging chunks
 

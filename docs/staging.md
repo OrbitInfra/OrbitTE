@@ -159,5 +159,13 @@ receipts, self-peer and opposite-direction sessions. These native-call shims do
 not qualify real GPU/RNIC failures. The installed consumer accepts
 `remote_staging: true` in the existing staging profile, requiring a CUDA source,
 one RDMA slice per chunk and the same passive observer. It additionally checks
-real remote-operation counters and private MR retirement. Its new hardware
-profile remains unqualified until the exact installed artifacts run successfully.
+real remote-operation counters and private MR retirement. The consumer waits for
+`SubmissionStatus.locally_drained` before its next incremental submit reuses the
+one-slot parent admission; task byte completion alone does not release that slot.
+The CUDA ledger checks all asynchronous copies, including setup/readback, against
+actual live allocations and completion before cross-thread reuse/free.
+
+Stable/MSRV installed consumers pass 16 two-host H20 cases for this healthy serial
+profile, with four fresh independent repeats. Source and this bounded profile
+are independently accepted. The profile and artifact binding are in [Qualification](qualification.md#serial-remote-cuda-staging); overlapping
+pipelines, physical faults and full ProxyManager parity remain open.

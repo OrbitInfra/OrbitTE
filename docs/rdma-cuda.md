@@ -34,7 +34,9 @@ PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
 Opt-in [serial remote CUDA staging](staging.md#serial-remote-staging) coordinates
 Pin/Delegate/Unpin over the same control channel, while TCP and RDMA retain
-payload ownership. This new path remains hardware-unqualified.
+payload ownership. Its healthy serial profile passes 16 installed H20 cases on
+stable and Rust 1.85; see [qualification](qualification.md#serial-remote-cuda-staging)
+for exact artifacts and limits.
 
 TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
 GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,

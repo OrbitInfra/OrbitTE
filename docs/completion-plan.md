@@ -552,15 +552,16 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   consumers pass 24 H20 TCP/staged-RDMA cases plus four fresh independent
   repeats. Source and this bounded healthy profile are accepted; physical CUDA
   faults and default-capacity stress remain unqualified. See [local staging](staging.md).
-- [ ] **P5.5b — remote staging operations (serial session implemented).**
+- [ ] **P5.5b — remote staging operations (healthy serial profile accepted).**
   Opt-in remote CUDA Pin/Delegate/Unpin uses the P5.5a chunk owner and real TCP
   or RDMA CROSS legs. One handler and parent slot suffice; scoped phase receipts,
   explicit private MR retirement and fallible chunk release fence reuse. CPU
   controls cover partial effects, lost receipts and retained CUDA/MR failures.
-  Independent review accepts the serial source boundary at `64c9899`; the new
-  installed profile is still unqualified. Qualify this serial boundary,
-  then complete overlapping PRE/CROSS/POST pipelines and remote scheduling
-  before claiming full ProxyManager parity. See [the contract](staging.md#serial-remote-staging).
+  Independent review accepts the serial source boundary at `64c9899`. Clean
+  stable/MSRV consumers at `9f2ad39` pass 16 H20 TCP/RDMA cases plus four fresh
+  independent repeats; source and this bounded healthy profile are accepted.
+  Complete overlapping PRE/CROSS/POST pipelines and remote scheduling before
+  claiming full ProxyManager parity. See [the contract](staging.md#serial-remote-staging).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
 
@@ -823,10 +824,10 @@ pass 34 installed cases plus four fresh independent repeats and are accepted
 for the fixed-working-set profile. P5.5a local shared staging chunks pass
 24 installed TCP/staged-RDMA cases plus four fresh independent repeats; source
 and this bounded healthy profile are accepted. P5.5b serial remote
-Delegate/Pin/Unpin and nested admission are now implemented with CPU fault
-controls. Next qualify its installed TCP/RDMA profile, then complete overlapping
-pipelines and remote scheduling within P5.5b. New hardware evidence must name
-fresh nodes; unavailable gates remain unqualified. OrbitKV
+Delegate/Pin/Unpin and nested admission pass 16 installed H20 TCP/RDMA cases
+plus four fresh independent repeats; source and this bounded healthy profile
+are accepted. Next complete overlapping PRE/CROSS/POST pipelines and remote
+scheduling within P5.5b. New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV
 linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
