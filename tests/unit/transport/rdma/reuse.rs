@@ -338,10 +338,22 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
     let log = events(runtime);
     let before = log.lock().unwrap().clone();
     assert!(matches!(
-        stale.fill(&local, 0),
+        stale.fill(
+            &local,
+            0,
+            #[cfg(feature = "cuda")]
+            &runtime.proxy
+        ),
         Err(Error::Unavailable("stale RDMA grant handle"))
     ));
-    winner.fill(&local, 0).unwrap();
+    winner
+        .fill(
+            &local,
+            0,
+            #[cfg(feature = "cuda")]
+            &runtime.proxy,
+        )
+        .unwrap();
     assert!(matches!(
         stale.connect(&current_remote),
         Err(Error::Unavailable("stale RDMA grant handle"))

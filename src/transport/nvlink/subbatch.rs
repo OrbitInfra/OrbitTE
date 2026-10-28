@@ -8,7 +8,7 @@ pub(super) fn subbatch_len(requests: &[PreparedTransfer], max_bytes: usize) -> u
     let context = |request: &PreparedTransfer| {
         request
             .local
-            .ipc_range(request.local_offset, request.length)?
+            .allocation_range(request.local_offset, request.length)?
             .0
             .ipc_context()
     };

@@ -52,6 +52,8 @@ pub use batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskS
 pub mod cuda;
 
 #[cfg(feature = "cuda")]
+pub use runtime::proxy_manager::StagingStats;
+#[cfg(feature = "cuda")]
 pub use transport::nvlink::NVLinkStats;
 
 pub use config::EngineConfig;

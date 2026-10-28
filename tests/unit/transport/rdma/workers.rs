@@ -119,7 +119,11 @@ fn invalid_worker_counts_fail_before_provider_discovery() {
             ..RdmaConfig::default()
         };
         assert!(matches!(
-            crate::transport::rdma::RdmaTransport::new(config),
+            crate::transport::rdma::RdmaTransport::new(
+                config,
+                #[cfg(feature = "cuda")]
+                crate::transport::rdma::tests::proxy()
+            ),
             Err(Error::InvalidConfig(_))
         ));
     }

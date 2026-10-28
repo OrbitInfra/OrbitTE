@@ -15,6 +15,7 @@ import uuid
 import cleanup
 import installed
 import gdr
+import staging
 
 
 def restart_plan(case):
@@ -113,7 +114,7 @@ class Controller:
         self.ssh(node, ['ldd', self.remote + '/hardware_peer'])
 
     def collect(self, node, root):
-        names = ['inventory-before.json', 'inventory-after.json', 'running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json']
+        names = ['inventory-before.json', 'inventory-after.json', 'running.json', 'stdout.log', 'stderr.log', 'result.json', 'supervisor.log', 'maps.txt', 'restart.json', 'cuda-staging.jsonl']
         names += ['cq-fault-' + str(g) + '.jsonl' for g in range(3)]
         names += ['maps-' + str(g) + '.txt' for g in range(3)]
         names += ['restart-' + kind + '-' + str(g) + '.txt'
@@ -143,6 +144,11 @@ class Controller:
                           restart_kill_role=environment['ORBITTE_RESTART_KILL_ROLE'],
                           restart_generations=int(environment['ORBITTE_RESTART_GENERATIONS']),
                           restart_live_peer=environment.get('ORBITTE_HOST_MODE') in ('installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure'))
+        if environment.get('ORBITTE_STAGING_OBSERVE') == '1':
+            if self.fault_library is None:
+                raise ValueError('staging gate requires its pinned CUDA observer')
+            environment.update(LD_PRELOAD=self.remote + '/liborbitte_cq_fault.so', ORBITTE_IPC_LOG=root + '/cuda-staging.jsonl')
+            config['fault_library_sha256'] = hashlib.sha256(self.fault_library.read_bytes()).hexdigest()
         if environment.get('ORBITTE_GDR_OBSERVE') == '1':
             if self.fault_library is None:
                 raise ValueError('GPU direct gate requires its pinned native observer')
@@ -332,6 +338,9 @@ class Controller:
                     and (case[r + '_kind'] == 'cpu' or case[r + '_kind'].startswith('pinned:'))
                     for r in ['source', 'requester']))),
             }
+            if 'staging_chunk_size' in case:
+                staging.validate_case(case)
+                environment.update(ORBITTE_SHARED_ROLE=role, ORBITTE_STAGING_OBSERVE='1', ORBITTE_STAGING_CHUNK_SIZE=str(case['staging_chunk_size']), ORBITTE_STAGING_CHUNK_COUNT='1')
             cuda_memory = case.get('cuda_memory', 'staged')
             if cuda_memory not in ('staged', 'direct'):
                 raise ValueError('CUDA RDMA memory policy must be staged or direct')
@@ -499,6 +508,12 @@ class Controller:
             except (ValueError, KeyError, TypeError) as error:
                 passed = False
                 validation_error = str(error)
+        if passed and 'staging_chunk_size' in case:
+            try:
+                staging.verify(case, evidence)
+            except (ValueError, KeyError, TypeError) as error:
+                passed = False
+                validation_error = str(error)
         if passed and case.get('mode') in cleanup.MODES:
             try:
                 cleanup.verify(case, evidence)
@@ -519,12 +534,22 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--installation', type=Path, help='build_installed.py manifest for the public host/GPU consumer')
     parser.add_argument('--gdr-observer', type=Path, help='pinned passive native GPU MR/WR observer')
+    parser.add_argument('--staging-observer', type=Path, help='packaged passive CUDA allocation/copy observer')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     profile = json.loads(args.profile.read_text())
     controller = Controller(profile, args.binary.resolve(), args.output.resolve())
     manifest = {'profile': profile, 'binary_sha256': controller.sha256, 'remote_root': controller.remote, 'started_unix': time.time(), 'status': 'running', 'performance_measurement': False}
     try:
+        if args.staging_observer:
+            if args.gdr_observer or args.installation is None or profile.get('runner') is not None:
+                raise ValueError('staging gate requires only the installed public GPU consumer')
+            if len({profile['nodes'][node]['hostname'] for node in profile['nodes']}) != 2 or len({profile['nodes'][node]['boot_id'] for node in profile['nodes']}) != 2:
+                raise ValueError('staging gate requires two physical hosts')
+            for case in profile['cases']:
+                staging.validate_case(case)
+            controller.fault_library = args.staging_observer.resolve()
+            manifest['cuda_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
         if args.gdr_observer:
             if profile.get('runner') is not None or not all(case.get('cuda_memory') == 'direct' for case in profile['cases']):
                 raise ValueError('GPU observer requires explicit public direct CUDA cases')
@@ -554,11 +579,12 @@ def main():
                 raise ValueError('unexpected installed binary protocol')
         elif args.installation is not None:
             installation = json.loads(args.installation.read_text())
-            if (not args.gdr_observer or installation.get('status') != 'passed'
+            if (not (args.gdr_observer or args.staging_observer) or installation.get('status') != 'passed'
                     or installation.get('dirty') or installation.get('consumer') != 'gpu'
                     or installation.get('binary_sha256') != controller.sha256
                     or installation.get('protocol') != 'orbitte-hardware-peer-v1'
-                    or installation.get('fault_library_sha256') != manifest['gdr_observer_sha256']):
+                    or (args.gdr_observer and installation.get('fault_library_sha256') != manifest['gdr_observer_sha256'])
+                    or (args.staging_observer and installation.get('cuda_observer_sha256') != manifest['cuda_observer_sha256'])):
                 raise ValueError('GPU installation is dirty, incomplete or belongs to other inputs')
             manifest['installation'] = installation
             manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()

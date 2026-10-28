@@ -125,6 +125,14 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             environment.pop('ORBITTE_RESTART_ROOT')
             environment.pop('ORBITTE_RESTART_GENERATION')
             manifest.update(fault_library=str(fault_library), fault_library_sha256=digest(fault_library))
+        if gpu:
+            source = library / 'tests/hardware/nvlink_observer.c'
+            fixture_hashes['tests/hardware/nvlink_observer.c'] = digest(source)
+            if source.read_bytes() != (root / 'tests/hardware/nvlink_observer.c').read_bytes():
+                raise ValueError('packaged CUDA observer differs from source')
+            observer = output / 'libcuda_staging_observer.so'
+            run('staging-observer-build', [*compiler, *flags, '-fPIC', '-shared', str(source), '-ldl', '-o', str(observer)])
+            manifest.update(cuda_observer=str(observer), cuda_observer_sha256=digest(observer))
         run('fetch', ['cargo', 'fetch', '--locked'], cwd=library)
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)

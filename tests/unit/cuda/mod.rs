@@ -13,6 +13,7 @@ mod ipc_host;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod shim;
+mod staging;
 use shim::*;
 
 #[test]
@@ -138,6 +139,9 @@ fn cuda_registered_ranges_use_actual_owners_and_tcp_read_write_paths() {
     drop(source_memory);
     // A wire ACK precedes the source handler dropping its physical owners.
     source.close_source(Duration::from_secs(2)).unwrap();
+    // Idle chunks retain their actual context until whole-engine close.
+    assert!(weak.upgrade().is_some());
+    source.close(Duration::from_secs(2)).unwrap();
     assert!(weak.upgrade().is_none());
 }
 
@@ -206,6 +210,10 @@ fn unproven_cuda_copy_keeps_batch_backing_capacity_and_requester_admission() {
     ));
     let stats = requester.stats().unwrap();
     assert_eq!(
+        (stats.staging.retained_chunks, stats.staging.reserved_bytes),
+        (1, 4 << 20)
+    );
+    assert_eq!(
         (
             stats.allocated_batches,
             stats.inflight_batches,
@@ -264,6 +272,7 @@ fn source_cuda_sync_failure_retains_source_owner_and_prevents_false_drain() {
         Err(Error::Timeout)
     ));
     assert_eq!(source.stats().unwrap().active_source_operations, 1);
+    assert_eq!(source.stats().unwrap().staging.retained_chunks, 1);
     assert!(weak.upgrade().is_some());
 }
 

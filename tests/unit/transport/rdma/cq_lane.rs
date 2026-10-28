@@ -1617,3 +1617,15 @@ fn periodic_reclaim_removes_drained_faulted_lanes_without_port_recovery() {
         .close(Instant::now() + Duration::from_secs(2))
         .unwrap();
 }
+
+#[cfg(feature = "cuda")]
+pub(in crate::transport::rdma) fn before_staging_abort(
+    runtime: &RdmaTransport,
+    endpoint: &RdmaGrant,
+) {
+    if runtime.config.device.as_deref() == Some("copy_staging_close_fault") {
+        assert_eq!(runtime.proxy.stats().unwrap().retained_chunks, 1);
+        endpoint.record.lock().unwrap().failure =
+            Some(Fault::Backend("injected drained CQ failure", 5));
+    }
+}

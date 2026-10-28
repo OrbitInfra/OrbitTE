@@ -453,7 +453,11 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn ipc_range(&self, offset: usize, length: usize) -> Result<(Allocation, usize)> {
+    pub(crate) fn allocation_range(
+        &self,
+        offset: usize,
+        length: usize,
+    ) -> Result<(Allocation, usize)> {
         checked_range(offset, length, self.len())?;
         Ok((self.0.allocation.clone(), self.0.allocation_offset + offset))
     }

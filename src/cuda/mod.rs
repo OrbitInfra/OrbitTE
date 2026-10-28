@@ -18,6 +18,7 @@ pub(crate) mod ipc;
 mod pinned;
 #[cfg(feature = "rdma")]
 mod rdma;
+mod staging;
 mod stream;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
 pub(crate) use pinned::PinnedAllocation;

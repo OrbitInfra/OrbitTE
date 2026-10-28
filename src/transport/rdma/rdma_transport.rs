@@ -23,6 +23,8 @@ use crate::{
 };
 
 pub(crate) struct RdmaTransport {
+    #[cfg(feature = "cuda")]
+    pub(crate) proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
     pub(super) config: RdmaConfig,
     pub(super) usage: Arc<Mutex<RdmaStats>>,
     pub(super) counters: Arc<events::Counters>,
@@ -57,12 +59,17 @@ impl ParentAdmission {
 }
 
 impl RdmaTransport {
-    pub(crate) fn new(config: RdmaConfig) -> Result<Arc<Self>> {
+    pub(crate) fn new(
+        config: RdmaConfig,
+        #[cfg(feature = "cuda")] proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
+    ) -> Result<Arc<Self>> {
         config.validate()?;
         let usage = Arc::default();
         let registrations =
             buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &sys::REAL);
         Ok(Arc::new(Self {
+            #[cfg(feature = "cuda")]
+            proxy,
             config,
             usage,
             counters: Arc::default(),

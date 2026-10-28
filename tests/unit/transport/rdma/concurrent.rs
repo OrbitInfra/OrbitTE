@@ -352,7 +352,14 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
         hop_limit: 64,
         ..Default::default()
     };
-    let Ok(mut runtime) = Arc::try_unwrap(RdmaTransport::new(config).unwrap()) else {
+    let Ok(mut runtime) = Arc::try_unwrap(
+        RdmaTransport::new(
+            config,
+            #[cfg(feature = "cuda")]
+            crate::transport::rdma::tests::proxy(),
+        )
+        .unwrap(),
+    ) else {
         panic!("one runtime owner")
     };
     runtime.verbs = &native::VERBS;
