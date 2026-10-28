@@ -22,6 +22,11 @@ pub struct EngineConfig {
     pub staging_chunk_size: usize,
     #[cfg(feature = "cuda")]
     pub staging_chunk_count: usize,
+    /// Opt-in serial Pin/Delegate/Unpin sessions for remote CUDA ranges.
+    /// Both peers must enable this. TCP/RDMA remain the payload transports;
+    /// remote host memory and explicit GPU Direct RDMA are rejected.
+    #[cfg(feature = "cuda")]
+    pub remote_staging: bool,
     #[cfg(feature = "rdma")]
     pub rdma: Option<crate::transport::rdma::RdmaConfig>,
     pub bind_addr: SocketAddr,
@@ -54,6 +59,8 @@ impl Default for EngineConfig {
             staging_chunk_size: 4 << 20,
             #[cfg(feature = "cuda")]
             staging_chunk_count: 64,
+            #[cfg(feature = "cuda")]
+            remote_staging: false,
             #[cfg(feature = "rdma")]
             rdma: None,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
@@ -85,6 +92,16 @@ impl EngineConfig {
         #[cfg(feature = "rdma")]
         if let Some(config) = &self.rdma {
             config.validate()?;
+        }
+        #[cfg(all(feature = "cuda", feature = "rdma"))]
+        if self.remote_staging
+            && self.rdma.as_ref().is_some_and(|config| {
+                config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
+            })
+        {
+            return Err(Error::InvalidConfig(
+                "remote staging conflicts with GPU Direct RDMA",
+            ));
         }
         if self.max_registered_regions == 0 || self.max_registered_regions > 4096 {
             return Err(Error::InvalidConfig(

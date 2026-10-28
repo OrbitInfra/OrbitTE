@@ -125,13 +125,36 @@ fn finish(
     let host_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
-    let expect_direct = host_direct || gpu_direct;
+    let remote_staging = env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1");
+    let remote_rdma = remote_staging && transport == Transport::Rdma;
+    let expect_direct = host_direct || gpu_direct || remote_rdma;
     let contexts = env::var("ORBITTE_RDMA_RAILS").map_or(1, |v| v.split(',').count());
     let grants = env::var("ORBITTE_EXPECT_GRANTS")
         .map_or(Ok(6u64), |v| v.parse())
         .map_err(|_| Error::InvalidConfig("expected grant count"))?;
     let persistent = contexts * (2 * usize::from(host_direct) + usize::from(gpu_direct));
     let source_cached = host_direct;
+    let private_mrs = if remote_rdma { 6 } else { 0 };
+    let reused_mrs = if remote_rdma {
+        grants - private_mrs
+    } else if host_direct || (gpu_direct && role == "requester") {
+        grants
+    } else {
+        0
+    };
+    let opened_source_mrs = contexts as u64 * u64::from(source_cached)
+        + if remote_rdma && role == "source" {
+            private_mrs
+        } else {
+            0
+        };
+    let reused_source_mrs = if remote_rdma && role == "source" {
+        grants - private_mrs
+    } else if source_cached && role == "source" {
+        grants
+    } else {
+        0
+    };
     let idle = engine
         .stats()?
         .rdma
@@ -215,23 +238,13 @@ fn finish(
         || idle.progress_failures != 0
         || idle.persistent_mrs != persistent
         || idle.persistent_mr_bytes != persistent * memory.len()
-        || idle.opened_persistent_mrs != persistent as u64
-        || idle.reused_persistent_mrs
-            != if host_direct || (gpu_direct && role == "requester") {
-                grants
-            } else {
-                0
-            }
+        || idle.opened_persistent_mrs != persistent as u64 + private_mrs
+        || idle.reused_persistent_mrs != reused_mrs
         || idle.evicted_persistent_mrs != 0
         || idle.retained_persistent_mrs != 0
         || idle.persistent_source_mrs != contexts * usize::from(source_cached)
-        || idle.opened_source_mrs != contexts as u64 * u64::from(source_cached)
-        || idle.reused_source_mrs
-            != if source_cached && role == "source" {
-                grants
-            } else {
-                0
-            }
+        || idle.opened_source_mrs != opened_source_mrs
+        || idle.reused_source_mrs != reused_source_mrs
         || idle.retained_source_mrs != 0
     {
         return Err(Error::Internal("persistent MR reuse counters differ"));
@@ -259,6 +272,35 @@ fn finish(
     engine.close_requester(TIMEOUT)?;
     engine.close_source(TIMEOUT)?;
     let staging = engine.stats()?.staging;
+    if remote_staging {
+        let chunk: usize = env::var("ORBITTE_STAGING_CHUNK_SIZE")
+            .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?
+            .parse()
+            .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?;
+        let length = slices(payload)[0].2;
+        let steps = 6 * length.div_ceil(chunk) as u64;
+        let expected = if role == "source" {
+            (6, steps, steps, 6)
+        } else {
+            (0, 0, 0, 0)
+        };
+        if (
+            staging.remote_pins,
+            staging.remote_delegates,
+            staging.remote_crosses,
+            staging.remote_unpins,
+        ) != expected
+        {
+            return Err(Error::Internal("remote staging operation receipts differ"));
+        }
+        println!(
+            "ORBITTE_REMOTE_STAGE_STATS {{\"pins\":{},\"delegates\":{},\"crosses\":{},\"unpins\":{}}}",
+            staging.remote_pins,
+            staging.remote_delegates,
+            staging.remote_crosses,
+            staging.remote_unpins
+        );
+    }
     if env::var("ORBITTE_STAGING_OBSERVE").as_deref() == Ok("1") {
         let expected = u64::from(matches!(&backing, Memory::Cuda(_)) && !gpu_direct);
         let chunk: usize = env::var("ORBITTE_STAGING_CHUNK_SIZE")
@@ -530,6 +572,13 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     let engine = Arc::new(TransferEngine::new(EngineConfig {
         bind_addr,
+        remote_staging: env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1"),
+        handler_threads: if env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1") {
+            1
+        } else {
+            4
+        },
+        max_inflight_batches: 1,
         staging_chunk_size: env::var("ORBITTE_STAGING_CHUNK_SIZE")
             .map_or(Ok(4 << 20), |s| s.parse())?,
         staging_chunk_count: env::var("ORBITTE_STAGING_CHUNK_COUNT")

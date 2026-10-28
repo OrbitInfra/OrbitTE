@@ -149,6 +149,8 @@ impl TransferEngine {
             })
             .transpose()?;
         let source = Arc::new(Source {
+            #[cfg(feature = "cuda")]
+            remote_staging: config.remote_staging,
             epoch,
             #[cfg(feature = "cuda")]
             proxy,
@@ -564,6 +566,16 @@ impl TransferEngine {
                     })
             };
             let result = match request.transport {
+                #[cfg(feature = "cuda")]
+                Transport::Tcp | Transport::Rdma if self.config.remote_staging => {
+                    single(self.source.proxy.transfer_remote(
+                        *operation,
+                        peer,
+                        request,
+                        &self.source,
+                        *deadline,
+                    ))
+                }
                 Transport::Tcp => single(TcpTransport::transfer(
                     *operation,
                     peer,
@@ -890,6 +902,8 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
+    #[cfg(feature = "cuda")]
+    pub(crate) remote_staging: bool,
     #[cfg(feature = "cuda")]
     pub(crate) nvlink: Option<crate::transport::nvlink::NVLinkTransport>,
     #[cfg(feature = "cuda")]

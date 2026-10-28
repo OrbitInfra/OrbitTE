@@ -197,6 +197,43 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
+    #[allow(unsafe_code)]
+    pub(crate) fn with_read_slice<T>(
+        &self,
+        operation: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
+        let backing = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.check_access(&(0..self.length))?;
+        // SAFETY: the entire allocation is checked and exclusively locked;
+        // neither a CPU writer nor a native DMA loan overlaps this slice.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(backing.bytes.address().as_ptr(), self.length) };
+        operation(bytes)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn with_staging_access<T>(
+        &self,
+        length: usize,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let range = checked_range(0, length, self.length)?;
+        let mut backing = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.check_access(&range)?;
+        let result = operation();
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            backing.cuda_uncertain = true;
+        }
+        result
+    }
+
+    #[cfg(feature = "cuda")]
     pub(crate) fn fence_cuda(&self) {
         self.backing
             .lock()

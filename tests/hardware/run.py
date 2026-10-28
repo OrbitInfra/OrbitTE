@@ -341,6 +341,13 @@ class Controller:
             if 'staging_chunk_size' in case:
                 staging.validate_case(case)
                 environment.update(ORBITTE_SHARED_ROLE=role, ORBITTE_STAGING_OBSERVE='1', ORBITTE_STAGING_CHUNK_SIZE=str(case['staging_chunk_size']), ORBITTE_STAGING_CHUNK_COUNT='1')
+            if case.get('remote_staging', False):
+                staging.validate_case(case)
+                length = case.get('slice_bytes', case['payload'] // 4 - 23)
+                chunk = case['staging_chunk_size']
+                environment.update(ORBITTE_REMOTE_STAGING='1',
+                    ORBITTE_EXPECT_QP_REUSE=str(int(case['transport'] == 'rdma')),
+                    ORBITTE_EXPECT_GRANTS=str(6 * ((length + chunk - 1) // chunk)))
             cuda_memory = case.get('cuda_memory', 'staged')
             if cuda_memory not in ('staged', 'direct'):
                 raise ValueError('CUDA RDMA memory policy must be staged or direct')

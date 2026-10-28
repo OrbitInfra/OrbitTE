@@ -23,6 +23,7 @@ mod stream;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
 pub(crate) use pinned::PinnedAllocation;
 pub use pinned::allocate_pinned_host;
+pub(crate) use staging::StagingCopy;
 use stream::CopyStream;
 
 static RETAINED_DEVICE: AtomicUsize = AtomicUsize::new(0);

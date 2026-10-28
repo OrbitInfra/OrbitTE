@@ -12,6 +12,7 @@ mod ipc_cache;
 mod ipc_host;
 #[cfg(feature = "rdma")]
 mod rdma;
+mod remote_staging;
 mod shim;
 mod staging;
 use shim::*;

@@ -46,6 +46,24 @@ class StagingProof(unittest.TestCase):
                     with self.assertRaises(ValueError): staging.verify(case, evidence)
                 else: staging.verify(case, evidence)
 
+    def test_remote_profile_requires_completed_operations_on_the_source(self):
+        for fault in (None, 'missing', 'unpin', 'cross', 'requester', 'host'):
+            with self.subTest(fault=fault):
+                case, evidence, native = fixture()
+                case['remote_staging'] = True
+                if fault == 'host': case['source_kind'] = 'cpu'
+                evidence['source']['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)
+                for role in ('source', 'requester'):
+                    counts = dict(pins=6, delegates=18, crosses=18, unpins=6) if role == 'source' else dict(pins=0, delegates=0, crosses=0, unpins=0)
+                    if fault == 'unpin' and role == 'source': counts['unpins'] -= 1
+                    if fault == 'cross' and role == 'source': counts['crosses'] -= 1
+                    if fault == 'requester' and role == 'requester': counts['pins'] = 1
+                    if fault != 'missing':
+                        evidence[role]['stdout.log'] += '\nORBITTE_REMOTE_STAGE_STATS ' + json.dumps(counts)
+                if fault:
+                    with self.assertRaises(ValueError): staging.verify(case, evidence)
+                else: staging.verify(case, evidence)
+
     def test_observer_scope_is_bounded(self):
         scope = dict(ORBITTE_STAGING_OBSERVE='1', ORBITTE_SHARED_ROLE='source', ORBITTE_STAGING_CHUNK_COUNT='1')
         self.assertTrue(supervise.fault_scope(scope))

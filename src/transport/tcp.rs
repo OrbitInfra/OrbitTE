@@ -19,16 +19,88 @@ impl TcpTransport {
             crate::runtime::proxy_manager::ProxyManager,
         >,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        let mut bytes = Self::payload(
+            operation,
+            request,
+            deadline,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+        .map_err(|error| (error, RemoteEffect::None))?;
+        let mut channel = ControlChannel::connect(peer.endpoint, deadline)
+            .map_err(|error| (error, RemoteEffect::None))?;
+        Self::exchange(
+            operation,
+            peer,
+            request,
+            &mut channel,
+            &mut bytes,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn transfer_on(
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        request: &PreparedTransfer,
+        channel: &mut ControlChannel<'_>,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
+    ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        let mut bytes = Self::payload(
+            operation,
+            request,
+            channel.deadline,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+        .map_err(|error| (error, RemoteEffect::None))?;
+        Self::exchange(
+            operation,
+            peer,
+            request,
+            channel,
+            &mut bytes,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+    }
+
+    fn payload(
+        operation: TransferOp,
+        request: &PreparedTransfer,
+        deadline: Instant,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
+    ) -> Result<Vec<u8>> {
+        let mut bytes = buffer(request.length)?;
+        let _ = deadline;
+        if operation == TransferOp::Write {
+            #[cfg(feature = "cuda")]
+            proxy.read(&request.local, request.local_offset, &mut bytes, deadline)?;
+            #[cfg(not(feature = "cuda"))]
+            request.local.read(request.local_offset, &mut bytes)?;
+        }
+        Ok(bytes)
+    }
+
+    fn exchange(
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        request: &PreparedTransfer,
+        channel: &mut ControlChannel<'_>,
+        bytes: &mut [u8],
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
+    ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        let deadline = channel.deadline;
         let mut effect = RemoteEffect::None;
         let result = (|| {
-            let mut bytes = buffer(request.length)?;
-            if operation == TransferOp::Write {
-                #[cfg(feature = "cuda")]
-                proxy.read(&request.local, request.local_offset, &mut bytes, deadline)?;
-                #[cfg(not(feature = "cuda"))]
-                request.local.read(request.local_offset, &mut bytes)?;
-            }
-            let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
             let operation_code = if operation == TransferOp::Read {
                 Operation::TcpRead
             } else {
@@ -44,24 +116,24 @@ impl TcpTransport {
                 }
                 .encode(),
             )?;
-            let reply = Reply::read(&mut channel, peer.epoch)?;
+            let reply = Reply::read(channel, peer.epoch)?;
             if operation == TransferOp::Read {
                 if reply.status != 0 || reply.length != request.length as u64 {
                     return Err(Error::Protocol("READ payload length/status"));
                 }
-                channel.read_exact(&mut bytes)?;
+                channel.read_exact(bytes)?;
                 remaining(deadline)?;
                 #[cfg(feature = "cuda")]
-                proxy.write(&request.local, request.local_offset, &bytes, deadline)?;
+                proxy.write(&request.local, request.local_offset, bytes, deadline)?;
                 #[cfg(not(feature = "cuda"))]
-                request.local.write(request.local_offset, &bytes)?;
+                request.local.write(request.local_offset, bytes)?;
             } else {
                 if reply.status != 9 {
                     return Err(Error::Protocol("WRITE missing ready response"));
                 }
                 effect = RemoteEffect::Unknown;
-                channel.write_all(&bytes)?;
-                let reply = Reply::read(&mut channel, peer.epoch)?;
+                channel.write_all(bytes)?;
+                let reply = Reply::read(channel, peer.epoch)?;
                 if reply.status != 0 || reply.length != 0 {
                     return Err(Error::Protocol("WRITE acknowledgement length/status"));
                 }

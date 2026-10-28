@@ -195,12 +195,13 @@ impl RdmaTransport {
             if (local_paths.len() > 1 || self.config.num_lanes > 1)
                 && plan_rdma_slices(request.length, self.config.block_size, 64)?.1 > 1
             {
+                let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
                 return self.transfer_slices(
                     operation,
                     peer,
                     request,
                     epoch,
-                    deadline,
+                    &mut channel,
                     &mut effect,
                 );
             }
@@ -257,15 +258,30 @@ impl RdmaTransport {
         result.map_err(|error| (error, effect))
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn transfer_on(
+        &self,
+        operation: TransferOp,
+        peer: &RemoteSegment,
+        request: &PreparedTransfer,
+        epoch: SourceEpoch,
+        channel: &mut ControlChannel<'_>,
+    ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        let mut effect = RemoteEffect::None;
+        self.transfer_slices(operation, peer, request, epoch, channel, &mut effect)
+            .map_err(|error| (error, effect))
+    }
+
     fn transfer_slices(
         &self,
         operation: TransferOp,
         peer: &RemoteSegment,
         request: &PreparedTransfer,
         epoch: SourceEpoch,
-        deadline: Instant,
+        channel: &mut ControlChannel<'_>,
         effect: &mut RemoteEffect,
     ) -> Result<()> {
+        let deadline = channel.deadline;
         let local_paths = self.paths()?;
         let mut wire = data_request(operation, peer, request);
         wire.operation = if operation == TransferOp::Read {
@@ -273,9 +289,8 @@ impl RdmaTransport {
         } else {
             Operation::RdmaWriteSlices
         };
-        let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
         channel.write_all(&wire.encode())?;
-        let (remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
+        let (remote_paths, remote_width) = path::read_paths(channel, peer.epoch)?;
         let mut remote_limit = [0];
         channel.read_exact(&mut remote_limit)?;
         if !(1..=64).contains(&remote_limit[0]) {
@@ -328,9 +343,9 @@ impl RdmaTransport {
         }
         channel.write_all(&[count as u8])?;
         for (range, _, _, _) in &plan {
-            range.write(&mut channel)?;
+            range.write(channel)?;
         }
-        let admitted = Reply::read(&mut channel, peer.epoch)?;
+        let admitted = Reply::read(channel, peer.epoch)?;
         if admitted.status != 9 || admitted.length != 0 {
             return Err(Error::Protocol("RDMA parent receive admission"));
         }
@@ -357,21 +372,16 @@ impl RdmaTransport {
                         None => self.allocate(range.length, 1u64 << local_id)?,
                     };
                     let endpoint = self.requester_grant(
-                        &channel,
+                        channel,
                         &child_wire,
                         &child,
                         self.reserve_grant(lease, &child.local, &credits)?,
                         remote,
                         remote_width.min(self.config.num_lanes),
                     )?;
-                    if let Some(slice) = self.requester_slice(
-                        &mut channel,
-                        &child_wire,
-                        &child,
-                        epoch,
-                        remote,
-                        endpoint,
-                    )? {
+                    if let Some(slice) =
+                        self.requester_slice(channel, &child_wire, &child, epoch, remote, endpoint)?
+                    {
                         prepared = Some(slice);
                         break;
                     }
@@ -397,7 +407,7 @@ impl RdmaTransport {
                     .grant
                     .progress
                     .wait(&slice.grant.record, slice.grant.claim, deadline)?;
-                self.finish_requester_slice(&mut channel, slice, &request.local)?;
+                self.finish_requester_slice(channel, slice, &request.local)?;
             }
             Ok(())
         })();

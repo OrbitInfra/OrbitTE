@@ -1,4 +1,7 @@
-//! Local staging chunks, independent of payload transports and task completion.
+//! Shared staging chunks and remote operations, independent of payload transports.
+
+mod remote_stage_operation;
+mod stage_registration;
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -20,6 +23,10 @@ pub struct StagingStats {
     pub reuses: u64,
     pub completed_chunks: u64,
     pub copied_bytes: u64,
+    pub remote_pins: u64,
+    pub remote_delegates: u64,
+    pub remote_crosses: u64,
+    pub remote_unpins: u64,
 }
 
 enum StageBuffer {
@@ -37,6 +44,10 @@ struct StageBuffers {
     reuses: u64,
     completed_chunks: u64,
     copied_bytes: u64,
+    remote_pins: u64,
+    remote_delegates: u64,
+    remote_crosses: u64,
+    remote_unpins: u64,
 }
 
 pub(crate) struct ProxyManager {
@@ -68,6 +79,10 @@ impl ProxyManager {
                 reuses: 0,
                 completed_chunks: 0,
                 copied_bytes: 0,
+                remote_pins: 0,
+                remote_delegates: 0,
+                remote_crosses: 0,
+                remote_unpins: 0,
             }),
             changed: Condvar::new(),
         }))
@@ -170,6 +185,10 @@ impl ProxyManager {
             reuses: state.reuses,
             completed_chunks: state.completed_chunks,
             copied_bytes: state.copied_bytes,
+            remote_pins: state.remote_pins,
+            remote_delegates: state.remote_delegates,
+            remote_crosses: state.remote_crosses,
+            remote_unpins: state.remote_unpins,
             ..StagingStats::default()
         };
         for slot in &state.slots {
@@ -303,6 +322,35 @@ impl StageBufferLease {
     }
     pub(crate) fn drained(&mut self) {
         self.safe_to_release = true;
+    }
+    pub(crate) fn release(mut self) -> Result<()> {
+        let buffer = self
+            .buffer
+            .take()
+            .ok_or(Error::Internal("missing staging lease"))?;
+        let result = buffer.check_access().and({
+            if self.safe_to_release {
+                Ok(())
+            } else {
+                Err(Error::Unquiesced {
+                    operation: "staging chunk still active",
+                    code: -1,
+                })
+            }
+        });
+        if result.is_ok() {
+            self.manager
+                .finish_slot(self.index, StageBuffer::Idle(buffer));
+        } else {
+            self.manager.finish_slot(self.index, StageBuffer::Retained);
+            buffer.retain();
+            std::mem::forget(Arc::clone(&self.manager));
+        }
+        result
+    }
+    pub(crate) fn quarantine(&mut self) {
+        self.safe_to_release = false;
+        self.manager.finish_slot(self.index, StageBuffer::Retained);
     }
     pub(crate) fn retain(mut self) {
         self.safe_to_release = false;
