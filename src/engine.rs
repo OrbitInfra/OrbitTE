@@ -128,7 +128,12 @@ impl TransferEngine {
         #[cfg(feature = "cuda")]
         let nvlink = config
             .nvlink
-            .then(|| crate::transport::nvlink::NVLinkTransport::new(config.max_inflight_bytes))
+            .then(|| {
+                crate::transport::nvlink::NVLinkTransport::new(
+                    config.max_inflight_bytes,
+                    config.nvlink_cache_entries,
+                )
+            })
             .transpose()?;
         let source = Arc::new(Source {
             epoch,
@@ -738,6 +743,11 @@ impl TransferEngine {
                 .map_err(|_| Error::Internal("source lock poisoned"))?;
             admission = guard;
         }
+        drop(admission);
+        #[cfg(feature = "cuda")]
+        if let Some(transport) = &self.source.nvlink {
+            transport.exports.wait_empty(deadline)?;
+        }
         Ok(())
     }
 
@@ -767,6 +777,11 @@ impl TransferEngine {
                 .map_err(|_| Error::Internal("batch lock poisoned"))?
                 .0;
         }
+        drop(usage);
+        #[cfg(feature = "cuda")]
+        if let Some(transport) = &self.source.nvlink {
+            transport.close_imports(self.source.epoch, deadline)?;
+        }
         Ok(())
     }
 
@@ -795,8 +810,10 @@ impl TransferEngine {
             source.open = false;
             requester.open = false;
         }
-        self.close_source_until(deadline)?;
+        // Peers may export to each other. Release outgoing imports before
+        // waiting for incoming exports, keeping close receipts serviceable.
         self.close_requester_until(deadline)?;
+        self.close_source_until(deadline)?;
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
             runtime.close(deadline)?;

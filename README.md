@@ -88,7 +88,9 @@ host-wide context inventory limit. Direct mode has provider prerequisites. The
 with explicit exporter-lifetime limits. Bounded subbatch import reuse passes
 28 additional installed cases on two H20 hosts; local owned pinned host
 READ/WRITE and mixed host/GPU groups pass 30 further cases plus four independent
-repeats. These bounded profiles are independently accepted.
+repeats. These bounded profiles are independently accepted. Optional
+cross-submission import caching is implemented with bounded mappings and explicit
+exporter close receipts; its installed qualification is pending.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

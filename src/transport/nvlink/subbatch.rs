@@ -1,38 +1,5 @@
-use crate::cuda::ipc::IpcMapping;
+use crate::Transport;
 use crate::engine::PreparedTransfer;
-use crate::memory::Allocation;
-use crate::{Result, Transport};
-
-use super::budget::MappingPermit;
-
-/// One relocation/import reference, charged until native close is proven.
-pub(super) struct NVLinkSubBatch {
-    pub(super) mapping: IpcMapping,
-    permit: Option<MappingPermit>,
-}
-
-impl NVLinkSubBatch {
-    pub(super) fn new(memory: &Allocation, permit: MappingPermit) -> Result<Self> {
-        Ok(Self {
-            mapping: IpcMapping::new(memory)?,
-            permit: Some(permit),
-        })
-    }
-
-    pub(super) fn close(mut self) -> Result<()> {
-        self.mapping.close()?;
-        self.permit.take();
-        Ok(())
-    }
-}
-
-impl Drop for NVLinkSubBatch {
-    fn drop(&mut self) {
-        if let Some(permit) = self.permit.take() {
-            permit.retain();
-        }
-    }
-}
 
 /// Preserve request order. Never enlarge source authority beyond one region or
 /// its normal transfer limit, and never reuse a mapping on another CUDA context.

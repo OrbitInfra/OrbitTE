@@ -1,12 +1,19 @@
 //! TENT NVLink transport boundary: same-host IPC relocation and CUDA completion.
 
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 mod budget;
+mod cache;
+mod export;
+mod mapping;
 mod subbatch;
 use budget::MappingBudget;
 pub use budget::NVLinkStats;
-use subbatch::{NVLinkSubBatch, subbatch_len};
+use cache::{RelocationCache, RelocationKey};
+use export::ExportCache;
+use mapping::OpenedMapping;
+use subbatch::subbatch_len;
 
 use crate::cuda::ipc::IpcExport;
 use crate::engine::{PreparedSubmission, remaining};
@@ -21,7 +28,7 @@ const GRANT_SIZE: usize = 200;
 const BINDING_SIZE: usize = 84;
 const RECEIPT_SIZE: usize = BINDING_SIZE + 1;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct Identity {
     machine: SourceEpoch,
     process: SourceEpoch,
@@ -82,13 +89,17 @@ impl Identity {
 pub(crate) struct NVLinkTransport {
     identity: Identity,
     budget: Arc<MappingBudget>,
+    imports: RelocationCache,
+    pub(crate) exports: ExportCache,
 }
 
 impl NVLinkTransport {
-    pub(crate) fn new(max_bytes: usize) -> Result<Self> {
+    pub(crate) fn new(max_bytes: usize, cache_entries: usize) -> Result<Self> {
         Ok(Self {
             identity: Identity::local()?,
             budget: MappingBudget::new(max_bytes),
+            imports: RelocationCache::new(cache_entries),
+            exports: ExportCache::new(cache_entries),
         })
     }
 
@@ -122,16 +133,37 @@ impl NVLinkTransport {
             let mut copied = 0;
             let mut attempted = 0;
             let mut acknowledged = false;
-            let result = (|| {
+            let mut lease = None;
+            let mut result = (|| {
                 let (memory, _) = requests[0]
                     .local
                     .ipc_range(requests[0].local_offset, requests[0].length)?;
-                memory.ipc_context()?;
+                let context = memory.ipc_context()?;
+                let cached = self.imports.limit != 0;
+                if cached {
+                    let key = RelocationKey {
+                        endpoint: peer.endpoint,
+                        epoch: peer.epoch,
+                        region: requests[0].remote.id,
+                        context,
+                    };
+                    let mut acquired = self.imports.acquire(key, deadline)?;
+                    let entry = acquired
+                        .entry
+                        .as_mut()
+                        .ok_or(Error::Internal("missing relocation"))?;
+                    if entry.closing {
+                        entry.close(self, key, requester, deadline)?;
+                        *entry = cache::CachedMapping::new()?;
+                    }
+                    lease = Some(acquired);
+                }
                 let wire = Request {
-                    operation: if operation == TransferOp::Read {
-                        Operation::NvlinkRead
-                    } else {
-                        Operation::NvlinkWrite
+                    operation: match (cached, operation == TransferOp::Read) {
+                        (true, true) => Operation::NvlinkReadCached,
+                        (true, false) => Operation::NvlinkWriteCached,
+                        (false, true) => Operation::NvlinkRead,
+                        (false, false) => Operation::NvlinkWrite,
                     },
                     epoch: peer.epoch,
                     region: requests[0].remote.id,
@@ -140,12 +172,20 @@ impl NVLinkTransport {
                 };
                 let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
                 channel.write_all(&wire.encode())?;
-                let mut hello = [0; HELLO_SIZE];
-                hello[..4].copy_from_slice(b"NVL1");
-                self.identity.encode(&mut hello[4..36]);
-                hello[36..].copy_from_slice(&requester.0);
-                channel.write_all(&hello)?;
-                let reply = match Reply::read(&mut channel, peer.epoch) {
+                if let Some(entry) = lease.as_ref().and_then(|lease| lease.entry.as_ref()) {
+                    channel.write_all(&self.cache_hello(
+                        requester,
+                        entry.token,
+                        entry.grant.is_some(),
+                    ))?;
+                } else {
+                    let mut hello = [0; HELLO_SIZE];
+                    hello[..4].copy_from_slice(b"NVL1");
+                    self.identity.encode(&mut hello[4..36]);
+                    hello[36..].copy_from_slice(&requester.0);
+                    channel.write_all(&hello)?;
+                }
+                let mut reply = match Reply::read(&mut channel, peer.epoch) {
                     Err(Error::ResourceExhausted) if count > 1 => {
                         // A typed rejection before any grant cannot have exposed a
                         // mapping or copied bytes. The peer may have a smaller cap.
@@ -154,6 +194,17 @@ impl NVLinkTransport {
                     }
                     other => other?,
                 };
+                if lease
+                    .as_ref()
+                    .and_then(|lease| lease.entry.as_ref())
+                    .is_some_and(|entry| entry.grant.is_none())
+                {
+                    if reply.status != 12 || reply.length != 0 {
+                        return Err(Error::Protocol("NVLink cache offer"));
+                    }
+                    channel.write_all(&[0])?;
+                    reply = Reply::read(&mut channel, peer.epoch)?;
+                }
                 if reply.status != 0 || reply.length != GRANT_SIZE as u64 {
                     return Err(Error::Protocol("NVLink grant size/status"));
                 }
@@ -163,13 +214,34 @@ impl NVLinkTransport {
                     self.validate_grant(&grant, &wire, requester)?;
                 let copy = (|| {
                     remaining(deadline)?;
-                    let permit = self.budget.reserve(extent, false)?;
+                    let entry = lease.as_mut().and_then(|lease| lease.entry.as_mut());
+                    let mut batch = if let Some(entry) = entry {
+                        let base_offset = remote_offset
+                            .checked_sub(start)
+                            .ok_or(Error::InvalidRange)?;
+                        let identity = Identity::decode(&grant[4..36]);
+                        let expected = (handle, extent, base_offset, identity);
+                        if entry.grant.is_some_and(|old| old != expected) {
+                            return Err(Error::Protocol("NVLink cached allocation changed"));
+                        }
+                        entry.grant = Some(expected);
+                        entry.mapping.take()
+                    } else {
+                        None
+                    };
+                    let needs_open = batch.is_none();
+                    if needs_open {
+                        let permit = self.budget.reserve(extent, false)?;
+                        batch = Some(OpenedMapping::new(&memory, permit)?);
+                    }
+                    let mut batch = batch.ok_or(Error::Internal("missing NVLink mapping"))?;
                     if operation == TransferOp::Write {
                         effect = RemoteEffect::Unknown;
                     }
-                    let mut batch = NVLinkSubBatch::new(&memory, permit)?;
                     let copied_result = (|| {
-                        batch.mapping.open(handle)?;
+                        if needs_open {
+                            batch.mapping.open(handle)?;
+                        }
                         for (index, request) in requests.iter().enumerate() {
                             // The engine began the first task before acquiring the grant.
                             if index != 0 && !begin(index) {
@@ -191,9 +263,14 @@ impl NVLinkTransport {
                         }
                         Ok(())
                     })();
-                    // Closing the single import proves completion of every touched
-                    // local owner. A failure retains the import and its entire charge.
-                    batch.close()?;
+                    if let Some(entry) = lease.as_mut().and_then(|lease| lease.entry.as_mut()) {
+                        let drained = batch.mapping.finish_copies();
+                        entry.mapping = Some(batch);
+                        drained?;
+                    } else {
+                        // The default profile closes every subbatch import.
+                        batch.close()?;
+                    }
                     copied_result
                 })();
                 if matches!(copy, Err(Error::Unquiesced { .. })) {
@@ -210,7 +287,21 @@ impl NVLinkTransport {
                 acknowledged = true;
                 copy
             })();
-            if retry_single {
+            if result.is_err() {
+                if let Some(lease) = lease.as_mut() {
+                    if let Some(entry) = lease.entry.as_mut() {
+                        match entry.close(self, lease.key, requester, deadline) {
+                            Ok(()) => lease.entry = None,
+                            Err(error @ Error::Unquiesced { .. }) => result = Err(error),
+                            // Proven native close with a lost receipt/ACK remains a
+                            // non-reusable close obligation for close_requester.
+                            Err(_) => (),
+                        }
+                    }
+                }
+            }
+            drop(lease);
+            if retry_single && !matches!(result, Err(Error::Unquiesced { .. })) {
                 count = 1;
                 continue;
             }
@@ -227,6 +318,26 @@ impl NVLinkTransport {
                 error,
             });
         }
+    }
+
+    pub(crate) fn close_imports(&self, requester: SourceEpoch, deadline: Instant) -> Result<()> {
+        let mut failure = None;
+        for key in self.imports.keys()? {
+            let Some(mut lease) = self.imports.existing(key, deadline)? else {
+                continue;
+            };
+            if let Some(entry) = lease.entry.as_mut() {
+                match entry.close(self, key, requester, deadline) {
+                    Ok(()) => lease.entry = None,
+                    Err(error) => {
+                        if failure.is_none() {
+                            failure = Some(error);
+                        }
+                    }
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     fn validate_grant(
@@ -271,6 +382,12 @@ impl NVLinkTransport {
         offset: usize,
         length: usize,
     ) -> Result<()> {
+        if matches!(
+            request.operation,
+            Operation::NvlinkReadCached | Operation::NvlinkWriteCached
+        ) {
+            return self.serve_cached(channel, epoch, request, memory, offset, length);
+        }
         let mut hello = [0; HELLO_SIZE];
         channel.read_exact(&mut hello)?;
         if &hello[..4] != b"NVL1" {

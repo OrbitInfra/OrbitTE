@@ -395,16 +395,25 @@ stream readiness remain P5 work.
 bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
 `cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
 one imported native reference, its context and every touched local allocation.
-`transport/nvlink/subbatch.rs::NVLinkSubBatch` owns the mapping charge and explicit
-close boundary for consecutive same-region/context requests. `cuda/stream.rs` owns actual
-copy completion. ControlService dispatches IPC grants and retains uncertain
-source handlers; Engine/Batch retain uncertain requester admissions.
+`transport/nvlink/mapping.rs::OpenedMapping` owns the mapping charge and explicit
+native close. `subbatch.rs` groups consecutive same-region/context requests.
+The optional `cache.rs::RelocationCache` owns bounded single-flight imports;
+`export.rs::ExportCache` owns the independent persistent source registration,
+whole-allocation loan and physical charge. Each cached submission revalidates
+source authorization, then releases drained local owners at operation completion.
+`cuda/stream.rs` owns actual copy completion. ControlService keeps cached close
+receipts available after source admission closes; Engine drains outgoing imports
+before incoming exports. Legacy uncertain handlers and current uncertain
+requester DMA still retain their admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant now covers a bounded group, with per-slice
 events and one final import close/source receipt. Shared cleanup failure has an
 explicit affected task span. Native TENT keeps a transport-wide relocation cache;
-OrbitTE releases the mapping at the subbatch boundary.
+OrbitTE does so by default, or keeps it until explicit requester close when
+`nvlink_cache_entries` is enabled. The initial ready-offer handshake separates
+unexposed reservations from exposed exporter obligations; a late first request
+cannot expose a handle after its requester already closed the original socket.
 
 `cuda/pinned.rs::PinnedAllocation` owns real host allocation, primary context,
 and reusable copy stream/event. `HostMemory` holds its access lock through native

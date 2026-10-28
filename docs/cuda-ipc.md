@@ -65,7 +65,7 @@ including a mixed host/GPU group. The transport preserves
 input order, including overlapping or out-of-order ranges; each copy drains its
 allocation-owned event before the next begins. It does not reorder addresses.
 
-`NVLinkSubBatch` holds one mapping and its physical-extent charge. The source
+`OpenedMapping` holds one mapping and its physical-extent charge. The source
 grants the smallest enclosing remote range, bounded by `max_transfer_bytes`;
 logical byte accounting still adds only requested bytes, excluding gaps. A new
 region, context, transport or oversized envelope ends the group. If the source
@@ -73,11 +73,61 @@ has a smaller limit, an explicit `ResourceExhausted` reply **before any grant**
 permits one retry as a single request. No ambiguous I/O, received grant or copy
 failure is retried.
 
-The import closes at the group boundary. There is no idle mapping between
-submissions and no additional wire format. This bounds exporter lifetime without
-requiring a new remote revocation protocol. Cross-submission caching remains open.
+With the default `nvlink_cache_entries: 0`, the import closes at the group
+boundary. The optional cache below extends that lifetime explicitly.
+
+## Cross-submission relocation cache
+
+Both cooperating engines can opt in with `nvlink_cache_entries: N` (1–4096).
+`NVLinkTransport` owns a bounded `RelocationCache`, keyed by peer endpoint,
+authoritative source epoch, region ID and the actual local CUDA context.
+Concurrent first submissions for the same key share one slot, including during
+initial grant/open. Waiting for a busy slot uses the submission deadline. The
+cache retains the native context, so its address cannot be recycled under a live
+mapping. Different contexts/regions never alias a cached entry.
+
+Every submission still asks the source to validate admission, epoch, current
+registration, range and permission. A cached pointer alone grants no new
+operation. The source `ExportCache` retains the actual `RegisteredMemory`,
+`IpcExport` whole-allocation loan and physical mapping charge. One allocation
+therefore supports only one live export token/context in this profile, and
+**source-side local access and RDMA remain excluded for the entire cache
+lifetime**, including idle time. This is suited to a fixed, cooperating working
+set; it is not transparent caching of mutable source buffers.
+
+The first request reserves an active source entry and receives an offer with no
+handle. Only the requester's answer permits handle exposure. This ensures that
+an explicit close which overtakes a queued first request cannot leave a later
+exposed export behind: the requester closes its original socket before issuing
+close, so a delayed offer cannot receive its answer. An unexposed reservation is
+cleaned up on EOF. Once exposed, missing grant/completion bytes retain the entry.
+
+Each subbatch drains its copy events and restores contexts before a bound
+**operation-complete receipt**. Its ACK determines the completed prefix; it does
+not release the export or mapping. Completed local GPU/pinned-host owners are
+released at this drain boundary, so an idle import cannot accumulate every prior
+requester's allocation. Uncertain current copies still retain their real owners.
+
+`close_requester` permanently fences new outgoing work, waits for accepted
+submissions, then closes cached imports. Native close and context restoration
+must succeed before an independent **mapping-close receipt** releases the source
+entry. The close endpoint remains available after source admission closes or the
+region is unregistered. A lost close ACK leaves a non-reusable close obligation;
+a later `close_requester` retries only the idempotent receipt, never the native
+close. An uncertain native close poisons the slot and retains its native owner
+and physical quota without retry. `close()` releases outgoing imports before
+waiting for incoming exports, permitting two cooperating peers to close together.
+
+Both import and export entry counts are bounded by `nvlink_cache_entries`, and
+their physical extents share the existing mapping byte budget. Full caches
+reject new keys. There is no automatic eviction, idle expiry or public flush
+that permits further submissions in this substage. Dropping the engine does not
+prove remote closure: explicit shutdown is required, and uncertain owners stay
+retained. A source-close timeout does not revoke an outstanding handle.
 
 ## Completion and shutdown
+
+The default per-subbatch profile proceeds as follows:
 
 1. The source validates the request's authoritative source epoch, memory bounds,
    permission, boot identity and requester process identity. It retains the
@@ -115,8 +165,10 @@ memory handle cannot release it. Inspect `EngineStats.nvlink` and
 reclamation after a missing receipt in this substage.
 
 Boot/process identities and epochs detect stale or incompatible peers; they are
-not authentication. The existing wire version 15 gains IPC opcodes 8/9 with an
-`NVL1` payload. TCP/RDMA layouts are unchanged; older peers reject these opcodes.
+not authentication. Wire version 16 keeps per-subbatch IPC opcodes 8/9 (`NVL1`) and adds
+cached READ/WRITE/close opcodes 10/11/12 (`NVL2` hello). Initial cached offers use
+ready status 12 with no handle payload. TCP/RDMA layouts are unchanged; older
+wire versions are rejected rather than interpreted as cached completion.
 This is OrbitTE's protocol, not native TENT wire compatibility.
 
 ## Correspondence to TENT
@@ -131,19 +183,22 @@ visible to callers.
 
 TENT's `relocateSharedMemoryAddress` caches imports in its transport relocation
 map, while `NVLinkSubBatch` owns task streams/events. OrbitTE's
-`transport/nvlink/subbatch.rs::NVLinkSubBatch` scopes relocation reuse to a
-bounded group and `cuda/ipc.rs::IpcMapping` owns the native reference, context and
-touched allocations. Each local allocation reuses its existing stream/event.
-TENT's longer-lived cache and device-wide stream pool remain separate work;
-this implementation does not claim their full scheduling behavior.
+`transport/nvlink/cache.rs::RelocationCache` follows that transport-level
+placement. `mapping.rs::OpenedMapping` owns one native import and its charge;
+`export.rs::ExportCache` separately owns source lifetime. `subbatch.rs` only
+selects consecutive same-region/context slices. `cuda/ipc.rs::IpcMapping` owns
+the native reference, retained context and current touched allocations. Each
+local allocation reuses its stream/event. TENT's cache closes in `uninstall`;
+OrbitTE additionally requires explicit cooperating source close receipts.
+Device-wide stream pooling and broader scheduling remain separate work.
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
 (`transports/nvlink/host_register`, default false), but its remote relocation
 accepts only CUDA buffers. OrbitTE follows that distinction: `cuda/pinned.rs`
 owns local pinned backing/stream, `HostMemory` owns CPU/RDMA exclusion, and
 `IpcMapping` retains the concrete host or device allocation. Remote grants
-remain GPU-only. Remote host exports, cross-submission import-cache ownership,
-MNNVL/VMM and exporter-crash safety remain open in P5.4.
+remain GPU-only. Remote host exports, dynamic cache eviction, MNNVL/VMM and
+exporter-crash safety remain open in P5.4.
 These limits follow the native
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
@@ -161,7 +216,7 @@ CUDA driver. The output includes an installed binary, native observer, bounded
 controller and manifest with hashes. On an allocated host, run `nvlink_run.py`
 with explicit `--binary`, `--observer`, their manifest hashes, `--devices 0,1`,
 `--lock-root`, `--output`, `--payload`, `--mode` and
-`--memory device|host|mixed` (mixed requires a batch mode). Output must stay outside the
+`--memory device|host|mixed` (mixed requires a batch or cache mode). Output must stay outside the
 source checkout. The controller locks the selected GPU UUIDs and requires an
 NVLink topology edge; it never claims measured fabric bandwidth from that fact.
 
@@ -182,3 +237,13 @@ evidence. See [local pinned host qualification](qualification.md#local-pinned-ho
 [subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
 and [the initial profile](qualification.md#cooperative-cuda-ipc-and-nvlink) for
 exact artifacts and profile limits.
+
+The `cache-healthy` mode starts four concurrent READ submissions, then a WRITE
+submission over the same three-slice mixed/host/device group: all fifteen payload
+copies must share one native import/export and one final close. `cache-graceful`
+and `cache-requester-exit` exercise the distinct persistent export lifetime.
+The latter is killed after event drain and before native close, and verifies
+retention without final source payload readback. Source admission is no longer
+held by an idle handler; the export table remains charged instead. Native ledger
+checks distinguish IPC payload from owned-device setup/readback, require exact
+copy directions/ranges and event/context completion, and validate final cleanup.
