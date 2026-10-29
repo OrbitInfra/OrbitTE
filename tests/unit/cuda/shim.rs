@@ -43,6 +43,7 @@ pub(super) struct Device {
     pub(super) event_gate_skip: AtomicUsize,
     pub(super) event_waits: AtomicUsize,
     pub(super) event_queries: AtomicUsize,
+    pub(super) event_not_ready: AtomicUsize,
     pub(super) event_query_results: AtomicUsize,
     pub(super) event_query_successes: AtomicUsize,
     pub(super) event_query_fail_at: AtomicUsize,
@@ -280,6 +281,7 @@ unsafe extern "C" fn event_query(completion: sys::CUevent) -> Status {
     let stream = device.completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
     if copy_held(device, stream) {
+        device.event_not_ready.fetch_add(1, Ordering::AcqRel);
         if device.pop_after_not_ready.load(Ordering::Acquire) {
             device.pop_error.store(201, Ordering::Release);
         }
@@ -548,6 +550,7 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         event_gate_skip: AtomicUsize::new(0),
         event_waits: AtomicUsize::new(0),
         event_queries: AtomicUsize::new(0),
+        event_not_ready: AtomicUsize::new(0),
         event_query_results: AtomicUsize::new(0),
         event_query_successes: AtomicUsize::new(0),
         event_query_fail_at: AtomicUsize::new(0),

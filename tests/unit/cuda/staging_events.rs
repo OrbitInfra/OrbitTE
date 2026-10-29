@@ -58,28 +58,17 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                     .unwrap();
                 let until = std::time::Instant::now() + Duration::from_secs(2);
                 loop {
-                    if b.submitted_copies
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .any(|&(source, destination, _)| {
+                    let advanced = b.submitted_copies.lock().unwrap().iter().any(
+                        |&(source, destination, _)| {
                             if operation == TransferOp::Read {
                                 destination == base + (held + 1) * 3
                             } else {
                                 source == base + (held + 1) * 3
                             }
-                        })
-                    {
-                        break;
-                    }
-                    assert!(
-                        std::time::Instant::now() < until,
-                        "chunk after {held} stalled behind the old window barrier: {transport:?}/{operation:?}"
+                        },
                     );
-                    std::thread::yield_now();
-                }
-                assert!(
-                    b.streams
+                    let pending = b
+                        .streams
                         .lock()
                         .unwrap()
                         .values()
@@ -90,8 +79,16 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                             } else {
                                 copy.source == base + held * 3
                             }
-                        })
-                );
+                        });
+                    if advanced && pending && b.event_not_ready.load(Ordering::Acquire) != 0 {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "chunk after {held} stalled behind the old window barrier: {transport:?}/{operation:?}"
+                    );
+                    std::thread::yield_now();
+                }
                 assert_eq!(
                     b.event_waits.load(Ordering::Acquire),
                     0,
