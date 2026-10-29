@@ -1,5 +1,6 @@
 """Validate native pinned chunk reuse and completion from the public GPU peer."""
 import json
+from itertools import groupby
 from gdr import require, records
 import staging_native
 
@@ -98,7 +99,7 @@ def verify(case, evidence):
         for direction in ('htod', 'dtoh'):
             actual = [(c['row']['destination'] if direction == 'htod' else c['row']['source'], c['row']['length'])
                       for c in copies if c['row']['kind'] == direction]
-            require(actual == expected_copies, role + ': native GPU range/chunk/tail mismatch')
+            require(sorted(actual) == sorted(expected_copies), role + ': native GPU range/chunk/tail mismatch')
         for copy in ledger['copies']:
             row = copy['row']
             require((row['source'] if row['kind'] == 'htod' else row['destination']) == copy['host']['address'],
@@ -114,7 +115,12 @@ def verify(case, evidence):
         expected += [('dtoh', *full, 'private')]
         actual = [(c['row']['kind'], c['row']['destination'] if c['row']['kind'] == 'htod' else c['row']['source'],
                    c['row']['length'], 'slot' if c['host'] in pins else 'private') for c in ledger['copies']]
-        require(actual == expected, role + ': copy outside exact consumer setup/payload/update/readback phases')
+        def phases(rows):
+            for key, group in groupby(rows, key=lambda row: (row[0], row[3])):
+                ranges = [(row[1], row[2]) for row in group]
+                yield key, sorted(ranges) if key[1] == 'slot' else ranges
+        require(list(phases(actual)) == list(phases(expected)),
+                role + ': copy outside exact consumer setup/payload/update/readback phases')
         require(len({c['stream_owner']['seq'] for c in copies}) == width,
                 role + ': persistent copy stream count differs from role width')
         slot_streams = case.get('remote_staging', False) or width > 1

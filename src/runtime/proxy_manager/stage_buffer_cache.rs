@@ -38,14 +38,7 @@ impl StageBufferCache<'_> {
     ) -> Result<()> {
         match self {
             Self::Cuda { copy, slots } => {
-                let pipeline = slots.len() > 1;
-                slots[slot].copy(
-                    copy,
-                    offset,
-                    length,
-                    operation == TransferOp::Read,
-                    pipeline,
-                )
+                slots[slot].copy(copy, offset, length, operation == TransferOp::Read, true)
             }
             Self::Host(stage) => stage.host.with_staging_bytes(length, |bytes| {
                 if operation == TransferOp::Read {
@@ -54,6 +47,13 @@ impl StageBufferCache<'_> {
                     request.local.read(request.local_offset + offset, bytes)
                 }
             }),
+        }
+    }
+
+    pub(super) fn query(&mut self, slot: usize) -> Result<bool> {
+        match self {
+            Self::Cuda { copy, slots } => slots[slot].query(copy),
+            Self::Host(_) => Ok(true),
         }
     }
 

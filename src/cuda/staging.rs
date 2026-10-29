@@ -244,8 +244,25 @@ impl StagingCopy {
         stage: &mut crate::runtime::proxy_manager::StageBufferLease,
         length: usize,
     ) -> Result<()> {
-        // A pending slot is intentionally inaccessible to CPU/DMA consumers.
-        // Wait through its stream owner before calling check_access again.
+        self.progress(stage, length, true).map(|_| ())
+    }
+
+    pub(crate) fn query(
+        &mut self,
+        stage: &mut crate::runtime::proxy_manager::StageBufferLease,
+        length: usize,
+    ) -> Result<bool> {
+        self.progress(stage, length, false)
+    }
+
+    fn progress(
+        &mut self,
+        stage: &mut crate::runtime::proxy_manager::StageBufferLease,
+        length: usize,
+        wait: bool,
+    ) -> Result<bool> {
+        // Pending slots stay inaccessible to CPU/DMA consumers. Query may
+        // leave the same generation pending; errors consume it into retention.
         let result = (|| {
             let host = stage.buffer()?;
             let mut slot = host.copy_stream.lock().map_err(|_| Error::Unquiesced {
@@ -256,7 +273,14 @@ impl StagingCopy {
                 operation: "CUDA stage stream missing",
                 code: -1,
             })?;
-            let result = stream.complete();
+            let result = if wait {
+                stream.complete().map(|()| true)
+            } else {
+                stream.query()
+            };
+            if matches!(result, Ok(false)) {
+                return result;
+            }
             if !stream.quiescent() {
                 return Err(Error::Unquiesced {
                     operation: "CUDA staged completion",
@@ -265,6 +289,9 @@ impl StagingCopy {
             }
             result
         })();
+        if matches!(result, Ok(false)) {
+            return result;
+        }
         self.pending -= 1;
         if matches!(result, Err(Error::Unquiesced { .. })) {
             self.failed = true;
@@ -274,7 +301,7 @@ impl StagingCopy {
         }
         result?;
         stage.completed(length);
-        Ok(())
+        Ok(true)
     }
 }
 

@@ -124,6 +124,31 @@ impl CopyStream {
         context.current(|| self.wait_current())
     }
 
+    /// NOT_READY keeps this event generation and both allocations pending.
+    pub(super) fn query(&mut self) -> Result<bool> {
+        let context = Arc::clone(&self.context);
+        let ready = context.current(|| {
+            if !self.pending {
+                return Err(Error::Internal("CUDA copy is not pending"));
+            }
+            let event = self.event.ok_or(Error::Internal("CUDA event missing"))?;
+            // SAFETY: only enqueue records this event, after the owned copy;
+            // no slot reuse is allowed before this generation completes.
+            match unsafe { (context.driver.event_query)(event.as_ptr()) } {
+                SUCCESS => Ok(true),
+                sys::CUresult::CUDA_ERROR_NOT_READY => Ok(false),
+                code => Err(Error::Unquiesced {
+                    operation: "cuEventQuery copy",
+                    code: code as i32,
+                }),
+            }
+        })?;
+        if ready {
+            self.pending = false;
+        }
+        Ok(ready)
+    }
+
     /// The caller retains both device allocations/mappings through completion.
     pub(super) unsafe fn copy_device(
         &mut self,

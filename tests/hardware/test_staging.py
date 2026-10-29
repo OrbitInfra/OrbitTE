@@ -207,6 +207,54 @@ class StagingProof(unittest.TestCase):
                     if fault == 'missing-memory': evidence['source']['stdout.log'] = evidence['source']['stdout.log'].split('\n',1)[1]
                     with self.assertRaises(ValueError): verify(case,evidence,native)
 
+    def test_query_not_ready_preserves_generation_until_success_and_context_restore(self):
+        case, source, source_native = fixture(depth=2)
+        _, requester, original = fixture(gpu_role='requester', depth=2)
+        case['requester_kind'] = 'cuda:0'
+        evidence = dict(source=source['source'], requester=requester['requester'])
+        evidence['source']['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in source_native)
+        native = []
+        for row in original:
+            row = copy.deepcopy(row)
+            if row['kind'] == 'wait_begin' and row['event'] >= 30:
+                native += [dict(row, kind='query_begin'), dict(row, kind='query', code=600),
+                           dict(row, kind='pop', context=5), dict(row, kind='push', context=5)]
+                row['kind'] = 'query_begin'
+            elif row['kind'] == 'wait' and row['event'] >= 30:
+                row['kind'] = 'query'
+            native.append(row)
+        verify(case, evidence, copy.deepcopy(native), role='requester')
+        # Independent slots may submit POSTs out of logical offset order.
+        reordered = copy.deepcopy(native)
+        frames = []
+        for index, row in enumerate(reordered):
+            if row['kind'] == 'htod_begin' and row['source'] in (100, 108):
+                start = index - 1
+                end = next(i for i in range(index, len(reordered)) if reordered[i]['kind'] == 'pop') + 1
+                frames.append((start, end))
+                if len(frames) == 2: break
+        (a, b), (c, d) = frames
+        reordered[a:d] = reordered[c:d] + reordered[b:c] + reordered[a:b]
+        verify(case, evidence, reordered, role='requester')
+        for fault in ('only-not-ready', 'wrong-event', 'wrong-thread', 'missing-entry', 'duplicate-success',
+                      'missing-pop', 'free-after-not-ready', 'query-error', 'stale-generation'):
+            with self.subTest(fault=fault):
+                rows = copy.deepcopy(native)
+                ready = next(i for i,r in enumerate(rows) if r['kind']=='query' and r['code']==0)
+                pending = next(i for i,r in enumerate(rows) if r['kind']=='query' and r['code']==600)
+                if fault == 'only-not-ready': rows[ready]['code'] = 600
+                if fault == 'wrong-event': rows[ready]['event'] = 999
+                if fault == 'wrong-thread': rows[ready]['tid'] = 99
+                if fault == 'missing-entry': rows.pop(ready-1)
+                if fault == 'duplicate-success': rows.insert(ready+1, copy.deepcopy(rows[ready]))
+                if fault == 'missing-pop': rows.pop(ready+1)
+                if fault == 'free-after-not-ready': rows.insert(pending+1, dict(rows[pending], kind='unpin_begin', address=100, code=0))
+                if fault == 'query-error': rows[ready]['code'] = 700
+                if fault == 'stale-generation':
+                    rows[ready+2:ready+2] = [dict(rows[ready], kind='push', context=5),
+                        dict(rows[ready], kind='query_begin'), copy.deepcopy(rows[ready]), dict(rows[ready], kind='pop', context=5)]
+                with self.assertRaises(ValueError): verify(case, evidence, rows, role='requester')
+
     def test_profile_and_observer_scope_are_bounded(self):
         case, _, _ = fixture(depth=3)
         for value in (0, 17, True, '3', -1):

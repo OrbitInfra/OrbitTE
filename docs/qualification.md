@@ -29,6 +29,38 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Requester chunk event loop
+
+The current v19 requester uses a bounded PRE/CROSS/POST event loop. Each local
+slot queries its recorded CUDA completion and advances independently; ordered
+CROSS commands retain the existing connection protocol. NOT_READY keeps the
+same generation and physical owners. Query success requires context restoration
+before slot reuse or completion accounting. Query errors quarantine the slot;
+error cleanup drains all other accepted copies and preserves native uncertainty.
+Source phase handling, shared shard session ownership and wire v19 are unchanged.
+
+Public TCP/RDMA READ/WRITE controls hold one chunk's native completion and prove
+that another slot refills beyond the former window barrier. They cover first
+and reused event generations, multiple ring turns, short tails, exact bytes,
+guards, range loans and shutdown. The same control run against the old requester
+window loop fails at the expected barrier. Additional controls cover NOT_READY
+followed by context restore failure, first/middle/final query failure, submit and
+record recovery, final POST deadline and native cleanup retention. Existing
+source/error-drain event-synchronize failure controls remain in the suite.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/staging-chunk-progress-20261029/`.
+`old-window-control.json` binds the expected negative result; targeted requester
+and query controls pass. The native observer forwards query entry/return codes;
+its ledger preserves NOT_READY generations and rejects stale, repeated, foreign
+or prematurely released completion owners. Slot submissions may reorder within
+an exact payload phase; private setup/readback and actual generation ownership
+remain strict. Full source gates and independent review are pending.
+
+No new hardware task is requested. Current installed v19 execution, physical
+overlap and performance remain unqualified. Concurrent CROSS, general remote
+operation scheduling, location selection and full ProxyManager parity remain open.
+
 ## Shared staging worker shards
 
 The current v19 source replaces per-session thread creation with a lazily started
@@ -62,8 +94,9 @@ passes all eight feature/compiler combinations; the
 and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594687)
 also pass for that source. No new hardware task is requested.
 Installed v19 execution, physical overlap and performance remain unqualified.
-Nonblocking chunk progress, concurrent CROSS on the wire and location selection
-remain open; shared threads do not establish complete ProxyManager parity.
+The requester event-loop substage above supersedes the local window barrier.
+Concurrent CROSS and location selection remain open; shared threads alone do not
+establish complete ProxyManager parity.
 
 ## Bounded session progress
 
@@ -137,8 +170,8 @@ The controller and consumer now account for each ring's own width, private MRs,
 persistent stream/events and physical pinned bytes. Neither these CPU controls
 nor earlier v18 hardware runs qualify the current artifact or demonstrate
 physical overlap or throughput. The session progress and shared-shard substages
-above extend this source boundary. Nonblocking chunk progress, concurrent CROSS
-on the wire and location selection remain open.
+above extend this source boundary. The chunk event-loop substage supersedes its
+local window barrier; concurrent CROSS on the wire and location selection remain open.
 
 ## Bounded requester CUDA staging
 

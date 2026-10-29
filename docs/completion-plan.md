@@ -586,8 +586,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   drain obligation, including caller unwind and task panic. Independent source
   review accepts this boundary at `3db26ee`; see
   [the shared-shard evidence](qualification.md#shared-staging-worker-shards).
-  Qualify the current v19 artifact and complete
-  nonblocking chunk progress, concurrent CROSS on the wire and location selection
+  Requester chunk progress now queries CUDA events and advances PRE/CROSS/POST
+  per slot without a window barrier. NOT_READY retains the same generation;
+  errors quarantine uncertain owners and drain accepted siblings. Source review
+  of this new boundary is pending. Qualify the current v19 artifact and complete
+  concurrent CROSS on the wire and location selection
   before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
@@ -870,9 +873,10 @@ receipt fencing are source-accepted at `4441017`, including native uncertainty
 and worker-panic ownership controls. Shared ProxyManager shards are now implemented
 with lazy bounded admission, pre-Pin queue cancellation, task-terminal ownership
 and explicit thread close. Independent source review accepts `3db26ee` for
-this source/CPU ownership scope. The next
-implementation boundary is nonblocking chunk progress, followed by concurrent
-CROSS scheduling and location selection. Full ProxyManager parity remains open.
+this source/CPU ownership scope. Nonblocking requester chunk progress is now
+implemented with per-slot event queries and immediate refill; independent source
+review is pending. The next implementation boundary is concurrent CROSS and
+remote-operation progress, followed by location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

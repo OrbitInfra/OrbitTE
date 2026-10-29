@@ -18,6 +18,7 @@ mod requester_pipeline;
 mod requester_staging;
 mod shim;
 mod staging;
+mod staging_events;
 mod staging_pipeline;
 mod staging_progress;
 mod staging_shards;

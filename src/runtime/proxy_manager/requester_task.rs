@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::ProxyManager;
 use super::stage_buffer_cache::StageBufferCache;
@@ -61,63 +61,7 @@ impl ProxyManager {
                 };
                 let result = (|| {
                     let chunk = receive(&pinned, deadline)?;
-                    if operation == TransferOp::Write {
-                        for slot in 0..width {
-                            remaining(deadline)?;
-                            let offset = slot * chunk;
-                            stages.copy(
-                                slot,
-                                request,
-                                offset,
-                                chunk.min(request.length - offset),
-                                operation,
-                            )?;
-                        }
-                    }
-                    let count = request.length.div_ceil(chunk);
-                    for first in (0..count).step_by(width) {
-                        let end = (first + width).min(count);
-                        for index in first..end {
-                            remaining(deadline)?;
-                            let slot = index % width;
-                            stages.complete(slot)?;
-                            session
-                                .send
-                                .try_send(Command::Cross {
-                                    local: stages.registration(slot).memory()?.clone(),
-                                    offset: index * chunk,
-                                })
-                                .map_err(|error| match error {
-                                    mpsc::TrySendError::Full(_) => Error::ResourceExhausted,
-                                    mpsc::TrySendError::Disconnected(_) => {
-                                        Error::Internal(WORKER_STOPPED)
-                                    }
-                                })?;
-                        }
-                        for index in first..end {
-                            let offset = receive(&session.completed, deadline)?;
-                            if offset != index * chunk {
-                                return Err(Error::Internal("staging CROSS completion order"));
-                            }
-                            // Only the local slot is reusable here. The worker may
-                            // still be waiting for the corresponding Delegate receipt.
-                            let next = if operation == TransferOp::Read {
-                                offset
-                            } else {
-                                offset + width * chunk
-                            };
-                            if next < request.length {
-                                remaining(deadline)?;
-                                stages.copy(
-                                    index % width,
-                                    request,
-                                    next,
-                                    chunk.min(request.length - next),
-                                    operation,
-                                )?;
-                            }
-                        }
-                    }
+                    session.transfer_event_loop(stages, request, operation, chunk, deadline)?;
                     stages.drain()?;
                     remaining(deadline)?;
                     session
@@ -184,7 +128,144 @@ struct Session {
     worker: TaskHandle,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StageState {
+    Pre,
+    Cross,
+    Post,
+    InflightPre,
+    InflightCross,
+    InflightPost,
+    Finish,
+}
+
+struct Chunk {
+    offset: usize,
+    state: StageState,
+}
+
 impl Session {
+    fn transfer_event_loop(
+        &self,
+        stages: &mut StageBufferCache<'_>,
+        request: &PreparedTransfer,
+        operation: TransferOp,
+        size: usize,
+        deadline: Instant,
+    ) -> crate::Result<()> {
+        let width = stages.width();
+        let first = if operation == TransferOp::Write {
+            StageState::Pre
+        } else {
+            StageState::Cross
+        };
+        let mut chunks: Vec<_> = (0..width)
+            .map(|slot| Chunk {
+                offset: slot * size,
+                state: first,
+            })
+            .collect();
+        let mut submitted = 0;
+        let mut completed = 0;
+        let mut finished = 0;
+        let mut idle_sweeps = 0u32;
+        while finished != width {
+            remaining(deadline)?;
+            let mut progress = false;
+            loop {
+                let offset = match self.completed.try_recv() {
+                    Ok(offset) => offset,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        return Err(Error::Internal(WORKER_STOPPED));
+                    }
+                };
+                let chunk = &mut chunks[(offset / size) % width];
+                if offset != completed
+                    || offset != chunk.offset
+                    || chunk.state != StageState::InflightCross
+                {
+                    return Err(Error::Internal("staging CROSS completion order"));
+                }
+                completed += size.min(request.length - offset);
+                if operation == TransferOp::Read {
+                    chunk.state = StageState::Post;
+                } else {
+                    chunk.offset += width * size;
+                    chunk.state = StageState::Pre;
+                }
+                progress = true;
+            }
+            for (slot, chunk) in chunks.iter_mut().enumerate() {
+                if chunk.state == StageState::Finish {
+                    continue;
+                }
+                if chunk.offset >= request.length {
+                    chunk.state = StageState::Finish;
+                    finished += 1;
+                    progress = true;
+                    continue;
+                }
+                let before = chunk.state;
+                match chunk.state {
+                    StageState::Pre | StageState::Post => {
+                        stages.copy(
+                            slot,
+                            request,
+                            chunk.offset,
+                            size.min(request.length - chunk.offset),
+                            operation,
+                        )?;
+                        chunk.state = if operation == TransferOp::Write {
+                            StageState::InflightPre
+                        } else {
+                            StageState::InflightPost
+                        };
+                    }
+                    StageState::InflightPre | StageState::InflightPost => {
+                        if stages.query(slot)? {
+                            chunk.state = StageState::Cross;
+                            if operation == TransferOp::Read {
+                                chunk.offset += width * size;
+                            }
+                        }
+                    }
+                    StageState::Cross if chunk.offset == submitted => {
+                        let command = Command::Cross {
+                            local: stages.registration(slot).memory()?.clone(),
+                            offset: chunk.offset,
+                        };
+                        match self.send.try_send(command) {
+                            Ok(()) => {
+                                submitted += size.min(request.length - chunk.offset);
+                                chunk.state = StageState::InflightCross;
+                            }
+                            Err(mpsc::TrySendError::Full(_)) => (),
+                            Err(mpsc::TrySendError::Disconnected(_)) => {
+                                return Err(Error::Internal(WORKER_STOPPED));
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+                progress |= chunk.state != before;
+            }
+            if progress {
+                idle_sweeps = 0;
+            } else {
+                if idle_sweeps < 128 {
+                    std::thread::yield_now();
+                } else {
+                    let delay =
+                        Duration::from_micros((1u64 << (idle_sweeps - 128).min(8)).min(200));
+                    std::thread::park_timeout(delay.min(remaining(deadline)?));
+                }
+                idle_sweeps = idle_sweeps.saturating_add(1);
+            }
+        }
+        Ok(())
+    }
+
     fn finish(self) -> Terminal {
         let Self {
             send,

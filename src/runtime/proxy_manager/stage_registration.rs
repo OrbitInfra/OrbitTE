@@ -171,6 +171,21 @@ impl PinnedStage {
         result
     }
 
+    pub(super) fn query(&mut self, copy: &mut StagingCopy) -> Result<bool> {
+        let Some(length) = self.pending else {
+            return Ok(true);
+        };
+        let result = copy.query(
+            &mut self.lease.lock().unwrap_or_else(|p| p.into_inner()),
+            length,
+        );
+        if !matches!(result, Ok(false)) {
+            self.pending = None;
+        }
+        copy.publish_failure();
+        result
+    }
+
     pub(super) fn complete(&mut self, copy: &mut StagingCopy) -> Result<bool> {
         let Some(length) = self.pending.take() else {
             return Ok(false);

@@ -103,12 +103,12 @@ accepted. The opt-in [bounded remote pipeline](docs/staging.md#bounded-remote-pi
 supports up to 16 reusable slots and passes 24 fresh installed H20 TCP/RDMA
 cases plus four independent repeats. Source and this healthy pipeline profile
 are accepted for that recorded artifact. Requester staging now uses a bounded
-ring with independent PRE/POST completion, negotiated chunk sizes and a bounded
-CROSS queue. Up to eight shared staging worker shards progress network operations
+ring with per-chunk PRE/CROSS/POST progress, nonblocking CUDA event queries,
+negotiated chunk sizes and a bounded CROSS queue. Up to eight shared staging worker shards progress network operations
 while local CUDA advances; queued cancellation precedes Pin, and final success
 still requires remote receipts and full drain. Its v19
 hardware qualification is pending; earlier H20 results apply to their recorded
-artifacts. Nonblocking chunk scheduling and concurrent CROSS on the wire remain open.
+artifacts. Concurrent CROSS on the wire and location selection remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

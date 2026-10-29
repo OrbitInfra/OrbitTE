@@ -1,7 +1,8 @@
 """Match CUDA copy generations to their live allocations, context and handles.
 
 This validates successful native receipts, not physical DMA overlap or timing.
-A wait is consumed once and only its matching context pop permits reuse/free.
+A successful query/wait is consumed once; its context pop permits reuse/free.
+NOT_READY preserves the same generation and all of its physical owners.
 """
 from gdr import require
 
@@ -22,19 +23,20 @@ def validate(native, pid):
         return matches[0]
 
     for seq, row in enumerate(native, 1):
-        require(row['seq'] == seq and row['pid'] == pid and row['code'] == 0,
+        require(row['seq'] == seq and row['pid'] == pid and (row['code'] == 0 or (row['kind'] == 'query' and row['code'] == 600)),
                 'unordered, foreign or failed native receipt')
         kind = row['kind']
         stack = stacks.setdefault(row['tid'], [])
         if kind == 'push':
             require(row['context'] > 0, 'null context push')
-            stack.append(dict(context=row['context'], copies=[], waits=[], initializing=[]))
+            stack.append(dict(context=row['context'], copies=[], waits=[], queries=[], initializing=[]))
             continue
         require(stack, 'CUDA operation outside observed owning context')
         frame = stack[-1]
         context = frame['context']
         if kind == 'pop':
             require(row['context'] == context, 'restored a different context')
+            require(not frame['queries'], 'query context escaped before native return')
             for owner in frame['initializing']:
                 require(owner.get('synced'), 'allocation escaped before initialization synchronized')
                 owner['initialized'] = True
@@ -141,7 +143,8 @@ def validate(native, pid):
             require(event and event['context'] == context and event['pending'] is not None,
                     'wait has no matching live event generation')
             copy = event['pending']
-            require(not copy.get('wait_started') and (copy['submitted'] or copy in frame['copies']),
+            require(not copy.get('wait_started') and not copy.get('query_started') and not copy.get('waited')
+                    and (copy['submitted'] or copy in frame['copies']),
                     'duplicate wait or submission context not restored')
             copy['wait_started'] = seq
             frame['waits'].append(copy)
@@ -151,6 +154,24 @@ def validate(native, pid):
             require(copy and copy in frame['waits'] and not copy.get('waited'),
                     'wait return lacks matching invocation/generation/thread')
             copy['waited'] = seq
+        elif kind == 'query_begin':
+            event = events.get(row['event'])
+            copy = event['pending'] if event else None
+            require(copy and event['context'] == context and copy['submitted']
+                    and not copy.get('wait_started') and not copy.get('query_started') and not copy.get('waited'),
+                    'query has no live, restored and unconsumed event generation')
+            copy['query_started'] = seq
+            frame['queries'].append(copy)
+        elif kind == 'query':
+            event = events.get(row['event'])
+            copy = event['pending'] if event else None
+            require(copy and copy in frame['queries'] and copy.get('query_started'),
+                    'query return lacks matching invocation/generation/thread')
+            del copy['query_started']
+            frame['queries'].remove(copy)
+            if row['code'] == 0:
+                copy['waited'] = seq
+                frame['waits'].append(copy)
         elif kind == 'memset':
             owner = devices.get(row['address'])
             require(owner and owner in frame['initializing'] and not owner.get('zeroed')

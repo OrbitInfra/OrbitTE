@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 typedef struct { char reserved[64]; } ipc_handle;
-static int references;
+static int references, queries;
 int cuMemAlloc_v2(uint64_t *out, size_t size) { assert(size == 2097152); *out = 123; return 0; }
 int cuMemsetD8_v2(uint64_t ptr, unsigned char value, size_t size) { assert(ptr == 123 && !value && size == 2097152); return 0; }
 int cuCtxSynchronize(void) { return 0; }
@@ -16,6 +16,7 @@ int cuIpcCloseMemHandle(uint64_t ptr) { assert(ptr == 456); return --references 
 int cuMemcpyAsync(uint64_t dst, uint64_t src, size_t size, void *stream) { assert(dst == 456 && src == 123 && size == 17 && stream == (void *)2); return 1; }
 int cuEventRecord(void *event, void *stream) { assert(event == (void *)3 && stream == (void *)2); return 1; }
 int cuEventSynchronize(void *event) { assert(event == (void *)3); return 700; }
+int cuEventQuery(void *event) { assert(event == (void *)3); return ++queries == 1 ? 600 : queries == 2 ? 0 : 700; }
 int cuCtxPopCurrent_v2(void **out) { *out = (void *)4; return 201; }
 int cuMemFree_v2(uint64_t ptr) { assert(ptr == 123); return 1; }
 int cuMemHostAlloc(void **out, size_t size, unsigned flags) { assert(size == 151 && flags == 1); *out = (void *)0x123456789abc; return 0; }
@@ -58,6 +59,8 @@ int main(void) {
     assert(cuStreamCreate_fn(&stream,1)==0 && stream==(void *)2);
     assert(cuEventCreate_fn(&event,3)==0 && event==(void *)3);
     assert(cuEventDestroy_v2_fn(event)==700 && cuStreamDestroy_v2_fn(stream)==1);
+    LOAD(cuEventQuery);
+    assert(cuEventQuery_fn(event)==600 && cuEventQuery_fn(event)==0 && cuEventQuery_fn(event)==700);
     assert(dlclose(library)==0);
     return 0;
 }
