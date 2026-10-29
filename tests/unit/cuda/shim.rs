@@ -25,6 +25,7 @@ pub(super) struct Device {
     pub(super) bytes: UnsafeCell<Box<[u8]>>,
     pub(super) pins: Mutex<BTreeMap<usize, Box<[u8]>>>,
     pub(super) streams: Mutex<BTreeMap<usize, Option<PendingCopy>>>,
+    pub(super) submitted_copies: Mutex<Vec<(usize, usize, usize)>>,
     pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
     next_handle: AtomicUsize,
     pub(super) imports: Mutex<BTreeMap<u64, usize>>,
@@ -41,6 +42,14 @@ pub(super) struct Device {
     pub(super) stream_partial_create: AtomicBool,
     pub(super) event_gate_skip: AtomicUsize,
     pub(super) event_waits: AtomicUsize,
+    pub(super) event_queries: AtomicUsize,
+    pub(super) event_not_ready: AtomicUsize,
+    pub(super) event_query_results: AtomicUsize,
+    pub(super) event_query_successes: AtomicUsize,
+    pub(super) event_query_fail_at: AtomicUsize,
+    pub(super) query_hold: AtomicBool,
+    pub(super) query_hold_address: AtomicUsize,
+    pub(super) pop_after_not_ready: AtomicBool,
     pub(super) event_wait_fail_at: AtomicUsize,
     pub(super) event_create_error: AtomicI32,
     pub(super) record_error: AtomicI32,
@@ -254,6 +263,45 @@ unsafe extern "C" fn stream_synchronize(stream: sys::CUstream) -> Status {
     event("stream-sync");
     drain(stream as usize)
 }
+fn copy_held(device: &Device, stream: usize) -> bool {
+    if device.query_hold.load(Ordering::Acquire) {
+        return true;
+    }
+    let address = device.query_hold_address.load(Ordering::Acquire);
+    address != 0
+        && device.streams.lock().unwrap()[&stream]
+            .as_ref()
+            .is_some_and(|copy| copy.source == address || copy.destination == address)
+}
+
+unsafe extern "C" fn event_query(completion: sys::CUevent) -> Status {
+    event("event-query");
+    let device = current();
+    device.event_queries.fetch_add(1, Ordering::AcqRel);
+    let stream = device.completions.lock().unwrap()[&(completion as usize)]
+        .expect("unrecorded event cannot prove this copy complete");
+    if copy_held(device, stream) {
+        device.event_not_ready.fetch_add(1, Ordering::AcqRel);
+        if device.pop_after_not_ready.load(Ordering::Acquire) {
+            device.pop_error.store(201, Ordering::Release);
+        }
+        return Status::CUDA_ERROR_NOT_READY;
+    }
+    let ordinal = device.event_query_results.fetch_add(1, Ordering::AcqRel) + 1;
+    let result = if ordinal == device.event_query_fail_at.load(Ordering::Acquire) {
+        status(700)
+    } else {
+        drain(stream)
+    };
+    if result == SUCCESS {
+        device.event_query_successes.fetch_add(1, Ordering::AcqRel);
+    }
+    if device.pop_after_completion.load(Ordering::Acquire) {
+        device.pop_error.store(201, Ordering::Release);
+    }
+    result
+}
+
 unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     event("event-sync");
     let device = current();
@@ -273,6 +321,13 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     }
     let stream = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
+    let until = std::time::Instant::now() + Duration::from_secs(3);
+    while copy_held(device, stream) {
+        if std::time::Instant::now() >= until {
+            return Status::CUDA_ERROR_INVALID_VALUE;
+        }
+        std::thread::sleep(Duration::from_micros(50));
+    }
     let ordinal = current().event_waits.fetch_add(1, Ordering::AcqRel) + 1;
     let result = if ordinal == current().event_wait_fail_at.load(Ordering::Acquire) {
         status(700)
@@ -285,6 +340,11 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     result
 }
 fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usize) {
+    current()
+        .submitted_copies
+        .lock()
+        .unwrap()
+        .push((source, destination, length));
     let previous = current()
         .streams
         .lock()
@@ -458,6 +518,7 @@ pub(super) fn driver() -> Arc<Driver> {
         event_destroy,
         event_record,
         event_synchronize,
+        event_query,
         host_allocate,
         host_free,
         pointer_attribute: attribute,
@@ -471,6 +532,7 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
         pins: Mutex::default(),
         streams: Mutex::default(),
+        submitted_copies: Mutex::default(),
         completions: Mutex::default(),
         next_handle: AtomicUsize::new(1),
         imports: Mutex::default(),
@@ -487,6 +549,14 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         stream_partial_create: AtomicBool::new(false),
         event_gate_skip: AtomicUsize::new(0),
         event_waits: AtomicUsize::new(0),
+        event_queries: AtomicUsize::new(0),
+        event_not_ready: AtomicUsize::new(0),
+        event_query_results: AtomicUsize::new(0),
+        event_query_successes: AtomicUsize::new(0),
+        event_query_fail_at: AtomicUsize::new(0),
+        query_hold: AtomicBool::new(false),
+        query_hold_address: AtomicUsize::new(0),
+        pop_after_not_ready: AtomicBool::new(false),
         event_wait_fail_at: AtomicUsize::new(0),
         event_create_error: AtomicI32::new(0),
         record_error: AtomicI32::new(0),
@@ -692,5 +762,26 @@ fn ipc_copy_control() {
         current()
             .pop_after_completion
             .store(true, Ordering::Release);
+    }
+}
+
+pub(super) fn wait_pending(device: &Device, count: usize) {
+    let until = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let pending = device
+            .streams
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|copy| copy.is_some())
+            .count();
+        if pending == count && device.event_queries.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "pending CUDA copies: {pending}, expected {count}"
+        );
+        std::thread::yield_now();
     }
 }

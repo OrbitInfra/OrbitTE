@@ -47,6 +47,12 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
             let (entered, waiting) = std::sync::mpsc::sync_channel(0);
             let (resume, blocked) = std::sync::mpsc::sync_channel(0);
             *a.event_gate.lock().unwrap() = Some((entered, blocked));
+            b.query_hold_address.store(
+                local.base_address() as usize
+                    + 2
+                    + if operation == TransferOp::Read { 0 } else { 9 },
+                Ordering::Release,
+            );
             // R=1 makes Delegate wait for its CUDA copy before acknowledging.
             // READ skips the initial source PRE and holds its next PRE instead.
             a.event_gate_skip.store(
@@ -94,6 +100,7 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
                 requester.close_requester(Duration::from_millis(5)),
                 Err(Error::Timeout)
             ));
+            b.query_hold_address.store(0, Ordering::Release);
             resume.send(()).unwrap();
             let report = batch.wait(Duration::from_secs(5)).unwrap();
             assert_eq!(

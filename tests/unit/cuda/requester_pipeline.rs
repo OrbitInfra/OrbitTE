@@ -12,7 +12,7 @@ fn pending(device: &Device) -> usize {
 }
 
 #[test]
-fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
+fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
     for transport in [
         Transport::Tcp,
         #[cfg(feature = "rdma")]
@@ -60,11 +60,8 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                 if operation == TransferOp::Write {
                     local.write(5, &write).unwrap();
                 }
-                let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-                let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-                *b.event_gate.lock().unwrap() = Some((entered, blocked));
-                let completed = usize::from(operation == TransferOp::Write && width > 1);
-                b.event_gate_skip.store(completed, Ordering::Release);
+                b.query_hold.store(true, Ordering::Release);
+                let completed = 0;
                 let mut batch = requester
                     .submit_async(
                         operation,
@@ -79,7 +76,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                         Duration::from_secs(5),
                     )
                     .unwrap();
-                waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+                wait_pending(&b, width);
                 assert_eq!(
                     pending(&b),
                     width - completed,
@@ -137,7 +134,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                     std::thread::yield_now();
                 };
                 assert_eq!(stats.remote_unpins, round as u64);
-                resume.send(()).unwrap();
+                b.query_hold.store(false, Ordering::Release);
                 let report = batch.wait(Duration::from_secs(5)).unwrap();
                 assert!(
                     report.state == BatchState::Completed && report.locally_drained,
@@ -263,6 +260,7 @@ fn expired_final_post_drains_every_slot_before_releasing_local_owners() {
     let (entered, waiting) = std::sync::mpsc::sync_channel(0);
     let (resume, blocked) = std::sync::mpsc::sync_channel(0);
     *b.event_gate.lock().unwrap() = Some((entered, blocked));
+    b.query_hold.store(true, Ordering::Release);
     let mut batch = requester
         .submit_async(
             TransferOp::Read,
@@ -277,14 +275,17 @@ fn expired_final_post_drains_every_slot_before_releasing_local_owners() {
             Duration::from_secs(1),
         )
         .unwrap();
-    waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+    wait_pending(&b, 3);
     assert_eq!(pending(&b), 3);
     assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
     assert!(matches!(
         requester.close_requester(Duration::from_millis(5)),
         Err(Error::Timeout)
     ));
-    std::thread::sleep(Duration::from_millis(1100));
+    waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+    assert_eq!(gpu.allocation.lock().unwrap().dma, vec![2..10]);
+    b.query_hold.store(false, Ordering::Release);
     resume.send(()).unwrap();
     let report = batch.wait(Duration::from_secs(3)).unwrap();
     assert!(

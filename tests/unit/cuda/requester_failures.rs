@@ -47,9 +47,7 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                         Duration::from_secs(5),
                     )
                     .unwrap();
-                let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-                let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-                *b.event_gate.lock().unwrap() = Some((entered, blocked));
+                b.query_hold.store(true, Ordering::Release);
                 let mut batch = requester
                     .submit_async(
                         operation,
@@ -64,14 +62,14 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                         Duration::from_secs(5),
                     )
                     .unwrap();
-                waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+                wait_pending(&b, 3);
                 assert_eq!(pending(&b), 3);
                 if fault == "submit" {
                     b.copy_error.store(1, Ordering::Release);
                 } else {
                     b.record_error.store(1, Ordering::Release);
                 }
-                resume.send(()).unwrap();
+                b.query_hold.store(false, Ordering::Release);
                 let report = batch.wait(Duration::from_secs(5)).unwrap();
                 let submission = batch.submissions().unwrap().remove(0);
                 assert_eq!(
@@ -98,7 +96,11 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                     }
                 );
                 assert_eq!(pending(&b), 0);
-                assert_eq!(b.event_waits.load(Ordering::Acquire), 3);
+                assert_eq!(
+                    b.event_waits.load(Ordering::Acquire)
+                        + b.event_query_results.load(Ordering::Acquire),
+                    3
+                );
                 assert_eq!(
                     b.events
                         .lock()
@@ -178,9 +180,7 @@ fn requester_context_restore_failure_retains_all_accepted_slots() {
                 Duration::from_secs(5),
             )
             .unwrap();
-        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-        let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-        *b.event_gate.lock().unwrap() = Some((entered, blocked));
+        b.query_hold.store(true, Ordering::Release);
         let batch = requester
             .submit_async(
                 operation,
@@ -195,17 +195,18 @@ fn requester_context_restore_failure_retains_all_accepted_slots() {
                 Duration::from_secs(5),
             )
             .unwrap();
-        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        wait_pending(&b, 3);
         assert_eq!(pending(&b), 3);
         b.pop_after_completion.store(true, Ordering::Release);
-        resume.send(()).unwrap();
+        b.query_hold.store(false, Ordering::Release);
         let report = batch.wait(Duration::from_secs(5)).unwrap();
         assert_eq!(report.state, BatchState::Failed);
         assert!(!report.locally_drained);
         let failure = batch.submissions().unwrap().remove(0).failure.unwrap();
         assert!(matches!(failure.error, Error::Unquiesced { .. }));
         assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
-        assert_eq!(b.event_waits.load(Ordering::Acquire), 1);
+        assert_eq!(b.event_query_successes.load(Ordering::Acquire), 1);
+        assert_eq!(b.event_waits.load(Ordering::Acquire), 0);
         assert_eq!(
             pending(&b),
             2,
@@ -273,20 +274,26 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                         Duration::from_secs(3),
                     )
                     .unwrap();
-                b.event_wait_fail_at.store(fail_at, Ordering::Release);
-                let report = requester
-                    .submit_and_wait(
-                        operation,
-                        &peer,
-                        &[TransferRequest {
-                            transport,
-                            local_address: local.base_address() + 2,
-                            remote_address: remote.base_address() + 1,
-                            length: 8,
-                        }],
-                        Duration::from_secs(3),
-                    )
-                    .unwrap();
+                b.query_hold.store(true, Ordering::Release);
+                b.event_query_fail_at.store(fail_at, Ordering::Release);
+                let report = std::thread::scope(|scope| {
+                    let transfer = scope.spawn(|| {
+                        requester.submit_and_wait(
+                            operation,
+                            &peer,
+                            &[TransferRequest {
+                                transport,
+                                local_address: local.base_address() + 2,
+                                remote_address: remote.base_address() + 1,
+                                length: 8,
+                            }],
+                            Duration::from_secs(3),
+                        )
+                    });
+                    wait_pending(&b, 3);
+                    b.query_hold.store(false, Ordering::Release);
+                    transfer.join().unwrap().unwrap()
+                });
                 assert!(
                     !report.is_complete() && !report.locally_drained,
                     "{transport:?}/{operation:?}/{fail_at}: {report:?}"
@@ -303,7 +310,11 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                 assert_eq!(gpu.allocation.lock().unwrap().dma, vec![2..10]);
                 let stats = requester.stats().unwrap().staging;
                 assert_eq!((stats.retained_chunks, stats.completed_chunks), (3, 2));
-                assert_eq!(b.event_waits.load(Ordering::Acquire), 3);
+                assert_eq!(
+                    b.event_waits.load(Ordering::Acquire)
+                        + b.event_query_results.load(Ordering::Acquire),
+                    3
+                );
                 assert_eq!(
                     b.streams
                         .lock()

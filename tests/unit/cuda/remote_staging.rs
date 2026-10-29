@@ -704,7 +704,8 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
             }
         );
         if device_requester {
-            assert_eq!(b.event_waits.load(Ordering::Acquire), 3);
+            assert_eq!(b.event_query_successes.load(Ordering::Acquire), 3);
+            assert_eq!(b.event_waits.load(Ordering::Acquire), 0);
             assert!(b.streams.lock().unwrap().values().all(Option::is_none));
             assert_eq!(requester.stats().unwrap().staging.completed_chunks, 3);
         }

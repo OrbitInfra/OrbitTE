@@ -79,19 +79,24 @@ PRE/POST completion boundary, while TCP/RDMA still own CROSS.
 The current implementation can keep both source and requester CUDA copies
 pending during CROSS. Independent local and remote rings follow TENT's
 `local_locked` / `remote_locked` ownership: local WRITE slots become reusable
-after CROSS, and local READ slots after POST. A bounded requester window submits
-up to `L` CROSS commands to its assigned shard and consumes each completion
-individually. Local CUDA progress can overlap a CROSS or Delegate receipt wait.
-The worker still serializes CROSS and scoped receipts on one connection.
+after CROSS, and local READ slots after POST. The requester event loop tracks at
+most `L` chunks and submits CROSS commands in logical order, while querying each
+local PRE/POST independently. A ready slot immediately starts its next chunk;
+there is no whole-window refill barrier. Local progress continues while a CROSS
+or Delegate receipt is pending. The worker still serializes CROSS and scoped
+receipts on one connection.
 Frozen TENT creates eight shared worker shards; each dequeues one task and runs
 its chunk event loop to completion. OrbitTE starts at most eight shards on demand,
 reuses an idle shard and otherwise selects the smallest queue with rotating ties.
-Each shard still executes one session at a time. TENT additionally polls internal
-batches and remote operations to schedule available chunks independently.
-OrbitTE's local windows retain their refill barrier and synchronous CUDA wait.
-Nonblocking chunk progress, multiple CROSS operations on the wire and location
-selection remain in the existing P5/P6 queue. CPU controls establish accepted
-work overlap, not physical DMA overlap or a throughput improvement.
+Each shard still executes one session at a time. TENT's `transferEventLoop`
+polls PRE/CROSS/POST batches and remote operations, releasing each local buffer
+at its own phase boundary. OrbitTE uses the same chunk phases for requester
+progress, with `CopyStream` querying the recorded CUDA event and the connection
+worker publishing CROSS receipts. Idle sweeps follow TENT's 128 yields followed
+by exponential delays from one to 200 microseconds, bounded by the deadline.
+Concurrent CROSS on the wire and general remote-operation/location scheduling
+remain in the existing P5/P6 queue. CPU controls establish scheduling and owner
+lifetime; physical DMA overlap and throughput require hardware measurement.
 
 ## Serial remote staging
 
@@ -197,8 +202,9 @@ the control connection. The source checks out its entire negotiated ring before
 acknowledging Pin. Insufficient capacity fails with `ResourceExhausted`; neither
 side silently narrows its ring. A large local physical chunk can conservatively
 limit `L` even when the smaller negotiated chunks would permit more concurrency.
-There is no late expansion after Pin. A width of one uses synchronous local
-copies on that side; the other side can independently pipeline.
+There is no late expansion after Pin. The requester uses asynchronous copies
+and queries even at width one. The source keeps its existing synchronous copy
+at width one and accepted-copy pipeline at larger widths.
 
 Logical chunk `i` uses local slot `i % L` and source slot `i % R`. Each CUDA slot
 owns its actual pinned allocation, a persistent stream/event and a private
@@ -216,8 +222,9 @@ charged without a Drop retry.
 | Final Unpin | Drain all local POSTs before sending Unpin. The source drains every accepted PRE/POST, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
 
 A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
-`remote_delegates` and completed-chunk counters advance only after event wait and
-context restoration succeed. `remote_crosses` still follows actual transport
+`remote_delegates` advances after the source event wait and context restoration.
+Requester completed-chunk counters advance once after event query (or error-drain
+wait) and successful context restoration. `remote_crosses` still follows actual transport
 cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
 `RemoteEffect::Unknown` before sending Delegate and is never automatically
 replayed after an ambiguous reply.
@@ -233,19 +240,32 @@ original request deadline. A cancelled/expired queued session is removed and its
 actual captures are destroyed before terminal publication, without Pin, payload
 I/O or waiting for an unrelated active native call. An active session negotiates
 Pin on its shard, then publishes the negotiated chunk size to the caller.
-Command and CROSS completion queues each hold at most `L` entries, and a window
-references at most `L` local registrations. The shard owns the control connection;
+Command and CROSS completion queues each hold at most `L` entries. The event
+loop retains one chunk state per slot and references at most `L` registrations. The shard owns the control connection;
 local CUDA owners remain in the caller. TCP still transports TCP payload; RDMA uses its existing shared
 verbs workers/CQ lanes and uses TCP only for control.
 
-Within each window the caller waits for a slot's local PRE or previous POST,
-then submits its CROSS. It consumes CROSS results individually and immediately
-starts the corresponding local POST or next PRE. A CROSS result is published
+The caller sweeps `Pre`, `Cross`, `Post` and their in-flight states without
+blocking on an individual CUDA event or CROSS completion. A WRITE's PRE must
+complete before its ordered CROSS; a READ's POST must complete before its slot
+can receive another CROSS. Other slots continue to progress. CROSS results are
+consumed individually and start the corresponding local POST or next PRE.
+A CROSS result is published
 only after actual transport grant cleanup and the scoped source receipt; the
 worker drops its local registration clone first. It sends the required Delegate
 before publishing CROSS completion, records WRITE uncertainty before that send,
 then waits for the remote receipt independently of local CUDA progress. CROSS
 ready releases the local slot, not the remote operation or the whole request.
+
+`cuEventQuery` returning `CUDA_ERROR_NOT_READY` retains the exact pending length,
+event generation, GPU range loan, pinned lease and private MR. Only query success
+followed by successful context restoration clears that pending copy and advances
+completion counters. A query error or failed context restoration quarantines the
+actual slot and makes range failure sticky. Error cleanup still waits for every
+other accepted copy; success on a sibling cannot clear uncertainty. Ordinary
+healthy requester progress performs no event synchronization. The CUDA Driver
+API [event contract](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__EVENT.html)
+defines the query result; event destruction is not completion evidence.
 
 After consuming all CROSS results, the caller drains every accepted local copy
 and queues Unpin. The worker processes Unpin only after every preceding Delegate
@@ -367,11 +387,12 @@ bytes use each side's own chunk size and width. Byte and chunk counts do not
 scale with width.
 
 The staging-only observer adds context push and stream/event create/destroy
-receipts plus paired entry/return records for copy, wait and cleanup calls.
+receipts plus paired entry/return records for copy, query, wait and cleanup calls.
 `staging_native.py` joins each event record generation to its actual stream,
 thread/context and live GPU/pinned allocations. Completion requires both the
-matching wait return and context restoration. Distinct slots may interleave
-and finish in different orders; reusing a slot or entering cleanup on any
+matching successful query/wait return and context restoration. NOT_READY keeps
+the same live generation; stale or repeated terminal receipts fail the gate.
+Distinct slots may submit and finish in different orders; reusing a slot or entering cleanup on any
 thread before its completion fails the gate. Pool streams/events must be
 destroyed before their pinned allocation is freed. The observer forwards all
 native arguments, outputs and return codes without inserting driver waits.
@@ -380,7 +401,9 @@ The frozen bounded profile covers TCP/RDMA, CPU/GPU requesters, both host
 orientations, asymmetric caps, widths 1/2/3/4/16 and shortening a requested width
 to the chunk count. Main pipeline cases turn the ring more than three times and
 include a tail. All six sessions reuse physical slots; setup/readback copies
-are also checked. Tests distinguish unconfirmed submissions from physical DMA
+are also checked. Native slot copies are matched by exact address/length
+multiplicity within each payload phase; setup/update/readback ordering and
+per-slot generations remain strict. Tests distinguish unconfirmed submissions from physical DMA
 execution: native receipts do not establish execution overlap or throughput.
 The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
@@ -388,6 +411,6 @@ earlier serial evidence remains bound to its original observer and wire version.
 The current requester ring requires its own v19 artifact and evidence. Its
 controller supports independent widths and conservative local capacity, but
 hardware execution is deferred while new resource requests are paused. The
-shared worker shards and bounded CROSS windows also require fresh installed
-evidence; the CPU controls prove ownership and scheduling only. Nonblocking chunk
-progress, concurrent CROSS on the wire and location selection remain in P5.5b.
+shared worker shards and requester query event loop also require fresh installed
+evidence; the CPU controls prove ownership and scheduling only. Concurrent CROSS
+on the wire and location selection remain in P5.5b.

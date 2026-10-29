@@ -31,7 +31,7 @@ static _Atomic(int (*)(uint64_t *, ipc_handle, unsigned)) open_native;
 static _Atomic(int (*)(uint64_t)) close_native;
 static _Atomic(int (*)(uint64_t, uint64_t, size_t, void *)) copy_native;
 static _Atomic(int (*)(void *, void *)) record_native;
-static _Atomic(int (*)(void *)) wait_native;
+static _Atomic(int (*)(void *)) wait_native, query_native;
 static _Atomic(int (*)(void **)) pop_native;
 static _Atomic(int (*)(void *)) push_native;
 static _Atomic(int (*)(void **, unsigned)) stream_create_native, event_create_native;
@@ -128,6 +128,12 @@ static int wait_wrap(void *event) {
     if (staging()) emit("wait_begin", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, 0);
     int code = wait_native(event); emit("wait", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, code); return code;
 }
+static int query_wrap(void *event) {
+    if (staging()) emit("query_begin", "\"event\":%" PRIuPTR ",\"code\":0", (uintptr_t)event);
+    int code = query_native(event);
+    if (staging()) emit("query", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, code);
+    return code;
+}
 static int pop_wrap(void **context) {
     int code = pop_native(context); emit("pop", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)*context, code); return code;
 }
@@ -182,6 +188,7 @@ void *dlsym(void *library, const char *name) {
     WRAP("cuMemcpyAsync", copy_native, copy_wrap)
     WRAP("cuEventRecord", record_native, record_wrap)
     WRAP("cuEventSynchronize", wait_native, wait_wrap)
+    WRAP("cuEventQuery", query_native, query_wrap)
     WRAP("cuCtxPopCurrent_v2", pop_native, pop_wrap)
     WRAP("cuCtxPushCurrent_v2", push_native, push_wrap)
     WRAP("cuStreamCreate", stream_create_native, stream_create_wrap)
