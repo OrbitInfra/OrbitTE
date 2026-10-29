@@ -571,9 +571,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   at `460d825`, including negotiated chunk sizes, exclusive GPU range loans and
   clean package provenance; its v19 installed profile remains unqualified.
   The requester now has an independent bounded PRE/POST ring, per-slot pending
-  ownership and final local drain before Unpin. Source review of this substage
-  is pending. New hardware requests are paused at the user's direction: continue
-  source implementation with hardware gates explicitly deferred. Qualify the
+  ownership and final local drain before Unpin. Independent source review accepts
+  `c87c403`, including recovered submit/record errors, native context uncertainty
+  and multi-slot MR failure retention. New hardware requests are paused at the
+  user's direction: continue source implementation with hardware gates explicitly
+  deferred. Qualify the
   current v19 artifact and complete asynchronous CROSS/remote scheduling and
   location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -846,13 +848,14 @@ at `c0f6a9e`, with native per-slot stream/event lifetime evidence and 300-CROSS
 MW index rollover. Four fresh independent repeats and cleanup audits pass;
 source and this healthy profile are accepted. Independent source review accepts
 requester chunk-size negotiation, GPU range loans and chunk-visible failures at
-`460d825`. The next substage implements independent requester PRE/POST rings,
-shared pending-copy ownership and final drain before Unpin; source acceptance is
-pending. Installed v19 qualification remains open. At the user's direction,
-continue source work without requesting new hardware tasks; qualify the current
-artifact on fresh nodes when hardware work resumes. After source acceptance,
-the next implementation boundary is asynchronous CROSS and remote-operation
-scheduling, followed by location selection. Full ProxyManager parity remains open.
+`460d825`. Independent requester PRE/POST rings, shared pending-copy ownership
+and final drain before Unpin are source-accepted at `c87c403`, with recovered
+submission and uncertain CUDA/MR cleanup controls. Installed v19 qualification
+remains open. At the user's direction, continue source work without requesting
+new hardware tasks; qualify the current artifact on fresh nodes when hardware
+work resumes. The next implementation boundary is asynchronous CROSS and
+remote-operation scheduling, followed by location selection. Full ProxyManager
+parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
