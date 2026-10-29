@@ -1,13 +1,10 @@
-//! One admitted task owns its bounded CROSS queue and control-connection worker.
+//! One session's ordered Pin/Delegate/CROSS/Unpin progress on a shared shard.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::thread;
 use std::time::Instant;
 
-use super::ProxyManager;
 use super::remote_stage_operation::RemoteStageOperation;
-use super::stage_buffer_cache::StageBufferCache;
 use crate::engine::{PreparedTransfer, Source, remaining};
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::transport::tcp::TcpTransport;
@@ -16,9 +13,9 @@ use crate::{
     SourceEpoch, TransferOp, Transport,
 };
 
-const WORKER_STOPPED: &str = "staging worker stopped before completion";
+pub(super) const WORKER_STOPPED: &str = "staging worker stopped before completion";
 
-enum Command {
+pub(super) enum Command {
     Cross {
         local: RegisteredMemory,
         offset: usize,
@@ -33,16 +30,8 @@ pub(super) struct StagingTask<'a> {
     peer: &'a RemoteSegment,
     request: &'a PreparedTransfer,
     source: &'a Source,
-    chunk: usize,
+    pub(super) chunk: usize,
     remote_width: usize,
-}
-
-struct WorkerToken<'a>(&'a ProxyManager);
-
-impl Drop for WorkerToken<'_> {
-    fn drop(&mut self) {
-        self.0.progress_workers.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 impl<'a> StagingTask<'a> {
@@ -109,124 +98,7 @@ impl<'a> StagingTask<'a> {
         })
     }
 
-    pub(super) fn run(
-        self,
-        stages: &mut StageBufferCache<'_>,
-        effect: &mut RemoteEffect,
-    ) -> Result<()> {
-        let width = stages.width();
-        let (send, commands) = mpsc::sync_channel(width);
-        let (complete, completed) = mpsc::sync_channel(width);
-        let stopping = AtomicBool::new(false);
-        let deadline = self.channel.deadline;
-        let chunk = self.chunk;
-        let request = self.request;
-        let operation = self.operation;
-        let manager = &self.source.proxy;
-        thread::scope(|scope| {
-            manager.progress_workers.fetch_add(1, Ordering::AcqRel);
-            let _worker_token = WorkerToken(manager);
-            let stopping = &stopping;
-            let worker = thread::Builder::new()
-                .name("orbitte-staging".into())
-                .spawn_scoped(scope, move || {
-                    let mut effect = RemoteEffect::None;
-                    let result = self.progress(commands, complete, stopping, &mut effect);
-                    (result, effect)
-                })?;
-            let result = (|| {
-                if operation == TransferOp::Write {
-                    for slot in 0..width {
-                        remaining(deadline)?;
-                        let offset = slot * chunk;
-                        stages.copy(
-                            slot,
-                            request,
-                            offset,
-                            chunk.min(request.length - offset),
-                            operation,
-                        )?;
-                    }
-                }
-                let count = request.length.div_ceil(chunk);
-                for first in (0..count).step_by(width) {
-                    let end = (first + width).min(count);
-                    for index in first..end {
-                        remaining(deadline)?;
-                        let slot = index % width;
-                        stages.complete(slot)?;
-                        send.try_send(Command::Cross {
-                            local: stages.registration(slot).memory()?.clone(),
-                            offset: index * chunk,
-                        })
-                        .map_err(|error| match error {
-                            mpsc::TrySendError::Full(_) => Error::ResourceExhausted,
-                            mpsc::TrySendError::Disconnected(_) => Error::Internal(WORKER_STOPPED),
-                        })?;
-                    }
-                    for index in first..end {
-                        let offset = receive(&completed, deadline)?;
-                        if offset != index * chunk {
-                            return Err(Error::Internal("staging CROSS completion order"));
-                        }
-                        // Only the local slot is reusable here. The worker may
-                        // still be waiting for the corresponding Delegate receipt.
-                        let next = if operation == TransferOp::Read {
-                            offset
-                        } else {
-                            offset + width * chunk
-                        };
-                        if next < request.length {
-                            remaining(deadline)?;
-                            stages.copy(
-                                index % width,
-                                request,
-                                next,
-                                chunk.min(request.length - next),
-                                operation,
-                            )?;
-                        }
-                    }
-                }
-                stages.drain()?;
-                remaining(deadline)?;
-                send.try_send(Command::Unpin)
-                    .map_err(|_| Error::Internal(WORKER_STOPPED))?;
-                Ok(())
-            })();
-            if result.is_err() {
-                stopping.store(true, Ordering::Release);
-                manager.cancelled_tasks.fetch_add(1, Ordering::AcqRel);
-            }
-            // Never strand a worker publishing a completion during cancellation.
-            // Joining also drops every queued registration before MR retirement.
-            drop(send);
-            drop(completed);
-            let terminal = match worker.join() {
-                Ok((terminal, remote_effect)) => {
-                    *effect = remote_effect;
-                    terminal
-                }
-                Err(_) => {
-                    if operation == TransferOp::Write {
-                        *effect = RemoteEffect::Unknown;
-                    }
-                    Err(Error::Unquiesced {
-                        operation: "staging worker panic",
-                        code: -1,
-                    })
-                }
-            };
-            match (result, terminal) {
-                (_, Err(error @ Error::Unquiesced { .. }))
-                | (Err(Error::Internal(WORKER_STOPPED)), Err(error)) => Err(error),
-                (Err(error), _) => Err(error),
-                (Ok(()), terminal) => terminal,
-            }
-        })
-    }
-
-    fn progress(
+    pub(super) fn progress(
         mut self,
         commands: Receiver<Command>,
         complete: SyncSender<usize>,
@@ -362,7 +234,7 @@ impl<'a> StagingTask<'a> {
     }
 }
 
-fn receive<T>(receiver: &Receiver<T>, deadline: Instant) -> Result<T> {
+pub(super) fn receive<T>(receiver: &Receiver<T>, deadline: Instant) -> Result<T> {
     receiver
         .recv_timeout(remaining(deadline)?)
         .map_err(|error| match error {

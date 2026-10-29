@@ -20,6 +20,7 @@ mod shim;
 mod staging;
 mod staging_pipeline;
 mod staging_progress;
+mod staging_shards;
 use shim::*;
 
 #[test]

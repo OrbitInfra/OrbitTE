@@ -36,6 +36,7 @@ pub struct TransferRequest {
     pub length: usize,
 }
 
+#[derive(Clone)]
 pub(crate) struct PreparedTransfer {
     pub(crate) transport: Transport,
     pub(crate) local: RegisteredMemory,
