@@ -29,6 +29,7 @@ pub(crate) struct FakeDevice {
     endpoints: AtomicUsize,
     payload_posts: AtomicUsize,
     held_payload: Mutex<Vec<(u32, u64)>>,
+    first_payload_mr: AtomicUsize,
     mrs: AtomicUsize,
     windows: AtomicUsize,
     window_indices: Mutex<std::collections::HashMap<u32, usize>>,
@@ -146,6 +147,7 @@ pub(super) unsafe extern "C" fn open_device(
         endpoints: AtomicUsize::new(0),
         payload_posts: AtomicUsize::new(0),
         held_payload: Mutex::default(),
+        first_payload_mr: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
         window_indices: Mutex::default(),
@@ -382,6 +384,14 @@ unsafe extern "C" fn prepare_grant(
                 return code;
             }
         }
+    }
+    if device.mode.starts_with("copy_cross_hold") && permission == 0 {
+        let _ = device.first_payload_mr.compare_exchange(
+            0,
+            unsafe { (*memory).mr } as usize,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
     qp.grants.lock().unwrap().insert(
         memory as usize,
@@ -737,14 +747,24 @@ unsafe extern "C" fn post(
     } else {
         count
     };
-    if mode.starts_with("copy_cross_hold") && ordinal == 1 {
-        device
-            .held_payload
-            .lock()
-            .unwrap()
-            .extend(requests[..accepted].iter().map(|wr| (state.qpn, wr.id)));
-        device.pause.0.lock().unwrap().0 = true;
-        device.pause.1.notify_all();
+    let first_mr = device.first_payload_mr.load(Ordering::Acquire);
+    let own_mr = unsafe { (*memory).mr } as usize;
+    if mode.starts_with("copy_cross_hold") && own_mr == first_mr && accepted > 0 {
+        // A post can refill a slice or fill the whole CQ. Hold one exact WR
+        // from the first private registration, leaving credit for other chunks.
+        let inserted = {
+            let mut held = device.held_payload.lock().unwrap();
+            if held.is_empty() {
+                held.push((state.qpn, requests[0].id));
+                true
+            } else {
+                false
+            }
+        };
+        if inserted {
+            device.pause.0.lock().unwrap().0 = true;
+            device.pause.1.notify_all();
+        }
     }
     for request in &requests[..accepted] {
         assert!(request.offset as usize + request.length as usize <= local_length);
@@ -775,7 +795,7 @@ unsafe extern "C" fn post(
                 mode == "wc"
                     || mode == "wc_close0"
                     || (mode == "copy_second_error_close0" && ordinal == 2)
-                    || (mode.starts_with("copy_cross_hold_error") && ordinal == 3),
+                    || (mode.starts_with("copy_cross_hold_error") && own_mr != first_mr),
             ),
             vendor_error: 0,
             ..Default::default()

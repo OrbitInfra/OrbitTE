@@ -254,3 +254,137 @@ fn failed_second_cross_drains_first_or_retains_every_uncertain_owner() {
         }
     }
 }
+
+#[test]
+fn deadline_after_reordered_success_preserves_effects_and_all_native_owners() {
+    for cleanup_failure in [false, true] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            let (source, _) = engine(7, 2, "copy", 4);
+            let (requester, hold) = engine(
+                7,
+                3,
+                if cleanup_failure {
+                    "copy_cross_hold_close0"
+                } else {
+                    "copy_cross_hold"
+                },
+                4,
+            );
+            let requester = Arc::new(requester);
+            let a_bytes: [u8; 64] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+            let b_bytes: [u8; 64] = std::array::from_fn(|i| (i * 19 + 53) as u8);
+            let a = allocation(&a_bytes);
+            let b = allocation(&b_bytes);
+            let source_gpu = memory(&a);
+            let local_gpu = memory(&b);
+            let weak_gpu = Arc::downgrade(&local_gpu);
+            let weak_device = Arc::downgrade(&b);
+            let remote = source
+                .register_cuda_memory_batch(
+                    &[(source_gpu.clone(), 0, 64)],
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap()
+                .remove(0);
+            let local = requester
+                .register_cuda_memory_batch(&[(local_gpu.clone(), 0, 64)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0);
+            let peer = requester
+                .open_segment(
+                    source.endpoint(),
+                    source.source_epoch(),
+                    Duration::from_secs(3),
+                )
+                .unwrap();
+            let mut batch = requester
+                .submit_async(
+                    operation,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Rdma,
+                        local_address: local.base_address() + 2,
+                        remote_address: remote.base_address() + 1,
+                        length: 41,
+                    }],
+                    None,
+                    Duration::from_secs(5),
+                )
+                .unwrap();
+            wait_until(|| hold.0.lock().unwrap().0);
+            wait_until(|| source.stats().unwrap().staging.remote_crosses == 1);
+            if operation == TransferOp::Read {
+                wait_until(|| b.event_query_successes.load(Ordering::Acquire) == 1);
+            } else {
+                wait_until(|| a.submitted_copies.lock().unwrap().len() == 1);
+            }
+            assert!(requester.stats().unwrap().rdma.unwrap().work_requests > 0);
+            assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
+            // Intentionally never release the first payload CQE. Deadline must
+            // retire actual native work; it cannot erase the already finished leg.
+            let report = batch.wait(Duration::from_secs(8)).unwrap();
+            let failure = batch.submissions().unwrap().remove(0).failure.unwrap();
+            assert_eq!(report.state, BatchState::Failed);
+            assert_eq!(
+                report.locally_drained, !cleanup_failure,
+                "{operation:?}/{cleanup_failure}: {report:?} {failure:?}"
+            );
+            assert_eq!(
+                failure.remote_effect,
+                if operation == TransferOp::Write {
+                    crate::RemoteEffect::Unknown
+                } else {
+                    crate::RemoteEffect::None
+                }
+            );
+            assert!(
+                if cleanup_failure {
+                    matches!(failure.error, Error::Unquiesced { .. })
+                } else {
+                    matches!(failure.error, Error::Timeout | Error::Unavailable(_))
+                },
+                "{failure:?}"
+            );
+            source.close(Duration::from_secs(3)).unwrap();
+            assert_eq!(source.stats().unwrap().staging.remote_crosses, 1);
+            assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
+            let mut expected_a = a_bytes;
+            let mut expected_b = b_bytes;
+            if operation == TransferOp::Read {
+                expected_b[9..16].copy_from_slice(&a_bytes[8..15]);
+            } else {
+                expected_a[8..15].copy_from_slice(&b_bytes[9..16]);
+            }
+            let mut observed = [0; 64];
+            source_gpu.read(0, &mut observed).unwrap();
+            assert_eq!(observed, expected_a);
+            // An uncertain engine fences public access. Inspect only this CPU
+            // provider's owned bytes, after its pending CUDA work has drained.
+            assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
+            let stats = requester.stats().unwrap();
+            if cleanup_failure {
+                assert_eq!(stats.staging.retained_chunks, 3);
+                assert!(stats.rdma.unwrap().retained_grants >= 2);
+                assert_eq!(b.pins.lock().unwrap().len(), 3);
+                assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+                assert!(matches!(
+                    requester.close_requester(Duration::from_millis(5)),
+                    Err(Error::Timeout)
+                ));
+            } else {
+                assert_eq!(stats.rdma.unwrap().active_grants, 0);
+                assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
+                batch.free().unwrap();
+                requester.close(Duration::from_secs(3)).unwrap();
+                assert!(b.pins.lock().unwrap().is_empty());
+            }
+            drop(batch);
+            drop(local);
+            drop(local_gpu);
+            drop(requester);
+            drop(b);
+            assert_eq!(weak_gpu.upgrade().is_some(), cleanup_failure);
+            assert_eq!(weak_device.upgrade().is_some(), cleanup_failure);
+        }
+    }
+}
