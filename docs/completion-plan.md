@@ -580,8 +580,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   explicit cancellation of queued commands and final remote receipt fencing.
   Independent source review accepts `4441017`; worker panic controls retain
   actual owners and admission without falsely reporting local drain.
-  Qualify the current v19 artifact and complete shared shard/event-loop progress,
-  concurrent CROSS on the wire and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  A shared pool now starts at most eight shards, reuses idle threads and bounds
+  each shard queue to 64 sessions. Pin follows dequeue; queued timeout/cancel
+  destroys task captures before terminal delivery. Active work keeps its native
+  drain obligation, including caller unwind and task panic. Independent source
+  review accepts this boundary at `3db26ee`; see
+  [the shared-shard evidence](qualification.md#shared-staging-worker-shards).
+  Qualify the current v19 artifact and complete
+  nonblocking chunk progress, concurrent CROSS on the wire and location selection
+  before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -860,9 +867,12 @@ new hardware tasks; qualify the current artifact on fresh nodes when hardware
 work resumes. Bounded CROSS windows and a session worker now decouple local CUDA
 progress from CROSS/Delegate waits; queue cancellation, native drain and final
 receipt fencing are source-accepted at `4441017`, including native uncertainty
-and worker-panic ownership controls. The next implementation boundary is shared
-ProxyManager shards and nonblocking chunk progress, followed by concurrent CROSS
-scheduling and location selection. Full ProxyManager parity remains open.
+and worker-panic ownership controls. Shared ProxyManager shards are now implemented
+with lazy bounded admission, pre-Pin queue cancellation, task-terminal ownership
+and explicit thread close. Independent source review accepts `3db26ee` for
+this source/CPU ownership scope. The next
+implementation boundary is nonblocking chunk progress, followed by concurrent
+CROSS scheduling and location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

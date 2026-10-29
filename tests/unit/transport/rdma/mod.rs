@@ -1380,8 +1380,16 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         max_send_wr: if mode == "pause_copy" { 2 } else { 16 },
         ..RdmaConfig::new(mode)
     };
+    runtime_with_config(config)
+}
+
+pub(crate) fn runtime_with_config(config: RdmaConfig) -> RdmaTransport {
     let usage = Arc::default();
-    let verbs = if mode.starts_with("async_") {
+    let verbs = if config
+        .device
+        .as_deref()
+        .is_some_and(|mode| mode.starts_with("async_"))
+    {
         &ASYNC_VERBS
     } else {
         &VERBS

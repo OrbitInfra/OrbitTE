@@ -29,13 +29,49 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Shared staging worker shards
+
+The current v19 source replaces per-session thread creation with a lazily started
+pool of at most eight shared shards. An idle shard is reused; queued tasks have
+bounded admission and retain their original deadline. Pin starts after dequeue.
+Queued cancellation destroys the actual task captures before its terminal receipt;
+active work continues through the existing transport drain boundary. Independent
+terminal delivery and caller unwind ordering prevent early private MR retirement.
+Task panic retains uncertain owners while leaving the shard available.
+
+CPU controls cover eight active sessions plus 512 queued tasks, queue exhaustion,
+pre-start timeout/cancellation, shutdown timeout and retry, concurrent lazy
+admission/close, reuse after panic, idle-thread Drop and caller unwind with a full
+completion queue. A public-path control holds eight source CUDA completions and
+expires a ninth queued request without remote Pin, then verifies exact bytes,
+guards and thread reuse over TCP and RDMA. These are CPU ownership controls.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/staging-worker-shards-20261029/`.
+Stable and Rust 1.85 combined runs each pass 309 unit tests, eight integration
+tests and one doctest. CUDA-only tests/Clippy, combined Clippy, all 50 controller
+controls, the CPU trace fixture and strict documentation checks pass. `gates.json`
+records these commands and results. The original single-QP/eight-byte fixture
+rejected the concurrency control with `ResourceExhausted`; that failed control
+is preserved, and the accepted control uses the existing default RDMA budgets.
+Independent source review accepts `3db26ee` for this source/CPU ownership scope.
+`independent-review/source-review-3db26ee.json` binds the frozen source, diff
+and 16 passing independent gates. [CI](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594882)
+passes all eight feature/compiler combinations; the
+[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594607)
+and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594687)
+also pass for that source. No new hardware task is requested.
+Installed v19 execution, physical overlap and performance remain unqualified.
+Nonblocking chunk progress, concurrent CROSS on the wire and location selection
+remain open; shared threads do not establish complete ProxyManager parity.
+
 ## Bounded session progress
 
-The current v19 source adds bounded CROSS command/completion queues and one
+The accepted v19 source at `4441017` adds bounded CROSS command/completion queues and one
 joined connection worker per admitted staging request. Local CUDA progress can
 continue while a CROSS or Delegate receipt is pending. CROSS remains ordered on
-one connection; this does not implement TENT's shared shards or multiple CROSS
-operations on the wire. See [the ownership contract](staging.md#session-progress-and-completion).
+one connection. The shared-shard substage above supersedes its per-session worker;
+multiple CROSS operations on the wire remain open. See [the ownership contract](staging.md#session-progress-and-completion).
 
 CPU controls hold a local CUDA event while CROSS progresses, hold a source
 Delegate receipt while local PRE/POST starts, and lose the final Delegate reply
@@ -59,7 +95,7 @@ preserve commands and outcomes, including the corrected CUDA-only Clippy
 diagnostic. `independent-review/source-review-4441017.json` binds 16 independent
 source gates; `worker-panic-control.json` in that directory binds the additional
 reviewer control now included in the permanent tests. This accepts the source
-substage; shared shards, nonblocking chunk progress and full P5.5b remain open.
+substage; its remaining scheduling work is recorded in the shared-shard boundary above.
 No new Forge task or hardware execution is requested. Current installed
 qualification and performance remain unqualified; earlier H20 results retain
 their original artifact boundaries.
@@ -100,8 +136,9 @@ Hardware execution is deferred at the user's direction; no new task is requested
 The controller and consumer now account for each ring's own width, private MRs,
 persistent stream/events and physical pinned bytes. Neither these CPU controls
 nor earlier v18 hardware runs qualify the current artifact or demonstrate
-physical overlap or throughput. The session progress substage above extends this source boundary. Shared shards,
-concurrent CROSS on the wire and location selection remain open.
+physical overlap or throughput. The session progress and shared-shard substages
+above extend this source boundary. Nonblocking chunk progress, concurrent CROSS
+on the wire and location selection remain open.
 
 ## Bounded requester CUDA staging
 

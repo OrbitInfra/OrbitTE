@@ -6,8 +6,9 @@ mod source_task;
 mod stage_buffer_cache;
 mod stage_registration;
 mod staging_task;
+mod worker_shard;
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -18,8 +19,13 @@ use crate::{Error, RegisteredMemory, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StagingStats {
-    /// Session progress workers, including workers being joined after failure.
-    pub progress_workers: usize,
+    /// Live shared staging threads, including idle shards.
+    pub worker_shards: usize,
+    pub opened_worker_shards: u64,
+    /// Sessions waiting for a shard; no Pin or payload has started.
+    pub queued_tasks: usize,
+    /// Sessions running through transport drain and capture destruction.
+    pub active_tasks: usize,
     /// Local scheduling failures that stopped admission of queued CROSS work.
     pub cancelled_tasks: u64,
     /// Includes construction, checked-out chunks and failed cleanup.
@@ -60,7 +66,7 @@ struct StageBuffers {
 }
 
 pub(crate) struct ProxyManager {
-    progress_workers: AtomicUsize,
+    workers: worker_shard::Workers,
     cancelled_tasks: AtomicU64,
     chunk_size: usize,
     buffers: Mutex<StageBuffers>,
@@ -82,7 +88,7 @@ impl ProxyManager {
             ));
         }
         Ok(Arc::new(Self {
-            progress_workers: AtomicUsize::new(0),
+            workers: worker_shard::Workers::default(),
             cancelled_tasks: AtomicU64::new(0),
             chunk_size,
             buffers: Mutex::new(StageBuffers {
@@ -194,7 +200,6 @@ impl ProxyManager {
             .lock()
             .map_err(|_| Error::Internal("staging lock poisoned"))?;
         let mut stats = StagingStats {
-            progress_workers: self.progress_workers.load(Ordering::Acquire),
             cancelled_tasks: self.cancelled_tasks.load(Ordering::Acquire),
             allocations: state.allocations,
             reuses: state.reuses,
@@ -215,6 +220,8 @@ impl ProxyManager {
             }
             stats.reserved_chunks += 1;
         }
+        drop(state);
+        self.workers.stats(&mut stats);
         stats.reserved_bytes = stats.reserved_chunks * self.chunk_size;
         Ok(stats)
     }
@@ -250,6 +257,7 @@ impl ProxyManager {
     }
 
     pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
+        self.workers.close(deadline)?;
         let mut state = self
             .buffers
             .lock()

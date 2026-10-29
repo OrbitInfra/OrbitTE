@@ -67,8 +67,9 @@ and an inline source handler to preserve that distinction with bounded resources
 The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
 stage buffers (`id % kStageBuffers`). `source_task.rs` owns source `Chunk`
 scheduling; `requester_task.rs` reserves the local ring and full GPU range loan.
-`staging_task.rs::StagingTask` owns bounded local PRE/POST scheduling, the CROSS
-queue and the session connection worker. Its `StageBufferCache` retains the request's private
+`requester_task.rs` also owns local PRE/POST scheduling and bounded CROSS queues.
+`staging_task.rs::StagingTask` owns the connection and ordered remote phases;
+`worker_shard.rs` queues these sessions on shared `WorkerShard`s. `StageBufferCache` retains the request's private
 registrations and buffers, following the resource role of TENT's cache of the
 same name. `stage_registration.rs::PinnedStage` owns the actual pinned lease,
 private registration, pending copy and ordered retirement on either side.
@@ -79,14 +80,17 @@ The current implementation can keep both source and requester CUDA copies
 pending during CROSS. Independent local and remote rings follow TENT's
 `local_locked` / `remote_locked` ownership: local WRITE slots become reusable
 after CROSS, and local READ slots after POST. A bounded requester window submits
-up to `L` CROSS commands to one session worker and consumes each completion
+up to `L` CROSS commands to its assigned shard and consumes each completion
 individually. Local CUDA progress can overlap a CROSS or Delegate receipt wait.
 The worker still serializes CROSS and scoped receipts on one connection.
-TENT uses eight shared worker shards, polls asynchronous internal batches and
-remote operations, and independently schedules available chunks. OrbitTE's
-bounded windows still have a refill barrier and use one worker per admitted
-session. Shared shards, multiple CROSS operations on the wire, a general progress
-event loop and location selection remain in the existing P5/P6 queue. CPU controls establish accepted
+Frozen TENT creates eight shared worker shards; each dequeues one task and runs
+its chunk event loop to completion. OrbitTE starts at most eight shards on demand,
+reuses an idle shard and otherwise selects the smallest queue with rotating ties.
+Each shard still executes one session at a time. TENT additionally polls internal
+batches and remote operations to schedule available chunks independently.
+OrbitTE's local windows retain their refill barrier and synchronous CUDA wait.
+Nonblocking chunk progress, multiple CROSS operations on the wire and location
+selection remain in the existing P5/P6 queue. CPU controls establish accepted
 work overlap, not physical DMA overlap or a throughput improvement.
 
 ## Serial remote staging
@@ -220,12 +224,18 @@ replayed after an ambiguous reply.
 
 ### Session progress and completion
 
-The requester reserves its physical ring before starting one `orbitte-staging`
-worker. Existing parent request admission bounds the worker count; no worker is
-created per chunk and no nested public batch is admitted. Command and completion
-queues each hold at most `L` entries, and a window references at most `L` local
-registrations. The worker owns the control connection; local CUDA owners remain
-in the caller. TCP still transports TCP payload; RDMA uses its existing shared
+The requester reserves its physical ring and GPU range loan before submitting
+a session to the shared pool. Existing parent admission remains charged through
+queueing and completion. At most eight `orbitte-staging-{id}` threads exist per
+`ProxyManager`, with at most 64 waiting sessions per shard. Full queues return
+`ResourceExhausted`; no nested public batch is admitted. Queue time consumes the
+original request deadline. A cancelled/expired queued session is removed and its
+actual captures are destroyed before terminal publication, without Pin, payload
+I/O or waiting for an unrelated active native call. An active session negotiates
+Pin on its shard, then publishes the negotiated chunk size to the caller.
+Command and CROSS completion queues each hold at most `L` entries, and a window
+references at most `L` local registrations. The shard owns the control connection;
+local CUDA owners remain in the caller. TCP still transports TCP payload; RDMA uses its existing shared
 verbs workers/CQ lanes and uses TCP only for control.
 
 Within each window the caller waits for a slot's local PRE or previous POST,
@@ -244,16 +254,29 @@ even when every CROSS result was received. On failure, the caller stops queue
 admission and cancels commands that have not started. The active CROSS continues
 through the existing transport drain protocol under its original deadline;
 cancellation does not interrupt its control channel. The caller drops its queue
-handles and joins the worker before private registration/MR retirement. Worker
-panic becomes `Unquiesced`; uncertain native errors take precedence over an
+handles and waits for a separate task terminal receipt before private MR
+retirement. That receipt is sent only after the task closure, command receiver,
+registration clones and connection have been destroyed. It cannot be blocked by
+a full CROSS completion queue. Caller unwind drops both chunk channel handles
+before its task guard cancels and waits. Task panic becomes `Unquiesced` while
+the shard remains available; uncertain native errors take precedence over an
 ordinary local failure and keep actual owners and admission charged.
 
-`EngineStats.staging.progress_workers` includes workers being joined, and
-`cancelled_tasks` counts local scheduling exits that stop queued work. These are
-independently sampled counters, not a snapshot of native DMA progress. Successful
-requester and full-engine close require zero progress workers. Directional
-`close_source` still permits outgoing sessions to continue. Queue time uses
-the original request deadline; timeout never substitutes for CUDA/DMA drain.
+`EngineStats.staging.worker_shards` counts live threads, including idle ones;
+`opened_worker_shards` records total starts. `active_tasks` counts executing
+sessions and `queued_tasks` counts waiting sessions. The active count can reach
+zero before terminal delivery; it is not a drain receipt. `cancelled_tasks` counts
+local scheduling exits that stop queued work. Counters are independently sampled.
+`close_requester` fences admission and waits for accepted calls, leaving idle
+shards available to the engine owner. `close_source` does not stop outgoing
+shards. Successful whole-engine `close` joins all shards before releasing pooled
+buffers. If requester/source drain times out, the pool remains available for
+already accepted work; retry observes the same owners. Native uncertainty can
+keep that engine and its idle shards retained. At the pool shutdown boundary,
+admission and lazy creation are fenced together, queued tasks are cancelled and
+active tasks retain their original drain obligation. A pool close timeout can be
+waited again without restarting threads. Idle workers hold only their shard
+state, not a strong engine reference. Timeout never substitutes for CUDA/DMA drain.
 
 EOF, a protocol error or deadline expiry stops new work but drains every accepted
 copy once, including siblings of a failed copy. `PinnedStage` takes its pending
@@ -365,6 +388,6 @@ earlier serial evidence remains bound to its original observer and wire version.
 The current requester ring requires its own v19 artifact and evidence. Its
 controller supports independent widths and conservative local capacity, but
 hardware execution is deferred while new resource requests are paused. The
-session worker and bounded CROSS windows also require fresh installed evidence;
-the CPU controls prove ownership and scheduling only. Shared shard progress,
-concurrent CROSS on the wire and location selection remain in P5.5b.
+shared worker shards and bounded CROSS windows also require fresh installed
+evidence; the CPU controls prove ownership and scheduling only. Nonblocking chunk
+progress, concurrent CROSS on the wire and location selection remain in P5.5b.

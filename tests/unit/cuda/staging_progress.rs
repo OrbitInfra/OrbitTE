@@ -297,7 +297,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
         let stats = requester.stats().unwrap();
         assert_eq!(
             (
-                stats.staging.progress_workers,
+                stats.staging.active_tasks,
                 stats.staging.active_chunks,
                 stats.inflight_batches
             ),
@@ -320,7 +320,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             "{failure:?}"
         );
         assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
-        assert_eq!(requester.stats().unwrap().staging.progress_workers, 0);
+        assert_eq!(requester.stats().unwrap().staging.active_tasks, 0);
         assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
         b.copy_error.store(0, Ordering::Release);
         let mut bytes = [0; 32];
@@ -371,7 +371,12 @@ fn panic_on_close(remaining: usize, seen: Arc<AtomicUsize>) {
             "the injected panic follows native completion"
         );
         assert!(grant.has_resources());
-        assert_eq!(std::thread::current().name(), Some("orbitte-staging"));
+        assert!(
+            std::thread::current()
+                .name()
+                .unwrap()
+                .starts_with("orbitte-staging-")
+        );
         seen.fetch_add(1, Ordering::AcqRel);
         if remaining == 1 {
             panic!("injected worker panic before private grant cleanup");
@@ -466,7 +471,7 @@ fn worker_panic_retains_actual_owners_and_possible_write_effect() {
         let stats = requester.stats().unwrap();
         assert_eq!(
             (
-                stats.staging.progress_workers,
+                stats.staging.active_tasks,
                 stats.staging.retained_chunks,
                 stats.inflight_batches
             ),
