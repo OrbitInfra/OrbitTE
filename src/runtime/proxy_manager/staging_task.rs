@@ -14,7 +14,6 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport}
 
 struct Chunk {
     stage: PinnedStage,
-    pending: Option<usize>,
     to_device: bool,
     pipeline: bool,
 }
@@ -29,7 +28,6 @@ impl Chunk {
     ) -> Result<Self> {
         Ok(Self {
             stage: PinnedStage::new(lease, source, transport)?,
-            pending: None,
             to_device: operation == TransferOp::Write,
             pipeline,
         })
@@ -45,14 +43,9 @@ impl Chunk {
         length: usize,
     ) -> Result<()> {
         remote.expect(channel, Operation::Delegate, offset, length)?;
-        if self.pending.is_some() {
-            return Err(Error::Internal("staging chunk still pending"));
-        }
         self.stage
             .copy(copy, offset, length, self.to_device, self.pipeline)?;
-        if self.pipeline {
-            self.pending = Some(length);
-        } else {
+        if !self.pipeline {
             manager.completed_remote(Operation::Delegate);
         }
         // For a pipeline this receipt accepts PRE/POST; CROSS or final Unpin
@@ -61,8 +54,7 @@ impl Chunk {
     }
 
     fn drain(&mut self, copy: &mut StagingCopy, manager: &ProxyManager) -> Result<()> {
-        if let Some(length) = self.pending.take() {
-            self.stage.complete(copy, length)?;
+        if self.stage.complete(copy)? {
             manager.completed_remote(Operation::Delegate);
         }
         Ok(())

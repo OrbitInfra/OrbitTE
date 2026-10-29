@@ -134,14 +134,14 @@ fn finish(
         .map_err(|_| Error::InvalidConfig("expected grant count"))?;
     let persistent = contexts * (2 * usize::from(host_direct) + usize::from(gpu_direct));
     let source_cached = host_direct;
-    let remote_depth: u64 = if remote_staging && role == "source" {
+    let stage_width: u64 = if remote_staging {
         env::var("ORBITTE_EXPECT_STAGE_DEPTH")
             .map_or(Ok(1), |s| s.parse())
             .map_err(|_| Error::InvalidConfig("expected staging depth"))?
     } else {
         1
     };
-    let private_mrs = if remote_rdma { 6 * remote_depth } else { 0 };
+    let private_mrs = if remote_rdma { 6 * stage_width } else { 0 };
     let reused_mrs = if remote_rdma {
         grants - private_mrs
     } else if host_direct || (gpu_direct && role == "requester") {
@@ -327,7 +327,7 @@ fn finish(
             .iter()
             .map(|(_, _, length)| length.div_ceil(transfer_chunk))
             .sum();
-        let slots = expected * remote_depth;
+        let slots = expected * stage_width;
         if staging.allocations != slots
             || staging.reuses != 5 * slots
             || staging.copied_bytes != bytes as u64 * expected

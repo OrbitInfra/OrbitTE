@@ -67,17 +67,21 @@ and an inline source handler to preserve that distinction with bounded resources
 The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
 stage buffers (`id % kStageBuffers`). `staging_task.rs` owns the source task and
 its source `Chunk` scheduling; `requester_task.rs` owns bounded local PRE/POST
-and CROSS scheduling. `stage_registration.rs::PinnedStage` owns the actual
-pinned lease, its private registration and ordered retirement on either side.
+and CROSS scheduling. Its `StageBufferCache` retains the request's private
+registrations and buffers, following the resource role of TENT's cache of the
+same name. `stage_registration.rs::PinnedStage` owns the actual pinned lease,
+private registration, pending copy and ordered retirement on either side.
 `remote_stage_operation.rs` owns scoped messages and receipts. Per-slot CUDA completion supplies the
 PRE/POST completion boundary, while TCP/RDMA still own CROSS.
 
-The current implementation overlaps remote CUDA work with CROSS in one source
-handler. TENT's full event loop also schedules the requester's local stage and
-tracks asynchronous remote operations across chunks. OrbitTE now reuses one
-bounded requester slot with synchronous local PRE/POST. Multiple asynchronous
-requester slots, location selection and broader remote scheduling remain
-in the existing P5/P6 queue. This is a scoped step toward that architecture.
+The current implementation can keep both source and requester CUDA copies
+pending during CROSS. Independent local and remote rings follow TENT's
+`local_locked` / `remote_locked` ownership: local WRITE slots become reusable
+after CROSS, and local READ slots after POST. CROSS and its scoped receipts
+remain serialized on one control connection. TENT's full event loop also tracks
+asynchronous CROSS batches and remote operations; that scheduler and location
+selection remain in the existing P5/P6 queue. CPU controls establish accepted
+work overlap, not physical DMA overlap or a throughput improvement.
 
 ## Serial remote staging
 
@@ -104,13 +108,17 @@ calls the existing transport directly; it never recursively submits an ordinary
 batch or waits for a second handler. One handler, one parent batch slot and one
 pinned source chunk per engine are sufficient. A GPU requester also needs one
 local pinned chunk; self-peer and opposite-direction sessions share their
-engine pool and need source width plus one requester slot. Native RDMA grant/CQ/MR budgets still apply.
+engine pool. With pipelining enabled, each engine needs its outgoing local ring
+plus its incoming source ring; self-peer capacity is `L + R` below. Insufficient
+capacity fails immediately, without waiting for a slot held by the same session.
+Native RDMA grant/CQ/MR budgets still apply.
 RDMA uses its slices protocol even for a single chunk, retaining its bounded
 same-connection QP-cache-miss retries and actual verbs payload path.
 
-The requester reuses one private host slot across all CROSS legs, always at
-local offset zero. CUDA requesters reserve one physical pool slot and retain its
-stream/event across sessions. CPU requesters allocate at most
+Each CROSS uses local offset zero in its selected private host slot. At the
+default depth of one, CUDA requesters reserve one physical pool slot; larger
+depths reserve a bounded local ring before Pin. Each physical slot retains its
+stream/event across sessions. CPU requesters still allocate at most
 `min(request.length, staging_chunk_size)` host bytes under the parent admission;
 they do not spend CUDA pool slots. No full-request snapshot or commit payload
 is allocated. TCP/RDMA retain their independent bounded transport resources.
@@ -144,8 +152,10 @@ ACK alone never completes a remote GPU WRITE. Lost POST/Unpin replies leave WRIT
 with `RemoteEffect::Unknown`. READ commits each completed chunk after its scoped
 CROSS receipt; a lost Unpin receipt still fails the request even when all chunks
 are visible. A failed request contributes zero completed requests/bytes, but may
-have a visible prefix. `locally_drained` proves physical local completion, not
-rollback, and failed groups do not send attached notifications. Successful local native drain allows cleanup after EOF, while uncertain
+have changed bytes. Independent local POST streams can complete out of order;
+a native failure does not establish an exact visible prefix. `locally_drained`
+proves physical local completion, not rollback, and failed groups do not send
+attached notifications. Successful local native drain allows cleanup after EOF, while uncertain
 CUDA or RDMA cleanup retains actual backing and the responsible parent/source
 admission. Ordinary confirmed errors remain errors even when locally drained.
 There is no automatic retry of a possibly executed WRITE.
@@ -160,24 +170,39 @@ not replace requester completion receipts.
 ## Bounded remote pipeline
 
 Set `EngineConfig.staging_pipeline_depth` to 2–16 on both peers to opt in.
-It defaults to 1 and cannot exceed `staging_chunk_count`. Pin selects the minimum
-of the two depths and the request's chunk count. The source checks out that
-entire width before acknowledging Pin. Insufficient capacity fails with
-`ResourceExhausted`; it never silently narrows the negotiated window. A short
-request may negotiate one slot and use the synchronous path.
+It defaults to 1 and cannot exceed `staging_chunk_count`. For a request of `N`
+bytes, physical chunk sizes `C_local` / `C_source` and configured depth caps
+`D_local` / `D_source`, the rings are:
 
-Each slot owns its pinned allocation, a persistent CUDA stream/event and a
-private registration for the current session. Logical chunk `i` uses slot
-`i % depth`. Scoped CROSS grants also bind that slot. Registrations retire at
-Unpin; the drained native allocation and stream/event remain in the pool for
-later sessions. Full engine close destroys those handles before freeing the
-pin. Failed construction or destruction remains charged without a Drop retry.
+| Quantity | Bound |
+| --- | --- |
+| Logical chunk size `C` | `min(C_local, C_source)` |
+| CUDA requester width `L`, reserved before Pin | `min(D_local, ceil(N / C_local))` |
+| Source width `R`, negotiated by Pin | `min(D_local, D_source, ceil(N / C))` |
+| CPU requester width | One ordinary host buffer, no CUDA pool charge |
+
+The requester reserves its entire local ring and full GPU range before opening
+the control connection. The source checks out its entire negotiated ring before
+acknowledging Pin. Insufficient capacity fails with `ResourceExhausted`; neither
+side silently narrows its ring. A large local physical chunk can conservatively
+limit `L` even when the smaller negotiated chunks would permit more concurrency.
+There is no late expansion after Pin. A width of one uses synchronous local
+copies on that side; the other side can independently pipeline.
+
+Logical chunk `i` uses local slot `i % L` and source slot `i % R`. Each CUDA slot
+owns its actual pinned allocation, a persistent stream/event and a private
+registration for the current session. Scoped CROSS grants bind the source slot.
+Source registrations retire at Unpin; requester registrations retire after its
+receipt or after draining an errored session. Drained native allocations and
+stream/events remain in the pool for later sessions. Full engine close destroys
+those handles before freeing pins. Failed construction or destruction remains
+charged without a Drop retry.
 
 | Direction | Scheduling and completion |
 | --- | --- |
-| READ | Delegate initially queues PRE for each slot. CROSS waits for its slot's CUDA event, then transfers bytes. The freed slot queues the next PRE while other chunks are in flight. |
-| WRITE | CROSS fills a drained slot. Delegate queues POST and returns an acceptance receipt. The next CROSS may use another slot; reuse of the same slot waits for its earlier POST. |
-| Final Unpin | Drain every accepted PRE/POST, retire private registrations/MRs and release the GPU range loan before replying. Earlier completed READ chunks may already be visible locally. |
+| READ | Delegate prefills `R` source PREs. CROSS waits for its source slot and any previous POST in its local slot. Its scoped receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
+| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After CROSS and Delegate receipts, the freed local slot queues PRE at `i + L`; other PREs and source POSTs can remain pending. |
+| Final Unpin | Drain all local POSTs before sending Unpin. The source drains every accepted PRE/POST, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
 
 A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
 `remote_delegates` and completed-chunk counters advance only after event wait and
@@ -187,8 +212,10 @@ cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
 replayed after an ambiguous reply.
 
 EOF, a protocol error or deadline expiry stops new work but drains every accepted
-copy once. Each range owner tracks accepted copies; each physical slot owns
-its stream/event. Ordinary pending work does not fence the entire allocation.
+copy once, including siblings of a failed copy. `PinnedStage` takes its pending
+length exactly once; an absent pending copy performs no native wait. The range
+owner tracks aggregate accepted copies, while each physical slot owns its
+stream/event and refuses retirement while a copy is still pending. Ordinary pending work does not fence the entire allocation.
 Native uncertainty is published as a sticky allocation flag after private
 host/lease/stream locks are released. A successful sibling never clears it.
 An uncertain CUDA copy retains the actual GPU owner and range loan. Private MR
@@ -265,10 +292,12 @@ Set `staging_pipeline_depth` in the hardware profile, or use
 `staging_chunk_size` for physical slots; native copy/grant checks use the
 negotiated minimum while pinned-byte accounting uses each physical size.
 The consumer reports its actual configuration; the harness requires the
-negotiated width to match the physical pool slots and persistent stream/event
-owners. Source private MR counts scale by negotiated width, while the requester
-has one reusable private slot MR per session. Byte and chunk counts do not scale
-with width.
+independent widths `R` and `L` to match the physical pool slots and persistent
+stream/event owners on each side. Source private MR counts scale by `R`;
+requester private MR counts scale by `L` (one for CPU requesters). Six sessions
+therefore create `6 * R` and `6 * L` private MRs, respectively. Physical pinned
+bytes use each side's own chunk size and width. Byte and chunk counts do not
+scale with width.
 
 The staging-only observer adds context push and stream/event create/destroy
 receipts plus paired entry/return records for copy, wait and cleanup calls.
@@ -289,5 +318,7 @@ execution: native receipts do not establish execution overlap or throughput.
 The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
 earlier serial evidence remains bound to its original observer and wire version.
-Requester bounded staging requires its own v19 artifact and evidence. Broader
+The current requester ring requires its own v19 artifact and evidence. Its
+controller supports independent widths and conservative local capacity, but
+hardware execution is deferred while new resource requests are paused. Broader
 asynchronous remote scheduling remains in P5.5b.

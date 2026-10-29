@@ -567,11 +567,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   stable/MSRV consumers at `c0f6a9e` pass 24 fresh H20 TCP/RDMA cases, including
   300 CROSS operations with safe MW index rollover. Four fresh independent
   repeats and their cleanup audit pass; source and this healthy profile are
-  accepted. Requester one-slot staging, negotiated chunk sizes and exclusive GPU
-  range loans are implemented; independent source review accepts `460d825` with
-  stable/MSRV gates and clean package provenance. Its v19 installed profile
-  remains unqualified. Next complete that frozen gate and broader asynchronous
-  local/remote scheduling before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  accepted. Independent source review accepts the first bounded requester stage
+  at `460d825`, including negotiated chunk sizes, exclusive GPU range loans and
+  clean package provenance; its v19 installed profile remains unqualified.
+  The requester now has an independent bounded PRE/POST ring, per-slot pending
+  ownership and final local drain before Unpin. Source review of this substage
+  is pending. New hardware requests are paused at the user's direction: continue
+  source implementation with hardware gates explicitly deferred. Qualify the
+  current v19 artifact and complete asynchronous CROSS/remote scheduling and
+  location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -840,12 +844,15 @@ plus four fresh independent repeats; source and this bounded healthy profile
 are accepted. The bounded remote pipeline now passes 24 fresh installed cases
 at `c0f6a9e`, with native per-slot stream/event lifetime evidence and 300-CROSS
 MW index rollover. Four fresh independent repeats and cleanup audits pass;
-source and this healthy profile are accepted. Requester bounded staging is now
-implemented with one reusable slot, negotiated chunk sizes, GPU range loans and
-chunk-visible READ failure semantics. Independent source review accepts
-`460d825`; installed v19 qualification remains open. Complete its frozen healthy
-profile before accepting broader asynchronous remote scheduling. Full
-ProxyManager parity remains open.
+source and this healthy profile are accepted. Independent source review accepts
+requester chunk-size negotiation, GPU range loans and chunk-visible failures at
+`460d825`. The next substage implements independent requester PRE/POST rings,
+shared pending-copy ownership and final drain before Unpin; source acceptance is
+pending. Installed v19 qualification remains open. At the user's direction,
+continue source work without requesting new hardware tasks; qualify the current
+artifact on fresh nodes when hardware work resumes. After source acceptance,
+the next implementation boundary is asynchronous CROSS and remote-operation
+scheduling, followed by location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

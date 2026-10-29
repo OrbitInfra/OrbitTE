@@ -71,11 +71,12 @@ For a cross-rail request, all slice receipts must complete before its one reques
 and full byte count are added. Earlier slices may already have changed bytes if
 a later slice fails, including source-staged WRITE slices copied back after
 their own completion. Completion is not an atomic multi-rail commit.
-Remote staging READ similarly commits each drained chunk after its scoped CROSS
-receipt. A later failure, including lost Unpin, leaves completed chunks visible
-but counts the failed request as zero completed requests/bytes. The requester
-uses one bounded slot; WRITE no longer snapshots the entire request. Keep input
-bytes stable while a request is in flight. GPU staging range loans reject
+Remote staging READ starts each local POST after its scoped CROSS receipt.
+Independent slot copies may complete out of order. A later failure, including
+lost Unpin, leaves changed bytes visible but counts the failed request as zero
+completed requests/bytes; native uncertainty does not imply an exact prefix.
+The CUDA requester uses a bounded ring; WRITE does not snapshot the entire
+request. Keep input bytes stable while a request is in flight. GPU staging range loans reject
 conflicting access, including overlapping self-peer copies.
 
 For asynchronous ownership, see [`Batch`](async-batches.md): submit groups,

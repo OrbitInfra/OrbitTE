@@ -9,8 +9,6 @@ import supervise
 def fixture(gpu_role='source', depth=1, cap=None, remote=False, physical=4):
     remote = remote or depth > 1
     pipeline_width = min(depth, cap or depth)
-    width = pipeline_width if gpu_role == 'source' else 1
-    slot_streams = remote or width > 1
     case = dict(source='a', requester='b', source_kind='cpu', requester_kind='cpu', transport='rdma',
                 payload=4 * ((pipeline_width * 2 + 1) * 4 + 24), staging_chunk_size=4)
     case[gpu_role + '_kind'] = 'cuda:0'
@@ -18,6 +16,8 @@ def fixture(gpu_role='source', depth=1, cap=None, remote=False, physical=4):
     if remote:
         case.update(remote_staging=True, source_pipeline_depth=depth, requester_pipeline_depth=cap or depth)
     length = case['payload'] // 4 - 23
+    width = staging.stage_width(case, gpu_role)
+    slot_streams = remote or width > 1
     size = case['payload'] + 128
     native = []
     def emit(kind, **values):
@@ -120,12 +120,16 @@ class StagingProof(unittest.TestCase):
                 broken['source']['stdout.log'] = broken['source']['stdout.log'].replace('"reserved_bytes": '+str(physical*depth), '"reserved_bytes": 0')
                 with self.assertRaises(ValueError): staging.verify(case, broken)
 
-    def test_remote_requester_slot_stream_is_distinct_from_setup_and_width(self):
-        for depth in (1, 3):
-            for physical in (4, 7):
-                case, source, source_native = fixture(depth=depth, remote=True)
-                _, requester, requester_native = fixture('requester', depth=depth, remote=True, physical=physical)
+    def test_remote_requester_rings_keep_role_width_and_physical_slot_owners(self):
+        for depth, cap, physical, local_width in [(1, 1, 4, 1), (3, 3, 7, 3), (1, 3, 4, 3),
+                                                  (3, 1, 4, 1), (2, 3, 7, 3), (3, 2, 4, 2),
+                                                  (3, 3, 100, 1), (16, 16, 4, 16)]:
+            with self.subTest(source_depth=depth, requester_depth=cap, physical=physical):
+                case, source, source_native = fixture(depth=depth, cap=cap, remote=True)
+                _, requester, requester_native = fixture('requester', depth=depth, cap=cap, remote=True, physical=physical)
                 case.update(requester_kind='cuda:0', requester_chunk_size=physical)
+                self.assertEqual(staging.stage_width(case, 'requester'), local_width)
+                self.assertEqual(staging.stage_width(case, 'source'), min(depth, cap))
                 evidence = dict(source=source['source'], requester=requester['requester'])
                 for role, native in [('source', source_native), ('requester', requester_native)]:
                     evidence[role]['cuda-staging.jsonl'] = '\n'.join(json.dumps(row) for row in native)

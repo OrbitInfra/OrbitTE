@@ -33,6 +33,7 @@ pub(super) struct Device {
     pub(super) ipc_pop_after_close: AtomicBool,
     pub(super) stream_create_error: AtomicI32,
     pub(super) stream_partial_create: AtomicBool,
+    pub(super) event_gate_skip: AtomicUsize,
     pub(super) event_waits: AtomicUsize,
     pub(super) event_wait_fail_at: AtomicUsize,
     pub(super) event_create_error: AtomicI32,
@@ -60,8 +61,8 @@ pub(super) struct Device {
     pub(super) events: Mutex<Vec<&'static str>>,
 }
 pub(super) struct PendingCopy {
-    source: usize,
-    destination: usize,
+    pub(super) source: usize,
+    pub(super) destination: usize,
     length: usize,
 }
 
@@ -249,7 +250,17 @@ unsafe extern "C" fn stream_synchronize(stream: sys::CUstream) -> Status {
 }
 unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     event("event-sync");
-    if let Some((entered, resume)) = current().event_gate.lock().unwrap().take() {
+    let device = current();
+    let gate = {
+        let mut gate = device.event_gate.lock().unwrap();
+        if device.event_gate_skip.load(Ordering::Acquire) == 0 {
+            gate.take()
+        } else {
+            device.event_gate_skip.fetch_sub(1, Ordering::AcqRel);
+            None
+        }
+    };
+    if let Some((entered, resume)) = gate {
         entered.send(()).unwrap();
         resume.recv_timeout(Duration::from_secs(3)).unwrap();
     }
@@ -453,6 +464,7 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         ipc_pop_after_close: AtomicBool::new(false),
         stream_create_error: AtomicI32::new(0),
         stream_partial_create: AtomicBool::new(false),
+        event_gate_skip: AtomicUsize::new(0),
         event_waits: AtomicUsize::new(0),
         event_wait_fail_at: AtomicUsize::new(0),
         event_create_error: AtomicI32::new(0),

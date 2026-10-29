@@ -2,6 +2,7 @@
 
 mod remote_stage_operation;
 mod requester_task;
+mod stage_buffer_cache;
 mod stage_registration;
 mod staging_task;
 

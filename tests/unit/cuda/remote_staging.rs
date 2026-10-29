@@ -532,11 +532,13 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
 fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
     use std::io::{Read, copy};
     use std::net::{Shutdown, TcpListener, TcpStream};
-    for (operation, depth) in [
-        (TransferOp::Read, 1),
-        (TransferOp::Write, 1),
-        (TransferOp::Read, 2),
-        (TransferOp::Write, 2),
+    for (operation, depth, device_requester) in [
+        (TransferOp::Read, 1, false),
+        (TransferOp::Write, 1, false),
+        (TransferOp::Read, 2, false),
+        (TransferOp::Write, 2, false),
+        (TransferOp::Read, 3, true),
+        (TransferOp::Write, 3, true),
     ] {
         let source = super::staging_pipeline::engine(Transport::Tcp, depth);
         let requester = super::staging_pipeline::engine(Transport::Tcp, depth);
@@ -546,9 +548,17 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
             .register_cuda_memory_batch(&[(gpu.clone(), 0, 12)], Permission::RemoteReadWrite)
             .unwrap()
             .remove(0);
-        let local = requester
-            .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
-            .unwrap();
+        let b = allocation(&[0xcc; 10]);
+        let local = if device_requester {
+            requester
+                .register_cuda_memory_batch(&[(memory(&b), 0, 10)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0)
+        } else {
+            requester
+                .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap()
+        };
         let mut peer = requester
             .open_segment(
                 source.endpoint(),
@@ -620,6 +630,11 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
                 RemoteEffect::None
             }
         );
+        if device_requester {
+            assert_eq!(b.event_waits.load(Ordering::Acquire), 3);
+            assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+            assert_eq!(requester.stats().unwrap().staging.completed_chunks, 3);
+        }
         let mut observed = [0; 10];
         local.read(0, &mut observed).unwrap();
         let mut expected = [0xcc; 10];
@@ -650,6 +665,7 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
         for engine in [&requester, &source] {
             engine.close(Duration::from_secs(2)).unwrap();
         }
+        assert!(b.pins.lock().unwrap().is_empty());
     }
 }
 
@@ -657,7 +673,8 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
 fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() {
     let make = || {
         TransferEngine::new(EngineConfig {
-            staging_chunk_count: 2,
+            staging_chunk_count: 6,
+            staging_pipeline_depth: 3,
             ..config()
         })
         .unwrap()
@@ -686,6 +703,7 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
     for owner in [&a_owner, &b_owner] {
         let (entered, waiting) = std::sync::mpsc::sync_channel(0);
         let (resume, blocked) = std::sync::mpsc::sync_channel(0);
+        // Stop source PRE completion while both range loans and rings coexist.
         *owner.event_gate.lock().unwrap() = Some((entered, blocked));
         gates.push((waiting, resume));
     }
@@ -715,6 +733,19 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
         let right = scope.spawn(|| run(&b, &b_peer, &b_memory, &a_memory));
         for (waiting, _) in &gates {
             waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        for owner in [&a_owner, &b_owner] {
+            assert_eq!(owner.pins.lock().unwrap().len(), 6);
+            assert_eq!(
+                owner
+                    .streams
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|v| v.is_some())
+                    .count(),
+                3
+            );
         }
         for gpu in [&a_gpu, &b_gpu] {
             let allocation = gpu
