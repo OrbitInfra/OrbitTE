@@ -3,7 +3,7 @@ use crate::cuda::ipc::IpcExport;
 use crate::runtime::proxy_manager::ProxyManager;
 use std::time::Instant;
 
-fn engine(transport: Transport, chunk: usize, depth: usize) -> TransferEngine {
+pub(super) fn engine(transport: Transport, chunk: usize, depth: usize) -> TransferEngine {
     let config = EngineConfig {
         remote_staging: true,
         staging_chunk_size: chunk,
@@ -24,7 +24,7 @@ fn engine(transport: Transport, chunk: usize, depth: usize) -> TransferEngine {
 }
 
 #[test]
-fn requester_reuses_one_slot_at_negotiated_chunk_size_including_tails() {
+fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
     for transport in [
         Transport::Tcp,
         #[cfg(feature = "rdma")]
@@ -111,10 +111,19 @@ fn requester_reuses_one_slot_at_negotiated_chunk_size_including_tails() {
                 let chunk = source_chunk.min(local_chunk);
                 let chunks = length.div_ceil(chunk);
                 let source_width = 3.min(chunks);
+                let local_width = 3.min(length.div_ceil(local_chunk));
                 let stats = requester.stats().unwrap().staging;
                 assert_eq!(
                     (stats.allocations, stats.reuses, stats.reserved_bytes),
-                    if cuda { (1, 1, local_chunk) } else { (0, 0, 0) }
+                    if cuda {
+                        (
+                            local_width as u64,
+                            local_width as u64,
+                            local_chunk * local_width,
+                        )
+                    } else {
+                        (0, 0, 0)
+                    }
                 );
                 assert_eq!(
                     stats.completed_chunks,
@@ -255,60 +264,4 @@ fn successful_sibling_drain_cannot_clear_failed_range_or_release_actual_owner() 
         weak.upgrade().is_some(),
         "failed copy must retain the actual CudaMemory, not just its address"
     );
-}
-
-#[test]
-fn requester_native_copy_failure_retains_one_slot_range_and_parent_admission() {
-    for operation in [TransferOp::Read, TransferOp::Write] {
-        let source = engine(Transport::Tcp, 3, 2);
-        let requester = engine(Transport::Tcp, 3, 2);
-        let a = allocation(&[0x57; 64]);
-        let b = allocation(&[0xcc; 64]);
-        let gpu = memory(&b);
-        let remote = source
-            .register_cuda_memory_batch(&[(memory(&a), 0, 64)], Permission::RemoteReadWrite)
-            .unwrap()
-            .remove(0);
-        let local = requester
-            .register_cuda_memory_batch(&[(gpu.clone(), 0, 64)], Permission::LocalOnly)
-            .unwrap()
-            .remove(0);
-        let peer = requester
-            .open_segment(
-                source.endpoint(),
-                source.source_epoch(),
-                Duration::from_secs(3),
-            )
-            .unwrap();
-        b.event_wait_fail_at.store(1, Ordering::Release);
-        let report = requester
-            .submit_and_wait(
-                operation,
-                &peer,
-                &[TransferRequest {
-                    transport: Transport::Tcp,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
-                Duration::from_secs(3),
-            )
-            .unwrap();
-        assert!(
-            !report.is_complete() && !report.locally_drained,
-            "{report:?}"
-        );
-        let failure = report.failure.unwrap();
-        assert!(matches!(failure.error, Error::Unquiesced { .. }));
-        assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
-        assert_eq!(gpu.allocation.lock().unwrap().dma, vec![2..10]);
-        assert_eq!(requester.stats().unwrap().staging.retained_chunks, 1);
-        assert!(matches!(
-            requester.close_requester(Duration::from_millis(10)),
-            Err(Error::Timeout)
-        ));
-        source.close(Duration::from_secs(3)).unwrap();
-        assert!(a.pins.lock().unwrap().is_empty());
-        assert_eq!(b.pins.lock().unwrap().len(), 1);
-    }
 }

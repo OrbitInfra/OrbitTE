@@ -22,6 +22,16 @@ def negotiated_depth(case):
     return min(configured_depth(case, 'source'), configured_depth(case, 'requester'), (length + chunk - 1) // chunk)
 
 
+def stage_width(case, role):
+    if not case.get('remote_staging') or case.get(role + '_kind') == 'cpu':
+        return 1
+    if role == 'source':
+        return negotiated_depth(case)
+    length = case.get('slice_bytes', case['payload'] // 4 - 23)
+    physical = configured_chunk(case, role)
+    return min(configured_depth(case, role), (length + physical - 1) // physical)
+
+
 def validate_case(case):
     require(case.get('transport') in ('tcp', 'rdma') and case.get('cuda_memory', 'staged') == 'staged'
             and case.get('source') != case.get('requester'), 'invalid staging transport scope')
@@ -67,7 +77,7 @@ def verify(case, evidence):
         if case[role + '_kind'] == 'cpu':
             require(all(value == 0 for value in stats[0].values()) and not proof.get('cuda-staging.jsonl'), role + ': CPU path spent CUDA chunks')
             continue
-        width = negotiated_depth(case) if case.get('remote_staging') and role == 'source' else 1
+        width = stage_width(case, role)
         require(stats[0] == dict(allocations=width, reuses=5 * width, chunks=6 * len(sizes), bytes=6 * length, reserved_bytes=physical_chunk * width), role + ': chunk accounting mismatch')
         native = [json.loads(line) for line in proof['cuda-staging.jsonl'].splitlines()]
         ledger = staging_native.validate(native, result['native_pid'])
@@ -80,7 +90,7 @@ def verify(case, evidence):
         require(len(allocations) == 1 and allocations[0]['address'] == owner['base']
                 and allocations[0]['length'] == owner['length'], role + ': GPU allocation differs from registered owner')
         pins = [row for row in ledger['pins'] if row['length'] == physical_chunk]
-        require(len(pins) == width, role + ': persistent physical slot count differs from negotiated depth')
+        require(len(pins) == width, role + ': persistent physical slot count differs from role width')
         copies = [copy for copy in ledger['copies'] if copy['host'] in pins]
         expected_copies = [(owner['base'] + 64 + index * (case['payload'] // 4)
                             + (11 if role == 'source' else 5) + offset, min(chunk, length - offset))
@@ -106,7 +116,7 @@ def verify(case, evidence):
                    c['row']['length'], 'slot' if c['host'] in pins else 'private') for c in ledger['copies']]
         require(actual == expected, role + ': copy outside exact consumer setup/payload/update/readback phases')
         require(len({c['stream_owner']['seq'] for c in copies}) == width,
-                role + ': persistent copy stream count differs from negotiated depth')
+                role + ': persistent copy stream count differs from role width')
         slot_streams = case.get('remote_staging', False) or width > 1
         require(len([h for h in ledger['handles'] if h['kind'] == 'stream_create']) == (width + 1 if slot_streams else 1)
                 and len([h for h in ledger['handles'] if h['kind'] == 'event_create']) == (width + 1 if slot_streams else 1),

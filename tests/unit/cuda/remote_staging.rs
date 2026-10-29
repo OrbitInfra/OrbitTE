@@ -458,72 +458,145 @@ fn self_peer_gpu_ranges_require_two_slots_and_reject_overlap_before_copy() {
 #[cfg(feature = "rdma")]
 #[test]
 fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
-    for source_fault in [true, false] {
-        let make = |fault| {
-            let mut runtime = crate::transport::rdma::tests::runtime(if fault {
-                "direct:copy_stage_close"
-            } else {
-                "direct:copy"
-            });
-            runtime.proxy = ProxyManager::new(3, 1).unwrap();
-            crate::engine::tests::rdma_fixture_with_config(runtime, config())
-        };
-        let source = make(source_fault);
-        let requester = make(!source_fault);
-        let a = allocation(&[0x57; 12]);
-        let b = allocation(&[0xcc; 8]);
-        let source_gpu = memory(&a);
-        let local_gpu = memory(&b);
-        let remote = source
-            .register_cuda_memory_batch(&[(source_gpu, 0, 12)], Permission::RemoteReadWrite)
-            .unwrap()
-            .remove(0);
-        let local = requester
-            .register_cuda_memory_batch(&[(local_gpu, 0, 8)], Permission::LocalOnly)
-            .unwrap()
-            .remove(0);
-        let peer = requester
-            .open_segment(
-                source.endpoint(),
-                source.source_epoch(),
-                Duration::from_secs(2),
-            )
-            .unwrap();
-        let report = requester
-            .submit_and_wait(
-                TransferOp::Read,
-                &peer,
-                &[TransferRequest {
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
-                Duration::from_secs(2),
-            )
-            .unwrap();
-        assert!(!report.is_complete(), "{source_fault}: {report:?}");
-        assert_eq!(report.locally_drained, source_fault);
-        let bad = if source_fault { &source } else { &requester };
-        let stats = bad.stats().unwrap();
-        assert_eq!(stats.rdma.unwrap().retained_persistent_mrs, 1);
-        if source_fault {
-            assert_eq!(stats.staging.retained_chunks, 1);
-            assert!(matches!(
-                source.close_source(Duration::from_millis(10)),
-                Err(Error::Timeout)
-            ));
-            assert_eq!(source.stats().unwrap().active_source_operations, 1);
-            assert_eq!(a.pins.lock().unwrap().len(), 1);
-            requester.close(Duration::from_secs(2)).unwrap();
-        } else {
-            assert_eq!(stats.inflight_batches, 1);
-            assert!(matches!(
-                requester.close_requester(Duration::from_millis(10)),
-                Err(Error::Timeout)
-            ));
-            source.close(Duration::from_secs(2)).unwrap();
-            assert!(a.pins.lock().unwrap().is_empty());
+    for depth in [1, 3] {
+        for source_fault in [false, true] {
+            for operation in [TransferOp::Read, TransferOp::Write] {
+                let make = |fault| {
+                    let mut runtime = crate::transport::rdma::tests::runtime(if fault {
+                        "direct:copy_stage_close"
+                    } else {
+                        "direct:copy"
+                    });
+                    runtime.proxy =
+                        crate::runtime::proxy_manager::ProxyManager::new(3, depth).unwrap();
+                    crate::engine::tests::rdma_fixture_with_config(
+                        runtime,
+                        EngineConfig {
+                            remote_staging: true,
+                            staging_chunk_size: 3,
+                            staging_chunk_count: depth,
+                            staging_pipeline_depth: depth,
+                            handler_threads: 1,
+                            max_inflight_batches: 1,
+                            ..EngineConfig::default()
+                        },
+                    )
+                };
+                let source = make(source_fault);
+                let requester = make(!source_fault);
+                let a = allocation(&[0x57; 64]);
+                let b = allocation(&[0xcc; 64]);
+                let source_gpu = memory(&a);
+                let local_gpu = memory(&b);
+                let weak_bad = Arc::downgrade(if source_fault {
+                    &source_gpu
+                } else {
+                    &local_gpu
+                });
+                let remote = source
+                    .register_cuda_memory_batch(
+                        &[(source_gpu.clone(), 0, 64)],
+                        Permission::RemoteReadWrite,
+                    )
+                    .unwrap()
+                    .remove(0);
+                let local = requester
+                    .register_cuda_memory_batch(
+                        &[(local_gpu.clone(), 0, 64)],
+                        Permission::LocalOnly,
+                    )
+                    .unwrap()
+                    .remove(0);
+                let peer = requester
+                    .open_segment(
+                        source.endpoint(),
+                        source.source_epoch(),
+                        Duration::from_secs(5),
+                    )
+                    .unwrap();
+                let report = requester
+                    .submit_and_wait(
+                        operation,
+                        &peer,
+                        &[TransferRequest {
+                            transport: Transport::Rdma,
+                            local_address: local.base_address() + 2,
+                            remote_address: remote.base_address() + 1,
+                            length: 8,
+                        }],
+                        Duration::from_secs(5),
+                    )
+                    .unwrap();
+                assert!(
+                    !report.is_complete(),
+                    "{source_fault}/{operation:?}: {report:?}"
+                );
+                assert_eq!(report.locally_drained, source_fault);
+                assert_eq!(
+                    (report.completed_requests, report.transferred_bytes),
+                    (0, 0)
+                );
+                assert_eq!(
+                    report.failure.unwrap().remote_effect,
+                    if operation == TransferOp::Write {
+                        crate::RemoteEffect::Unknown
+                    } else {
+                        crate::RemoteEffect::None
+                    }
+                );
+                assert!(a.streams.lock().unwrap().values().all(Option::is_none));
+                assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+                assert!(source_gpu.allocation.lock().unwrap().dma.is_empty());
+                assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
+                let bad = if source_fault { &source } else { &requester };
+                let stats = bad.stats().unwrap();
+                assert_eq!(stats.rdma.unwrap().retained_persistent_mrs, 1);
+                assert_eq!(stats.staging.retained_chunks, depth);
+                if source_fault {
+                    assert!(matches!(
+                        source.close_source(Duration::from_millis(10)),
+                        Err(Error::Timeout)
+                    ));
+                    requester.close(Duration::from_secs(5)).unwrap();
+                    assert_eq!(source.stats().unwrap().active_source_operations, 1);
+                    assert!(b.pins.lock().unwrap().is_empty());
+                } else {
+                    assert!(matches!(
+                        requester.close_requester(Duration::from_millis(10)),
+                        Err(Error::Timeout)
+                    ));
+                    source.close(Duration::from_secs(5)).unwrap();
+                    assert_eq!(requester.stats().unwrap().inflight_batches, 1);
+                    assert!(a.pins.lock().unwrap().is_empty());
+                }
+                assert_eq!(
+                    source.stats().unwrap().staging.remote_unpins,
+                    u64::from(!source_fault)
+                );
+                let mut observed = [0; 64];
+                let mut expected = [0xcc; 64];
+                if operation == TransferOp::Read {
+                    expected[2..10].fill(0x57);
+                }
+                local_gpu.read(0, &mut observed).unwrap();
+                assert_eq!(observed, expected);
+                let mut expected = [0x57; 64];
+                if operation == TransferOp::Write {
+                    expected[1..9].fill(0xcc);
+                }
+                source_gpu.read(0, &mut observed).unwrap();
+                assert_eq!(observed, expected);
+                drop(remote);
+                drop(local);
+                drop(source_gpu);
+                drop(local_gpu);
+                drop(source);
+                drop(requester);
+                assert!(
+                    weak_bad.upgrade().is_some(),
+                    "native MR failure retains the actual GPU backing through its admission owner"
+                );
+            }
         }
     }
 }
@@ -532,11 +605,13 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
 fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
     use std::io::{Read, copy};
     use std::net::{Shutdown, TcpListener, TcpStream};
-    for (operation, depth) in [
-        (TransferOp::Read, 1),
-        (TransferOp::Write, 1),
-        (TransferOp::Read, 2),
-        (TransferOp::Write, 2),
+    for (operation, depth, device_requester) in [
+        (TransferOp::Read, 1, false),
+        (TransferOp::Write, 1, false),
+        (TransferOp::Read, 2, false),
+        (TransferOp::Write, 2, false),
+        (TransferOp::Read, 3, true),
+        (TransferOp::Write, 3, true),
     ] {
         let source = super::staging_pipeline::engine(Transport::Tcp, depth);
         let requester = super::staging_pipeline::engine(Transport::Tcp, depth);
@@ -546,9 +621,17 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
             .register_cuda_memory_batch(&[(gpu.clone(), 0, 12)], Permission::RemoteReadWrite)
             .unwrap()
             .remove(0);
-        let local = requester
-            .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
-            .unwrap();
+        let b = allocation(&[0xcc; 10]);
+        let local = if device_requester {
+            requester
+                .register_cuda_memory_batch(&[(memory(&b), 0, 10)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0)
+        } else {
+            requester
+                .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
+                .unwrap()
+        };
         let mut peer = requester
             .open_segment(
                 source.endpoint(),
@@ -620,6 +703,11 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
                 RemoteEffect::None
             }
         );
+        if device_requester {
+            assert_eq!(b.event_waits.load(Ordering::Acquire), 3);
+            assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+            assert_eq!(requester.stats().unwrap().staging.completed_chunks, 3);
+        }
         let mut observed = [0; 10];
         local.read(0, &mut observed).unwrap();
         let mut expected = [0xcc; 10];
@@ -650,6 +738,7 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
         for engine in [&requester, &source] {
             engine.close(Duration::from_secs(2)).unwrap();
         }
+        assert!(b.pins.lock().unwrap().is_empty());
     }
 }
 
@@ -657,7 +746,8 @@ fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
 fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() {
     let make = || {
         TransferEngine::new(EngineConfig {
-            staging_chunk_count: 2,
+            staging_chunk_count: 6,
+            staging_pipeline_depth: 3,
             ..config()
         })
         .unwrap()
@@ -686,6 +776,7 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
     for owner in [&a_owner, &b_owner] {
         let (entered, waiting) = std::sync::mpsc::sync_channel(0);
         let (resume, blocked) = std::sync::mpsc::sync_channel(0);
+        // Stop source PRE completion while both range loans and rings coexist.
         *owner.event_gate.lock().unwrap() = Some((entered, blocked));
         gates.push((waiting, resume));
     }
@@ -715,6 +806,19 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
         let right = scope.spawn(|| run(&b, &b_peer, &b_memory, &a_memory));
         for (waiting, _) in &gates {
             waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        for owner in [&a_owner, &b_owner] {
+            assert_eq!(owner.pins.lock().unwrap().len(), 6);
+            assert_eq!(
+                owner
+                    .streams
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|v| v.is_some())
+                    .count(),
+                3
+            );
         }
         for gpu in [&a_gpu, &b_gpu] {
             let allocation = gpu

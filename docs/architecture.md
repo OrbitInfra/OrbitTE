@@ -275,7 +275,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
-| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, scoped remote operations, bounded requester slot/source pipeline, GPU range loans and CUDA copy/drain |
+| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
 
 `rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only
@@ -389,8 +389,13 @@ records an event after async copy work. OrbitTE reuses one stream/event
 per serialized public allocation copy and one per physical pool slot for
 remote source and requester staging. `StagingCopy` owns an exclusive GPU range
 loan and actual allocation reference while the allocation mutex is released
-between metadata updates; disjoint sessions can progress together. The slot retains both handles across sessions; close releases them
-before its pinned allocation. The separate NVLink transport shares the copy
+between metadata updates; disjoint sessions can progress together.
+`runtime/proxy_manager/stage_buffer_cache.rs::StageBufferCache` owns the requester ring's private registrations
+and drain. Each `PinnedStage` owns its accepted pending copy; completion is
+consumed once before the slot is reused or retired. Local WRITE slots release
+after CROSS and local READ slots after POST, matching TENT's separate local and
+remote stage ownership. The slot retains both handles across sessions; close
+releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation
 zeroing still synchronizes its context. Transport-level scheduling and caller

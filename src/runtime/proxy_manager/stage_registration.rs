@@ -118,6 +118,7 @@ impl Drop for StageRegistration {
 pub(super) struct PinnedStage {
     pub(super) registration: StageRegistration,
     lease: Arc<Mutex<StageBufferLease>>,
+    pending: Option<usize>,
 }
 
 impl PinnedStage {
@@ -136,17 +137,21 @@ impl PinnedStage {
         Ok(Self {
             registration: StageRegistration::new(host, source, transport)?,
             lease,
+            pending: None,
         })
     }
 
     pub(super) fn copy(
-        &self,
+        &mut self,
         copy: &mut StagingCopy,
         offset: usize,
         length: usize,
         to_device: bool,
         pipeline: bool,
     ) -> Result<()> {
+        if self.pending.is_some() {
+            return Err(Error::Internal("staging chunk still pending"));
+        }
         copy.check_access()?;
         let result = self.registration.host.with_staging_access(length, || {
             let mut lease = self
@@ -159,20 +164,34 @@ impl PinnedStage {
                 copy.copy(&mut lease, offset, length, to_device)
             }
         });
+        if result.is_ok() && pipeline {
+            self.pending = Some(length);
+        }
         copy.publish_failure();
         result
     }
 
-    pub(super) fn complete(&self, copy: &mut StagingCopy, length: usize) -> Result<()> {
+    pub(super) fn complete(&mut self, copy: &mut StagingCopy) -> Result<bool> {
+        let Some(length) = self.pending.take() else {
+            return Ok(false);
+        };
         let result = copy.complete(
             &mut self.lease.lock().unwrap_or_else(|p| p.into_inner()),
             length,
         );
         copy.publish_failure();
-        result
+        result.map(|()| true)
     }
 
     pub(super) fn finish(mut self, result: Result<()>) -> Result<()> {
+        let result = if self.pending.is_some() {
+            Err(Error::Unquiesced {
+                operation: "staging copy still pending",
+                code: -1,
+            })
+        } else {
+            result
+        };
         let result = self.registration.finish(result);
         if matches!(result, Err(Error::Unquiesced { .. })) {
             self.lease

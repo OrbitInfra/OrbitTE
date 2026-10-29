@@ -29,9 +29,48 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Requester CUDA pipeline
+
+The current wire-v19 implementation adds an independent bounded requester ring
+to the accepted source pipeline. CUDA WRITE prequeues local PREs; READ can keep
+POSTs pending until local slot reuse. Every final local POST drains before
+Unpin. The request-local `StageBufferCache` retains private registrations, and
+`PinnedStage` owns each accepted copy and one-time completion. Width and budget
+formulas are in [the staging contract](staging.md#bounded-remote-pipeline).
+
+Source controls cover unequal local/remote widths, multiple ring turns and tails,
+pending copies during CROSS, opposite-direction sessions, shared-pool exhaustion,
+first/middle/final native wait failures, deadline expiry during final POST and
+lost Unpin. Refill submit/record failures drain accepted siblings while preserving
+partial READ bytes and WRITE uncertainty. Context restoration and private MR
+retirement failures retain actual owners and admissions after ordinary references
+drop; MR controls cover both sides, directions and depths one and three.
+
+Independent review accepts the source contract at
+[`c87c403`](https://github.com/OrbitInfra/OrbitTE/commit/c87c403fd021872c3bd68fde55078bd6bdead9bb),
+whose production and installed-consumer inputs are unchanged from `027efad`.
+Stable and Rust 1.85 combined runs each pass 299 unit tests, eight integration
+tests and one doctest; all-target Clippy, 50 hardware-controller controls and
+strict documentation checks pass. The reviewer independently repeats the
+applicable feature gates and the integrated failure controls. The existing IPC
+timeout control now waits for actual server closure instead of a fixed sleep.
+
+Evidence stays outside Git at
+`/root/orbitte-artifacts/requester-pipeline-20261029/`.
+`independent-review/source-review-c87c403.json` binds the frozen source, original
+and incremental review gates, and additional failure controls. This accepts the
+source substage; it does not close P5.5b.
+
+Hardware execution is deferred at the user's direction; no new task is requested.
+The controller and consumer now account for each ring's own width, private MRs,
+persistent stream/events and physical pinned bytes. Neither these CPU controls
+nor earlier v18 hardware runs qualify the current artifact or demonstrate
+physical overlap or throughput. Full asynchronous CROSS/remote scheduling and
+location selection remain open.
+
 ## Bounded requester CUDA staging
 
-The current v19 implementation replaces the full-request requester payload with
+The prior v19 substage replaces the full-request requester payload with
 one reusable private slot. Pin negotiates the minimum chunk size; actual pinned
 budgets remain per-engine physical sizes. CUDA range loans permit disjoint
 sessions and reject overlap; completed READ chunks remain visible on later
@@ -57,8 +96,9 @@ sizes, short tails and source widths up to 16.
 Installed v19 qualification remains pending. Earlier v18 pipeline evidence below
 remains bound to its original artifact. The new healthy profile must verify exact
 requester slot/MR reuse, matching copy/event generations, physical budgets, both
-directions, byte guards and cleanup on fresh nodes. Multiple asynchronous
-requester slots, broader location scheduling and performance remain open.
+directions, byte guards and cleanup on fresh nodes. The requester ring above
+supersedes this one-slot implementation; neither substage has installed v19
+hardware qualification. Broader location scheduling and performance remain open.
 
 ## Bounded remote CUDA pipeline
 

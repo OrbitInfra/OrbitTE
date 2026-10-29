@@ -17,14 +17,16 @@ pub struct EngineConfig {
     #[cfg(feature = "cuda")]
     pub nvlink_cache_entries: usize,
     /// Per-engine lazy CUDA-pinned staging. Local copies check out one chunk;
-    /// remote pipelines check out their negotiated width. Idle chunks are reused
+    /// remote sessions reserve independent source and requester rings. Idle chunks are reused
     /// until engine close. Total capacity is at most 1 GiB.
     #[cfg(feature = "cuda")]
     pub staging_chunk_size: usize,
     #[cfg(feature = "cuda")]
     pub staging_chunk_count: usize,
-    /// Maximum remote staging slots per session (1..=16), bounded by the pool.
-    /// One preserves serial copies; larger values overlap remote CUDA and CROSS.
+    /// Maximum staging slots per session and side (1..=16), bounded by the pool.
+    /// The source negotiates its width. CUDA requesters reserve up to this cap
+    /// before Pin, shortened by the request's local physical-chunk count.
+    /// One preserves serial copies; larger values overlap CUDA work and CROSS.
     #[cfg(feature = "cuda")]
     pub staging_pipeline_depth: usize,
     /// Opt-in Pin/Delegate/Unpin sessions for remote CUDA ranges.
