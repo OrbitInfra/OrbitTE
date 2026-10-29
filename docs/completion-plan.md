@@ -568,8 +568,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   300 CROSS operations with safe MW index rollover. Four fresh independent
   repeats and their cleanup audit pass; source and this healthy profile are
   accepted. Requester one-slot staging, negotiated chunk sizes and exclusive GPU
-  range loans are implemented; v19 installed qualification and review are pending.
-  Next complete broader asynchronous local/remote scheduling before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  range loans are implemented; independent source review accepts `460d825` with
+  stable/MSRV gates and clean package provenance. Its v19 installed profile
+  remains unqualified. Next complete that frozen gate and broader asynchronous
+  local/remote scheduling before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -840,8 +842,9 @@ at `c0f6a9e`, with native per-slot stream/event lifetime evidence and 300-CROSS
 MW index rollover. Four fresh independent repeats and cleanup audits pass;
 source and this healthy profile are accepted. Requester bounded staging is now
 implemented with one reusable slot, negotiated chunk sizes, GPU range loans and
-chunk-visible READ failure semantics. Complete its v19 installed qualification
-and independent review before broader asynchronous remote scheduling. Full
+chunk-visible READ failure semantics. Independent source review accepts
+`460d825`; installed v19 qualification remains open. Complete its frozen healthy
+profile before accepting broader asynchronous remote scheduling. Full
 ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

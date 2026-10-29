@@ -38,10 +38,27 @@ sessions and reject overlap; completed READ chunks remain visible on later
 failure. Source controls cover asymmetric chunks/tails, simultaneous opposite
 directions, shared-pool exhaustion, IPC/RDMA interlocks and sticky native failure.
 
-Installed v19 qualification and independent review are pending. Earlier v18
-pipeline evidence below remains bound to its original artifact. The new healthy
-profile must verify exact requester slot/MR reuse, matching copy/event generations,
-physical budgets, both directions, byte guards and cleanup on fresh nodes.
+Independent review accepts the source contract at
+[`460d825`](https://github.com/OrbitInfra/OrbitTE/commit/460d825d6438fc70883e7acd61a83d099406b3e7),
+whose production and installed-consumer inputs are unchanged from `fc183ab`.
+Stable and Rust 1.85 combined runs each pass 294 unit tests, eight integration
+tests and one doctest. Targeted Clippy, wire-v19 relay, all 50 hardware-controller
+controls and strict documentation checks pass. The reviewer independently
+repeats the applicable gates and verifies both clean installed packages.
+This accepts source and package provenance, not installed execution.
+
+Evidence remains outside Git at
+`/root/orbitte-artifacts/proxy-requester-20261029/`.
+`independent-review/source-review-460d825.json` binds the source gates, review and
+installed manifests. `frozen-cases.json` defines 12 healthy cases per compiler:
+TCP/RDMA, CPU/GPU requesters, both host directions, asymmetric physical chunk
+sizes, short tails and source widths up to 16.
+
+Installed v19 qualification remains pending. Earlier v18 pipeline evidence below
+remains bound to its original artifact. The new healthy profile must verify exact
+requester slot/MR reuse, matching copy/event generations, physical budgets, both
+directions, byte guards and cleanup on fresh nodes. Multiple asynchronous
+requester slots, broader location scheduling and performance remain open.
 
 ## Bounded remote CUDA pipeline
 
