@@ -588,8 +588,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [the shared-shard evidence](qualification.md#shared-staging-worker-shards).
   Requester chunk progress now queries CUDA events and advances PRE/CROSS/POST
   per slot without a window barrier. NOT_READY retains the same generation;
-  errors quarantine uncertain owners and drain accepted siblings. Source review
-  of this new boundary is pending. Qualify the current v19 artifact and complete
+  errors quarantine uncertain owners and drain accepted siblings. Independent
+  source review accepts this boundary at `1ac1d01`; see
+  [the event-loop evidence](qualification.md#requester-chunk-event-loop).
+  Qualify the current v19 artifact and complete
   concurrent CROSS on the wire and location selection
   before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -873,10 +875,10 @@ receipt fencing are source-accepted at `4441017`, including native uncertainty
 and worker-panic ownership controls. Shared ProxyManager shards are now implemented
 with lazy bounded admission, pre-Pin queue cancellation, task-terminal ownership
 and explicit thread close. Independent source review accepts `3db26ee` for
-this source/CPU ownership scope. Nonblocking requester chunk progress is now
-implemented with per-slot event queries and immediate refill; independent source
-review is pending. The next implementation boundary is concurrent CROSS and
-remote-operation progress, followed by location selection. Full ProxyManager parity remains open.
+this source/CPU ownership scope. Nonblocking requester chunk progress with
+per-slot event queries and immediate refill is source-accepted at `1ac1d01`.
+The next implementation boundary is concurrent CROSS and remote-operation
+progress, followed by location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

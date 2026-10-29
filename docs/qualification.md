@@ -50,12 +50,23 @@ source/error-drain event-synchronize failure controls remain in the suite.
 
 Evidence is outside Git at
 `/root/orbitte-artifacts/staging-chunk-progress-20261029/`.
-`old-window-control.json` binds the expected negative result; targeted requester
-and query controls pass. The native observer forwards query entry/return codes;
+`old-window-final.json` binds the final source and expected negative result
+from a fresh build with only the requester window loop restored to its old form.
+The native observer forwards query entry/return codes;
 its ledger preserves NOT_READY generations and rejects stale, repeated, foreign
 or prematurely released completion owners. Slot submissions may reorder within
 an exact payload phase; private setup/readback and actual generation ownership
-remain strict. Full source gates and independent review are pending.
+remain strict.
+
+Stable and Rust 1.85 combined runs each pass 311 unit tests, eight integration
+tests and one doctest. CUDA-only tests/Clippy, combined Clippy, all 51 controller
+controls, the CPU trace fixture and strict documentation checks pass;
+`gates.json` binds these 11 gates to `1ac1d01`. Independent source review accepts
+that commit for the source/CPU ownership scope. Fresh independent build trees
+pass stable/MSRV tests and Clippy for both CUDA and RDMA+CUDA;
+`independent-review/` records the frozen source, diff, gate logs and review.
+Earlier failed assertions, the sampling-race control and a stale reviewer build
+attempt are preserved and excluded from the accepted results.
 
 No new hardware task is requested. Current installed v19 execution, physical
 overlap and performance remain unqualified. Concurrent CROSS, general remote
