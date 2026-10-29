@@ -29,6 +29,20 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Bounded requester CUDA staging
+
+The current v19 implementation replaces the full-request requester payload with
+one reusable private slot. Pin negotiates the minimum chunk size; actual pinned
+budgets remain per-engine physical sizes. CUDA range loans permit disjoint
+sessions and reject overlap; completed READ chunks remain visible on later
+failure. Source controls cover asymmetric chunks/tails, simultaneous opposite
+directions, shared-pool exhaustion, IPC/RDMA interlocks and sticky native failure.
+
+Installed v19 qualification and independent review are pending. Earlier v18
+pipeline evidence below remains bound to its original artifact. The new healthy
+profile must verify exact requester slot/MR reuse, matching copy/event generations,
+physical budgets, both directions, byte guards and cleanup on fresh nodes.
+
 ## Bounded remote CUDA pipeline
 
 Clean stable 1.99.1 and Rust 1.85.0 installed consumers from

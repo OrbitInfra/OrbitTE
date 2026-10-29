@@ -65,8 +65,8 @@ pub(super) struct PendingCopy {
     length: usize,
 }
 
-// SAFETY: device bytes are accessed exclusively via one CudaMemory lock; pinned
-// buffers are private to each copy and the map serializes allocation/deallocation.
+// SAFETY: CudaMemory access locks and exclusive range loans exclude conflicting
+// device-byte access. Pinned buffers are private; maps serialize their lifecycle.
 unsafe impl Send for Device {}
 unsafe impl Sync for Device {}
 thread_local! { pub(super) static STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }

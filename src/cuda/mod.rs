@@ -440,7 +440,7 @@ impl CudaMemory {
                 source.is_some(),
             )
         };
-        allocation.uncertain = !stream.quiescent();
+        allocation.uncertain |= !stream.quiescent();
         if allocation.uncertain || context.poisoned.load(Ordering::Acquire) {
             RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(staging);

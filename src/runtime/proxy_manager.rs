@@ -1,6 +1,7 @@
 //! Shared staging chunks and remote operations, independent of payload transports.
 
 mod remote_stage_operation;
+mod requester_task;
 mod stage_registration;
 mod staging_task;
 

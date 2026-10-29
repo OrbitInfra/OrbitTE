@@ -1,20 +1,19 @@
 //! Source-side bounded PRE/CROSS/POST tasks and their private chunk owners.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::remote_stage_operation::{RemoteStageOperation, read_request};
-use super::stage_registration::StageRegistration;
+use super::stage_registration::PinnedStage;
 use super::{ProxyManager, StageBufferLease};
 use crate::cuda::StagingCopy;
 use crate::engine::Source;
 use crate::memory::Allocation;
 use crate::runtime::control_plane::{ControlChannel, Operation, Request};
 use crate::transport::tcp::TcpTransport;
-use crate::{Error, HostMemory, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport};
+use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport};
 
 struct Chunk {
-    stage: StageRegistration,
-    lease: Arc<Mutex<StageBufferLease>>,
+    stage: PinnedStage,
     pending: Option<usize>,
     to_device: bool,
     pipeline: bool,
@@ -28,16 +27,8 @@ impl Chunk {
         operation: TransferOp,
         pipeline: bool,
     ) -> Result<Self> {
-        let length = lease.buffer()?.length;
-        let address = lease.buffer()?.address;
-        let lease = Arc::new(Mutex::new(lease));
-        // SAFETY: the actual pinned lease backs this private registration. The
-        // task drains CUDA before CROSS or reuse; transport loans use HostMemory.
-        #[allow(unsafe_code)]
-        let host = Arc::new(unsafe { HostMemory::from_raw_parts(address, length, lease.clone())? });
         Ok(Self {
-            stage: StageRegistration::new(host, source, transport)?,
-            lease,
+            stage: PinnedStage::new(lease, source, transport)?,
             pending: None,
             to_device: operation == TransferOp::Write,
             pipeline,
@@ -46,7 +37,7 @@ impl Chunk {
 
     fn delegate(
         &mut self,
-        copy: &mut StagingCopy<'_>,
+        copy: &mut StagingCopy,
         channel: &mut ControlChannel<'_>,
         remote: &RemoteStageOperation,
         manager: &ProxyManager,
@@ -57,17 +48,8 @@ impl Chunk {
         if self.pending.is_some() {
             return Err(Error::Internal("staging chunk still pending"));
         }
-        self.stage.host.with_staging_access(length, || {
-            let mut lease = self
-                .lease
-                .lock()
-                .map_err(|_| Error::Internal("staging lease lock poisoned"))?;
-            if self.pipeline {
-                copy.begin(&mut lease, offset, length, self.to_device)
-            } else {
-                copy.copy(&mut lease, offset, length, self.to_device)
-            }
-        })?;
+        self.stage
+            .copy(copy, offset, length, self.to_device, self.pipeline)?;
         if self.pipeline {
             self.pending = Some(length);
         } else {
@@ -78,38 +60,16 @@ impl Chunk {
         remote.respond(channel, Operation::Delegate, offset, length)
     }
 
-    fn drain(&mut self, copy: &mut StagingCopy<'_>, manager: &ProxyManager) -> Result<()> {
+    fn drain(&mut self, copy: &mut StagingCopy, manager: &ProxyManager) -> Result<()> {
         if let Some(length) = self.pending.take() {
-            let mut lease = self.lease.lock().unwrap_or_else(|p| p.into_inner());
-            copy.complete(&mut lease, length)?;
+            self.stage.complete(copy, length)?;
             manager.completed_remote(Operation::Delegate);
         }
         Ok(())
     }
 
-    fn finish(mut self, result: Result<()>) -> Result<()> {
-        let result = self.stage.finish(result);
-        if matches!(result, Err(Error::Unquiesced { .. })) {
-            self.lease
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .quarantine();
-            return result;
-        }
-        drop(self.stage);
-        let lease = Arc::try_unwrap(self.lease).map_err(|lease| {
-            lease.lock().unwrap_or_else(|p| p.into_inner()).quarantine();
-            std::mem::forget(lease);
-            Error::Unquiesced {
-                operation: "pinned stage still borrowed",
-                code: -1,
-            }
-        })?;
-        lease
-            .into_inner()
-            .unwrap_or_else(|p| p.into_inner())
-            .release()
-            .and(result)
+    fn finish(self, result: Result<()>) -> Result<()> {
+        self.stage.finish(result)
     }
 }
 
@@ -147,7 +107,7 @@ impl ProxyManager {
         if !source.remote_staging {
             return Err(Error::Unavailable("remote staging is not enabled"));
         }
-        let mut hello = [0; 2];
+        let mut hello = [0; 10];
         channel.read_exact(&mut hello)?;
         let transport = match hello[0] {
             0 => Transport::Tcp,
@@ -173,7 +133,12 @@ impl ProxyManager {
         if !(1..=16).contains(&hello[1]) {
             return Err(Error::Protocol("Pin pipeline depth"));
         }
-        let length = self.chunk_size;
+        let cap = usize::try_from(crate::runtime::control_plane::u64_at(&hello, 2))
+            .map_err(|_| Error::Protocol("Pin chunk cap"))?;
+        if cap == 0 || cap > 64 << 20 {
+            return Err(Error::Protocol("Pin chunk cap"));
+        }
+        let length = self.chunk_size.min(cap);
         let total = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
         let depth = (hello[1] as usize)
             .min(source.staging_pipeline_depth)
@@ -249,7 +214,7 @@ impl ProxyManager {
                             channel,
                             source.epoch,
                             &cross,
-                            chunk.stage.memory()?,
+                            chunk.stage.registration.memory()?,
                             0,
                             count,
                             self,
@@ -260,7 +225,12 @@ impl ProxyManager {
                                 .rdma
                                 .as_ref()
                                 .ok_or(Error::Unavailable("RDMA is not configured"))?
-                                .serve(channel, source.epoch, &cross, chunk.stage.memory()?)?;
+                                .serve(
+                                    channel,
+                                    source.epoch,
+                                    &cross,
+                                    chunk.stage.registration.memory()?,
+                                )?;
                         }
                         _ => return Err(Error::Protocol("Pin transport")),
                     }

@@ -13,6 +13,7 @@ mod ipc_host;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod remote_staging;
+mod requester_staging;
 mod shim;
 mod staging;
 mod staging_pipeline;

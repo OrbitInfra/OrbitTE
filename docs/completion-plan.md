@@ -567,8 +567,9 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   stable/MSRV consumers at `c0f6a9e` pass 24 fresh H20 TCP/RDMA cases, including
   300 CROSS operations with safe MW index rollover. Four fresh independent
   repeats and their cleanup audit pass; source and this healthy profile are
-  accepted. Next complete requester-side bounded staging, then broader remote
-  scheduling before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  accepted. Requester one-slot staging, negotiated chunk sizes and exclusive GPU
+  range loans are implemented; v19 installed qualification and review are pending.
+  Next complete broader asynchronous local/remote scheduling before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -837,10 +838,11 @@ plus four fresh independent repeats; source and this bounded healthy profile
 are accepted. The bounded remote pipeline now passes 24 fresh installed cases
 at `c0f6a9e`, with native per-slot stream/event lifetime evidence and 300-CROSS
 MW index rollover. Four fresh independent repeats and cleanup audits pass;
-source and this healthy profile are accepted. Next implement
-requester-side bounded staging, then broader asynchronous remote scheduling.
-The current requester still owns a full-request snapshot/commit payload; this
-must remain explicit until its replacement has its own failure and lifetime gates.
+source and this healthy profile are accepted. Requester bounded staging is now
+implemented with one reusable slot, negotiated chunk sizes, GPU range loans and
+chunk-visible READ failure semantics. Complete its v19 installed qualification
+and independent review before broader asynchronous remote scheduling. Full
+ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

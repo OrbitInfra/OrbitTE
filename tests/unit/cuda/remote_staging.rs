@@ -168,6 +168,7 @@ fn pin(
         )
         .unwrap();
     channel.write_all(&[0, 1]).unwrap();
+    channel.write_all(&3u64.to_be_bytes()).unwrap();
     let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
     assert_eq!((reply.status, reply.length), (0, 3));
     let mut nonce = [0; 16];
@@ -361,61 +362,97 @@ fn remote_cuda_failures_keep_confirmed_drain_separate_from_success() {
 }
 
 #[test]
-fn self_peer_gpu_roundtrip_and_busy_pin_are_bounded() {
-    let engine = engine(Transport::Tcp);
-    let a = allocation(&[0x57; 24]);
-    let gpu = memory(&a);
-    let memory = engine
-        .register_cuda_memory_batch(&[(gpu.clone(), 0, 24)], Permission::RemoteReadWrite)
-        .unwrap()
-        .remove(0);
-    let peer = engine
-        .open_segment(
-            engine.endpoint(),
-            engine.source_epoch(),
-            Duration::from_secs(2),
-        )
+fn self_peer_gpu_ranges_require_two_slots_and_reject_overlap_before_copy() {
+    for capacity in [1, 2] {
+        let engine = TransferEngine::new(EngineConfig {
+            staging_chunk_count: capacity,
+            ..config()
+        })
         .unwrap();
-    let request = TransferRequest {
-        transport: Transport::Tcp,
-        local_address: memory.base_address() + 12,
-        remote_address: memory.base_address(),
-        length: 8,
-    };
-    for operation in [TransferOp::Read, TransferOp::Write] {
-        let report = engine
-            .submit_and_wait(
-                operation,
-                &peer,
-                std::slice::from_ref(&request),
+        let original: [u8; 24] = std::array::from_fn(|i| i as u8 + 1);
+        let a = allocation(&original);
+        let gpu = memory(&a);
+        let memory = engine
+            .register_cuda_memory_batch(&[(gpu.clone(), 0, 24)], Permission::RemoteReadWrite)
+            .unwrap()
+            .remove(0);
+        let peer = engine
+            .open_segment(
+                engine.endpoint(),
+                engine.source_epoch(),
                 Duration::from_secs(2),
             )
             .unwrap();
-        assert!(report.is_complete(), "{report:?}");
-    }
-    let guard = gpu.allocation.lock().unwrap();
-    let mut channel =
-        ControlChannel::connect(engine.endpoint(), Instant::now() + Duration::from_secs(2))
-            .unwrap();
-    channel
-        .write_all(
-            &Request {
-                operation: Operation::PinRead,
-                epoch: engine.source_epoch(),
-                region: memory.id(),
-                offset: 0,
-                length: 8,
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            for overlap in [true, false] {
+                memory.write(0, &original).unwrap();
+                let report = engine
+                    .submit_and_wait(
+                        operation,
+                        &peer,
+                        &[TransferRequest {
+                            transport: Transport::Tcp,
+                            local_address: memory.base_address() + if overlap { 4 } else { 12 },
+                            remote_address: memory.base_address(),
+                            length: 8,
+                        }],
+                        Duration::from_secs(2),
+                    )
+                    .unwrap();
+                let mut expected = original;
+                if overlap || capacity == 1 {
+                    assert!(
+                        report.locally_drained && !report.is_complete(),
+                        "{report:?}"
+                    );
+                    let failure = report.failure.unwrap();
+                    assert!(
+                        matches!(failure.error, Error::Unavailable(_)) && overlap
+                            || matches!(failure.error, Error::ResourceExhausted) && !overlap,
+                        "{failure:?}"
+                    );
+                    assert_eq!(failure.remote_effect, RemoteEffect::None);
+                } else {
+                    assert!(report.is_complete() && report.locally_drained, "{report:?}");
+                    if operation == TransferOp::Read {
+                        expected[12..20].copy_from_slice(&original[..8]);
+                    } else {
+                        expected[..8].copy_from_slice(&original[12..20]);
+                    }
+                }
+                let mut bytes = [0; 24];
+                memory.read(0, &mut bytes).unwrap();
+                assert_eq!(bytes, expected);
+                assert!(gpu.allocation.lock().unwrap().dma.is_empty());
+                assert_eq!(engine.stats().unwrap().staging.active_chunks, 0);
             }
-            .encode(),
-        )
-        .unwrap();
-    channel.write_all(&[0, 1]).unwrap();
-    assert!(matches!(
-        Reply::read(&mut channel, engine.source_epoch()),
-        Err(Error::ResourceExhausted)
-    ));
-    drop(guard);
-    engine.close(Duration::from_secs(2)).unwrap();
+        }
+        let guard = gpu.allocation.lock().unwrap();
+        let mut channel =
+            ControlChannel::connect(engine.endpoint(), Instant::now() + Duration::from_secs(2))
+                .unwrap();
+        channel
+            .write_all(
+                &Request {
+                    operation: Operation::PinRead,
+                    epoch: engine.source_epoch(),
+                    region: memory.id(),
+                    offset: 0,
+                    length: 8,
+                }
+                .encode(),
+            )
+            .unwrap();
+        channel.write_all(&[0, 1]).unwrap();
+        channel.write_all(&3u64.to_be_bytes()).unwrap();
+        assert!(matches!(
+            Reply::read(&mut channel, engine.source_epoch()),
+            Err(Error::ResourceExhausted)
+        ));
+        drop(guard);
+        engine.close(Duration::from_secs(2)).unwrap();
+        assert!(a.pins.lock().unwrap().is_empty());
+    }
 }
 
 #[cfg(feature = "rdma")]
@@ -492,7 +529,7 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
 }
 
 #[test]
-fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
+fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
     use std::io::{Read, copy};
     use std::net::{Shutdown, TcpListener, TcpStream};
     for (operation, depth) in [
@@ -510,7 +547,7 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
             .unwrap()
             .remove(0);
         let local = requester
-            .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
+            .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
             .unwrap();
         let mut peer = requester
             .open_segment(
@@ -559,7 +596,7 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
                 &peer,
                 &[TransferRequest {
                     transport: Transport::Tcp,
-                    local_address: local.base_address(),
+                    local_address: local.base_address() + 1,
                     remote_address: remote.base_address() + 1,
                     length: 8,
                 }],
@@ -572,6 +609,10 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
             "{report:?}"
         );
         assert_eq!(
+            (report.completed_requests, report.transferred_bytes),
+            (0, 0)
+        );
+        assert_eq!(
             report.failure.unwrap().remote_effect,
             if operation == TransferOp::Write {
                 RemoteEffect::Unknown
@@ -579,9 +620,14 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
                 RemoteEffect::None
             }
         );
+        let mut observed = [0; 10];
+        local.read(0, &mut observed).unwrap();
+        let mut expected = [0xcc; 10];
+        if operation == TransferOp::Read {
+            expected[1..9].fill(0x57);
+        }
+        assert_eq!(observed, expected);
         let mut bytes = [0; 8];
-        local.read(0, &mut bytes).unwrap();
-        assert_eq!(bytes, [0xcc; 8]);
         let stats = source.stats().unwrap().staging;
         assert_eq!(
             (
@@ -608,19 +654,26 @@ fn lost_unpin_receipt_cannot_commit_read_or_report_write_success() {
 }
 
 #[test]
-fn opposite_direction_sessions_release_remote_before_local_gpu_commit() {
-    let a = engine(Transport::Tcp);
-    let b = engine(Transport::Tcp);
+fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() {
+    let make = || {
+        TransferEngine::new(EngineConfig {
+            staging_chunk_count: 2,
+            ..config()
+        })
+        .unwrap()
+    };
+    let a = make();
+    let b = make();
     let a_owner = allocation(&[0x31; 24]);
     let b_owner = allocation(&[0x42; 24]);
     let a_gpu = memory(&a_owner);
     let b_gpu = memory(&b_owner);
     let a_memory = a
-        .register_cuda_memory_batch(&[(a_gpu, 0, 24)], Permission::RemoteReadWrite)
+        .register_cuda_memory_batch(&[(a_gpu.clone(), 0, 24)], Permission::RemoteReadWrite)
         .unwrap()
         .remove(0);
     let b_memory = b
-        .register_cuda_memory_batch(&[(b_gpu, 0, 24)], Permission::RemoteReadWrite)
+        .register_cuda_memory_batch(&[(b_gpu.clone(), 0, 24)], Permission::RemoteReadWrite)
         .unwrap()
         .remove(0);
     let a_peer = a
@@ -629,6 +682,13 @@ fn opposite_direction_sessions_release_remote_before_local_gpu_commit() {
     let b_peer = b
         .open_segment(a.endpoint(), a.source_epoch(), Duration::from_secs(2))
         .unwrap();
+    let mut gates = Vec::new();
+    for owner in [&a_owner, &b_owner] {
+        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
+        let (resume, blocked) = std::sync::mpsc::sync_channel(0);
+        *owner.event_gate.lock().unwrap() = Some((entered, blocked));
+        gates.push((waiting, resume));
+    }
     std::thread::scope(|scope| {
         fn run(
             engine: &TransferEngine,
@@ -653,6 +713,21 @@ fn opposite_direction_sessions_release_remote_before_local_gpu_commit() {
         }
         let left = scope.spawn(|| run(&a, &a_peer, &a_memory, &b_memory));
         let right = scope.spawn(|| run(&b, &b_peer, &b_memory, &a_memory));
+        for (waiting, _) in &gates {
+            waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        for gpu in [&a_gpu, &b_gpu] {
+            let allocation = gpu
+                .allocation
+                .try_lock()
+                .expect("no GPU lock across pending copies/network");
+            assert!(!allocation.uncertain);
+            assert_eq!(allocation.dma.len(), 2);
+            assert!(allocation.dma.contains(&(0..8)) && allocation.dma.contains(&(12..20)));
+        }
+        for (_, resume) in gates {
+            resume.send(()).unwrap();
+        }
         left.join().unwrap();
         right.join().unwrap();
     });
@@ -712,6 +787,7 @@ fn pin_rejects_non_cuda_opt_out_and_source_permission_before_allocation() {
             )
             .unwrap();
         channel.write_all(&[0, 1]).unwrap();
+        channel.write_all(&3u64.to_be_bytes()).unwrap();
         let error = match Reply::read(&mut channel, source.source_epoch()) {
             Err(error) => error,
             Ok(_) => panic!("unexpected Pin grant: {scenario}"),

@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v18 messages; moving them into their own module does not make this
+OrbitTE v19 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,7 +121,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v18 handshake can attach independent grants to a
+QP creation lock. The public v19 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
@@ -275,7 +275,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
-| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, scoped remote operations, bounded source pipeline and CUDA copy/drain |
+| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, scoped remote operations, bounded requester slot/source pipeline, GPU range loans and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
 
 `rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only
@@ -386,8 +386,10 @@ This follows the frozen TENT
 pattern of lazy nonblocking streams and owning handles, and
 [NVLinkTransport](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
 records an event after async copy work. OrbitTE reuses one stream/event
-per serialized allocation and one per physical pool slot for bounded remote
-pipelines. The slot retains both handles across sessions; close releases them
+per serialized public allocation copy and one per physical pool slot for
+remote source and requester staging. `StagingCopy` owns an exclusive GPU range
+loan and actual allocation reference while the allocation mutex is released
+between metadata updates; disjoint sessions can progress together. The slot retains both handles across sessions; close releases them
 before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

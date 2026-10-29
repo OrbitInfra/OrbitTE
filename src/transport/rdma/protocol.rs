@@ -1,4 +1,4 @@
-//! OrbitTE v18 rendezvous and exact-grant receipts carried by the control service.
+//! OrbitTE v19 rendezvous and exact-grant receipts carried by the control service.
 //! These messages are distinct from TENT's native metadata and wire formats.
 
 use super::DESCRIPTOR_SIZE;
