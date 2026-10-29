@@ -575,9 +575,13 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   `c87c403`, including recovered submit/record errors, native context uncertainty
   and multi-slot MR failure retention. New hardware requests are paused at the
   user's direction: continue source implementation with hardware gates explicitly
-  deferred. Qualify the
-  current v19 artifact and complete asynchronous CROSS/remote scheduling and
-  location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  deferred. Bounded CROSS command/completion queues and one joined session
+  worker now separate local CUDA progress from network/Delegate waits, with
+  explicit cancellation of queued commands and final remote receipt fencing.
+  Independent source review accepts `4441017`; worker panic controls retain
+  actual owners and admission without falsely reporting local drain.
+  Qualify the current v19 artifact and complete shared shard/event-loop progress,
+  concurrent CROSS on the wire and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -853,9 +857,12 @@ and final drain before Unpin are source-accepted at `c87c403`, with recovered
 submission and uncertain CUDA/MR cleanup controls. Installed v19 qualification
 remains open. At the user's direction, continue source work without requesting
 new hardware tasks; qualify the current artifact on fresh nodes when hardware
-work resumes. The next implementation boundary is asynchronous CROSS and
-remote-operation scheduling, followed by location selection. Full ProxyManager
-parity remains open.
+work resumes. Bounded CROSS windows and a session worker now decouple local CUDA
+progress from CROSS/Delegate waits; queue cancellation, native drain and final
+receipt fencing are source-accepted at `4441017`, including native uncertainty
+and worker-panic ownership controls. The next implementation boundary is shared
+ProxyManager shards and nonblocking chunk progress, followed by concurrent CROSS
+scheduling and location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

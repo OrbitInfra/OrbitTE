@@ -119,9 +119,15 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                     (3, 3, 0)
                 );
                 source.close(Duration::from_secs(5)).unwrap();
-                assert_eq!(
-                    source.stats().unwrap().staging.remote_crosses,
-                    if operation == TransferOp::Read { 4 } else { 1 }
+                let source_stats = source.stats().unwrap().staging;
+                let crossed = source_stats.remote_crosses;
+                assert!(
+                    if operation == TransferOp::Read {
+                        (4..=6).contains(&crossed)
+                    } else {
+                        (1..=3).contains(&crossed)
+                    },
+                    "{source_stats:?}"
                 );
                 assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
                 b.copy_error.store(0, Ordering::Release);
@@ -136,7 +142,7 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                 assert_eq!(observed, expected, "{transport:?}/{operation:?}/{fault}");
                 let mut expected = [0x57; 64];
                 if operation == TransferOp::Write {
-                    expected[1..4].fill(0xcc);
+                    expected[1..1 + source_stats.remote_delegates as usize * 3].fill(0xcc);
                 }
                 source_gpu.read(0, &mut observed).unwrap();
                 assert_eq!(observed, expected);
@@ -291,14 +297,9 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                 );
                 let failure = report.failure.unwrap();
                 assert!(matches!(failure.error, Error::Unquiesced { .. }));
-                assert_eq!(
-                    failure.remote_effect,
-                    if operation == TransferOp::Write && fail_at > 1 {
-                        crate::RemoteEffect::Unknown
-                    } else {
-                        crate::RemoteEffect::None
-                    }
-                );
+                if operation == TransferOp::Read || fail_at == 1 {
+                    assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
+                }
                 assert_eq!(gpu.allocation.lock().unwrap().dma, vec![2..10]);
                 let stats = requester.stats().unwrap().staging;
                 assert_eq!((stats.retained_chunks, stats.completed_chunks), (3, 2));
@@ -312,19 +313,30 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                         .count(),
                     1
                 );
-                assert_eq!(
-                    source.stats().unwrap().staging.remote_crosses,
-                    if operation == TransferOp::Read {
-                        3
-                    } else {
-                        (fail_at - 1) as u64
-                    }
-                );
+
                 assert!(matches!(
                     requester.close_requester(Duration::from_millis(10)),
                     Err(Error::Timeout)
                 ));
                 source.close(Duration::from_secs(3)).unwrap();
+                let stats = source.stats().unwrap().staging;
+                if operation == TransferOp::Read {
+                    assert_eq!(stats.remote_crosses, 3);
+                } else {
+                    assert!(
+                        stats.remote_crosses < fail_at as u64,
+                        "only ready PREs can cross: {stats:?}"
+                    );
+                    assert!(stats.remote_delegates <= stats.remote_crosses);
+                    if stats.remote_delegates != 0 {
+                        assert_eq!(failure.remote_effect, crate::RemoteEffect::Unknown);
+                    }
+                    let mut expected = [0x57; 64];
+                    expected[1..1 + stats.remote_delegates as usize * 3].fill(0xcc);
+                    let mut bytes = [0; 64];
+                    memory(&a).read(0, &mut bytes).unwrap();
+                    assert_eq!(bytes, expected);
+                }
                 assert_eq!(
                     source.stats().unwrap().staging.remote_unpins,
                     0,

@@ -103,9 +103,11 @@ accepted. The opt-in [bounded remote pipeline](docs/staging.md#bounded-remote-pi
 supports up to 16 reusable slots and passes 24 fresh installed H20 TCP/RDMA
 cases plus four independent repeats. Source and this healthy pipeline profile
 are accepted for that recorded artifact. Requester staging now uses a bounded
-ring with independent PRE/POST completion and negotiated chunk sizes. Its v19
+ring with independent PRE/POST completion, negotiated chunk sizes and a bounded
+CROSS queue. A session worker progresses network operations while local CUDA
+advances; final success still requires remote receipts and full drain. Its v19
 hardware qualification is pending; earlier H20 results apply to their recorded
-artifacts. Broader asynchronous remote scheduling remains open.
+artifacts. Shared shard scheduling and concurrent CROSS on the wire remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

@@ -65,9 +65,10 @@ TENT's `pinStageBuffer`, `delegateAsync`, `submitCrossStage` and
 an unconfirmed operation before deferred cleanup. OrbitTE uses scoped receipts
 and an inline source handler to preserve that distinction with bounded resources.
 The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
-stage buffers (`id % kStageBuffers`). `staging_task.rs` owns the source task and
-its source `Chunk` scheduling; `requester_task.rs` owns bounded local PRE/POST
-and CROSS scheduling. Its `StageBufferCache` retains the request's private
+stage buffers (`id % kStageBuffers`). `source_task.rs` owns source `Chunk`
+scheduling; `requester_task.rs` reserves the local ring and full GPU range loan.
+`staging_task.rs::StagingTask` owns bounded local PRE/POST scheduling, the CROSS
+queue and the session connection worker. Its `StageBufferCache` retains the request's private
 registrations and buffers, following the resource role of TENT's cache of the
 same name. `stage_registration.rs::PinnedStage` owns the actual pinned lease,
 private registration, pending copy and ordered retirement on either side.
@@ -77,10 +78,15 @@ PRE/POST completion boundary, while TCP/RDMA still own CROSS.
 The current implementation can keep both source and requester CUDA copies
 pending during CROSS. Independent local and remote rings follow TENT's
 `local_locked` / `remote_locked` ownership: local WRITE slots become reusable
-after CROSS, and local READ slots after POST. CROSS and its scoped receipts
-remain serialized on one control connection. TENT's full event loop also tracks
-asynchronous CROSS batches and remote operations; that scheduler and location
-selection remain in the existing P5/P6 queue. CPU controls establish accepted
+after CROSS, and local READ slots after POST. A bounded requester window submits
+up to `L` CROSS commands to one session worker and consumes each completion
+individually. Local CUDA progress can overlap a CROSS or Delegate receipt wait.
+The worker still serializes CROSS and scoped receipts on one connection.
+TENT uses eight shared worker shards, polls asynchronous internal batches and
+remote operations, and independently schedules available chunks. OrbitTE's
+bounded windows still have a refill barrier and use one worker per admitted
+session. Shared shards, multiple CROSS operations on the wire, a general progress
+event loop and location selection remain in the existing P5/P6 queue. CPU controls establish accepted
 work overlap, not physical DMA overlap or a throughput improvement.
 
 ## Serial remote staging
@@ -102,8 +108,9 @@ new payload transport is introduced. The flag defaults to false.
 | Unpin | Drain accepted copies, retire private registrations/MRs and release source slots/range, then acknowledge | Same |
 | Request completion | Require final Unpin receipt and requester slot/MR retirement | Same |
 
-One control connection and one source admission own the entire session. Each
-chunk completes before the next starts, including the short tail. Nested CROSS
+One control connection and one source admission own the entire session. At depth
+one, CROSS commands are sequential, including the short tail. The local next PRE
+or current POST can start while the worker awaits a remote Delegate receipt. Nested CROSS
 calls the existing transport directly; it never recursively submits an ordinary
 batch or waits for a second handler. One handler, one parent batch slot and one
 pinned source chunk per engine are sufficient. A GPU requester also needs one
@@ -201,7 +208,7 @@ charged without a Drop retry.
 | Direction | Scheduling and completion |
 | --- | --- |
 | READ | Delegate prefills `R` source PREs. CROSS waits for its source slot and any previous POST in its local slot. Its scoped receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
-| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After CROSS and Delegate receipts, the freed local slot queues PRE at `i + L`; other PREs and source POSTs can remain pending. |
+| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After CROSS's scoped receipt and the Delegate send, the freed local slot queues PRE at `i + L` without waiting for that Delegate receipt; other PREs and source POSTs can remain pending. |
 | Final Unpin | Drain all local POSTs before sending Unpin. The source drains every accepted PRE/POST, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
 
 A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
@@ -210,6 +217,43 @@ context restoration succeed. `remote_crosses` still follows actual transport
 cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
 `RemoteEffect::Unknown` before sending Delegate and is never automatically
 replayed after an ambiguous reply.
+
+### Session progress and completion
+
+The requester reserves its physical ring before starting one `orbitte-staging`
+worker. Existing parent request admission bounds the worker count; no worker is
+created per chunk and no nested public batch is admitted. Command and completion
+queues each hold at most `L` entries, and a window references at most `L` local
+registrations. The worker owns the control connection; local CUDA owners remain
+in the caller. TCP still transports TCP payload; RDMA uses its existing shared
+verbs workers/CQ lanes and uses TCP only for control.
+
+Within each window the caller waits for a slot's local PRE or previous POST,
+then submits its CROSS. It consumes CROSS results individually and immediately
+starts the corresponding local POST or next PRE. A CROSS result is published
+only after actual transport grant cleanup and the scoped source receipt; the
+worker drops its local registration clone first. It sends the required Delegate
+before publishing CROSS completion, records WRITE uncertainty before that send,
+then waits for the remote receipt independently of local CUDA progress. CROSS
+ready releases the local slot, not the remote operation or the whole request.
+
+After consuming all CROSS results, the caller drains every accepted local copy
+and queues Unpin. The worker processes Unpin only after every preceding Delegate
+receipt succeeds. A missing final Delegate receipt therefore fails the request
+even when every CROSS result was received. On failure, the caller stops queue
+admission and cancels commands that have not started. The active CROSS continues
+through the existing transport drain protocol under its original deadline;
+cancellation does not interrupt its control channel. The caller drops its queue
+handles and joins the worker before private registration/MR retirement. Worker
+panic becomes `Unquiesced`; uncertain native errors take precedence over an
+ordinary local failure and keep actual owners and admission charged.
+
+`EngineStats.staging.progress_workers` includes workers being joined, and
+`cancelled_tasks` counts local scheduling exits that stop queued work. These are
+independently sampled counters, not a snapshot of native DMA progress. Successful
+requester and full-engine close require zero progress workers. Directional
+`close_source` still permits outgoing sessions to continue. Queue time uses
+the original request deadline; timeout never substitutes for CUDA/DMA drain.
 
 EOF, a protocol error or deadline expiry stops new work but drains every accepted
 copy once, including siblings of a failed copy. `PinnedStage` takes its pending
@@ -320,5 +364,7 @@ observer. Four fresh independent repeats and their cleanup audit also pass;
 earlier serial evidence remains bound to its original observer and wire version.
 The current requester ring requires its own v19 artifact and evidence. Its
 controller supports independent widths and conservative local capacity, but
-hardware execution is deferred while new resource requests are paused. Broader
-asynchronous remote scheduling remains in P5.5b.
+hardware execution is deferred while new resource requests are paused. The
+session worker and bounded CROSS windows also require fresh installed evidence;
+the CPU controls prove ownership and scheduling only. Shared shard progress,
+concurrent CROSS on the wire and location selection remain in P5.5b.

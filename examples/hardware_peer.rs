@@ -334,6 +334,8 @@ fn finish(
             || staging.completed_chunks != (chunks * 2) as u64 * expected
             || staging.idle_chunks != slots as usize
             || staging.active_chunks != 0
+            || staging.progress_workers != 0
+            || staging.cancelled_tasks != 0
             || staging.retained_chunks != 0
             || staging.reserved_bytes != chunk * slots as usize
         {
@@ -351,7 +353,8 @@ fn finish(
         );
     }
     engine.close(TIMEOUT)?;
-    if engine.stats()?.staging.reserved_chunks != 0 {
+    let staging = engine.stats()?.staging;
+    if staging.reserved_chunks != 0 || staging.progress_workers != 0 {
         return Err(Error::Internal("staging pool did not close"));
     }
     engine.unregister_memory(&memory)?;

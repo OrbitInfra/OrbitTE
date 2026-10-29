@@ -9,7 +9,13 @@ use driver::Status;
 
 // The shim owns actual host backing and records Driver API boundaries. These
 // tests prove CPU ownership contracts, not GPU execution or memory ordering.
+type Gate = Option<(
+    std::sync::mpsc::SyncSender<()>,
+    std::sync::mpsc::Receiver<()>,
+)>;
+
 pub(super) struct Device {
+    pub(super) copy_gate: Mutex<Gate>,
     pub(super) event_gate: Mutex<
         Option<(
             std::sync::mpsc::SyncSender<()>,
@@ -261,8 +267,9 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
         }
     };
     if let Some((entered, resume)) = gate {
-        entered.send(()).unwrap();
-        resume.recv_timeout(Duration::from_secs(3)).unwrap();
+        if entered.send(()).is_err() || resume.recv_timeout(Duration::from_secs(3)).is_err() {
+            return Status::CUDA_ERROR_INVALID_VALUE;
+        }
     }
     let stream = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
@@ -291,6 +298,13 @@ fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usi
         });
     assert!(previous.is_none(), "copy/event reused with pending DMA");
 }
+fn enter_copy_gate() -> bool {
+    let gate = current().copy_gate.lock().unwrap().take();
+    gate.is_none_or(|(entered, resume)| {
+        entered.send(()).is_ok() && resume.recv_timeout(Duration::from_secs(3)).is_ok()
+    })
+}
+
 unsafe extern "C" fn to_host(
     output: *mut c_void,
     address: u64,
@@ -298,6 +312,9 @@ unsafe extern "C" fn to_host(
     stream: sys::CUstream,
 ) -> Status {
     event("DtoH");
+    if !enter_copy_gate() {
+        return Status::CUDA_ERROR_INVALID_VALUE;
+    }
     if !current().imports.lock().unwrap().is_empty() {
         ipc_copy_control();
     }
@@ -317,6 +334,9 @@ unsafe extern "C" fn to_device(
     stream: sys::CUstream,
 ) -> Status {
     event("HtoD");
+    if !enter_copy_gate() {
+        return Status::CUDA_ERROR_INVALID_VALUE;
+    }
     if !current().imports.lock().unwrap().is_empty() {
         ipc_copy_control();
     }
@@ -446,6 +466,7 @@ pub(super) fn driver() -> Arc<Driver> {
 }
 pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
     let device = Arc::new(Device {
+        copy_gate: Mutex::new(None),
         event_gate: Mutex::new(None),
         bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
         pins: Mutex::default(),
