@@ -63,6 +63,16 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                     )
                     .unwrap();
                 wait_pending(&b, 3);
+                // A queued copy precedes its event record. Hold all initial
+                // generations until the refill fault can no longer hit setup.
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                while b.completions.lock().unwrap().values().flatten().count() != 3 {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "initial events not recorded"
+                    );
+                    std::thread::yield_now();
+                }
                 assert_eq!(pending(&b), 3);
                 if fault == "submit" {
                     b.copy_error.store(1, Ordering::Release);
