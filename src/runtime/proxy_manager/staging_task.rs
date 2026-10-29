@@ -124,6 +124,7 @@ impl<'a> StagingTask<'a> {
         let mut inflight: Vec<Option<Cross>> = (0..self.remote_width).map(|_| None).collect();
         let result =
             self.transfer_event_loop(&commands, &complete, stopping, effect, &mut inflight);
+        #[cfg(feature = "rdma")]
         let mut result = result;
         for cross in inflight.into_iter().flatten() {
             #[cfg(feature = "rdma")]

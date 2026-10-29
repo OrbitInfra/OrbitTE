@@ -306,7 +306,6 @@ impl ProxyManager {
                             remote.respond(channel, Operation::Cross, offset, count)?;
                         }
                         Operation::FinishCross if chunk.state == StageState::Cross => {
-                            *reply_epoch = source.epoch;
                             #[cfg(feature = "rdma")]
                             if let Some(transfer) = chunk.cross.take() {
                                 transfer.finish(
