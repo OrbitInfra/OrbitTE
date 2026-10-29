@@ -166,7 +166,6 @@ impl Session {
             })
             .collect();
         let mut submitted = 0;
-        let mut completed = 0;
         let mut finished = 0;
         let mut idle_sweeps = 0u32;
         while finished != width {
@@ -181,13 +180,9 @@ impl Session {
                     }
                 };
                 let chunk = &mut chunks[(offset / size) % width];
-                if offset != completed
-                    || offset != chunk.offset
-                    || chunk.state != StageState::InflightCross
-                {
+                if offset != chunk.offset || chunk.state != StageState::InflightCross {
                     return Err(Error::Internal("staging CROSS completion order"));
                 }
-                completed += size.min(request.length - offset);
                 if operation == TransferOp::Read {
                     chunk.state = StageState::Post;
                 } else {

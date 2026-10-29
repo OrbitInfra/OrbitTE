@@ -13,7 +13,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 19;
+const VERSION: u16 = 20;
 pub(crate) const REQUEST_SIZE: usize = 52;
 const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -41,6 +41,7 @@ pub(crate) enum Operation {
     Delegate = 15,
     Cross = 16,
     Unpin = 17,
+    FinishCross = 18,
 }
 
 pub(crate) struct Request {
@@ -85,6 +86,7 @@ impl Request {
             15 => Operation::Delegate,
             16 => Operation::Cross,
             17 => Operation::Unpin,
+            18 => Operation::FinishCross,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {

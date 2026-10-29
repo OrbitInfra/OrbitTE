@@ -1,8 +1,8 @@
-//! One session's ordered Pin/Delegate/CROSS/Unpin progress on a shared shard.
+//! One session's bounded CROSS owners and scoped remote phase progress.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::remote_stage_operation::RemoteStageOperation;
 use crate::engine::{PreparedTransfer, Source, remaining};
@@ -32,6 +32,7 @@ pub(super) struct StagingTask<'a> {
     source: &'a Source,
     pub(super) chunk: usize,
     remote_width: usize,
+    cross_width: usize,
 }
 
 impl<'a> StagingTask<'a> {
@@ -43,6 +44,15 @@ impl<'a> StagingTask<'a> {
         chunk_size: usize,
         deadline: Instant,
     ) -> Result<Self> {
+        let cross_limit = match request.transport {
+            #[cfg(feature = "rdma")]
+            Transport::Rdma => source
+                .rdma
+                .as_ref()
+                .ok_or(Error::Unavailable("RDMA is not configured"))?
+                .staging_concurrency(chunk_size),
+            _ => 1,
+        };
         let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
         channel.write_all(
             &Request {
@@ -67,6 +77,7 @@ impl<'a> StagingTask<'a> {
             source.staging_pipeline_depth as u8,
         ])?;
         channel.write_all(&(chunk_size as u64).to_be_bytes())?;
+        channel.write_all(&[cross_limit as u8])?;
         let pin = Reply::read(&mut channel, peer.epoch)?;
         let chunk = usize::try_from(pin.length).map_err(|_| Error::InvalidRange)?;
         if pin.status != 0 || chunk == 0 || chunk > chunk_size {
@@ -74,7 +85,7 @@ impl<'a> StagingTask<'a> {
         }
         let mut nonce = [0; 16];
         channel.read_exact(&mut nonce)?;
-        let mut width = [0];
+        let mut width = [0; 2];
         channel.read_exact(&mut width)?;
         let remote_width = width[0] as usize;
         if remote_width == 0
@@ -82,6 +93,10 @@ impl<'a> StagingTask<'a> {
             || remote_width > request.length.div_ceil(chunk)
         {
             return Err(Error::Protocol("Pin pipeline depth"));
+        }
+        let cross_width = width[1] as usize;
+        if cross_width == 0 || cross_width > cross_limit || cross_width > remote_width {
+            return Err(Error::Protocol("Pin CROSS depth"));
         }
         Ok(Self {
             channel,
@@ -95,6 +110,7 @@ impl<'a> StagingTask<'a> {
             source,
             chunk,
             remote_width,
+            cross_width,
         })
     }
 
@@ -105,6 +121,28 @@ impl<'a> StagingTask<'a> {
         stopping: &AtomicBool,
         effect: &mut RemoteEffect,
     ) -> Result<()> {
+        let mut inflight: Vec<Option<Cross>> = (0..self.remote_width).map(|_| None).collect();
+        let result =
+            self.transfer_event_loop(&commands, &complete, stopping, effect, &mut inflight);
+        let mut result = result;
+        for cross in inflight.into_iter().flatten() {
+            #[cfg(feature = "rdma")]
+            if let Some(transfer) = cross.rdma {
+                result = transfer.close(result);
+            }
+            drop(cross.local);
+        }
+        result
+    }
+
+    fn transfer_event_loop(
+        &mut self,
+        commands: &Receiver<Command>,
+        complete: &SyncSender<usize>,
+        stopping: &AtomicBool,
+        effect: &mut RemoteEffect,
+        inflight: &mut [Option<Cross>],
+    ) -> Result<()> {
         if self.operation == TransferOp::Read {
             for slot in 0..self.remote_width {
                 if stopping.load(Ordering::Acquire) {
@@ -114,61 +152,137 @@ impl<'a> StagingTask<'a> {
             }
         }
         let mut expected = 0;
+        let mut pending = None;
+        let mut idle = 0u32;
         loop {
-            let command = receive(&commands, self.channel.deadline)?;
+            remaining(self.channel.deadline)?;
             if stopping.load(Ordering::Acquire) {
                 return Err(Error::Cancelled);
             }
-            match command {
-                Command::Cross { local, offset } => {
-                    if offset != expected || offset >= self.request.length {
-                        return Err(Error::Internal("staging CROSS submission order"));
-                    }
-                    let length = self.chunk.min(self.request.length - offset);
-                    self.cross(local, offset, length)?;
-                    if stopping.load(Ordering::Acquire) {
-                        return Err(Error::Cancelled);
-                    }
-                    let next = if self.operation == TransferOp::Write {
-                        Some(offset)
-                    } else {
-                        let next = offset + self.chunk * self.remote_width;
-                        (next < self.request.length).then_some(next)
-                    };
-                    if let Some(next) = next {
-                        if self.operation == TransferOp::Write {
-                            *effect = RemoteEffect::Unknown;
-                        }
-                        self.remote.send(
-                            &mut self.channel,
-                            Operation::Delegate,
-                            next,
-                            self.chunk.min(self.request.length - next),
-                        )?;
-                    }
-                    complete.send(offset).map_err(|_| Error::Cancelled)?;
-                    if let Some(next) = next {
-                        self.remote.receipt(
-                            &mut self.channel,
-                            Operation::Delegate,
-                            next,
-                            self.chunk.min(self.request.length - next),
-                        )?;
-                    }
-                    expected += length;
+            let mut progress = false;
+            while inflight.iter().filter(|slot| slot.is_some()).count() < self.cross_width {
+                if stopping.load(Ordering::Acquire) {
+                    return Err(Error::Cancelled);
                 }
-                Command::Unpin => {
-                    if expected != self.request.length {
-                        return Err(Error::Internal("staging Unpin before all CROSS"));
+                let command = match pending.take() {
+                    Some(command) => command,
+                    None => match commands.try_recv() {
+                        Ok(command) => command,
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => return Err(Error::Cancelled),
+                    },
+                };
+                match command {
+                    Command::Cross { local, offset } => {
+                        if offset != expected || offset >= self.request.length {
+                            return Err(Error::Internal("staging CROSS submission order"));
+                        }
+                        let slot = (offset / self.chunk) % self.remote_width;
+                        if inflight[slot].is_some() {
+                            pending = Some(Command::Cross { local, offset });
+                            break;
+                        }
+                        let length = self.chunk.min(self.request.length - offset);
+                        inflight[slot] = Some(self.cross(local, offset, length)?);
+                        expected += length;
+                        progress = true;
                     }
-                    self.remote
-                        .send(&mut self.channel, Operation::Unpin, expected, 0)?;
-                    return self
-                        .remote
-                        .receipt(&mut self.channel, Operation::Unpin, expected, 0);
+                    Command::Unpin => {
+                        if expected != self.request.length || inflight.iter().any(Option::is_some) {
+                            return Err(Error::Internal("staging Unpin before all CROSS"));
+                        }
+                        self.remote
+                            .send(&mut self.channel, Operation::Unpin, expected, 0)?;
+                        return self.remote.receipt(
+                            &mut self.channel,
+                            Operation::Unpin,
+                            expected,
+                            0,
+                        );
+                    }
                 }
             }
+            for slot in inflight.iter_mut() {
+                let Some(cross) = slot.as_ref() else { continue };
+                if !cross.query()? {
+                    continue;
+                }
+                let cross = slot
+                    .take()
+                    .ok_or(Error::Internal("missing staging CROSS"))?;
+                let offset = cross.offset;
+                self.finish_cross(cross)?;
+                if stopping.load(Ordering::Acquire) {
+                    return Err(Error::Cancelled);
+                }
+                let next = if self.operation == TransferOp::Write {
+                    Some(offset)
+                } else {
+                    let next = offset + self.chunk * self.remote_width;
+                    (next < self.request.length).then_some(next)
+                };
+                if let Some(next) = next {
+                    if self.operation == TransferOp::Write {
+                        *effect = RemoteEffect::Unknown;
+                    }
+                    self.remote.send(
+                        &mut self.channel,
+                        Operation::Delegate,
+                        next,
+                        self.chunk.min(self.request.length - next),
+                    )?;
+                }
+                complete.send(offset).map_err(|_| Error::Cancelled)?;
+                if let Some(next) = next {
+                    self.remote.receipt(
+                        &mut self.channel,
+                        Operation::Delegate,
+                        next,
+                        self.chunk.min(self.request.length - next),
+                    )?;
+                }
+                progress = true;
+            }
+            if progress {
+                idle = 0;
+            } else {
+                if idle < 128 {
+                    std::thread::yield_now();
+                } else {
+                    let delay = Duration::from_micros((1u64 << (idle - 128).min(8)).min(200));
+                    std::thread::park_timeout(delay.min(remaining(self.channel.deadline)?));
+                }
+                idle = idle.saturating_add(1);
+            }
         }
+    }
+
+    fn finish_cross(&mut self, cross: Cross) -> Result<()> {
+        let offset = cross.offset;
+        let length = self.chunk.min(self.request.length - offset);
+        #[cfg(feature = "rdma")]
+        let mut rdma = cross.rdma;
+        let result = (|| {
+            self.remote
+                .send(&mut self.channel, Operation::FinishCross, offset, length)?;
+            #[cfg(feature = "rdma")]
+            if let Some(transfer) = rdma.take() {
+                transfer.finish(
+                    self.source
+                        .rdma
+                        .as_ref()
+                        .ok_or(Error::Unavailable("RDMA is not configured"))?,
+                    &mut self.channel,
+                )?;
+            }
+            self.remote
+                .receipt(&mut self.channel, Operation::FinishCross, offset, length)
+        })();
+        #[cfg(feature = "rdma")]
+        if let Some(transfer) = rdma {
+            return transfer.close(result);
+        }
+        result
     }
 
     fn delegate(&mut self, offset: usize) -> Result<()> {
@@ -179,7 +293,7 @@ impl<'a> StagingTask<'a> {
             .receipt(&mut self.channel, Operation::Delegate, offset, length)
     }
 
-    fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<()> {
+    fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
         self.remote
             .send(&mut self.channel, Operation::Cross, offset, length)?;
         let cross = PreparedTransfer {
@@ -198,6 +312,8 @@ impl<'a> StagingTask<'a> {
             remote_offset: 0,
             length,
         };
+        #[cfg(feature = "rdma")]
+        let mut rdma = None;
         match cross.transport {
             Transport::Tcp => TcpTransport::transfer_on(
                 self.operation,
@@ -205,32 +321,68 @@ impl<'a> StagingTask<'a> {
                 &cross,
                 &mut self.channel,
                 &self.source.proxy,
-            ),
+            )
+            .map_err(|(error, _)| error)?,
             Transport::Rdma => {
                 #[cfg(feature = "rdma")]
                 {
-                    self.source
-                        .rdma
-                        .as_ref()
-                        .ok_or(Error::Unavailable("RDMA is not configured"))?
-                        .transfer_on(
-                            self.operation,
-                            self.peer,
-                            &cross,
-                            self.source.epoch,
-                            &mut self.channel,
-                        )
+                    rdma = Some(
+                        self.source
+                            .rdma
+                            .as_ref()
+                            .ok_or(Error::Unavailable("RDMA is not configured"))?
+                            .submit_slices(
+                                self.operation,
+                                self.peer,
+                                &cross,
+                                self.source.epoch,
+                                &mut self.channel,
+                                self.cross_width,
+                            )
+                            .map_err(|(error, _)| error)?,
+                    );
                 }
                 #[cfg(not(feature = "rdma"))]
-                {
-                    return Err(Error::Unavailable("build with --features rdma"));
-                }
+                return Err(Error::Unavailable("build with --features rdma"));
             }
             _ => return Err(Error::Unavailable("remote staging requires TCP or RDMA")),
         }
-        .map_err(|(error, _)| error)?;
-        self.remote
-            .receipt(&mut self.channel, Operation::Cross, offset, length)
+        let receipt = self
+            .remote
+            .receipt(&mut self.channel, Operation::Cross, offset, length);
+        #[cfg(feature = "rdma")]
+        if let Err(error) = receipt {
+            if let Some(transfer) = rdma {
+                transfer.close(Err(error))?;
+                return Err(Error::Internal("failed CROSS lost its error"));
+            }
+            return Err(error);
+        }
+        #[cfg(not(feature = "rdma"))]
+        receipt?;
+        Ok(Cross {
+            local: cross.local,
+            offset,
+            #[cfg(feature = "rdma")]
+            rdma,
+        })
+    }
+}
+
+struct Cross {
+    local: RegisteredMemory,
+    offset: usize,
+    #[cfg(feature = "rdma")]
+    rdma: Option<crate::transport::rdma::RdmaTransfer>,
+}
+
+impl Cross {
+    fn query(&self) -> Result<bool> {
+        #[cfg(feature = "rdma")]
+        if let Some(transfer) = &self.rdma {
+            return transfer.query();
+        }
+        Ok(true)
     }
 }
 

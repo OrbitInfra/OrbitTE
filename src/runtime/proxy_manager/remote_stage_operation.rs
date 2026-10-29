@@ -12,7 +12,7 @@ pub(super) fn read_request(channel: &mut ControlChannel<'_>) -> Result<Request> 
 }
 
 /// Each frame is scoped to the original registration, operation, chunk and
-/// freshly pinned session. The handler only accepts the next expected step.
+/// freshly pinned session. Each slot accepts only its current generation and phase.
 pub(super) struct RemoteStageOperation {
     pub(super) nonce: SourceEpoch,
     pub(super) region: u64,
@@ -62,6 +62,18 @@ impl RemoteStageOperation {
         length: usize,
     ) -> Result<()> {
         let request = read_request(channel)?;
+        self.validate(&request, operation, offset, length)?;
+        remaining(channel.deadline)?;
+        Ok(())
+    }
+
+    pub(super) fn validate(
+        &self,
+        request: &Request,
+        operation: Operation,
+        offset: usize,
+        length: usize,
+    ) -> Result<()> {
         if request.operation != operation
             || request.epoch != self.nonce
             || request.region != self.region
@@ -70,7 +82,6 @@ impl RemoteStageOperation {
         {
             return Err(Error::Protocol("staging operation scope or order"));
         }
-        remaining(channel.deadline)?;
         Ok(())
     }
 
