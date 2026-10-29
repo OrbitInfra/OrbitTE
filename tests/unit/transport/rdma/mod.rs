@@ -30,6 +30,7 @@ pub(crate) struct FakeDevice {
     payload_posts: AtomicUsize,
     held_payload: Mutex<Vec<(u32, u64)>>,
     first_payload_mr: AtomicUsize,
+    failed_payload: Mutex<Option<(u32, u64)>>,
     mrs: AtomicUsize,
     windows: AtomicUsize,
     window_indices: Mutex<std::collections::HashMap<u32, usize>>,
@@ -148,6 +149,7 @@ pub(super) unsafe extern "C" fn open_device(
         payload_posts: AtomicUsize::new(0),
         held_payload: Mutex::default(),
         first_payload_mr: AtomicUsize::new(0),
+        failed_payload: Mutex::new(None),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
         window_indices: Mutex::default(),
@@ -766,6 +768,15 @@ unsafe extern "C" fn post(
             device.pause.1.notify_all();
         }
     }
+    let failed = if mode.starts_with("copy_cross_hold_error") && own_mr != first_mr {
+        let mut failed = device.failed_payload.lock().unwrap();
+        if let Some(request) = requests[..accepted].first() {
+            failed.get_or_insert((state.qpn, request.id));
+        }
+        *failed
+    } else {
+        None
+    };
     for request in &requests[..accepted] {
         assert!(request.offset as usize + request.length as usize <= local_length);
         if mode.contains("copy") {
@@ -795,7 +806,7 @@ unsafe extern "C" fn post(
                 mode == "wc"
                     || mode == "wc_close0"
                     || (mode == "copy_second_error_close0" && ordinal == 2)
-                    || (mode.starts_with("copy_cross_hold_error") && own_mr != first_mr),
+                    || (failed == Some((state.qpn, request.id))),
             ),
             vendor_error: 0,
             ..Default::default()
@@ -1003,9 +1014,15 @@ unsafe extern "C" fn poll(
     let mut queue = state.completions.lock().unwrap();
     let value = if device.mode.starts_with("copy_cross_hold") && !device.pause.0.lock().unwrap().1 {
         let held = device.held_payload.lock().unwrap();
+        let failed = *device.failed_payload.lock().unwrap();
         queue
             .iter()
-            .position(|wc| !held.contains(&(wc.qpn, wc.id)))
+            .position(|wc| {
+                let key = (wc.qpn, wc.id);
+                // A worker may post the second MR first. Delay its one error
+                // until the first MR owns an accepted WR; other CQEs free quota.
+                !held.contains(&key) && !(held.is_empty() && failed == Some(key))
+            })
             .and_then(|index| queue.remove(index))
     } else if device.mode.contains("reverse") {
         queue.pop_back()
