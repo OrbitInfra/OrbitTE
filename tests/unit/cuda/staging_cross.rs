@@ -213,11 +213,14 @@ fn failed_second_cross_drains_first_or_retains_every_uncertain_owner() {
             assert_eq!(report.locally_drained, !cleanup_failure, "{report:?}");
             let failure = batch.submissions().unwrap().remove(0).failure.unwrap();
             assert_eq!(failure.remote_effect, crate::RemoteEffect::None);
+            assert!(requester.stats().unwrap().rdma.unwrap().completion_errors > 0);
             assert!(
                 if cleanup_failure {
                     matches!(failure.error, Error::Unquiesced { .. })
                 } else {
-                    matches!(failure.error, Error::Backend { .. })
+                    // CQ failure may retire the lane before the submit/query
+                    // caller observes it; both errors require proven drain.
+                    matches!(failure.error, Error::Backend { .. } | Error::Unavailable(_))
                 },
                 "{failure:?}"
             );
