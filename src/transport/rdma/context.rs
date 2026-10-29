@@ -8,6 +8,9 @@ use super::{
 };
 use crate::{Error, RegisteredMemory, Result};
 
+mod key_domain;
+use key_domain::ExhaustedWindow;
+
 /// The context/PD belongs to one runtime and outlives every CQ, QP and MR.
 pub(super) struct RdmaContext {
     state: Mutex<State>,
@@ -38,6 +41,7 @@ struct Resources {
     next_connection: u64,
     next_grant: u64,
     keys: keys::Keys,
+    exhausted_windows: Vec<ExhaustedWindow>,
     address: RdmaAddress,
     gid_index: Option<u8>,
 }
@@ -78,6 +82,7 @@ impl RdmaContext {
                 next_connection: 1,
                 next_grant: 1,
                 keys: keys::Keys::new(config.max_window_key_indices),
+                exhausted_windows: Vec::new(),
                 address,
                 gid_index: config.gid_index,
             }))),
@@ -488,18 +493,7 @@ impl RdmaContext {
             if grant.handles.mw.is_null() {
                 return Err(Error::Internal("source endpoint has no MW"));
             }
-            let previous = device.keys.len();
-            let key = device.keys.burn(grant.handles.window_key);
-            let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
-            usage.window_key_indices += device.keys.len() - previous;
-            let key = match key {
-                Ok(key) => key,
-                Err(error) => {
-                    usage.window_key_exhaustions += 1;
-                    return Err(error);
-                }
-            };
-            usage.burned_window_keys += 1;
+            let key = device.burn_window_key(&mut grant.handles, config, self.verbs)?;
             grant.handles.window_key = key;
             local.rkey = key;
         }
@@ -540,6 +534,19 @@ impl RdmaContext {
                 });
             }
             State::Open(resources) => {
+                if let Err(Error::Unquiesced { operation, code }) =
+                    resources.close_exhausted_windows(self.verbs)
+                {
+                    resources
+                        .usage
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .retained_devices += 1;
+                    let previous =
+                        std::mem::replace(&mut *state, State::Retained { operation, code });
+                    std::mem::forget(previous);
+                    return Err(Error::Unquiesced { operation, code });
+                }
                 for (operation, close) in [
                     ("ibv_dealloc_pd", self.verbs.dealloc_pd),
                     ("ibv_close_device", self.verbs.close_device),

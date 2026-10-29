@@ -334,8 +334,9 @@ fn native_index_reallocation_cannot_repeat_any_burned_key_or_return_burns_on_clo
             stats.staging_bytes,
             stats.work_requests
         ),
-        (0, 0, 0, 0)
+        (1, 0, 0, 0)
     );
+    assert_eq!(stats.exhausted_windows, 1);
     // Exhausted remote authority must not silently turn into a local MR or
     // erase PD history. Local-only requests need no remote key.
     runtime.staging_endpoint(8, 0).unwrap().close().unwrap();
@@ -905,3 +906,6 @@ mod recovery;
 
 #[path = "native_context_recovery.rs"]
 mod native_context_recovery;
+
+#[path = "context/key_domain.rs"]
+mod key_domain;

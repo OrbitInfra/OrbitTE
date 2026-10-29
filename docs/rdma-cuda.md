@@ -32,11 +32,12 @@ registration returns an error; it never changes the request to staging. CUDA
 IPC and NVLink use a separate [cooperative transport](cuda-ipc.md). Direct GPU support requires actual
 PeerDirect-capable GPU/RNIC registration and the prerequisites below.
 
-Opt-in [serial remote CUDA staging](staging.md#serial-remote-staging) coordinates
+Opt-in [remote CUDA staging](staging.md#serial-remote-staging) coordinates
 Pin/Delegate/Unpin over the same control channel, while TCP and RDMA retain
-payload ownership. Its healthy serial profile passes 16 installed H20 cases on
-stable and Rust 1.85; see [qualification](qualification.md#serial-remote-cuda-staging)
-for exact artifacts and limits.
+payload ownership. The serial profile passes 16 installed H20 cases; the bounded
+up-to-16-slot pipeline passes 24 fresh cases on stable and Rust 1.85. See
+[qualification](qualification.md#bounded-remote-cuda-pipeline) for exact artifacts,
+review status and limits.
 
 TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
 GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,
@@ -133,6 +134,14 @@ direction, consumes its successful BIND completion, and posts a real completion
 receive before publishing the grant. Type-2B MW support is required; a remotely
 enabled parent MR is not a fallback. The PD retains a bounded, non-evicting key
 history so an old grant key cannot regain authority within that domain.
+When a native MW index has no fresh low-byte tag, the context keeps that newly
+allocated, never-bound MW alive and allocates a replacement from the same PD.
+Keeping the exhausted index allocated prevents immediate provider reuse without
+clearing key history. One parked MW per index and the historical index count
+are both bounded by `max_window_key_indices`; duplicate live indices, exhausted
+capacity or allocation failure reject admission. `exhausted_windows` counts
+these PD-owned MWs inside `active_windows`. Close destroys them before the PD;
+failed destruction retains the remaining MWs and PD without a Drop retry.
 
 The requester submits bounded, signaled READ/WRITE work. After every payload
 CQE succeeds, it posts a fenced `SEND_WITH_INV` on the same QP. The source must
@@ -172,7 +181,7 @@ second. Native data work and fallible destruction stay with the data owners.
 | `max_cqes` | 1024 | Each CQ's capacity; aggregate SQ and RQ debt are bounded separately |
 | `max_direct_bytes`, `max_staging_bytes` | 64 MiB each | Active direct loans and private staging respectively |
 | `max_cached_mrs`, `max_cached_mr_bytes` | 64 / 64 MiB | All full-view physical MR copies across contexts and capabilities |
-| `max_window_key_indices` | 65,536 | Historical MW key indices in each PD domain |
+| `max_window_key_indices` | 65,536 | Historical MW key indices and parked exhausted MWs in each PD domain |
 
 Creating, closing and retained resources remain charged. Native CQ completion
 repays its exact WR debt; receive admission remains charged until the actual

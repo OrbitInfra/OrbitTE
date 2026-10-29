@@ -134,7 +134,14 @@ fn finish(
         .map_err(|_| Error::InvalidConfig("expected grant count"))?;
     let persistent = contexts * (2 * usize::from(host_direct) + usize::from(gpu_direct));
     let source_cached = host_direct;
-    let private_mrs = if remote_rdma { 6 } else { 0 };
+    let remote_depth: u64 = if remote_staging && role == "source" {
+        env::var("ORBITTE_EXPECT_STAGE_DEPTH")
+            .map_or(Ok(1), |s| s.parse())
+            .map_err(|_| Error::InvalidConfig("expected staging depth"))?
+    } else {
+        1
+    };
+    let private_mrs = if remote_rdma { 6 * remote_depth } else { 0 };
     let reused_mrs = if remote_rdma {
         grants - private_mrs
     } else if host_direct || (gpu_direct && role == "requester") {
@@ -219,9 +226,10 @@ fn finish(
     if idle.active_grants != 0 || idle.retained_grants != 0 || idle.active_endpoints != idle_qps {
         return Err(Error::Internal("connection/grant owners did not drain"));
     }
-    if idle.active_windows != 0
+    if idle.active_windows != idle.exhausted_windows
+        || idle.exhausted_windows as u64 != idle.window_key_rollovers
         || idle.retained_windows != 0
-        || idle.opened_windows != windows
+        || idle.opened_windows != windows + idle.window_key_rollovers
         || idle.completed_window_binds != windows
         || idle.completed_window_invalidations != windows
         || idle.burned_window_keys != windows
@@ -311,14 +319,15 @@ fn finish(
             .iter()
             .map(|(_, _, length)| length.div_ceil(chunk))
             .sum();
-        if staging.allocations != expected
-            || staging.reuses != 5 * expected
+        let slots = expected * remote_depth;
+        if staging.allocations != slots
+            || staging.reuses != 5 * slots
             || staging.copied_bytes != bytes as u64 * expected
             || staging.completed_chunks != (chunks * 2) as u64 * expected
-            || staging.idle_chunks != expected as usize
+            || staging.idle_chunks != slots as usize
             || staging.active_chunks != 0
             || staging.retained_chunks != 0
-            || staging.reserved_bytes != chunk * expected as usize
+            || staging.reserved_bytes != chunk * slots as usize
         {
             return Err(Error::Internal(
                 "staging chunk ownership or byte accounting",
@@ -348,6 +357,7 @@ fn finish(
         || stats.requester_workers != 0
         || stats.active_source_operations != 0
         || rdma.active_windows != 0
+        || rdma.exhausted_windows != 0
         || rdma.retained_windows != 0
         || rdma.active_completion_channels != 0
         || rdma.retained_completion_channels != 0
@@ -451,11 +461,14 @@ fn finish(
         rdma.completed_reusable_grants
     );
     println!(
-        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{}}}",
+        "ORBITTE_KEY_STATS {{\"idle_indices\":{},\"indices\":{},\"burned_keys\":{},\"exhaustions\":{},\"rollovers\":{},\"idle_exhausted_windows\":{},\"exhausted_windows\":{}}}",
         idle.window_key_indices,
         rdma.window_key_indices,
         rdma.burned_window_keys,
-        rdma.window_key_exhaustions
+        rdma.window_key_exhaustions,
+        rdma.window_key_rollovers,
+        idle.exhausted_windows,
+        rdma.exhausted_windows
     );
     println!(
         "ORBITTE_WINDOW_STATS {{\"opened_windows\":{},\"completed_binds\":{},\"completed_invalidations\":{},\"active_windows\":0,\"retained_windows\":0}}",
@@ -570,7 +583,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if transport == Transport::Tcp {
         rdma.host_memory = RdmaHostMemory::Staged;
     }
-    let engine = Arc::new(TransferEngine::new(EngineConfig {
+    let config = EngineConfig {
         bind_addr,
         remote_staging: env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1"),
         handler_threads: if env::var("ORBITTE_REMOTE_STAGING").as_deref() == Ok("1") {
@@ -583,10 +596,19 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .map_or(Ok(4 << 20), |s| s.parse())?,
         staging_chunk_count: env::var("ORBITTE_STAGING_CHUNK_COUNT")
             .map_or(Ok(64), |s| s.parse())?,
+        staging_pipeline_depth: env::var("ORBITTE_STAGING_PIPELINE_DEPTH")
+            .map_or(Ok(1), |s| s.parse())?,
         rdma: Some(rdma),
         handler_timeout: TIMEOUT,
         ..EngineConfig::default()
-    })?);
+    };
+    if env::var("ORBITTE_STAGING_OBSERVE").as_deref() == Ok("1") {
+        println!(
+            "ORBITTE_STAGING_CONFIG {{\"depth\":{},\"chunk_count\":{},\"chunk_size\":{}}}",
+            config.staging_pipeline_depth, config.staging_chunk_count, config.staging_chunk_size
+        );
+    }
+    let engine = Arc::new(TransferEngine::new(config)?);
     let source_bytes = initial(seed, payload);
     let initial_bytes = if role == "source" {
         source_bytes.clone()
@@ -692,7 +714,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             || !status.locally_drained
             || status.transferred_bytes != transferred
         {
-            return Err("READ batch result".into());
+            return Err(format!(
+                "READ batch result: {status:?}; submissions: {:?}",
+                batch.submissions()?
+            )
+            .into());
         }
         for submission in batch.submissions()? {
             if submission.failure.is_some()
@@ -737,7 +763,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 NotificationStatus::Delivered
             )
         {
-            return Err("WRITE batch/notification result".into());
+            return Err(format!(
+                "WRITE batch/notification result: {status:?}; submissions: {:?}",
+                batch.submissions()?
+            )
+            .into());
         }
         verify(&memory, &expected)?;
         batch.free()?;

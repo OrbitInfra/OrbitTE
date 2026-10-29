@@ -16,7 +16,8 @@ def fault_scope(environment):
     role = environment.get('ORBITTE_SHARED_ROLE')
     if environment.get('ORBITTE_STAGING_OBSERVE') == '1':
         return (mode is None and role in ('source', 'requester')
-                and environment.get('ORBITTE_STAGING_CHUNK_COUNT') == '1'
+                and environment.get('ORBITTE_STAGING_CHUNK_COUNT') in tuple(str(n) for n in range(1, 17))
+                and environment.get('ORBITTE_STAGING_PIPELINE_DEPTH', '1') == environment.get('ORBITTE_STAGING_CHUNK_COUNT')
                 and environment.get('ORBITTE_GDR_OBSERVE') is None
                 and environment.get('ORBITTE_IPC_HOLD') is None)
     if environment.get('ORBITTE_GDR_OBSERVE') == '1':

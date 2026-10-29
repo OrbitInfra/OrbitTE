@@ -340,7 +340,9 @@ class Controller:
             }
             if 'staging_chunk_size' in case:
                 staging.validate_case(case)
-                environment.update(ORBITTE_SHARED_ROLE=role, ORBITTE_STAGING_OBSERVE='1', ORBITTE_STAGING_CHUNK_SIZE=str(case['staging_chunk_size']), ORBITTE_STAGING_CHUNK_COUNT='1')
+                environment.update(ORBITTE_SHARED_ROLE=role, ORBITTE_STAGING_OBSERVE='1', ORBITTE_STAGING_CHUNK_SIZE=str(case['staging_chunk_size']), ORBITTE_STAGING_CHUNK_COUNT=str(staging.configured_depth(case, role)),
+                    ORBITTE_STAGING_PIPELINE_DEPTH=str(staging.configured_depth(case, role)),
+                    ORBITTE_EXPECT_STAGE_DEPTH=str(staging.negotiated_depth(case)))
             if case.get('remote_staging', False):
                 staging.validate_case(case)
                 length = case.get('slice_bytes', case['payload'] // 4 - 23)

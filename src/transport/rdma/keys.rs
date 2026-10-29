@@ -20,6 +20,15 @@ impl Keys {
         self.indices.len()
     }
 
+    pub(super) fn exhausted(&self, native_key: u32) -> bool {
+        self.indices.get(&(native_key & !255)).is_some_and(|used| {
+            (1..=255).all(|increment| {
+                let tag = native_key.wrapping_add(increment) & 255;
+                used[(tag / 64) as usize] & (1u64 << (tag % 64)) != 0
+            })
+        })
+    }
+
     pub(super) fn burn(&mut self, native_key: u32) -> Result<u32> {
         let index = native_key & !255;
         if !self.indices.contains_key(&index) {

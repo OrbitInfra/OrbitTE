@@ -13,6 +13,10 @@ pub struct RdmaStats {
     pub opened_devices: u64,
     pub active_windows: usize,
     pub opened_windows: u64,
+    /// Never-bound MWs parked in their PD to prevent an exhausted index reappearing.
+    pub exhausted_windows: usize,
+    /// Index rotations; all previously burned full keys remain unavailable.
+    pub window_key_rollovers: u64,
     /// Historical native MW indices charged for the lifetime of their PD.
     pub window_key_indices: usize,
     /// Full rkeys burned before an endpoint can submit BIND, including failures.

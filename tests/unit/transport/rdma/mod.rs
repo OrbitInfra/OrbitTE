@@ -29,6 +29,8 @@ pub(crate) struct FakeDevice {
     endpoints: AtomicUsize,
     mrs: AtomicUsize,
     windows: AtomicUsize,
+    window_indices: Mutex<std::collections::HashMap<u32, usize>>,
+    next_window_index: AtomicU32,
     cqs: AtomicUsize,
     pub(crate) pause: Arc<(Mutex<(bool, bool)>, Condvar)>,
 }
@@ -95,6 +97,9 @@ struct FakeMr {
 }
 
 struct FakeWindow {
+    device: *const FakeDevice,
+    index: u32,
+    mr: AtomicUsize,
     bound: AtomicBool,
     qp_alive: AtomicBool,
     qp: AtomicUsize,
@@ -139,6 +144,8 @@ pub(super) unsafe extern "C" fn open_device(
         endpoints: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
+        window_indices: Mutex::default(),
+        next_window_index: AtomicU32::new(1),
         cqs: AtomicUsize::new(0),
         pause: Arc::default(),
     }));
@@ -249,6 +256,60 @@ unsafe extern "C" fn register_memory(
     }
 }
 
+unsafe extern "C" fn allocate_window(
+    memory: *mut sys::MemoryHandles,
+    handles: *const sys::DeviceHandles,
+) -> c_int {
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    let memory = unsafe { &mut *memory };
+    assert!(memory.mw.is_null());
+    device.events.lock().unwrap().push("alloc_window");
+    if device.mode == "window_unsupported" {
+        return libc::EOPNOTSUPP;
+    }
+    let mut indices = device.window_indices.lock().unwrap();
+    let replacement = !indices.is_empty();
+    if device.mode == "window_rollover_alloc" && replacement {
+        return libc::ENOMEM;
+    }
+    let index = if device.mode == "key_indices" {
+        device.next_window_index.fetch_add(1, Ordering::SeqCst) << 8
+    } else if device.mode == "window_rollover_duplicate" {
+        0x100
+    } else if device.mode.starts_with("window_rollover") {
+        (1..)
+            .map(|n| n << 8)
+            .find(|index| !indices.contains_key(index))
+            .unwrap()
+    } else {
+        0x100
+    };
+    *indices.entry(index).or_default() += 1;
+    device.windows.fetch_add(1, Ordering::SeqCst);
+    memory.mw = Box::into_raw(Box::new(FakeWindow {
+        device,
+        index,
+        mr: AtomicUsize::new(0),
+        bound: AtomicBool::new(false),
+        qp_alive: AtomicBool::new(false),
+        qp: AtomicUsize::new(0),
+        received: AtomicBool::new(false),
+        key: AtomicU32::new(0),
+    }))
+    .cast();
+    memory.window_key = index
+        | if device.mode == "window_rollover_duplicate" && replacement {
+            2
+        } else {
+            1
+        };
+    if device.mode == "window_rollover_partial" && replacement {
+        libc::EIO
+    } else {
+        0
+    }
+}
+
 unsafe extern "C" fn prepare_grant(
     h: *mut sys::ConnectionHandles,
     memory: *mut sys::MemoryHandles,
@@ -312,28 +373,10 @@ unsafe extern "C" fn prepare_grant(
             device.events.lock().unwrap().push("register_gpu_grant");
         }
         if permission != 0 && !(*memory).remote_mr && !device.mode.starts_with("open") {
-            device.events.lock().unwrap().push("alloc_window");
-            if device.mode == "window_unsupported" {
-                return libc::EOPNOTSUPP;
+            let code = allocate_window(memory, handles);
+            if code != 0 {
+                return code;
             }
-            device.windows.fetch_add(1, Ordering::SeqCst);
-            (*memory).mw = Box::into_raw(Box::new(FakeWindow {
-                bound: AtomicBool::new(false),
-                qp_alive: AtomicBool::new(true),
-                qp: AtomicUsize::new(qp as *const Fake as usize),
-                received: AtomicBool::new(false),
-                key: AtomicU32::new(0),
-            }))
-            .cast();
-            qp.window.store((*memory).mw as usize, Ordering::Release);
-            (*(*memory).mr.cast::<FakeMr>())
-                .windows
-                .fetch_add(1, Ordering::SeqCst);
-            (*memory).window_key = if device.mode == "key_indices" {
-                (qp.qpn << 8) | 1
-            } else {
-                0x101
-            };
         }
     }
     qp.grants.lock().unwrap().insert(
@@ -510,7 +553,25 @@ unsafe extern "C" fn window(
     let qp = unsafe { &*h.qp.cast::<Fake>() };
     let device = unsafe { &*qp.device };
     let cq = unsafe { &*qp.cq };
-    let state = unsafe { &(*(*memory).mw.cast::<FakeWindow>()).bound };
+    let native_window = unsafe { &*(*memory).mw.cast::<FakeWindow>() };
+    if bind {
+        let mr = unsafe { (*memory).mr } as usize;
+        assert_eq!(native_window.mr.swap(mr, Ordering::SeqCst), 0);
+        unsafe { &*(mr as *const FakeMr) }
+            .windows
+            .fetch_add(1, Ordering::SeqCst);
+        native_window
+            .qp
+            .store(qp as *const Fake as usize, Ordering::Release);
+        native_window.qp_alive.store(true, Ordering::Release);
+        qp.grants
+            .lock()
+            .unwrap()
+            .get_mut(&(memory as usize))
+            .unwrap()
+            .window = unsafe { (*memory).mw } as usize;
+    }
+    let state = &native_window.bound;
     qp.window_key
         .store(unsafe { (*memory).window_key }, Ordering::Release);
     qp.window
@@ -569,16 +630,17 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
     if h.mw.is_null() {
         return 0;
     }
-    let mr = unsafe { &*h.mr.cast::<FakeMr>() };
     let window = unsafe { &*h.mw.cast::<FakeWindow>() };
+    let mr = window.mr.load(Ordering::Acquire);
+    let mr = (mr != 0).then(|| unsafe { &*(mr as *const FakeMr) });
     assert!(
         !window.qp_alive.load(Ordering::Acquire)
             || (!window.bound.load(Ordering::Acquire) && window.received.load(Ordering::Acquire)),
         "MW cleanup requires creating QP close or actual receive/invalidation"
     );
-    let device = unsafe { &*mr.device };
+    let device = unsafe { &*window.device };
     device.events.lock().unwrap().push("dealloc_window");
-    if device.mode == "window_close" {
+    if device.mode == "window_close" || (device.mode == "window_rollover_close" && mr.is_none()) {
         return libc::EIO;
     }
     if window.qp_alive.load(Ordering::Acquire) {
@@ -598,12 +660,20 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
             .window
             .compare_exchange(h.mw as usize, 0, Ordering::AcqRel, Ordering::Acquire);
     }
+    let mut indices = device.window_indices.lock().unwrap();
+    let count = indices.get_mut(&window.index).unwrap();
+    *count -= 1;
+    if *count == 0 {
+        indices.remove(&window.index);
+    }
     unsafe {
         drop(Box::from_raw(h.mw.cast::<FakeWindow>()));
     }
     h.mw = std::ptr::null_mut();
     device.windows.fetch_sub(1, Ordering::SeqCst);
-    mr.windows.fetch_sub(1, Ordering::SeqCst);
+    if let Some(mr) = mr {
+        mr.windows.fetch_sub(1, Ordering::SeqCst);
+    }
     0
 }
 
@@ -1223,6 +1293,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     window,
     post_receive,
     send_completion,
+    allocate_window,
     dealloc_window,
     poll,
     destroy_qp: qp,
