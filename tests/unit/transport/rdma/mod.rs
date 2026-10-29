@@ -1021,7 +1021,7 @@ unsafe extern "C" fn poll(
                 let key = (wc.qpn, wc.id);
                 // A worker may post the second MR first. Delay its one error
                 // until the first MR owns an accepted WR; other CQEs free quota.
-                !held.contains(&key) && !(held.is_empty() && failed == Some(key))
+                !(held.contains(&key) || held.is_empty() && failed == Some(key))
             })
             .and_then(|index| queue.remove(index))
     } else if device.mode.contains("reverse") {
