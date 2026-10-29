@@ -42,15 +42,24 @@ Delegate receipt while local PRE/POST starts, and lose the final Delegate reply
 after every CROSS completed. A controlled local submit failure cancels queued
 CROSS commands while the active command drains; combined RDMA teardown failure
 must override the ordinary local error and retain the actual pin/context owner.
-Unequal rings, tails, self-peer admission and final POST drain controls remain.
+A pure Rust worker panic during first READ or first/second WRITE grant cleanup
+retains the actual GPU backing, all private pins and parent admission, with
+conservative WRITE uncertainty and exact already-written bytes. Unequal rings,
+tails, self-peer admission and final POST drain controls remain.
 
 Evidence is stored outside Git at
 `/root/orbitte-artifacts/async-cross-20261029/`.
-Stable and Rust 1.85 combined runs each pass 302 unit tests, eight integration
-tests and one doctest; CUDA-only tests/Clippy, combined Clippy, all 50 hardware
-controller controls, the CPU trace fixture and strict documentation checks pass.
-`gates.json` preserves commands and outcomes, including the corrected CUDA-only
-Clippy diagnostic. Independent source review remains pending for this revision.
+Independent review accepts the production source contract at
+[`4441017`](https://github.com/OrbitInfra/OrbitTE/commit/444101700732e33098329962d689aff82fac2b3c).
+Stable and Rust 1.85 combined runs with the integrated panic regression each pass
+303 unit tests, eight integration tests and one doctest; CUDA-only tests/Clippy,
+combined Clippy, all 50 hardware controller controls, the CPU trace fixture and
+strict documentation checks pass. `gates.json` and `integrated-gates.json`
+preserve commands and outcomes, including the corrected CUDA-only Clippy
+diagnostic. `independent-review/source-review-4441017.json` binds 16 independent
+source gates; `worker-panic-control.json` in that directory binds the additional
+reviewer control now included in the permanent tests. This accepts the source
+substage; shared shards, nonblocking chunk progress and full P5.5b remain open.
 No new Forge task or hardware execution is requested. Current installed
 qualification and performance remain unqualified; earlier H20 results retain
 their original artifact boundaries.

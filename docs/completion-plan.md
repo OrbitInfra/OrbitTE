@@ -578,6 +578,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   deferred. Bounded CROSS command/completion queues and one joined session
   worker now separate local CUDA progress from network/Delegate waits, with
   explicit cancellation of queued commands and final remote receipt fencing.
+  Independent source review accepts `4441017`; worker panic controls retain
+  actual owners and admission without falsely reporting local drain.
   Qualify the current v19 artifact and complete shared shard/event-loop progress,
   concurrent CROSS on the wire and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -857,7 +859,8 @@ remains open. At the user's direction, continue source work without requesting
 new hardware tasks; qualify the current artifact on fresh nodes when hardware
 work resumes. Bounded CROSS windows and a session worker now decouple local CUDA
 progress from CROSS/Delegate waits; queue cancellation, native drain and final
-receipt fencing are implemented. The next implementation boundary is shared
+receipt fencing are source-accepted at `4441017`, including native uncertainty
+and worker-panic ownership controls. The next implementation boundary is shared
 ProxyManager shards and nonblocking chunk progress, followed by concurrent CROSS
 scheduling and location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
