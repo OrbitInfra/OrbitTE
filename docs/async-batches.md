@@ -47,8 +47,9 @@ from bypassing the thread or retained-owner limits.
 ## Results, cancellation and quiescence
 
 Tasks expose waiting/running/completed/failed/cancelled/skipped states, exact
-completed bytes, cancellation requests and a retained structured failure. Failure
-indices are public batch task indices. `request_index` identifies the first
+bytes of fully completed requests, cancellation requests and a retained structured failure. A failed remote staging
+request can have visible completed READ chunks while contributing zero completed
+bytes; drain status is not rollback. Failure indices are public batch task indices. `request_index` identifies the first
 failed task; `affected_requests` gives the consecutive failure span. A shared
 NVLink close/ACK failure can cover several already attempted tasks. Every task
 in that span shares the failure and drain status; only subsequent tasks are

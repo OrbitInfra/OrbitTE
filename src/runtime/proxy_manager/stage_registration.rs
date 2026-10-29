@@ -1,6 +1,9 @@
 //! Private host registrations live exactly as long as the staging operation.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use super::StageBufferLease;
+use crate::cuda::StagingCopy;
 
 use crate::engine::Source;
 use crate::memory::MemoryRegistry;
@@ -107,5 +110,90 @@ impl Drop for StageRegistration {
             #[cfg(feature = "rdma")]
             std::mem::forget(self.rdma.take());
         }
+    }
+}
+
+/// Private registration and pinned backing are retired together, only after
+/// both CUDA copies and transport DMA have drained.
+pub(super) struct PinnedStage {
+    pub(super) registration: StageRegistration,
+    lease: Arc<Mutex<StageBufferLease>>,
+}
+
+impl PinnedStage {
+    pub(super) fn new(
+        lease: StageBufferLease,
+        source: &Source,
+        transport: Transport,
+    ) -> Result<Self> {
+        let length = lease.buffer()?.length;
+        let address = lease.buffer()?.address;
+        let lease = Arc::new(Mutex::new(lease));
+        // SAFETY: this actual pinned lease backs the registration. HostAccess
+        // excludes transport DMA while the range owner submits local CUDA work.
+        #[allow(unsafe_code)]
+        let host = Arc::new(unsafe { HostMemory::from_raw_parts(address, length, lease.clone())? });
+        Ok(Self {
+            registration: StageRegistration::new(host, source, transport)?,
+            lease,
+        })
+    }
+
+    pub(super) fn copy(
+        &self,
+        copy: &mut StagingCopy,
+        offset: usize,
+        length: usize,
+        to_device: bool,
+        pipeline: bool,
+    ) -> Result<()> {
+        copy.check_access()?;
+        let result = self.registration.host.with_staging_access(length, || {
+            let mut lease = self
+                .lease
+                .lock()
+                .map_err(|_| Error::Internal("staging lease lock poisoned"))?;
+            if pipeline {
+                copy.begin(&mut lease, offset, length, to_device)
+            } else {
+                copy.copy(&mut lease, offset, length, to_device)
+            }
+        });
+        copy.publish_failure();
+        result
+    }
+
+    pub(super) fn complete(&self, copy: &mut StagingCopy, length: usize) -> Result<()> {
+        let result = copy.complete(
+            &mut self.lease.lock().unwrap_or_else(|p| p.into_inner()),
+            length,
+        );
+        copy.publish_failure();
+        result
+    }
+
+    pub(super) fn finish(mut self, result: Result<()>) -> Result<()> {
+        let result = self.registration.finish(result);
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            self.lease
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .quarantine();
+            return result;
+        }
+        drop(self.registration);
+        let lease = Arc::try_unwrap(self.lease).map_err(|lease| {
+            lease.lock().unwrap_or_else(|p| p.into_inner()).quarantine();
+            std::mem::forget(lease);
+            Error::Unquiesced {
+                operation: "pinned stage still borrowed",
+                code: -1,
+            }
+        })?;
+        lease
+            .into_inner()
+            .unwrap_or_else(|p| p.into_inner())
+            .release()
+            .and(result)
     }
 }

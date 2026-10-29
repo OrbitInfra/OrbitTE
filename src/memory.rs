@@ -198,19 +198,21 @@ impl HostMemory {
 
     #[cfg(feature = "cuda")]
     #[allow(unsafe_code)]
-    pub(crate) fn with_read_slice<T>(
+    pub(crate) fn with_staging_bytes<T>(
         &self,
-        operation: impl FnOnce(&[u8]) -> Result<T>,
+        length: usize,
+        operation: impl FnOnce(&mut [u8]) -> Result<T>,
     ) -> Result<T> {
+        let range = checked_range(0, length, self.length)?;
         let backing = self
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&(0..self.length))?;
-        // SAFETY: the entire allocation is checked and exclusively locked;
+        backing.check_access(&range)?;
+        // SAFETY: the staging range is checked and exclusively locked;
         // neither a CPU writer nor a native DMA loan overlaps this slice.
         let bytes =
-            unsafe { std::slice::from_raw_parts(backing.bytes.address().as_ptr(), self.length) };
+            unsafe { std::slice::from_raw_parts_mut(backing.bytes.address().as_ptr(), length) };
         operation(bytes)
     }
 

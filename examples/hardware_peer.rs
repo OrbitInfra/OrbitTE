@@ -281,7 +281,7 @@ fn finish(
     engine.close_source(TIMEOUT)?;
     let staging = engine.stats()?.staging;
     if remote_staging {
-        let chunk: usize = env::var("ORBITTE_STAGING_CHUNK_SIZE")
+        let chunk: usize = env::var("ORBITTE_EXPECT_STAGE_CHUNK_SIZE")
             .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?
             .parse()
             .map_err(|_| Error::InvalidConfig("remote staging chunk size"))?;
@@ -315,9 +315,17 @@ fn finish(
             .unwrap()
             .parse()
             .unwrap();
+        let transfer_chunk = if remote_staging {
+            env::var("ORBITTE_EXPECT_STAGE_CHUNK_SIZE")
+                .map_err(|_| Error::InvalidConfig("expected staging chunk"))?
+                .parse::<usize>()
+                .map_err(|_| Error::InvalidConfig("expected staging chunk"))?
+        } else {
+            chunk
+        };
         let chunks: usize = slices(payload)
             .iter()
-            .map(|(_, _, length)| length.div_ceil(chunk))
+            .map(|(_, _, length)| length.div_ceil(transfer_chunk))
             .sum();
         let slots = expected * remote_depth;
         if staging.allocations != slots

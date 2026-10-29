@@ -62,7 +62,7 @@ impl CudaMemory {
                     source.is_some(),
                 )
             };
-            allocation.uncertain = !stream.quiescent();
+            allocation.uncertain |= !stream.quiescent();
             if allocation.uncertain || context.poisoned.load(Ordering::Acquire) {
                 stage.retain();
                 return match result {
@@ -86,10 +86,11 @@ impl CudaMemory {
     }
 }
 
-/// The allocation lock covers the complete remote operation. Native copies
-/// borrow it directly instead of recursively entering CudaMemory's copy API.
-pub(crate) struct StagingCopy<'a> {
-    allocation: &'a mut DeviceAllocation,
+/// A logical GPU range stays borrowed while network and native work progress.
+/// Each pinned slot owns its stream; the allocation mutex never spans network I/O.
+pub(crate) struct StagingCopy {
+    memory: Arc<CudaMemory>,
+    range: Range<usize>,
     address: u64,
     length: usize,
     pending: usize,
@@ -98,24 +99,37 @@ pub(crate) struct StagingCopy<'a> {
 
 impl CudaMemory {
     pub(crate) fn with_staging<T>(
-        &self,
+        self: &Arc<Self>,
         offset: usize,
         length: usize,
         manager: &Arc<crate::runtime::proxy_manager::ProxyManager>,
         depth: usize,
         operation: impl FnOnce(
-            &mut StagingCopy<'_>,
+            &mut StagingCopy,
             Vec<crate::runtime::proxy_manager::StageBufferLease>,
         ) -> Result<T>,
     ) -> Result<T> {
         let range = checked_range(offset, length, self.length)?;
-        // Network handlers must not wait behind an unrelated allocation user.
         let mut allocation = self.allocation.try_lock().map_err(|error| match error {
             std::sync::TryLockError::WouldBlock => Error::ResourceExhausted,
             std::sync::TryLockError::Poisoned(_) => Error::Internal("CUDA memory lock poisoned"),
         })?;
         allocation.check_dma(&range)?;
+        allocation
+            .dma
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
         let context = Arc::clone(&allocation.context);
+        allocation.dma.push(range.clone());
+        drop(allocation);
+        let mut copy = StagingCopy {
+            memory: Arc::clone(self),
+            range,
+            address: self.address + offset as u64,
+            length,
+            pending: 0,
+            failed: false,
+        };
         let mut stages = Vec::with_capacity(depth);
         for _ in 0..depth {
             stages.push(
@@ -124,32 +138,42 @@ impl CudaMemory {
                 })?,
             );
         }
-        if depth == 1 && allocation.copy_stream.is_none() {
-            match CopyStream::new(&context) {
-                Ok(stream) => allocation.copy_stream = Some(stream),
-                Err(error) => {
-                    if matches!(error, Error::Unquiesced { .. }) {
-                        allocation.uncertain = true;
-                        stages[0].quarantine();
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        operation(
-            &mut StagingCopy {
-                allocation: &mut allocation,
-                address: self.address + offset as u64,
-                length,
-                pending: 0,
-                failed: false,
-            },
-            stages,
-        )
+        operation(&mut copy, stages)
     }
 }
 
-impl StagingCopy<'_> {
+impl StagingCopy {
+    /// Called before taking private host/lease/stream locks. Existing accepted
+    /// copies still drain even when another range has made the allocation uncertain.
+    pub(crate) fn check_access(&self) -> Result<()> {
+        let allocation = self
+            .memory
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        if self.failed
+            || allocation.uncertain
+            || allocation.context.poisoned.load(Ordering::Acquire)
+        {
+            return Err(Error::Unquiesced {
+                operation: "CUDA staging range",
+                code: -1,
+            });
+        }
+        Ok(())
+    }
+
+    /// Publish native uncertainty after releasing private host/lease/stream locks.
+    pub(crate) fn publish_failure(&self) {
+        if self.failed {
+            self.memory
+                .allocation
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .uncertain = true;
+        }
+    }
+
     pub(crate) fn copy(
         &mut self,
         stage: &mut crate::runtime::proxy_manager::StageBufferLease,
@@ -157,42 +181,10 @@ impl StagingCopy<'_> {
         length: usize,
         to_device: bool,
     ) -> Result<()> {
-        checked_range(offset, length, self.length)?;
-        let host = stage.buffer()?;
-        checked_range(0, length, host.length)?;
-        host.check_access()?;
-        let address = host.address;
-        stage.submitting();
-        let stream = self
-            .allocation
-            .copy_stream
-            .as_mut()
-            .ok_or(Error::Internal("CUDA copy stream missing"))?;
-        // SAFETY: the exclusive GPU allocation guard and pinned lease remain
-        // held through event completion and context restoration. The caller
-        // also holds HostMemory's access lock, excluding native DMA loans.
-        let result =
-            unsafe { stream.copy(self.address + offset as u64, address, length, to_device) };
-        self.failed |= !stream.quiescent();
-        self.allocation.uncertain = self.failed || self.pending != 0;
-        if self.allocation.uncertain || self.allocation.context.poisoned.load(Ordering::Acquire) {
-            stage.quarantine();
-            return match result {
-                Err(error) => Err(error),
-                Ok(()) => Err(Error::Unquiesced {
-                    operation: "CUDA delegate context restoration",
-                    code: -1,
-                }),
-            };
-        }
-        stage.drained();
-        result?;
-        stage.completed(length);
-        Ok(())
+        self.begin(stage, offset, length, to_device)?;
+        self.complete(stage, length)
     }
-}
 
-impl StagingCopy<'_> {
     pub(crate) fn begin(
         &mut self,
         stage: &mut crate::runtime::proxy_manager::StageBufferLease,
@@ -217,7 +209,7 @@ impl StagingCopy<'_> {
             let stream = slot
                 .as_mut()
                 .ok_or(Error::Internal("CUDA stage stream missing"))?;
-            // SAFETY: this task retains the GPU guard and pinned lease until
+            // SAFETY: this task retains the GPU range loan and pinned lease until
             // complete, including every failure/EOF path. The private host
             // registration cannot be crossed or reused while this slot is pending.
             let result = unsafe {
@@ -244,7 +236,6 @@ impl StagingCopy<'_> {
             }
             Err(_) => stage.drained(),
         }
-        self.allocation.uncertain = self.failed || self.pending != 0;
         result
     }
 
@@ -281,15 +272,26 @@ impl StagingCopy<'_> {
         } else {
             stage.drained();
         }
-        self.allocation.uncertain = self.failed || self.pending != 0;
         result?;
         stage.completed(length);
         Ok(())
     }
 }
 
-impl Drop for StagingCopy<'_> {
+impl Drop for StagingCopy {
     fn drop(&mut self) {
-        self.allocation.uncertain |= self.failed || self.pending != 0;
+        let mut allocation = self
+            .memory
+            .allocation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if self.failed || self.pending != 0 {
+            allocation.uncertain = true;
+            // Keep the actual device/context/external owner and its range loan.
+            // A successful sibling must not release this unresolved native work.
+            std::mem::forget(Arc::clone(&self.memory));
+        } else {
+            allocation.dma.retain(|range| *range != self.range);
+        }
     }
 }

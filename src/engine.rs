@@ -379,9 +379,9 @@ impl TransferEngine {
 
     /// Validates the entire batch before sending any request. Admission and
     /// validation failures return `Err`; execution failures are in the report.
-    /// TCP/staged READ commits a local request after its complete response.
-    /// Direct RDMA and CUDA IPC can change READ destinations or remote WRITE
-    /// bytes before a final receipt, including on failure. Inspect locally_drained
+    /// Remote staging commits READ destinations one completed chunk at a time.
+    /// Remote staging, Direct RDMA and CUDA IPC can change local READ or remote
+    /// WRITE bytes before a final receipt, including on failure. Inspect locally_drained
     /// and remote_effect before releasing owners or considering a retry.
     /// WRITE success requires source acknowledgement. No automatic retries.
     pub fn submit_and_wait(

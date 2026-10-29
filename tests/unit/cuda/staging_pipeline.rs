@@ -199,6 +199,7 @@ fn pin(
         )
         .unwrap();
     channel.write_all(&[0, depth]).unwrap();
+    channel.write_all(&3u64.to_be_bytes()).unwrap();
     Reply::read(&mut channel, source.source_epoch()).unwrap();
     let mut nonce = [0; 16];
     channel.read_exact(&mut nonce).unwrap();
@@ -607,9 +608,17 @@ fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
             source.stats().unwrap().rdma.unwrap().window_key_exhaustions,
             1
         );
+        assert_eq!(
+            (report.completed_requests, report.transferred_bytes),
+            (0, 0)
+        );
         let mut bytes = [0; 8];
         local.read(0, &mut bytes).unwrap();
-        assert_eq!(bytes, [0xcc; 8]);
+        let mut expected = [0xcc; 8];
+        if op == TransferOp::Read {
+            expected[..3].fill(0x57);
+        }
+        assert_eq!(bytes, expected);
         requester.close(Duration::from_secs(3)).unwrap();
         source.close(Duration::from_secs(3)).unwrap();
         assert_eq!(source.stats().unwrap().rdma.unwrap().active_windows, 0);

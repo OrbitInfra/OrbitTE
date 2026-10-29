@@ -66,14 +66,17 @@ an unconfirmed operation before deferred cleanup. OrbitTE uses scoped receipts
 and an inline source handler to preserve that distinction with bounded resources.
 The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
 stage buffers (`id % kStageBuffers`). `staging_task.rs` owns the source task and
-its private `Chunk` registrations; `remote_stage_operation.rs` owns scoped
-messages and requester scheduling. Per-slot CUDA completion supplies the
+its source `Chunk` scheduling; `requester_task.rs` owns bounded local PRE/POST
+and CROSS scheduling. `stage_registration.rs::PinnedStage` owns the actual
+pinned lease, its private registration and ordered retirement on either side.
+`remote_stage_operation.rs` owns scoped messages and receipts. Per-slot CUDA completion supplies the
 PRE/POST completion boundary, while TCP/RDMA still own CROSS.
 
 The current implementation overlaps remote CUDA work with CROSS in one source
 handler. TENT's full event loop also schedules the requester's local stage and
-tracks asynchronous remote operations across chunks. Requester-side bounded
-pipelines, location selection and broader asynchronous remote scheduling remain
+tracks asynchronous remote operations across chunks. OrbitTE now reuses one
+bounded requester slot with synchronous local PRE/POST. Multiple asynchronous
+requester slots, location selection and broader remote scheduling remain
 in the existing P5/P6 queue. This is a scoped step toward that architecture.
 
 ## Serial remote staging
@@ -87,35 +90,48 @@ new payload transport is introduced. The flag defaults to false.
 
 | Phase | READ | WRITE |
 | --- | --- | --- |
-| Local preparation | Reserve private host payload | Snapshot local bytes into private host payload |
-| Pin | Validate source epoch/region/range/permission; pin one chunk and lock the GPU allocation | Same |
-| Delegate PRE | Source GPU → pinned chunk, wait for event and context restore | — |
-| CROSS | TCP/RDMA chunk → requester private payload | Requester private payload → TCP/RDMA chunk |
-| Delegate POST | — | Pinned chunk → source GPU, wait for event and context restore |
-| Unpin | Retire private registration/MRs and release the actual chunk, then acknowledge | Same |
-| Local completion | Commit the accumulated private payload into the local range | Complete only after the final Unpin receipt |
+| Local preparation | Reserve one bounded private slot and borrow the full local GPU range | Same; no full-request snapshot |
+| Pin | Validate source epoch/region/range/permission; borrow its GPU range and pin its slots | Same |
+| PRE | Source GPU → pinned source slot, with event/context completion before CROSS | Local range → requester slot, with event/context completion before CROSS |
+| CROSS | TCP/RDMA source slot → requester slot | Requester slot → TCP/RDMA source slot |
+| POST | After the scoped CROSS receipt, requester slot → local range | Delegate source slot → source GPU |
+| Unpin | Drain accepted copies, retire private registrations/MRs and release source slots/range, then acknowledge | Same |
+| Request completion | Require final Unpin receipt and requester slot/MR retirement | Same |
 
 One control connection and one source admission own the entire session. Each
 chunk completes before the next starts, including the short tail. Nested CROSS
 calls the existing transport directly; it never recursively submits an ordinary
 batch or waits for a second handler. One handler, one parent batch slot and one
-pinned chunk are sufficient. Native RDMA grant/CQ/MR budgets still apply.
+pinned source chunk per engine are sufficient. A GPU requester also needs one
+local pinned chunk; self-peer and opposite-direction sessions share their
+engine pool and need source width plus one requester slot. Native RDMA grant/CQ/MR budgets still apply.
 RDMA uses its slices protocol even for a single chunk, retaining its bounded
 same-connection QP-cache-miss retries and actual verbs payload path.
 
-The requester owns one full-request private host payload under the parent
-inflight byte charge; transport buffers and the pinned pool retain their own
-bounds. READ POST borrows that private payload under its access lock, without
-a second full-request allocation. WRITE releases its local GPU lock before
-Pin; READ acquires its local GPU lock only after confirmed Unpin. The source
-uses a nonblocking allocation lock and fails busy admission with
-`ResourceExhausted`. This avoids self-peer and opposite-direction GPU lock cycles.
-The default depth of one preserves this serial contract. The requester still
-uses a full-request private payload when the remote pipeline below is enabled.
+The requester reuses one private host slot across all CROSS legs, always at
+local offset zero. CUDA requesters reserve one physical pool slot and retain its
+stream/event across sessions. CPU requesters allocate at most
+`min(request.length, staging_chunk_size)` host bytes under the parent admission;
+they do not spend CUDA pool slots. No full-request snapshot or commit payload
+is allocated. TCP/RDMA retain their independent bounded transport resources.
 
-Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin.
-Current version 18 adds requested/negotiated pipeline width to the Pin exchange;
-both peers must use version 18. Older headers are rejected.
+Pin negotiates `min(source chunk size, requester chunk size)` bytes per logical
+chunk. Each side still reserves and reports its actual configured physical slot
+size. A larger source allocation does not enlarge the negotiated CROSS grant.
+The tail uses its exact remaining byte count.
+
+`cuda::StagingCopy` retains the actual `Arc<CudaMemory>` and an exclusive logical
+range loan. Its allocation mutex protects only metadata, not network I/O or
+slot event waits. Nonoverlapping source/requester ranges on the same allocation
+can progress concurrently. Overlapping staging, CPU or RDMA access fails before
+new work; whole-allocation IPC export conflicts with every staging range.
+Self-peer overlap is rejected rather than providing snapshot-copy semantics.
+A busy metadata mutex fails admission with `ResourceExhausted`. Pool exhaustion
+also fails explicitly; no hidden pool or silent reduction of source depth is used.
+
+Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
+18 added pipeline width. Current version **19** also carries the requester chunk
+cap in Pin. Both peers must use version 19; older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
@@ -123,10 +139,13 @@ outside their session. These identities fence reuse; they are not authentication
 
 CROSS receipts follow actual transport grant cleanup. Unpin first unregisters
 the private view, retires every native MR and verifies no private registration
-borrower remains, then explicitly releases the chunk and GPU guard. A transport
+borrower remains, then explicitly releases the chunk and GPU range loan. A transport
 ACK alone never completes a remote GPU WRITE. Lost POST/Unpin replies leave WRITE
-with `RemoteEffect::Unknown`; READ does not commit local bytes without confirmed
-Unpin. Successful local native drain allows cleanup after EOF, while uncertain
+with `RemoteEffect::Unknown`. READ commits each completed chunk after its scoped
+CROSS receipt; a lost Unpin receipt still fails the request even when all chunks
+are visible. A failed request contributes zero completed requests/bytes, but may
+have a visible prefix. `locally_drained` proves physical local completion, not
+rollback, and failed groups do not send attached notifications. Successful local native drain allows cleanup after EOF, while uncertain
 CUDA or RDMA cleanup retains actual backing and the responsible parent/source
 admission. Ordinary confirmed errors remain errors even when locally drained.
 There is no automatic retry of a possibly executed WRITE.
@@ -158,7 +177,7 @@ pin. Failed construction or destruction remains charged without a Drop retry.
 | --- | --- |
 | READ | Delegate initially queues PRE for each slot. CROSS waits for its slot's CUDA event, then transfers bytes. The freed slot queues the next PRE while other chunks are in flight. |
 | WRITE | CROSS fills a drained slot. Delegate queues POST and returns an acceptance receipt. The next CROSS may use another slot; reuse of the same slot waits for its earlier POST. |
-| Final Unpin | Drain every accepted PRE/POST, retire private registrations/MRs and release the GPU guard before replying. READ commits its requester payload only after this reply. |
+| Final Unpin | Drain every accepted PRE/POST, retire private registrations/MRs and release the GPU range loan before replying. Earlier completed READ chunks may already be visible locally. |
 
 A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
 `remote_delegates` and completed-chunk counters advance only after event wait and
@@ -168,9 +187,13 @@ cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
 replayed after an ambiguous reply.
 
 EOF, a protocol error or deadline expiry stops new work but drains every accepted
-copy once. The GPU allocation tracks the aggregate pending count and a sticky
-uncertain flag; a later slot's success cannot clear another slot's failed wait
-or context restore. A recovered submission error can release resources after
+copy once. Each range owner tracks accepted copies; each physical slot owns
+its stream/event. Ordinary pending work does not fence the entire allocation.
+Native uncertainty is published as a sticky allocation flag after private
+host/lease/stream locks are released. A successful sibling never clears it.
+An uncertain CUDA copy retains the actual GPU owner and range loan. Private MR
+retirement failure retains the host stage and responsible admission even when
+CUDA has drained and its GPU range loan can be released. A recovered submission error can release resources after
 all other slots drain. Unproven completion retains the actual native buffers,
 registrations and responsible admission. No extra handler or nested batch slot
 is required.
@@ -184,8 +207,8 @@ An error after a partial native wire exchange may still require closing the
 connection with an unknown remote effect. A requester still writing CROSS may
 observe a socket error before it can read the source's error receipt. Long RDMA sessions rotate exhausted
 MW key indices through the [PD-owned key domain](rdma-cuda.md).
-The new installed pipeline profile passes 24 fresh two-host cases on stable/MSRV
-plus four independent repeats. Source and this healthy profile are accepted;
+The earlier v18 pipeline profile passes 24 two-host cases on stable/MSRV
+plus four independent repeats. That exact source and healthy profile are accepted;
 see [qualification](qualification.md#bounded-remote-cuda-pipeline).
 Scheduling overlap and native completion receipts do not establish GPU execution
 overlap or a performance improvement.
@@ -237,11 +260,14 @@ separate evidence below; physical faults and full ProxyManager parity remain ope
 ### Installed pipeline validation
 
 Set `staging_pipeline_depth` in the hardware profile, or use
-`source_pipeline_depth` / `requester_pipeline_depth` for asymmetric caps.
+`source_pipeline_depth` / `requester_pipeline_depth` for asymmetric depths.
+`source_chunk_size` / `requester_chunk_size` override the shared
+`staging_chunk_size` for physical slots; native copy/grant checks use the
+negotiated minimum while pinned-byte accounting uses each physical size.
 The consumer reports its actual configuration; the harness requires the
 negotiated width to match the physical pool slots and persistent stream/event
 owners. Source private MR counts scale by negotiated width, while the requester
-still has one private payload MR per session. Byte and chunk counts do not scale
+has one reusable private slot MR per session. Byte and chunk counts do not scale
 with width.
 
 The staging-only observer adds context push and stream/event create/destroy
@@ -260,7 +286,8 @@ to the chunk count. Main pipeline cases turn the ring more than three times and
 include a tail. All six sessions reuse physical slots; setup/readback copies
 are also checked. Tests distinguish unconfirmed submissions from physical DMA
 execution: native receipts do not establish execution overlap or throughput.
-The fresh 24-case installed matrix uses wire v18 and the generation-aware
+The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
-earlier serial evidence remains bound to its original observer and wire version. Requester-side bounded staging
-and broader asynchronous remote scheduling remain in P5.5b.
+earlier serial evidence remains bound to its original observer and wire version.
+Requester bounded staging requires its own v19 artifact and evidence. Broader
+asynchronous remote scheduling remains in P5.5b.

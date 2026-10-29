@@ -102,8 +102,9 @@ completion and private MR cleanup. This healthy serial profile is independently
 accepted. The opt-in [bounded remote pipeline](docs/staging.md#bounded-remote-pipeline)
 supports up to 16 reusable slots and passes 24 fresh installed H20 TCP/RDMA
 cases plus four independent repeats. Source and this healthy pipeline profile
-are accepted; requester-side bounded staging and broader asynchronous remote
-scheduling remain open.
+are accepted for that recorded artifact. Requester staging now uses one bounded
+slot and negotiates chunk sizes; its v19 hardware qualification is pending.
+Broader asynchronous remote scheduling remains open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
