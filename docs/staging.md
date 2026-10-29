@@ -442,6 +442,9 @@ hardware execution is deferred while new resource requests are paused. The
 shared worker shards and requester query event loop also require fresh installed
 evidence; the CPU controls prove ownership and scheduling only. The shared-QP
 control holds the first native payload completion while a second CROSS finishes,
-with exact bytes, guards and retained grant/RQ/range owners. A serialized CROSS
-control must fail that progress condition. General remote-operation progress,
+with exact bytes, guards and retained grant/RQ/range owners. Native fault injection
+selects an actual private MR and exact WR identity, independently of posting
+batch sizes. A serialized CROSS control fails that progress condition. Expiring
+the first CROSS after a later chunk finishes preserves exact partial effects;
+unproven cleanup retains the real owners. General remote-operation progress,
 asynchronous TCP payload and location selection remain in P5.5b.

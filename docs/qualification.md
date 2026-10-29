@@ -42,21 +42,48 @@ This corresponds to frozen TENT's `submitCrossStage` / `progressBatch` split.
 
 Per-CROSS slice caps account for the whole concurrent window while existing
 grant, receive and byte credits still charge actual work. The public-path CPU
-control uses L/R=3/2, two slices per CROSS, one physical QP and a folded tail.
-It holds the first payload CQE while the second CROSS completes, checks exact
+control uses L/R=3/2, two slices per CROSS, one physical QP and a short final chunk.
+It holds one exact payload CQE from the first private MR while the second CROSS completes, checks exact
 bytes/guards and verifies the first still owns its native credits and GPU range.
 A second control fails the later CROSS with an earlier payload pending; all
 owners must drain, or failed QP cleanup must preserve `Unquiesced` and actual
-pins, GPU owners and parent admission. Source scope controls reject early,
+pins, GPU owners and parent admission. A further control expires the first
+CROSS after the second has already changed bytes: READ preserves the exact
+noncontiguous POST range, WRITE keeps `RemoteEffect::Unknown`, and uncertain
+native cleanup retains the actual owners. Source scope controls reject early,
 duplicate and stale FinishCross and premature Unpin. Existing CUDA failure
 controls check actual submitted ranges because completed READ chunks need not
 form a prefix.
 
 Evidence is outside Git at
 `/root/orbitte-artifacts/staging-concurrent-cross-20261029/`.
-Full source gates and independent acceptance are pending. Failed development
-runs are retained separately from accepted results. Hardware requests remain
-paused: installed v20 execution, DMA overlap and performance are unqualified.
+Production gates at `9280d1f` pass stable/MSRV tests and Clippy, CUDA-only
+checks, all 51 controller controls, the CPU trace fixture and strict docs.
+The final source at `adc803f` adds test-only corrections and the partial-effects
+regression. Stable (restricted to two CPUs) and Rust 1.85 combined runs each pass
+314 unit tests, eight integration tests and one doctest; combined Clippy and
+format checks pass. `gates.json`, `final-gates.json`,
+`final-correction-gates.json` and the source manifests
+bind the commands, revisions and unchanged production files.
+
+`serialized-current-control/manifest.json` records a clean `665a32c` archive
+with only the CROSS window forced to one; the same healthy progress control
+fails as expected. The final test-only change normalizes an equivalent Boolean
+predicate for MSRV Clippy; the original warning and corrected gate are retained.
+Independent source review accepts `adc803f` for this source/CPU ownership
+scope. `independent-review/source-review-adc803f.json` binds the frozen diff,
+feature/compiler gates and final incremental checks. The corrected fault
+controls pass 20/20 independent two-CPU repeats. Earlier repeated controls
+include failures before the first payload was accepted; only the corrected
+run is accepted. Failed development and CI runs are retained separately. The first fault shim used post-call ordinals, which could
+hold all CQ credits or select a slice refill; it now binds an actual private MR
+and a single accepted WR. The second MR's one error CQE is delivered only after
+the first MR owns an accepted WR; other completions can still return credits.
+This also removes the assumption that preparation order implies posting order.
+Refill fault injection waits for all initial CUDA event records. Native-failure checks require a consumed error CQE while allowing the
+caller to observe either the original error or the asynchronously retired lane.
+These corrections retain the exact byte, drain and uncertain-owner assertions.
+Hardware requests remain paused: installed v20 execution, DMA overlap and performance are unqualified.
 TCP payload, control exchanges and source CUDA preparation retain their
 synchronous boundaries; general remote-operation progress, asynchronous TCP
 payload, location selection and full ProxyManager parity remain open.

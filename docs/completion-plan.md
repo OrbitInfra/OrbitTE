@@ -595,8 +595,9 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   capacity separately from CUDA rings, per-CROSS slice caps preserve actual
   quotas, and scoped FinishCross selects bilateral completion before slot reuse.
   Shared-QP reversed completion and aggregate failure controls cover the new
-  composition; independent source acceptance is pending. Qualify the current
-  v20 artifact and complete general remote-operation progress, asynchronous TCP
+  composition. Independent source review accepts `adc803f`; see
+  [the concurrent CROSS evidence](qualification.md#concurrent-rdma-cross).
+  Qualify the current v20 artifact and complete general remote-operation progress, asynchronous TCP
   payload and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
@@ -883,7 +884,7 @@ this source/CPU ownership scope. Nonblocking requester chunk progress with
 per-slot event queries and immediate refill is source-accepted at `1ac1d01`.
 Bounded concurrent RDMA CROSS is implemented with shared native workers,
 independent payload query, per-slot FinishCross and aggregate cleanup. Independent
-source acceptance is pending; see [the evidence](qualification.md#concurrent-rdma-cross).
+source review accepts `adc803f`; see [the evidence](qualification.md#concurrent-rdma-cross).
 The next implementation boundary is general remote-operation progress and
 asynchronous TCP payload, followed by location selection. Current v20 hardware
 qualification and full ProxyManager parity remain open.
