@@ -39,8 +39,12 @@ fn requester_reuses_one_slot_at_negotiated_chunk_size_including_tails() {
                 let source_bytes: [u8; 64] = std::array::from_fn(|i| (i * 37 + 11) as u8);
                 let a = allocation(&source_bytes);
                 let b = allocation(&[0xcc; 64]);
+                let source_gpu = memory(&a);
                 let remote = source
-                    .register_cuda_memory_batch(&[(memory(&a), 1, 62)], Permission::RemoteReadWrite)
+                    .register_cuda_memory_batch(
+                        &[(source_gpu.clone(), 1, 62)],
+                        Permission::RemoteReadWrite,
+                    )
                     .unwrap()
                     .remove(0);
                 let local_gpu = memory(&b);
@@ -96,6 +100,13 @@ fn requester_reuses_one_slot_at_negotiated_chunk_size_including_tails() {
                     let mut bytes = [0; 60];
                     local.read(0, &mut bytes).unwrap();
                     assert_eq!(bytes, expected);
+                    let mut source_observed = [0; 64];
+                    source_gpu.read(0, &mut source_observed).unwrap();
+                    let mut source_expected = source_bytes;
+                    if operation == TransferOp::Write {
+                        source_expected[2..2 + length].copy_from_slice(&write);
+                    }
+                    assert_eq!(source_observed, source_expected);
                 }
                 let chunk = source_chunk.min(local_chunk);
                 let chunks = length.div_ceil(chunk);
