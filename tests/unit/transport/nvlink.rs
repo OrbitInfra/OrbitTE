@@ -88,7 +88,7 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
         } else {
             2 << 20
         },
-        handler_timeout: Duration::from_millis(150),
+        handler_timeout: Duration::from_secs(2),
         ..EngineConfig::default()
     })
     .unwrap();
@@ -105,7 +105,7 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
     };
     let mut channel = ControlChannel::connect(
         engine.endpoint(),
-        crate::engine::deadline(Duration::from_secs(2)).unwrap(),
+        crate::engine::deadline(Duration::from_secs(5)).unwrap(),
     )
     .unwrap();
     channel.write_all(&request.encode()).unwrap();
@@ -129,7 +129,12 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
         memory.read(100, &mut [0; 1]).unwrap();
         return;
     }
-    assert_eq!(reply.unwrap().length, GRANT_SIZE as u64);
+    assert_eq!(
+        reply
+            .unwrap_or_else(|error| panic!("{case}: {error:?}"))
+            .length,
+        GRANT_SIZE as u64
+    );
     let mut grant = [0; GRANT_SIZE];
     if case == "partial-grant" {
         channel.read_exact(&mut grant[..1]).unwrap();
@@ -155,7 +160,12 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
     if case == "partial" {
         channel.write_all(&receipt[..20]).unwrap();
     } else if case == "timeout" {
-        std::thread::sleep(Duration::from_millis(200));
+        // The server must close after its receipt deadline, while the client
+        // still has time remaining. Closing the client first would only test EOF.
+        assert!(matches!(
+            Reply::read(&mut channel, engine.source_epoch()),
+            Err(Error::Io(_))
+        ));
     } else if case != "partial-grant" {
         channel.write_all(&receipt).unwrap();
     }
