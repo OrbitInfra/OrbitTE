@@ -54,7 +54,13 @@ controls, the CPU trace fixture and strict documentation checks pass. `gates.jso
 records these commands and results. The original single-QP/eight-byte fixture
 rejected the concurrency control with `ResourceExhausted`; that failed control
 is preserved, and the accepted control uses the existing default RDMA budgets.
-Independent source review remains pending. No new hardware task is requested.
+Independent source review accepts `3db26ee` for this source/CPU ownership scope.
+`independent-review/source-review-3db26ee.json` binds the frozen source, diff
+and 16 passing independent gates. [CI](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594882)
+passes all eight feature/compiler combinations; the
+[frozen TENT CPU comparison](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594607)
+and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40835594687)
+also pass for that source. No new hardware task is requested.
 Installed v19 execution, physical overlap and performance remain unqualified.
 Nonblocking chunk progress, concurrent CROSS on the wire and location selection
 remain open; shared threads do not establish complete ProxyManager parity.

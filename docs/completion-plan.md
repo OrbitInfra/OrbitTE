@@ -583,8 +583,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   A shared pool now starts at most eight shards, reuses idle threads and bounds
   each shard queue to 64 sessions. Pin follows dequeue; queued timeout/cancel
   destroys task captures before terminal delivery. Active work keeps its native
-  drain obligation, including caller unwind and task panic. Source review of this
-  new boundary is pending. Qualify the current v19 artifact and complete
+  drain obligation, including caller unwind and task panic. Independent source
+  review accepts this boundary at `3db26ee`; see
+  [the shared-shard evidence](qualification.md#shared-staging-worker-shards).
+  Qualify the current v19 artifact and complete
   nonblocking chunk progress, concurrent CROSS on the wire and location selection
   before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -867,7 +869,8 @@ progress from CROSS/Delegate waits; queue cancellation, native drain and final
 receipt fencing are source-accepted at `4441017`, including native uncertainty
 and worker-panic ownership controls. Shared ProxyManager shards are now implemented
 with lazy bounded admission, pre-Pin queue cancellation, task-terminal ownership
-and explicit thread close. Independent source review is pending. The next
+and explicit thread close. Independent source review accepts `3db26ee` for
+this source/CPU ownership scope. The next
 implementation boundary is nonblocking chunk progress, followed by concurrent
 CROSS scheduling and location selection. Full ProxyManager parity remains open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
