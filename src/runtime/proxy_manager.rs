@@ -2,10 +2,12 @@
 
 mod remote_stage_operation;
 mod requester_task;
+mod source_task;
 mod stage_buffer_cache;
 mod stage_registration;
 mod staging_task;
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -16,6 +18,10 @@ use crate::{Error, RegisteredMemory, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StagingStats {
+    /// Session progress workers, including workers being joined after failure.
+    pub progress_workers: usize,
+    /// Local scheduling failures that stopped admission of queued CROSS work.
+    pub cancelled_tasks: u64,
     /// Includes construction, checked-out chunks and failed cleanup.
     pub reserved_chunks: usize,
     pub reserved_bytes: usize,
@@ -54,6 +60,8 @@ struct StageBuffers {
 }
 
 pub(crate) struct ProxyManager {
+    progress_workers: AtomicUsize,
+    cancelled_tasks: AtomicU64,
     chunk_size: usize,
     buffers: Mutex<StageBuffers>,
     changed: Condvar,
@@ -74,6 +82,8 @@ impl ProxyManager {
             ));
         }
         Ok(Arc::new(Self {
+            progress_workers: AtomicUsize::new(0),
+            cancelled_tasks: AtomicU64::new(0),
             chunk_size,
             buffers: Mutex::new(StageBuffers {
                 open: true,
@@ -184,6 +194,8 @@ impl ProxyManager {
             .lock()
             .map_err(|_| Error::Internal("staging lock poisoned"))?;
         let mut stats = StagingStats {
+            progress_workers: self.progress_workers.load(Ordering::Acquire),
+            cancelled_tasks: self.cancelled_tasks.load(Ordering::Acquire),
             allocations: state.allocations,
             reuses: state.reuses,
             completed_chunks: state.completed_chunks,

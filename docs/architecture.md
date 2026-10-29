@@ -394,7 +394,12 @@ between metadata updates; disjoint sessions can progress together.
 and drain. Each `PinnedStage` owns its accepted pending copy; completion is
 consumed once before the slot is reused or retired. Local WRITE slots release
 after CROSS and local READ slots after POST, matching TENT's separate local and
-remote stage ownership. The slot retains both handles across sessions; close
+remote stage ownership. `staging_task.rs::StagingTask` owns one bounded session
+worker and up to `L` queued CROSS operations; `source_task.rs` owns source phases.
+The caller can submit local copies while the worker awaits remote receipts, and
+joins that worker before retiring registrations. Final Unpin waits for every
+local copy and remote receipt. Shared shards and concurrent CROSS on the wire
+remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

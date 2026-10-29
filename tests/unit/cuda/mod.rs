@@ -19,6 +19,7 @@ mod requester_staging;
 mod shim;
 mod staging;
 mod staging_pipeline;
+mod staging_progress;
 use shim::*;
 
 #[test]

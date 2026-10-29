@@ -29,6 +29,32 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Bounded session progress
+
+The current v19 source adds bounded CROSS command/completion queues and one
+joined connection worker per admitted staging request. Local CUDA progress can
+continue while a CROSS or Delegate receipt is pending. CROSS remains ordered on
+one connection; this does not implement TENT's shared shards or multiple CROSS
+operations on the wire. See [the ownership contract](staging.md#session-progress-and-completion).
+
+CPU controls hold a local CUDA event while CROSS progresses, hold a source
+Delegate receipt while local PRE/POST starts, and lose the final Delegate reply
+after every CROSS completed. A controlled local submit failure cancels queued
+CROSS commands while the active command drains; combined RDMA teardown failure
+must override the ordinary local error and retain the actual pin/context owner.
+Unequal rings, tails, self-peer admission and final POST drain controls remain.
+
+Evidence is stored outside Git at
+`/root/orbitte-artifacts/async-cross-20261029/`.
+Stable and Rust 1.85 combined runs each pass 302 unit tests, eight integration
+tests and one doctest; CUDA-only tests/Clippy, combined Clippy, all 50 hardware
+controller controls, the CPU trace fixture and strict documentation checks pass.
+`gates.json` preserves commands and outcomes, including the corrected CUDA-only
+Clippy diagnostic. Independent source review remains pending for this revision.
+No new Forge task or hardware execution is requested. Current installed
+qualification and performance remain unqualified; earlier H20 results retain
+their original artifact boundaries.
+
 ## Requester CUDA pipeline
 
 The current wire-v19 implementation adds an independent bounded requester ring
@@ -65,8 +91,8 @@ Hardware execution is deferred at the user's direction; no new task is requested
 The controller and consumer now account for each ring's own width, private MRs,
 persistent stream/events and physical pinned bytes. Neither these CPU controls
 nor earlier v18 hardware runs qualify the current artifact or demonstrate
-physical overlap or throughput. Full asynchronous CROSS/remote scheduling and
-location selection remain open.
+physical overlap or throughput. The session progress substage above extends this source boundary. Shared shards,
+concurrent CROSS on the wire and location selection remain open.
 
 ## Bounded requester CUDA staging
 

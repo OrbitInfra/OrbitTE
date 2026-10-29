@@ -27,6 +27,7 @@ pub(crate) struct FakeDevice {
     #[cfg(feature = "cuda")]
     pub(super) after_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     endpoints: AtomicUsize,
+    payload_posts: AtomicUsize,
     mrs: AtomicUsize,
     windows: AtomicUsize,
     window_indices: Mutex<std::collections::HashMap<u32, usize>>,
@@ -142,6 +143,7 @@ pub(super) unsafe extern "C" fn open_device(
         #[cfg(feature = "cuda")]
         after_open: Mutex::new(None),
         endpoints: AtomicUsize::new(0),
+        payload_posts: AtomicUsize::new(0),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
         window_indices: Mutex::default(),
@@ -711,6 +713,7 @@ unsafe extern "C" fn post(
     let device = unsafe { &*state.device };
     let cq = unsafe { &*state.cq };
     let mode = device.mode.as_str();
+    let ordinal = device.payload_posts.fetch_add(1, Ordering::AcqRel) + 1;
     {
         let grants = state.grants.lock().unwrap();
         let grant = &grants[&(memory as usize)];
@@ -757,7 +760,11 @@ unsafe extern "C" fn post(
             qpn: state.qpn + u32::from(mode == "wrong_qpn"),
             opcode: if write == 1 { 1 } else { 2 },
             length: request.length - u32::from(mode == "length"),
-            status: u32::from(mode == "wc" || mode == "wc_close0"),
+            status: u32::from(
+                mode == "wc"
+                    || mode == "wc_close0"
+                    || (mode == "copy_second_error_close0" && ordinal == 2),
+            ),
             vendor_error: 0,
             ..Default::default()
         });

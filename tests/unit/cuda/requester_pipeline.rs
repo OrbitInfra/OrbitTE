@@ -80,7 +80,11 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                     )
                     .unwrap();
                 waiting.recv_timeout(Duration::from_secs(3)).unwrap();
-                assert_eq!(pending(&b), width, "{transport:?}/{operation:?}/L={width}");
+                assert_eq!(
+                    pending(&b),
+                    width - completed,
+                    "{transport:?}/{operation:?}/L={width}"
+                );
                 let mut pending_addresses: Vec<_> = b
                     .streams
                     .lock()
@@ -98,7 +102,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                 pending_addresses.sort_unstable();
                 assert_eq!(
                     pending_addresses,
-                    (completed..completed + width)
+                    (completed..width)
                         .map(|i| local.base_address() as usize + 5 + i * 3)
                         .collect::<Vec<_>>()
                 );
@@ -114,16 +118,24 @@ fn requester_pipeline_keeps_independent_rings_pending_until_slot_reuse() {
                     (width, physical * width)
                 );
                 assert_eq!(stats.completed_chunks, (round * chunks + completed) as u64);
-                let stats = source.stats().unwrap().staging;
-                assert_eq!(
-                    stats.remote_crosses,
-                    (round * chunks
-                        + if operation == TransferOp::Read {
-                            width
-                        } else {
-                            completed
-                        }) as u64
-                );
+                let expected_crosses = (round * chunks
+                    + if operation == TransferOp::Read {
+                        width
+                    } else {
+                        completed
+                    }) as u64;
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let stats = loop {
+                    let stats = source.stats().unwrap().staging;
+                    if stats.remote_crosses == expected_crosses {
+                        break stats;
+                    }
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "CROSS must progress while local CUDA waits: {stats:?}"
+                    );
+                    std::thread::yield_now();
+                };
                 assert_eq!(stats.remote_unpins, round as u64);
                 resume.send(()).unwrap();
                 let report = batch.wait(Duration::from_secs(5)).unwrap();
