@@ -47,9 +47,29 @@ actual local GPU shim owner is retained when native cleanup is unproven.
 
 Evidence is selected outside Git at
 `/root/orbitte-artifacts/staging-connect-progress-20261030/`.
-Source/CPU gates and independent acceptance are pending. This does not qualify
-installed v21 execution, real DMA overlap or performance; hardware tasks remain
-paused. Pin and native handshakes still occupy their session worker, native/CQ
+At `a2d1b9e`, stable and Rust 1.85 pass all four feature profiles' tests and
+Clippy. Each combined run passes 329 unit tests, eight integration tests and one
+doctest with two CPUs. Both relay gates, the 25-observation Rust CPU trace and
+strict docs/local-link checks pass. `gates.json` records 22 primary gates;
+`source-manifest.json` and `build-environment.json` bind the source and tools.
+
+Independent source review accepts `a2d1b9e` for this source/CPU boundary.
+`independent-review/source-review-a2d1b9e.json` records the inspected diff and 21
+independently rerun feature/compiler/relay/format/docs gates. The reviewer also
+audits the primary CPU trace and negative controls. The unchanged controller
+suite is not repeated locally; GitHub CI executes its existing CPU gate.
+`stop-ignorant-control/manifest.json` records a fresh archive with only the
+channel's task stop removed. The unchanged partial-Pin and held-WR setup tests
+both fail their two-second stop assertion while the original request deadline
+is ten seconds. The independently checked archive and per-file hashes confirm
+the unique mutation and unchanged tests.
+
+The new Pin profiles cover READ and WRITE; the combined native socket stop and
+cleanup-failure profiles cover READ setup and finish. Existing WRITE-effect
+regressions pass separately. Source EOF cleanup remains withheld until after
+requester terminal, so the tests distinguish requester retirement from remote
+loan release. This does not qualify installed v21 execution, real DMA overlap
+or performance; hardware tasks remain paused. Pin and native handshakes still occupy their session worker, native/CQ
 waits remain synchronous, and public active cancellation and engine close order
 are unchanged. Full asynchronous control progress, location selection and full
 ProxyManager/API/wire parity remain open. Frozen TENT likewise pins remote stage
