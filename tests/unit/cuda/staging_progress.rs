@@ -276,8 +276,9 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             )
             .unwrap();
         local_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(hold.0.lock().unwrap().0);
-        assert!(requester.stats().unwrap().rdma.unwrap().work_requests > 0);
+        wait_until(|| {
+            hold.0.lock().unwrap().0 && requester.stats().unwrap().rdma.unwrap().work_requests > 0
+        });
         // The first CROSS owns an accepted WR while the second reaches POST.
         // Its local copy failure must cancel queued work and drain that real WR.
         b.copy_error.store(1, Ordering::Release);
