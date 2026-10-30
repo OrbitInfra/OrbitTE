@@ -417,8 +417,13 @@ pending or terminal result. The requester keeps its generation occupied until
 terminal confirmation, while querying and finishing other native CROSS owners.
 This follows TENT's `submitRemoteStage` / `INFLIGHT_REMOTE` / `tryTakeResult`
 ownership. Final Unpin waits for every local copy and terminal remote result.
-TCP payload and socket exchanges remain synchronous; asynchronous TCP/control
-progress and location scheduling remain open. The slot retains both handles across sessions; close
+`tcp/task.rs::TcpTask` owns a TCP payload snapshot, partial request/reply positions
+and its actual local registration. Ordinary TCP and staging use the same bounded
+nonblocking progress. `ControlOperation` retains one scoped partial response;
+`TcpCross` sequences its outer header, TCP task and CROSS receipt. The session
+never interleaves another operation into a partial frame. Connect/Pin, native
+RDMA setup/finish and source handlers remain synchronous; their control progress
+and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

@@ -80,6 +80,7 @@ fn path_table_bounds_and_duplicate_identities_are_rejected_before_selection() {
             stream: listener.accept().unwrap().0,
             deadline: Instant::now() + Duration::from_secs(1),
             stopping: None,
+            nonblocking: false,
         };
         (sender, receiver)
     };

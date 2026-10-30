@@ -29,6 +29,34 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Socket progress
+
+The current v21 source adds a concrete TcpTask shared by ordinary TCP and remote
+staging. It owns partial request/reply/payload/ACK positions, a bounded snapshot
+and the actual local registration. Scoped control operations preserve partial
+receipts; each session has one framing owner and never interleaves protocol bytes.
+TCP CROSS keeps outer header, inner transfer and final scoped receipt distinct.
+Staging local failure/stop can cancel pending socket I/O before its original
+deadline, then joins native drain and task destruction before owner retirement.
+
+CPU controls cover byte-fragmented replies, READ guards and EOF, real WRITE
+backpressure with snapshot/registration retention, and a peer withholding a
+partial Delegate reply or TCP payload through local failure and worker exit.
+The latter checks exact partial bytes, missing Unpin, healthy drain and retained
+GPU owners when context restoration is uncertain. Existing shared-QP/native
+cleanup failures and both feature families remain required regression gates.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/staging-control-progress-20261030/`.
+Full gates, blocking-I/O negative control and independent source review are pending.
+This is source/CPU work only: current installed v21 execution, DMA overlap and
+performance remain unqualified; hardware requests remain paused. Connect/Pin,
+native RDMA setup/finish, source handlers and ordinary local GPU snapshot/commit
+remain synchronous. Ordinary active batch cancellation, readiness notification,
+location selection and full ProxyManager/API/wire parity remain outside this
+substage. Frozen TENT's ordinary TcpTask uses synchronous workers; its separate
+hp_tcp async provider is not implemented by this change.
+
 ## Remote Delegate progress
 
 The v21 source submits CUDA Delegate work independently of completion at every

@@ -47,7 +47,7 @@ impl fmt::Display for Error {
             }
             Self::RequesterClosed => f.write_str("requester admission is closed"),
             Self::InvalidTask => f.write_str("task is outside the submitted batch"),
-            Self::Cancelled => f.write_str("task cancelled before physical submission"),
+            Self::Cancelled => f.write_str("transfer cancelled"),
             Self::Unquiesced { operation, code } => write!(
                 f,
                 "{operation} has unproven quiescence (status {code}); resources retained"

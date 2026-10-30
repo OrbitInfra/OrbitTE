@@ -1,7 +1,11 @@
+mod task;
+
+pub(crate) use task::TcpTask;
+
 use std::time::Instant;
 
 use crate::engine::{PreparedTransfer, remaining};
-use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request, buffer};
+use crate::runtime::control_plane::{ControlChannel, Operation, Request, buffer};
 use crate::{
     Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
@@ -19,8 +23,9 @@ impl TcpTransport {
             crate::runtime::proxy_manager::ProxyManager,
         >,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
-        let mut bytes = Self::payload(
+        let mut task = TcpTask::new(
             operation,
+            peer,
             request,
             deadline,
             #[cfg(feature = "cuda")]
@@ -29,44 +34,31 @@ impl TcpTransport {
         .map_err(|error| (error, RemoteEffect::None))?;
         let mut channel = ControlChannel::connect(peer.endpoint, deadline)
             .map_err(|error| (error, RemoteEffect::None))?;
-        Self::exchange(
-            operation,
-            peer,
-            request,
-            &mut channel,
-            &mut bytes,
-            #[cfg(feature = "cuda")]
-            proxy,
-        )
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn transfer_on(
-        operation: TransferOp,
-        peer: &RemoteSegment,
-        request: &PreparedTransfer,
-        channel: &mut ControlChannel<'_>,
-        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
-            crate::runtime::proxy_manager::ProxyManager,
-        >,
-    ) -> std::result::Result<(), (Error, RemoteEffect)> {
-        let mut bytes = Self::payload(
-            operation,
-            request,
-            channel.deadline,
-            #[cfg(feature = "cuda")]
-            proxy,
-        )
-        .map_err(|error| (error, RemoteEffect::None))?;
-        Self::exchange(
-            operation,
-            peer,
-            request,
-            channel,
-            &mut bytes,
-            #[cfg(feature = "cuda")]
-            proxy,
-        )
+        let result = (|| {
+            let mut idle = 0u32;
+            loop {
+                let mut advanced = false;
+                if task.progress(
+                    &mut channel,
+                    &mut advanced,
+                    #[cfg(feature = "cuda")]
+                    proxy,
+                )? {
+                    return Ok(());
+                }
+                if advanced {
+                    idle = 0;
+                } else if idle < 128 {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::park_timeout(
+                        std::time::Duration::from_micros(200).min(remaining(deadline)?),
+                    );
+                }
+                idle = idle.saturating_add(1);
+            }
+        })();
+        result.map_err(|error| (error, task.effect()))
     }
 
     fn payload(
@@ -86,61 +78,6 @@ impl TcpTransport {
             request.local.read(request.local_offset, &mut bytes)?;
         }
         Ok(bytes)
-    }
-
-    fn exchange(
-        operation: TransferOp,
-        peer: &RemoteSegment,
-        request: &PreparedTransfer,
-        channel: &mut ControlChannel<'_>,
-        bytes: &mut [u8],
-        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
-            crate::runtime::proxy_manager::ProxyManager,
-        >,
-    ) -> std::result::Result<(), (Error, RemoteEffect)> {
-        let deadline = channel.deadline;
-        let mut effect = RemoteEffect::None;
-        let result = (|| {
-            let operation_code = if operation == TransferOp::Read {
-                Operation::TcpRead
-            } else {
-                Operation::TcpWrite
-            };
-            channel.write_all(
-                &Request {
-                    operation: operation_code,
-                    epoch: peer.epoch,
-                    region: request.remote.id,
-                    offset: request.remote_offset as u64,
-                    length: request.length as u64,
-                }
-                .encode(),
-            )?;
-            let reply = Reply::read(channel, peer.epoch)?;
-            if operation == TransferOp::Read {
-                if reply.status != 0 || reply.length != request.length as u64 {
-                    return Err(Error::Protocol("READ payload length/status"));
-                }
-                channel.read_exact(bytes)?;
-                remaining(deadline)?;
-                #[cfg(feature = "cuda")]
-                proxy.write(&request.local, request.local_offset, bytes, deadline)?;
-                #[cfg(not(feature = "cuda"))]
-                request.local.write(request.local_offset, bytes)?;
-            } else {
-                if reply.status != 9 {
-                    return Err(Error::Protocol("WRITE missing ready response"));
-                }
-                effect = RemoteEffect::Unknown;
-                channel.write_all(bytes)?;
-                let reply = Reply::read(channel, peer.epoch)?;
-                if reply.status != 0 || reply.length != 0 {
-                    return Err(Error::Protocol("WRITE acknowledgement length/status"));
-                }
-            }
-            Ok(())
-        })();
-        result.map_err(|error| (error, effect))
     }
 
     pub(crate) fn serve(

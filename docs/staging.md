@@ -88,7 +88,8 @@ on one connection and queries their payload completion independently.
 `rdma_transport/transfer.rs::RdmaTransfer` owns the actual slices and registration,
 matching TENT's submitted internal batch and `progressBatch` boundary. The
 existing transport workers still own CQ progress. Each control exchange is
-serialized, and TCP payload retains its synchronous path.
+serialized. `transport/tcp/task.rs::TcpTask` owns TCP payload progress; the
+staging `TcpCross` also retains its outer header and scoped CROSS receipt.
 Frozen TENT creates eight shared worker shards; each dequeues one task and runs
 its chunk event loop to completion. OrbitTE starts at most eight shards on demand,
 reuses an idle shard and otherwise selects the smallest queue with rotating ties.
@@ -100,9 +101,10 @@ worker publishing CROSS receipts. Idle sweeps follow TENT's 128 yields followed
 by exponential delays from one to 200 microseconds, bounded by the deadline.
 Source CUDA Delegate submits an event at every ring width. Scoped
 `QueryDelegate` polls its completion once, so NOT_READY can leave other
-submitted CROSS owners progressing. Pin, control socket exchanges and TCP
-payload remain synchronous; asynchronous TCP/control progress and location
-scheduling remain in the existing P5/P6 queue. CPU controls establish scheduling and owner
+submitted CROSS owners progressing. TCP payload and Delegate/query/Unpin socket
+progress are bounded and nonblocking. Connect/Pin, RDMA setup/bilateral finish,
+source handlers and ordinary local GPU snapshot/commit remain synchronous.
+Remaining control progress and location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
 ## Serial remote staging
@@ -275,10 +277,48 @@ Frozen TENT uses `submitRemoteStage`, `INFLIGHT_REMOTE` and
 `RemoteStageOperation::tryTakeResult` with asynchronous RPC callbacks. OrbitTE
 uses explicit scoped query exchanges on its existing connection to establish
 the same separate completion/owner boundary. It does not yet provide TENT's
-fully asynchronous RPC mechanism: a slow socket exchange can still block this
-session worker. Error/EOF cleanup still closes all accepted RDMA work, drains
+fully asynchronous RPC mechanism: each session still has one framing owner,
+and connection setup, Pin and RDMA handshakes retain blocking boundaries.
+Error/EOF cleanup still closes all accepted RDMA work, drains
 all accepted CUDA siblings and only then retires private registrations. An
 unconfirmed remote reply is never a native drain proof.
+
+### Socket progress
+
+One `TcpTask` owns its request frame, partial reply, bounded payload snapshot,
+local registration and WRITE effect. Each turn attempts one socket operation of
+at most 64 KiB; WouldBlock preserves its position and returns pending. READ commits
+to local memory only after all payload bytes arrive. WRITE becomes Unknown before
+its first possible payload send and requires the terminal ACK; neither partial
+progress nor failure is replayed. The ordinary synchronous API drives this same
+task. Its local GPU snapshot/commit remains synchronous, and public batch cancel
+still does not interrupt an already running ordinary TCP operation.
+
+For remote staging, `TcpCross` sequences outer CROSS header, inner `TcpTask` and
+scoped CROSS receipt. `ControlOperation` separately owns Delegate, QueryDelegate,
+TCP FinishCross and Unpin request/response bytes. It attempts at most two small
+reads or one small write per turn; complete response framing and scope validation
+precede any state transition. An incomplete socket result differs from a fully
+received QueryDelegate NOT_READY. Initial queries follow Delegate acceptance
+before admission of more CROSS work; later queries rotate across pending slots.
+The wire remains v21.
+
+The single socket never interleaves two exchanges. Native payload completion can
+still be observed during a pending control response, but a bilateral finish must
+wait for that response. A staging local failure or shard stop is checked between
+polls, closes the interrupted session and joins its owner. It never appends Unpin
+into a partial frame. Existing native drain and uncertain-owner retention still
+precede private registration retirement. Public `Batch::cancel` retains its
+existing queued-versus-running contract; this substage does not add an active
+batch cancellation token to the transport API.
+
+Frozen TENT's `TcpTask` names the ordinary TCP request owner; its ordinary TCP
+workers use synchronous send/receive. Its separate `hp_tcp` provider has async
+header/body/response state. OrbitTE uses explicit socket progress in its existing
+TCP provider, and scoped control results corresponding to `delegateAsync` and
+`RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
+claims wire compatibility. Connect/Pin, native RDMA setup/bilateral finish, source
+handlers, readiness notification and full asynchronous RPC parity remain open.
 
 ### Session progress and completion
 
@@ -329,8 +369,10 @@ acceptance and terminal QueryDelegate result succeed. A missing final result the
 even when every CROSS result was received. On failure, the caller stops queue
 admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
-healthy siblings or erase an earlier `Unquiesced`. Active control exchanges keep
-their original deadline; cancellation does not interrupt their control channel.
+healthy siblings or erase an earlier `Unquiesced`. Partial TCP payload and scoped
+control receipts retain the original deadline and yield to staging cancellation.
+Blocking Pin, native RDMA setup/finish and provider calls keep their existing
+completion/drain obligations.
 On source EOF/error, all native CROSS owners close before CUDA drain and private
 registration retirement. The caller drops its queue
 handles and waits for a separate task terminal receipt before private MR
@@ -480,5 +522,7 @@ batch sizes. A serialized CROSS control fails that progress condition. Expiring
 the first CROSS after a later chunk finishes preserves exact partial effects;
 unproven cleanup retains the real owners. Remote query controls also hold one
 source PRE/POST while another submitted CROSS completes; query/context errors
-compose with native cleanup failure and preserve actual owners. Asynchronous
-TCP/control progress and location selection remain in P5.5b.
+compose with native cleanup failure and preserve actual owners. Socket controls
+hold a real partial reply/payload through local failure and task join, test real
+TCP write backpressure and preserve READ guards and uncertain GPU owners.
+Remaining blocking control boundaries and location selection stay in P5.5b.

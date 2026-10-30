@@ -369,6 +369,7 @@ pub(super) fn run() {
         stream,
         deadline: end,
         stopping: None,
+        nonblocking: false,
     };
     if lost {
         if !source {

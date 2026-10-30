@@ -15,7 +15,7 @@ use crate::{
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
 const VERSION: u16 = 21;
 pub(crate) const REQUEST_SIZE: usize = 52;
-const REPLY_SIZE: usize = 36;
+pub(crate) const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
 const REGION_SIZE: usize = 32;
 const IO_POLL: Duration = Duration::from_millis(25);
@@ -152,11 +152,15 @@ impl Reply {
     pub(crate) fn read(channel: &mut ControlChannel<'_>, expected: SourceEpoch) -> Result<Self> {
         let mut bytes = [0; REPLY_SIZE];
         channel.read_exact(&mut bytes)?;
-        validate_prefix(&bytes)?;
+        Self::decode(&bytes, expected)
+    }
+
+    pub(crate) fn decode(bytes: &[u8; REPLY_SIZE], expected: SourceEpoch) -> Result<Self> {
+        validate_prefix(bytes)?;
         let reply = Self {
             status: bytes[10],
-            epoch: epoch_at(&bytes),
-            length: u64_at(&bytes, 28),
+            epoch: epoch_at(bytes),
+            length: u64_at(bytes, 28),
         };
         if reply.epoch != expected {
             return Err(Error::EpochMismatch);
@@ -315,6 +319,7 @@ pub(crate) struct ControlChannel<'a> {
     pub(crate) stream: TcpStream,
     pub(crate) deadline: Instant,
     pub(crate) stopping: Option<&'a AtomicBool>,
+    pub(crate) nonblocking: bool,
 }
 
 impl ControlChannel<'_> {
@@ -325,6 +330,7 @@ impl ControlChannel<'_> {
             stream,
             deadline,
             stopping: None,
+            nonblocking: false,
         })
     }
 
@@ -339,6 +345,7 @@ impl ControlChannel<'_> {
     }
 
     pub(crate) fn read_exact(&mut self, mut bytes: &mut [u8]) -> Result<()> {
+        self.set_nonblocking(false)?;
         while !bytes.is_empty() {
             self.stream.set_read_timeout(Some(self.poll_timeout()?))?;
             match self.stream.read(bytes) {
@@ -352,6 +359,7 @@ impl ControlChannel<'_> {
     }
 
     pub(crate) fn write_all(&mut self, mut bytes: &[u8]) -> Result<()> {
+        self.set_nonblocking(false)?;
         while !bytes.is_empty() {
             self.stream.set_write_timeout(Some(self.poll_timeout()?))?;
             match self.stream.write(bytes) {
@@ -362,6 +370,38 @@ impl ControlChannel<'_> {
             }
         }
         Ok(())
+    }
+
+    fn set_nonblocking(&mut self, enabled: bool) -> Result<()> {
+        if self.nonblocking != enabled {
+            self.stream.set_nonblocking(enabled)?;
+            self.nonblocking = enabled;
+        }
+        Ok(())
+    }
+
+    /// One bounded socket attempt; zero means pending, never EOF or success.
+    pub(crate) fn poll_read(&mut self, bytes: &mut [u8]) -> Result<usize> {
+        self.poll_timeout()?;
+        self.set_nonblocking(true)?;
+        let length = bytes.len().min(64 << 10);
+        match self.stream.read(&mut bytes[..length]) {
+            Ok(0) => Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+            Ok(count) => Ok(count),
+            Err(error) if retryable(&error) => Ok(0),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn poll_write(&mut self, bytes: &[u8]) -> Result<usize> {
+        self.poll_timeout()?;
+        self.set_nonblocking(true)?;
+        match self.stream.write(&bytes[..bytes.len().min(64 << 10)]) {
+            Ok(0) => Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+            Ok(count) => Ok(count),
+            Err(error) if retryable(&error) => Ok(0),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(crate) fn reply(&mut self, epoch: SourceEpoch, status: u8, length: u64) -> Result<()> {
@@ -432,6 +472,7 @@ impl ControlService {
                             stream,
                             deadline,
                             stopping: Some(&stopping),
+                            nonblocking: false,
                         };
                         // A failed connection is isolated and closed, never replayed.
                         let _ = serve(&mut channel, &source, max_bytes);

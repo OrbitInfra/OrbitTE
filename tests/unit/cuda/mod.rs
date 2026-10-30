@@ -18,6 +18,7 @@ mod requester_failures;
 mod requester_pipeline;
 mod requester_staging;
 mod shim;
+mod socket_progress;
 mod staging;
 #[cfg(feature = "rdma")]
 mod staging_cross;
