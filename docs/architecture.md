@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v20 messages; moving them into their own module does not make this
+OrbitTE v21 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,7 +121,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v20 handshake can attach independent grants to a
+QP creation lock. The public v21 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
@@ -411,8 +411,13 @@ each queue holds at most 64 sessions. Pin starts only after dequeue. A task
 terminal receipt follows destruction of its closure, including all private
 registration and source references. The caller waits for this receipt before
 retiring registrations, including cancellation and unwind. `source_task.rs` owns
-source phases. Final Unpin waits for every local copy and remote receipt.
-TCP payload and control exchanges remain synchronous; general remote-operation
+source phases, including `InflightRemote` for each accepted CUDA Delegate.
+`QueryDelegate` polls that slot's recorded event and returns a fully scoped
+pending or terminal result. The requester keeps its generation occupied until
+terminal confirmation, while querying and finishing other native CROSS owners.
+This follows TENT's `submitRemoteStage` / `INFLIGHT_REMOTE` / `tryTakeResult`
+ownership. Final Unpin waits for every local copy and terminal remote result.
+TCP payload and socket exchanges remain synchronous; asynchronous TCP/control
 progress and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over

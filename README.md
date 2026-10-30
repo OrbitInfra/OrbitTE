@@ -108,10 +108,12 @@ negotiated chunk sizes and a bounded CROSS queue. Up to eight shared staging wor
 while local CUDA advances; queued cancellation precedes Pin, and final success
 still requires remote receipts and full drain. RDMA now admits several CROSS
 chunks on the same connection, queries their payload completion independently,
-and releases each slot only after bilateral cleanup. TCP payload remains
-synchronous. Current v20 hardware qualification is pending; earlier H20 results
-apply to their recorded artifacts. General remote-operation progress and
-location selection remain open.
+and releases each slot only after bilateral cleanup. Remote CUDA Delegate
+acceptance and completion are separate: scoped event queries keep other
+submitted CROSS owners moving while a remote copy is pending. TCP payload
+and socket exchanges remain synchronous. Current v21 hardware qualification
+is pending; earlier H20 results apply to their recorded artifacts. Asynchronous
+TCP/control progress and location selection remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

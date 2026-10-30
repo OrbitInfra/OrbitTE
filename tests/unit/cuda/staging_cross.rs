@@ -4,7 +4,12 @@ use crate::transport::rdma::{RdmaConfig, tests as verbs};
 
 type PayloadHold = Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>;
 
-fn engine(chunk: usize, depth: usize, mode: &str, grants: usize) -> (TransferEngine, PayloadHold) {
+pub(super) fn engine(
+    chunk: usize,
+    depth: usize,
+    mode: &str,
+    grants: usize,
+) -> (TransferEngine, PayloadHold) {
     let mut config = RdmaConfig::new(mode);
     config.max_endpoints = 1;
     config.max_grants = grants;

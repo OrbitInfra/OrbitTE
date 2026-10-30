@@ -597,8 +597,12 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Shared-QP reversed completion and aggregate failure controls cover the new
   composition. Independent source review accepts `adc803f`; see
   [the concurrent CROSS evidence](qualification.md#concurrent-rdma-cross).
-  Qualify the current v20 artifact and complete general remote-operation progress, asynchronous TCP
-  payload and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Remote CUDA Delegate completion is now polled through scoped QueryDelegate
+  results, including depth one. Pending remote slots defer reuse while other
+  submitted CROSS owners progress; terminal confirmation gates final Unpin.
+  Source review is pending; see [remote progress](qualification.md#remote-delegate-progress).
+  Qualify the current v21 artifact and complete asynchronous TCP/control progress
+  and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -885,9 +889,12 @@ per-slot event queries and immediate refill is source-accepted at `1ac1d01`.
 Bounded concurrent RDMA CROSS is implemented with shared native workers,
 independent payload query, per-slot FinishCross and aggregate cleanup. Independent
 source review accepts `adc803f`; see [the evidence](qualification.md#concurrent-rdma-cross).
-The next implementation boundary is general remote-operation progress and
-asynchronous TCP payload, followed by location selection. Current v20 hardware
-qualification and full ProxyManager parity remain open.
+Remote Delegate progress is now implemented in v21, separating acceptance from
+scoped event-query completion and retaining per-slot generations through pending
+results. Source review is pending; see [the evidence](qualification.md#remote-delegate-progress).
+The next implementation boundary is asynchronous TCP payload and control progress,
+followed by location selection. Current v21 hardware qualification and full
+ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.

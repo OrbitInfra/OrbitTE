@@ -77,11 +77,8 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 length: 8,
             };
             let mut active = Vec::new();
-            let mut releases = Vec::new();
             for (index, device) in devices.iter().take(8).enumerate() {
-                let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-                let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-                *device.event_gate.lock().unwrap() = Some((entered, blocked));
+                device.query_hold.store(true, Ordering::Release);
                 active.push(
                     requester
                         .submit_async(
@@ -93,8 +90,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                         )
                         .unwrap(),
                 );
-                waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-                releases.push(resume);
+                wait_pending(device, 1);
             }
             let stats = requester.stats().unwrap().staging;
             assert_eq!(
@@ -144,8 +140,8 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
             let mut untouched = [0; 16];
             local[8].read(0, &mut untouched).unwrap();
             assert_eq!(untouched, [0xcc; 16]);
-            for resume in releases {
-                resume.send(()).unwrap();
+            for device in devices.iter().take(8) {
+                device.query_hold.store(false, Ordering::Release);
             }
             for mut batch in active {
                 let report = batch.wait(Duration::from_secs(3)).unwrap();

@@ -98,8 +98,10 @@ at its own phase boundary. OrbitTE uses the same chunk phases for requester
 progress, with `CopyStream` querying the recorded CUDA event and the connection
 worker publishing CROSS receipts. Idle sweeps follow TENT's 128 yields followed
 by exponential delays from one to 200 microseconds, bounded by the deadline.
-Source CUDA preparation and Delegate handling may still block the connection
-worker. General remote-operation polling, asynchronous TCP payload and location
+Source CUDA Delegate submits an event at every ring width. Scoped
+`QueryDelegate` polls its completion once, so NOT_READY can leave other
+submitted CROSS owners progressing. Pin, control socket exchanges and TCP
+payload remain synchronous; asynchronous TCP/control progress and location
 scheduling remain in the existing P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
@@ -160,8 +162,10 @@ also fails explicitly; no hidden pool or silent reduction of source depth is use
 
 Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
 18 added pipeline width and version 19 added the requester chunk cap.
-Current version **20** negotiates a separate CROSS capacity and introduces
-`FinishCross`. Both peers must use version 20; older headers are rejected.
+Version 20 introduced a separate CROSS capacity and `FinishCross`.
+Current version **21** adds `QueryDelegate`: Delegate acceptance no longer
+permits READ CROSS, WRITE slot reuse or final Unpin. Both peers must use
+version 21; older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
@@ -213,8 +217,8 @@ acknowledging Pin. Insufficient capacity fails with `ResourceExhausted`; neither
 side silently narrows its ring. A large local physical chunk can conservatively
 limit `L` even when the smaller negotiated chunks would permit more concurrency.
 There is no late expansion after Pin. The requester uses asynchronous copies
-and queries even at width one. The source keeps its existing synchronous copy
-at width one and accepted-copy pipeline at larger widths.
+and queries even at width one. The source now also submits an asynchronous
+copy at width one; all widths require terminal `QueryDelegate` confirmation.
 
 RDMA advertises a separate native capacity in Pin. `W` is bounded by grant,
 CQ/receive, endpoint and byte limits, up to 16. Each peer divides its per-CROSS
@@ -236,17 +240,45 @@ charged without a Drop retry.
 
 | Direction | Scheduling and completion |
 | --- | --- |
-| READ | Delegate prefills `R` source PREs. CROSS waits for its source slot and any previous POST in its local slot. Its terminal FinishCross receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
-| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After FinishCross's terminal receipt and the Delegate send, the freed local slot queues PRE at `i + L` without waiting for that Delegate receipt; other PREs and source POSTs can remain pending. |
-| Final Unpin | Drain all local POSTs before sending Unpin. The source drains every accepted PRE/POST, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
+| READ | Delegate prefills `R` source PREs. CROSS requires a terminal QueryDelegate result for its source PRE and completion of any previous POST in its local slot. Its terminal FinishCross receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
+| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and terminal QueryDelegate confirmation of any previous POST in the source slot. After FinishCross's terminal receipt and the Delegate send, the freed local slot queues PRE at `i + L` without waiting for that Delegate receipt; other PREs and source POSTs can remain pending. |
+| Final Unpin | Drain all local POSTs and confirm every remote Delegate before sending Unpin. The source rejects premature Unpin, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
 
-A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
-`remote_delegates` advances after the source event wait and context restoration.
+Every Delegate receipt confirms **acceptance**, not CUDA completion.
+`remote_delegates` advances after source event-query success (or failure-path
+sibling drain) and successful context restoration.
 Requester completed-chunk counters advance once after event query (or error-drain
 wait) and successful context restoration. `remote_crosses` still follows actual transport
 cleanup, and `remote_unpins` follows full session cleanup. WRITE becomes
 `RemoteEffect::Unknown` before sending Delegate and is never automatically
 replayed after an ambiguous reply.
+
+### Remote Delegate progress
+
+The source keeps each accepted Delegate in `InflightRemote` with its original
+offset, generation, pinned bytes, private registration and GPU range loan.
+QueryDelegate is legal only in this state. Its successful reply contains the
+full echoed QueryDelegate frame plus one byte: `0` for pending, `1` for complete.
+Both results bind the session nonce, original region, absolute offset and length.
+Only event-query success and context restoration advance the state. Early,
+duplicate, stale or mismatched queries fail before another CUDA query or copy.
+
+The requester stores at most one pending Delegate per remote slot. Each sweep
+queries it once; NOT_READY does not count as progress and does not hold the sweep
+inside a native wait. A command that would reuse that slot is deferred while
+other submitted RDMA CROSS owners can still finish. A WRITE's old generation
+stays occupied until POST is confirmed. Unpin cannot substitute for any missing
+terminal result. Lost replies are not replayed; WRITE retains Unknown once its
+Delegate may have been sent.
+
+Frozen TENT uses `submitRemoteStage`, `INFLIGHT_REMOTE` and
+`RemoteStageOperation::tryTakeResult` with asynchronous RPC callbacks. OrbitTE
+uses explicit scoped query exchanges on its existing connection to establish
+the same separate completion/owner boundary. It does not yet provide TENT's
+fully asynchronous RPC mechanism: a slow socket exchange can still block this
+session worker. Error/EOF cleanup still closes all accepted RDMA work, drains
+all accepted CUDA siblings and only then retires private registrations. An
+unconfirmed remote reply is never a native drain proof.
 
 ### Session progress and completion
 
@@ -292,8 +324,8 @@ API [event contract](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_ap
 defines the query result; event destruction is not completion evidence.
 
 After consuming all CROSS results, the caller drains every accepted local copy
-and queues Unpin. The worker processes Unpin only after every preceding Delegate
-receipt succeeds. A missing final Delegate receipt therefore fails the request
+and queues Unpin. The worker defers Unpin until every preceding Delegate
+acceptance and terminal QueryDelegate result succeed. A missing final result therefore fails the request
 even when every CROSS result was received. On failure, the caller stops queue
 admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
@@ -436,7 +468,7 @@ execution: native receipts do not establish execution overlap or throughput.
 The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
 earlier serial evidence remains bound to its original observer and wire version.
-The current v20 requester ring and concurrent RDMA CROSS require their own artifact and evidence. Its
+The current v21 requester ring, concurrent RDMA CROSS and remote Delegate queries require their own artifact and evidence. The
 controller supports independent widths and conservative local capacity, but
 hardware execution is deferred while new resource requests are paused. The
 shared worker shards and requester query event loop also require fresh installed
@@ -446,5 +478,7 @@ with exact bytes, guards and retained grant/RQ/range owners. Native fault inject
 selects an actual private MR and exact WR identity, independently of posting
 batch sizes. A serialized CROSS control fails that progress condition. Expiring
 the first CROSS after a later chunk finishes preserves exact partial effects;
-unproven cleanup retains the real owners. General remote-operation progress,
-asynchronous TCP payload and location selection remain in P5.5b.
+unproven cleanup retains the real owners. Remote query controls also hold one
+source PRE/POST while another submitted CROSS completes; query/context errors
+compose with native cleanup failure and preserve actual owners. Asynchronous
+TCP/control progress and location selection remain in P5.5b.

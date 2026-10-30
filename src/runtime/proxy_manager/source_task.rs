@@ -15,7 +15,6 @@ use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport}
 struct Chunk {
     stage: PinnedStage,
     to_device: bool,
-    pipeline: bool,
     offset: usize,
     state: StageState,
     #[cfg(feature = "rdma")]
@@ -25,6 +24,7 @@ struct Chunk {
 #[derive(PartialEq, Eq)]
 enum StageState {
     Delegate,
+    InflightRemote,
     Ready,
     Cross,
     Finished,
@@ -36,12 +36,10 @@ impl Chunk {
         source: &Source,
         transport: Transport,
         operation: TransferOp,
-        pipeline: bool,
     ) -> Result<Self> {
         Ok(Self {
             stage: PinnedStage::new(lease, source, transport)?,
             to_device: operation == TransferOp::Write,
-            pipeline,
             offset: 0,
             state: if operation == TransferOp::Read {
                 StageState::Delegate
@@ -51,25 +49,6 @@ impl Chunk {
             #[cfg(feature = "rdma")]
             cross: None,
         })
-    }
-
-    fn delegate(
-        &mut self,
-        copy: &mut StagingCopy,
-        channel: &mut ControlChannel<'_>,
-        remote: &RemoteStageOperation,
-        manager: &ProxyManager,
-        offset: usize,
-        length: usize,
-    ) -> Result<()> {
-        self.stage
-            .copy(copy, offset, length, self.to_device, self.pipeline)?;
-        if !self.pipeline {
-            manager.completed_remote(Operation::Delegate);
-        }
-        // For a pipeline this receipt accepts PRE/POST; CROSS or final Unpin
-        // supplies its completion boundary. The nonce/range still scopes both.
-        remote.respond(channel, Operation::Delegate, offset, length)
     }
 
     fn drain(&mut self, copy: &mut StagingCopy, manager: &ProxyManager) -> Result<()> {
@@ -187,7 +166,7 @@ impl ProxyManager {
             let mut chunks = Vec::with_capacity(depth);
             let result = (|| {
                 for (slot, lease) in leases.into_iter().enumerate() {
-                    let mut chunk = Chunk::new(lease, source, transport, operation, depth > 1)?;
+                    let mut chunk = Chunk::new(lease, source, transport, operation)?;
                     chunk.offset = slot * length;
                     chunks.push(chunk);
                 }
@@ -230,15 +209,26 @@ impl ProxyManager {
                     remote.validate(&frame, frame.operation, chunk.offset, count)?;
                     match frame.operation {
                         Operation::Delegate if chunk.state == StageState::Delegate => {
-                            chunk.delegate(copy, channel, &remote, self, offset, count)?;
-                            if operation == TransferOp::Write {
-                                chunk.offset += length * depth;
+                            chunk
+                                .stage
+                                .copy(copy, offset, count, chunk.to_device, true)?;
+                            chunk.state = StageState::InflightRemote;
+                            remote.respond(channel, Operation::Delegate, offset, count)?;
+                        }
+                        Operation::QueryDelegate if chunk.state == StageState::InflightRemote => {
+                            let ready = chunk.stage.query(copy)?;
+                            if ready {
+                                self.completed_remote(Operation::Delegate);
+                                if operation == TransferOp::Write {
+                                    chunk.offset += length * depth;
+                                }
+                                chunk.state = if chunk.offset >= total {
+                                    StageState::Finished
+                                } else {
+                                    StageState::Ready
+                                };
                             }
-                            chunk.state = if chunk.offset >= total {
-                                StageState::Finished
-                            } else {
-                                StageState::Ready
-                            };
+                            remote.respond_progress(channel, offset, count, ready)?;
                         }
                         Operation::Cross if chunk.state == StageState::Ready => {
                             if offset != submitted || active >= cross_width {
@@ -246,7 +236,6 @@ impl ProxyManager {
                                     "staging CROSS admission order or capacity",
                                 ));
                             }
-                            chunk.drain(copy, self)?;
                             *reply_epoch = source.epoch;
                             let cross = read_request(channel)?;
                             let expected = match (transport, operation) {

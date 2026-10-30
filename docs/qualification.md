@@ -29,6 +29,30 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Remote Delegate progress
+
+The v21 source submits CUDA Delegate work independently of completion at every
+remote ring width. Scoped QueryDelegate results gate READ CROSS, WRITE slot
+reuse and final Unpin, while other submitted native CROSS owners can progress.
+This corresponds to frozen TENT's `submitRemoteStage`, `INFLIGHT_REMOTE` and
+`tryTakeResult` ownership; socket exchanges, Pin and TCP payload remain synchronous.
+
+CPU controls hold a source PRE/POST NOT_READY while another native CROSS
+finishes, verify bytes and guards with unequal rings and a short final chunk,
+and reject early, duplicate or mismatched queries before touching CUDA. Query
+and context-restoration failures compose with held native work and failed QP
+cleanup, retaining actual GPU/pin owners and admission. Lost terminal queries
+and Unpin receipts cannot report success. Existing cancellation and source
+sibling-drain controls use the new completion boundary.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/remote-operation-progress-20261030/`.
+Full gates, a synchronous-query negative control and independent source review
+are pending. Current v21 installed execution, DMA overlap and performance remain
+unqualified; hardware requests remain paused. Earlier installed profiles stay
+bound to their original revisions. Asynchronous TCP/control progress, location
+selection and full ProxyManager parity remain open.
+
 ## Concurrent RDMA CROSS
 
 The v20 source separates RDMA submission, payload query and bilateral finish.
