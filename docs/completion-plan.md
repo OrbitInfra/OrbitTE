@@ -616,8 +616,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [finish progress](qualification.md#native-rdma-finish-progress).
   Requester native setup socket progress is implemented with RDMA-owned parent
   admission and per-slice rendezvous, shared synchronous callers, and explicit
-  current-grant/sibling cleanup. Source acceptance is pending; see
-  [setup progress](qualification.md#native-rdma-setup-progress).
+  current-grant/sibling cleanup. Independent source review accepts `b2d9d3a`;
+  see [setup progress](qualification.md#native-rdma-setup-progress).
   Complete location selection, remaining synchronous connection/resource/retirement/source
   boundaries and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -919,8 +919,8 @@ Requester native finish progress is implemented with one framing owner, shared
 SEND/drain validation and partial completion frames. Independent source review
 accepts `e2f4037`; see [finish progress](qualification.md#native-rdma-finish-progress).
 Requester native setup socket progress is implemented with one outer framing
-owner and shared parent/slice states. Source acceptance is pending; see
-[setup progress](qualification.md#native-rdma-setup-progress).
+owner and shared parent/slice states. Independent source review accepts
+`b2d9d3a`; see [setup progress](qualification.md#native-rdma-setup-progress).
 The next implementation boundary is location selection. Cold connection
 acquisition, native construction/connect/copy, nonreusable retirement and source
 handlers retain explicit synchronous limits. Current v21 hardware qualification and full

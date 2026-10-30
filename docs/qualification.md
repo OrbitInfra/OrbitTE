@@ -54,8 +54,26 @@ required without weakened assertions.
 
 Evidence is selected outside Git at
 `/root/orbitte-artifacts/rdma-setup-progress-20261030/`.
-Source acceptance is pending. Validation and the independent review will bind the
-frozen commit; no hardware acceptance is implied by the source implementation.
+Independent source review accepts `b2d9d3a` for this source/CPU boundary.
+`gates.json` records 22 primary gates: stable and Rust 1.85 tests/Clippy for all
+four feature profiles, both relay gates, the 25-observation Rust CPU trace, format
+and strict documentation/local-link checks. Each combined run passes 334 unit
+tests, eight integration tests and one doctest; five hardware units and one
+integration subprocess fixture are marked ignored in the parent runner.
+`source-manifest.json` binds all 284 tracked files and `build-environment.json`
+records the toolchains. `ci-source-b2d9d3a.json` records 8/8 GitHub CI profiles,
+the frozen TENT CPU comparison and documentation success.
+
+`independent-review/source-review-b2d9d3a.json` records the independent diff,
+owner/protocol and evidence audit, with fresh stable/MSRV targets and 21 rerun
+gates. The final `blocking-setup-control-b2d9d3a/manifest.json` compares every
+tracked file: only the setup progress entry is changed to drive the same states
+to completion without yielding. The unchanged error-observation test then fails
+its first branch's two-second assertion before the ten-second request deadline;
+it does not execute all 16 branches after that failure. Compile and binary paths
+identify the final archive. Earlier development cleanup-order and Clippy failures
+are preserved in `development-history.json` and `primary-ca760b3-failed/`; the final
+source passes the original stop/drain and panic/effect assertions.
 
 Cold connection acquisition, local native construction/open/connect/fill,
 nonreusable retirement/copyback, failure drain and source handlers retain explicit
