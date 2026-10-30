@@ -122,6 +122,13 @@ pub(super) fn read_paths(
     epoch: SourceEpoch,
 ) -> Result<(Vec<NicPath>, usize)> {
     let reply = Reply::read(channel, epoch)?;
+    let length = table_length(&reply)?;
+    let mut bytes = vec![0; length];
+    channel.read_exact(&mut bytes)?;
+    decode_paths(&bytes)
+}
+
+pub(super) fn table_length(reply: &Reply) -> Result<usize> {
     if reply.status != 0
         || reply.length <= 1
         || reply.length > (1 + 64 * PATH_SIZE) as u64
@@ -129,16 +136,16 @@ pub(super) fn read_paths(
     {
         return Err(Error::Protocol("RDMA NIC path table length/status"));
     }
-    let mut width = [0];
-    channel.read_exact(&mut width)?;
-    if width[0] > 64 {
+    Ok(reply.length as usize)
+}
+
+pub(super) fn decode_paths(bytes: &[u8]) -> Result<(Vec<NicPath>, usize)> {
+    if bytes.is_empty() || bytes[0] > 64 {
         return Err(Error::Protocol("RDMA peer QP width"));
     }
     let mut paths: Vec<NicPath> = Vec::new();
-    for _ in 0..(reply.length as usize - 1) / PATH_SIZE {
-        let mut bytes = [0; PATH_SIZE];
-        channel.read_exact(&mut bytes)?;
-        let path = NicPath::decode(&bytes)?;
+    for bytes in bytes[1..].chunks(PATH_SIZE) {
+        let path = NicPath::decode(bytes)?;
         if paths
             .iter()
             .any(|p| p.nic_id == path.nic_id || p.name == path.name || p.domain == path.domain)
@@ -147,7 +154,7 @@ pub(super) fn read_paths(
         }
         paths.push(path);
     }
-    Ok((paths, width[0] as usize))
+    Ok((paths, bytes[0] as usize))
 }
 
 /// Filter wire-incompatible paths. Matching NIC names wins within a profile;

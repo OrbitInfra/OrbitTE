@@ -70,7 +70,7 @@ pub(super) struct Hello {
 }
 
 impl Hello {
-    pub(super) fn write(&self, channel: &mut ControlChannel<'_>) -> Result<()> {
+    pub(super) fn encode(&self) -> Result<[u8; HELLO_SIZE]> {
         let mut bytes = [0; HELLO_SIZE];
         bytes[0] = u8::from(self.direct) | (u8::from(self.source.is_some()) << 1);
         bytes[1..1 + IDENTITY_SIZE].copy_from_slice(&self.requester.encode());
@@ -81,7 +81,7 @@ impl Hello {
             u8::try_from(self.qp_width).map_err(|_| Error::Protocol("RDMA bootstrap QP width"))?;
         bytes[HELLO_SIZE - 24..HELLO_SIZE - 8].copy_from_slice(&self.expected_domain);
         bytes[HELLO_SIZE - 8..].copy_from_slice(&self.previous_grant.to_be_bytes());
-        channel.write_all(&bytes)
+        Ok(bytes)
     }
 
     pub(super) fn read(channel: &mut ControlChannel<'_>, epoch: SourceEpoch) -> Result<Self> {
@@ -219,12 +219,12 @@ pub(super) struct SliceRequest {
 }
 
 impl SliceRequest {
-    pub(super) fn write(&self, channel: &mut ControlChannel<'_>) -> Result<()> {
+    pub(super) fn encode(&self) -> [u8; 24] {
         let mut bytes = [0; 24];
         bytes[..4].copy_from_slice(&(self.offset as u32).to_be_bytes());
         bytes[4..8].copy_from_slice(&(self.length as u32).to_be_bytes());
         bytes[8..].copy_from_slice(&self.domain);
-        channel.write_all(&bytes)
+        bytes
     }
 
     pub(super) fn read_plan(

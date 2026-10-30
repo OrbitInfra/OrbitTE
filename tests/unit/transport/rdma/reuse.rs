@@ -215,44 +215,54 @@ fn connected_pair_keeps_actual_qps_but_releases_every_grant_and_old_registration
 
 #[test]
 fn one_slot_cache_evicts_other_capability_and_reconnects_only_after_explicit_cache_miss() {
-    let source = rdma_fixture("direct:copy");
-    let requester = rdma_fixture("direct:copy");
-    let local = requester
-        .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
-        .unwrap();
-    let remote = source
-        .register_memory(
-            vec![0x29; 8].into_boxed_slice(),
-            Permission::RemoteReadWrite,
-        )
-        .unwrap();
-    transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
-    // Evict only the source half; requester must first retire its stale half.
-    let source_runtime = source_runtime(&source);
-    source_runtime
-        .progress(source_runtime.device().unwrap())
-        .unwrap()
-        .evict_idle(|_| true, deadline(TIMEOUT).unwrap())
-        .unwrap();
-    transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
-    for op in [TransferOp::Write, TransferOp::Read] {
-        transfer(&requester, &source, &local, &remote, op, 0, 8);
-    }
-    for engine in [&requester, &source] {
-        let stats = engine.stats().unwrap().rdma.unwrap();
-        assert_eq!(
-            (
-                stats.active_endpoints,
-                stats.idle_endpoints,
-                stats.active_grants
-            ),
-            (1, 1, 0)
-        );
-        assert_eq!(stats.opened_connections, 4);
-        assert_eq!(stats.closed_connections, 3);
-        assert_eq!(stats.completed_reusable_grants, 4);
-        engine.close(TIMEOUT).unwrap();
-        assert_eq!(engine.stats().unwrap().rdma.unwrap().active_endpoints, 0);
+    for sliced in [false, true] {
+        let engine = || {
+            let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
+            if sliced {
+                runtime.config.num_lanes = 2;
+                runtime.config.block_size = 4;
+            }
+            crate::engine::tests::rdma_fixture_with_runtime(runtime)
+        };
+        let source = engine();
+        let requester = engine();
+        let local = requester
+            .register_memory(vec![0x63; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 8].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+        // Evict only the source half; requester must first retire its stale half.
+        let source_runtime = source_runtime(&source);
+        source_runtime
+            .progress(source_runtime.device().unwrap())
+            .unwrap()
+            .evict_idle(|_| true, deadline(TIMEOUT).unwrap())
+            .unwrap();
+        transfer(&requester, &source, &local, &remote, TransferOp::Read, 0, 8);
+        for op in [TransferOp::Write, TransferOp::Read] {
+            transfer(&requester, &source, &local, &remote, op, 0, 8);
+        }
+        for engine in [&requester, &source] {
+            let stats = engine.stats().unwrap().rdma.unwrap();
+            assert_eq!(
+                (
+                    stats.active_endpoints,
+                    stats.idle_endpoints,
+                    stats.active_grants
+                ),
+                (1, 1, 0)
+            );
+            assert_eq!(stats.opened_connections, 4);
+            assert_eq!(stats.closed_connections, 3);
+            assert_eq!(stats.completed_reusable_grants, if sliced { 8 } else { 4 });
+            engine.close(TIMEOUT).unwrap();
+            assert_eq!(engine.stats().unwrap().rdma.unwrap().active_endpoints, 0);
+        }
     }
 }
 

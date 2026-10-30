@@ -30,9 +30,9 @@ mod sys;
 mod workers;
 
 pub use config::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
-#[cfg(feature = "cuda")]
-pub(crate) use rdma_transport::RdmaTransfer;
 pub(crate) use rdma_transport::RdmaTransport;
+#[cfg(feature = "cuda")]
+pub(crate) use rdma_transport::{RdmaSetup, RdmaTransfer};
 pub use stats::RdmaStats;
 
 use context::RdmaContext;

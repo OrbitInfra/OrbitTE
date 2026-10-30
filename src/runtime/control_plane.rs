@@ -50,6 +50,7 @@ pub(crate) enum Operation {
     QueryDelegate = 19,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Request {
     pub(crate) operation: Operation,
     pub(crate) epoch: SourceEpoch,

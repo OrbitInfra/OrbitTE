@@ -17,7 +17,7 @@ use super::{
     sys, workers,
 };
 use crate::engine::PreparedTransfer;
-use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
+use crate::runtime::control_plane::{ControlChannel, Operation, Request};
 use crate::{
     Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
@@ -288,156 +288,23 @@ impl RdmaTransport {
         channel: &mut ControlChannel<'_>,
         concurrency: usize,
     ) -> std::result::Result<RdmaTransfer, (Error, RemoteEffect)> {
-        let mut effect = RemoteEffect::None;
-        let result = (|| {
-            if !(1..=16).contains(&concurrency) {
-                return Err(Error::InvalidConfig(
-                    "RDMA CROSS concurrency must be 1..=16",
-                ));
-            }
-            let deadline = channel.deadline;
-            let local_paths = self.paths()?;
-            let mut wire = data_request(operation, peer, request);
-            wire.operation = if operation == TransferOp::Read {
-                Operation::RdmaReadSlices
-            } else {
-                Operation::RdmaWriteSlices
-            };
-            channel.write_all(&wire.encode())?;
-            let (remote_paths, remote_width) = path::read_paths(channel, peer.epoch)?;
-            let mut remote_limit = [0];
-            channel.read_exact(&mut remote_limit)?;
-            if !(1..=64).contains(&remote_limit[0]) {
-                return Err(Error::Protocol("RDMA slice window limit"));
-            }
-            let cap = usize::from(remote_limit[0])
-                .min(
-                    (if self.direct(&request.local) {
-                        self.config.max_grants
-                    } else {
-                        self.config.max_grants.min(self.config.max_endpoints)
-                    }) / concurrency,
-                )
-                .min(self.config.max_cqes / concurrency)
-                .min(
-                    if operation == TransferOp::Write || request.local.is_cuda() {
-                        32
-                    } else {
-                        64
-                    },
-                );
-            let (block, count) = plan_rdma_slices(request.length, self.config.block_size, cap)?;
-            let credits =
-                GrantCredits::acquire(Arc::clone(&self.usage), self.config.max_grants, count)?;
-            let mask = path::local_device_mask(&local_paths, &remote_paths);
-            let mut plan = Vec::new();
-            plan.try_reserve_exact(count)
-                .map_err(|_| Error::ResourceExhausted)?;
-            for index in 0..count {
-                let offset = index * block;
-                let length = if index + 1 == count {
-                    request.length - offset
-                } else {
-                    block
-                };
-                let selection = self.allocate(length, mask)?;
-                let local = local_paths
-                    .iter()
-                    .find(|path| path.nic_id == selection.device_id())
-                    .ok_or(Error::Internal("RDMA selector returned a masked NIC path"))?;
-                let remote = path::remote_path(local, &remote_paths)?;
-                plan.push((
-                    SliceRequest {
-                        offset,
-                        length,
-                        domain: remote.domain,
-                    },
-                    selection,
-                    remote,
-                    local.nic_id,
-                ));
-            }
-            channel.write_all(&[count as u8])?;
-            for (range, _, _, _) in &plan {
-                range.write(channel)?;
-            }
-            let admitted = Reply::read(channel, peer.epoch)?;
-            if admitted.status != 9 || admitted.length != 0 {
-                return Err(Error::Protocol("RDMA parent receive admission"));
-            }
-            let mut slices = Vec::new();
-            slices
-                .try_reserve_exact(count)
-                .map_err(|_| Error::ResourceExhausted)?;
-            let result = (|| {
-                for (range, selection, remote, local_id) in plan {
-                    let child = PreparedTransfer {
-                        transport: request.transport,
-                        local: request.local.clone(),
-                        local_offset: request.local_offset + range.offset,
-                        remote: request.remote,
-                        remote_offset: request.remote_offset + range.offset,
-                        length: range.length,
-                    };
-                    let child_wire = data_request(operation, peer, &child);
-                    let mut selection = Some(selection);
-                    let mut prepared = None;
-                    for _ in 0..=remote_width.min(self.config.num_lanes) {
-                        let lease = match selection.take() {
-                            Some(lease) => lease,
-                            None => self.allocate(range.length, 1u64 << local_id)?,
-                        };
-                        let endpoint = self.requester_grant(
-                            channel,
-                            &child_wire,
-                            &child,
-                            self.reserve_grant(lease, &child.local, &credits)?,
-                            remote,
-                            remote_width.min(self.config.num_lanes),
-                        )?;
-                        if let Some(slice) = self.requester_slice(
-                            channel,
-                            &child_wire,
-                            &child,
-                            epoch,
-                            remote,
-                            endpoint,
-                        )? {
-                            prepared = Some(slice);
-                            break;
-                        }
+        let mut setup = RdmaSetup::new(self, operation, peer, request, epoch, concurrency)
+            .map_err(|error| (error, RemoteEffect::None))?;
+        loop {
+            let mut advanced = false;
+            match setup.progress(self, channel, &mut advanced) {
+                Ok(Some(transfer)) => return Ok(transfer),
+                Ok(None) => {
+                    if !advanced {
+                        std::thread::park_timeout(Duration::from_micros(100));
                     }
-                    slices.push(prepared.ok_or(Error::Protocol("RDMA repeated slice cache miss"))?);
                 }
-                // Every grant is ready before payload admission. Transport-level
-                // workers post and poll all QPs; no per-slice requester thread exists.
-                for slice in &slices {
-                    if operation == TransferOp::Write {
-                        effect = RemoteEffect::Unknown;
-                    }
-                    slice.grant.progress.submit(
-                        &slice.grant.record,
-                        slice.grant.claim,
-                        slice.remote,
-                        operation,
-                        deadline,
-                    )?;
+                Err(error) => {
+                    let effect = setup.effect;
+                    return Err((setup.abort(self, error), effect));
                 }
-                Ok(())
-            })();
-            if let Err(error) = result {
-                close_slices(&mut slices, Err(error), true)?;
             }
-            Ok(RdmaTransfer {
-                slices,
-                memory: request.local.clone(),
-                requester: true,
-                epoch: peer.epoch,
-                #[cfg(feature = "cuda")]
-                finish: finish::FinishProgress::default(),
-            })
-        })();
-        result.map_err(|error| (error, effect))
+        }
     }
 
     pub(crate) fn serve(
@@ -574,7 +441,10 @@ mod contexts;
 #[cfg(feature = "cuda")]
 mod finish;
 mod handshake;
+mod requester;
+mod setup;
 mod transfer;
+pub(crate) use setup::RdmaSetup;
 pub(crate) use transfer::RdmaTransfer;
 
 #[cfg(test)]

@@ -29,6 +29,59 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Native RDMA setup progress
+
+Requester setup now advances partial path tables, parent admission and native
+HELLO/OFFER/ACCEPT/READY/GRANT frames while other accepted CROSS payloads remain
+queryable. The final scoped CROSS receipt shares the same framing owner. All
+parent grants must validate before any payload submission; ordinary synchronous
+RDMA uses the same states and validators. Explicit cleanup aborts the partial
+grant before prepared/submitted siblings, preserving uncertainty and real owners.
+The wire remains v21.
+
+CPU controls use the actual production owners with existing verbs/CUDA shims and
+real loopback sockets. They withhold the second parent's path table, admission,
+OFFER or final ready reply while the first accepted payload WR reports a CQ error.
+Both directions and both successful/failed QP retirement check terminal delivery
+and client EOF before relay release, unchanged GPU bytes, no Unpin, range loans,
+charged chunks and retention of the actual allocation. Separate healthy controls
+split each setup reply/payload, including the last slice's GRANT and descriptor,
+assert zero posted payload before release, and check every byte/guard, short tails,
+one completion SEND per slice and physical connection reuse. A changed GRANT
+binding must fail before any payload. The existing one-slot stale-pair control
+also covers a two-slice parent; existing stop/drain and panic/effect tests remain
+required without weakened assertions.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/rdma-setup-progress-20261030/`.
+Independent source review accepts `b2d9d3a` for this source/CPU boundary.
+`gates.json` records 22 primary gates: stable and Rust 1.85 tests/Clippy for all
+four feature profiles, both relay gates, the 25-observation Rust CPU trace, format
+and strict documentation/local-link checks. Each combined run passes 334 unit
+tests, eight integration tests and one doctest; five hardware units and one
+integration subprocess fixture are marked ignored in the parent runner.
+`source-manifest.json` binds all 284 tracked files and `build-environment.json`
+records the toolchains. `ci-source-b2d9d3a.json` records 8/8 GitHub CI profiles,
+the frozen TENT CPU comparison and documentation success.
+
+`independent-review/source-review-b2d9d3a.json` records the independent diff,
+owner/protocol and evidence audit, with fresh stable/MSRV targets and 21 rerun
+gates. The final `blocking-setup-control-b2d9d3a/manifest.json` compares every
+tracked file: only the setup progress entry is changed to drive the same states
+to completion without yielding. The unchanged error-observation test then fails
+its first branch's two-second assertion before the ten-second request deadline;
+it does not execute all 16 branches after that failure. Compile and binary paths
+identify the final archive. Earlier development cleanup-order and Clippy failures
+are preserved in `development-history.json` and `primary-ca760b3-failed/`; the final
+source passes the original stop/drain and panic/effect assertions.
+
+Cold connection acquisition, local native construction/open/connect/fill,
+nonreusable retirement/copyback, failure drain and source handlers retain explicit
+synchronous boundaries. No new hardware task is requested. Installed v21, real
+DMA overlap and performance remain unqualified; location selection remains next.
+See [the setup contract](staging.md#native-rdma-setup-progress) for the frozen
+TENT correspondence and resource boundaries.
+
 ## Native RDMA finish progress
 
 Requester FinishCross now retains its RDMA transfer while polling completion
@@ -72,8 +125,9 @@ with their failed runs; the final source passes the unchanged panic/effect test.
 GitHub CI also passes 8/8 profiles, the frozen TENT CPU comparison and docs at
 this implementation revision; see `ci-source-e2f4037.json`.
 
-Pin, native setup, nonreusable QP retirement/copyback, cache fallback retirement,
-failure drain and source handlers retain synchronous boundaries. Provider calls
+At this finish revision, Pin, native setup, nonreusable QP retirement/copyback,
+cache fallback retirement, failure drain and source handlers retained synchronous
+boundaries; setup socket progress is covered by the subsequent revision above. Provider calls
 and locks are not preemptible. No new hardware task is requested; installed v21,
 real DMA overlap and performance remain unqualified. Frozen TENT correspondence
 and the exact owner boundaries are documented in

@@ -432,8 +432,14 @@ abort/close still drains accepted work, with uncertain cleanup retaining owners.
 partial DONE/Reply/ACK/READY progress. The active FinishCross stays in its inflight
 slot through the outer scoped receipt; other native payloads remain queryable.
 CqLane shares the same SEND submission and grant-drain validation with synchronous
-callers. Pin, native setup, nonreusable QP retirement, copyback and source handlers
-retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
+callers. `rdma_transport/setup.rs::RdmaSetup` owns the parent plan, grant credits,
+selected devices, pending requester handshake and prepared slices.
+`rdma_transport/requester.rs::RequesterSetup` owns that handshake's actual grant,
+partial frames and validated connection/binding. Staging keeps one outer CROSS
+framing owner through setup and its scoped receipt while observing other submitted
+payloads. Ordinary synchronous RDMA drives the same setup states and validators.
+Pin, cold connection acquisition, native construction/connect/copy, nonreusable
+QP retirement and source handlers retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

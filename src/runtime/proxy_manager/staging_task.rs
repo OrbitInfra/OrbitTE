@@ -147,6 +147,18 @@ impl<'a> StagingTask<'a> {
             self.transfer_event_loop(&commands, &complete, stopping, effect, &mut inflight);
         #[cfg(feature = "rdma")]
         let mut result = result;
+        #[cfg(feature = "rdma")]
+        for cross in inflight.iter_mut().flatten() {
+            if let Some(setup) = cross.setup.take() {
+                let error = result
+                    .err()
+                    .unwrap_or(Error::Internal("unfinished RDMA setup"));
+                result = Err(match self.source.rdma.as_ref() {
+                    Some(transport) => setup.abort(transport, error),
+                    None => Error::Internal("missing RDMA setup transport"),
+                });
+            }
+        }
         for cross in inflight.into_iter().flatten() {
             #[cfg(feature = "rdma")]
             if let Some(transfer) = cross.rdma {
@@ -191,22 +203,46 @@ impl<'a> StagingTask<'a> {
                 let mut ready = operation.progress_send(&mut self.channel, &mut advanced)?;
                 #[cfg(feature = "rdma")]
                 if ready {
-                    if let ControlAction::Finish { offset } = action {
-                        let cross = inflight[(*offset / self.chunk) % self.remote_width]
-                            .as_mut()
-                            .ok_or(Error::Internal("missing staging CROSS"))?;
-                        if let Some(transfer) = cross.rdma.as_mut() {
-                            ready = transfer.progress_finish(
-                                self.source
-                                    .rdma
-                                    .as_ref()
-                                    .ok_or(Error::Unavailable("RDMA is not configured"))?,
-                                &mut self.channel,
-                                &mut advanced,
-                            )?;
+                    match action {
+                        ControlAction::Cross { offset } => {
+                            let cross = inflight[(*offset / self.chunk) % self.remote_width]
+                                .as_mut()
+                                .ok_or(Error::Internal("missing staging CROSS"))?;
+                            if let Some(setup) = cross.setup.as_mut() {
+                                if let Some(transfer) = setup.progress(
+                                    self.source
+                                        .rdma
+                                        .as_ref()
+                                        .ok_or(Error::Unavailable("RDMA is not configured"))?,
+                                    &mut self.channel,
+                                    &mut advanced,
+                                )? {
+                                    cross.rdma = Some(transfer);
+                                    cross.setup = None;
+                                } else {
+                                    ready = false;
+                                }
+                            }
                         }
+                        ControlAction::Finish { offset } => {
+                            let cross = inflight[(*offset / self.chunk) % self.remote_width]
+                                .as_mut()
+                                .ok_or(Error::Internal("missing staging CROSS"))?;
+                            if let Some(transfer) = cross.rdma.as_mut() {
+                                ready = transfer.progress_finish(
+                                    self.source
+                                        .rdma
+                                        .as_ref()
+                                        .ok_or(Error::Unavailable("RDMA is not configured"))?,
+                                    &mut self.channel,
+                                    &mut advanced,
+                                )?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
+
                 let result = if ready {
                     operation.progress(&mut self.channel, &mut advanced)?
                 } else {
@@ -237,6 +273,8 @@ impl<'a> StagingTask<'a> {
                                 remote_operations[slot] = None;
                             }
                         }
+                        #[cfg(feature = "rdma")]
+                        ControlAction::Cross { .. } => {}
                         ControlAction::Finish { offset } => {
                             let slot = (offset / self.chunk) % self.remote_width;
                             let cross = inflight[slot]
@@ -337,7 +375,11 @@ impl<'a> StagingTask<'a> {
                         ),
                     ));
                 } else {
-                    while inflight.iter().filter(|slot| slot.is_some()).count() < self.cross_width {
+                    'admission: {
+                        if inflight.iter().filter(|slot| slot.is_some()).count() >= self.cross_width
+                        {
+                            break 'admission;
+                        }
                         if stopping.load(Ordering::Acquire) {
                             return Err(Error::Cancelled);
                         }
@@ -345,7 +387,7 @@ impl<'a> StagingTask<'a> {
                             Some(command) => command,
                             None => match commands.try_recv() {
                                 Ok(command) => command,
-                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Empty) => break 'admission,
                                 Err(mpsc::TryRecvError::Disconnected) => {
                                     return Err(Error::Cancelled);
                                 }
@@ -359,7 +401,7 @@ impl<'a> StagingTask<'a> {
                                 let slot = (offset / self.chunk) % self.remote_width;
                                 if inflight[slot].is_some() || remote_operations[slot].is_some() {
                                     pending = Some(Command::Cross { local, offset });
-                                    break;
+                                    break 'admission;
                                 }
                                 let length = self.chunk.min(self.request.length - offset);
                                 inflight[slot] = Some(self.cross(local, offset, length)?);
@@ -367,7 +409,14 @@ impl<'a> StagingTask<'a> {
                                 progress = true;
                                 if self.request.transport == Transport::Tcp {
                                     tcp_active = true;
-                                    break;
+                                } else {
+                                    #[cfg(feature = "rdma")]
+                                    {
+                                        control = Some((
+                                            ControlAction::Cross { offset },
+                                            self.remote.submit(Operation::Cross, offset, length),
+                                        ));
+                                    }
                                 }
                             }
                             Command::Unpin => {
@@ -378,14 +427,13 @@ impl<'a> StagingTask<'a> {
                                 }
                                 if remote_operations.iter().any(Option::is_some) {
                                     pending = Some(Command::Unpin);
-                                    break;
+                                    break 'admission;
                                 }
                                 control = Some((
                                     ControlAction::Unpin,
                                     self.remote.submit(Operation::Unpin, expected, 0),
                                 ));
                                 progress = true;
-                                break;
                             }
                         }
                     }
@@ -467,6 +515,8 @@ impl<'a> StagingTask<'a> {
                 }),
                 #[cfg(feature = "rdma")]
                 rdma: None,
+                #[cfg(feature = "rdma")]
+                setup: None,
             });
         }
         #[cfg(not(feature = "rdma"))]
@@ -478,35 +528,24 @@ impl<'a> StagingTask<'a> {
             if cross.transport != Transport::Rdma {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }
-            self.remote
-                .send(&mut self.channel, Operation::Cross, offset, length)?;
-            let transfer = self
-                .source
-                .rdma
-                .as_ref()
-                .ok_or(Error::Unavailable("RDMA is not configured"))?
-                .submit_slices(
-                    self.operation,
-                    self.peer,
-                    &cross,
-                    self.source.epoch,
-                    &mut self.channel,
-                    self.cross_width,
-                )
-                .map_err(|(error, _)| error)?;
-            if let Err(error) =
-                self.remote
-                    .receipt(&mut self.channel, Operation::Cross, offset, length)
-            {
-                transfer.close(Err(error))?;
-                return Err(Error::Internal("failed CROSS lost its error"));
-            }
+            let setup = crate::transport::rdma::RdmaSetup::new(
+                self.source
+                    .rdma
+                    .as_ref()
+                    .ok_or(Error::Unavailable("RDMA is not configured"))?,
+                self.operation,
+                self.peer,
+                &cross,
+                self.source.epoch,
+                self.cross_width,
+            )?;
             Ok(Cross {
                 local: cross.local,
                 offset,
                 ready: false,
                 tcp: None,
-                rdma: Some(transfer),
+                rdma: None,
+                setup: Some(setup),
             })
         }
     }
@@ -519,10 +558,16 @@ struct Cross {
     tcp: Option<TcpCross>,
     #[cfg(feature = "rdma")]
     rdma: Option<crate::transport::rdma::RdmaTransfer>,
+    #[cfg(feature = "rdma")]
+    setup: Option<crate::transport::rdma::RdmaSetup>,
 }
 
 impl Cross {
     fn query(&self) -> Result<bool> {
+        #[cfg(feature = "rdma")]
+        if self.setup.is_some() {
+            return Ok(false);
+        }
         #[cfg(feature = "rdma")]
         if let Some(transfer) = &self.rdma {
             return transfer.query();
@@ -532,6 +577,10 @@ impl Cross {
 }
 
 enum ControlAction {
+    #[cfg(feature = "rdma")]
+    Cross {
+        offset: usize,
+    },
     Delegate {
         offset: usize,
         completion: Option<usize>,
