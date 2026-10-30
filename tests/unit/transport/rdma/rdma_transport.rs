@@ -32,6 +32,7 @@ fn channels() -> (ControlChannel<'static>, ControlChannel<'static>) {
         stream: listener.accept().unwrap().0,
         deadline: deadline(TIMEOUT).unwrap(),
         stopping: None,
+        nonblocking: false,
     };
     (sender, receiver)
 }
@@ -277,6 +278,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 stream: listener.accept().unwrap().0,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             let wire = crate::runtime::control_plane::tests::read_request(&mut channel);
             path::write_paths(

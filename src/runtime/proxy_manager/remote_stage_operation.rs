@@ -2,7 +2,9 @@
 
 use super::ProxyManager;
 use crate::engine::remaining;
-use crate::runtime::control_plane::{ControlChannel, Operation, REQUEST_SIZE, Reply, Request};
+use crate::runtime::control_plane::{
+    ControlChannel, Operation, REPLY_SIZE, REQUEST_SIZE, Reply, Request,
+};
 use crate::{Error, Result, SourceEpoch};
 
 pub(super) fn read_request(channel: &mut ControlChannel<'_>) -> Result<Request> {
@@ -44,25 +46,22 @@ impl RemoteStageOperation {
         self.send(channel, operation, offset, length)
     }
 
-    pub(super) fn query_delegate(
+    pub(super) fn submit(
         &self,
-        channel: &mut ControlChannel<'_>,
+        operation: Operation,
         offset: usize,
         length: usize,
-    ) -> Result<bool> {
-        self.send(channel, Operation::QueryDelegate, offset, length)?;
-        let reply = Reply::read(channel, self.nonce)?;
-        if reply.status != 0 || reply.length != (REQUEST_SIZE + 1) as u64 {
-            return Err(Error::Protocol("staging progress receipt"));
-        }
-        self.expect(channel, Operation::QueryDelegate, offset, length)?;
-        let mut result = [0];
-        channel.read_exact(&mut result)?;
-        match result[0] {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(Error::Protocol("staging progress result")),
-        }
+    ) -> ControlOperation {
+        ControlOperation::new(self.frame(operation, offset, length), false)
+    }
+
+    pub(super) fn receive(
+        &self,
+        operation: Operation,
+        offset: usize,
+        length: usize,
+    ) -> ControlOperation {
+        ControlOperation::new(self.frame(operation, offset, length), true)
     }
 
     pub(super) fn respond_progress(
@@ -144,6 +143,91 @@ impl ProxyManager {
             _ => return,
         };
         *count = count.saturating_add(1);
+    }
+}
+
+/// The single framing owner until the complete scoped response is consumed.
+pub(super) struct ControlOperation {
+    request: Request,
+    sent: usize,
+    reply: [u8; REPLY_SIZE],
+    reply_read: usize,
+    payload: [u8; REQUEST_SIZE + 1],
+    payload_read: usize,
+}
+
+impl ControlOperation {
+    fn new(request: Request, received_only: bool) -> Self {
+        Self {
+            request,
+            sent: if received_only { REQUEST_SIZE } else { 0 },
+            reply: [0; REPLY_SIZE],
+            reply_read: 0,
+            payload: [0; REQUEST_SIZE + 1],
+            payload_read: 0,
+        }
+    }
+
+    pub(super) fn sent(&self) -> bool {
+        self.sent == REQUEST_SIZE
+    }
+
+    pub(super) fn progress(
+        &mut self,
+        channel: &mut ControlChannel<'_>,
+        advanced: &mut bool,
+    ) -> Result<Option<bool>> {
+        if !self.sent() {
+            let count = channel.poll_write(&self.request.encode()[self.sent..])?;
+            self.sent += count;
+            *advanced |= count != 0;
+            // Let the caller publish CROSS after Delegate send, before waiting
+            // on its acceptance receipt.
+            return Ok(None);
+        }
+        let query = self.request.operation == Operation::QueryDelegate;
+        let length = REQUEST_SIZE + usize::from(query);
+        if self.reply_read != REPLY_SIZE {
+            let count = channel.poll_read(&mut self.reply[self.reply_read..])?;
+            self.reply_read += count;
+            *advanced |= count != 0;
+            if self.reply_read != REPLY_SIZE {
+                return Ok(None);
+            }
+            let reply = Reply::decode(&self.reply, self.request.epoch)?;
+            if reply.status != 0 || reply.length != length as u64 {
+                return Err(Error::Protocol("staging progress receipt"));
+            }
+        }
+        if self.payload_read != length {
+            let count = channel.poll_read(&mut self.payload[self.payload_read..length])?;
+            self.payload_read += count;
+            *advanced |= count != 0;
+            if self.payload_read != length {
+                return Ok(None);
+            }
+        }
+        let mut frame = [0; REQUEST_SIZE];
+        frame.copy_from_slice(&self.payload[..REQUEST_SIZE]);
+        let remote = RemoteStageOperation {
+            nonce: self.request.epoch,
+            region: self.request.region,
+        };
+        remote.validate(
+            &Request::decode(&frame)?,
+            self.request.operation,
+            self.request.offset as usize,
+            self.request.length as usize,
+        )?;
+        remaining(channel.deadline)?;
+        if !query {
+            return Ok(Some(true));
+        }
+        match self.payload[REQUEST_SIZE] {
+            0 => Ok(Some(false)),
+            1 => Ok(Some(true)),
+            _ => Err(Error::Protocol("staging progress result")),
+        }
     }
 }
 

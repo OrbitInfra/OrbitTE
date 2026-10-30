@@ -258,6 +258,7 @@ fn partial_read_preserves_destination_and_lost_write_ack_is_ambiguous() {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             if operation == TransferOp::Read {
@@ -339,6 +340,7 @@ fn a_trickling_response_cannot_extend_the_absolute_deadline() {
             stream,
             deadline: deadline(TIMEOUT).unwrap(),
             stopping: None,
+            nonblocking: false,
         };
         channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
         channel
@@ -441,6 +443,7 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             let count = if case == 5 { 2 } else { 1 };
@@ -606,6 +609,7 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
                     stream,
                     deadline: deadline(TIMEOUT).unwrap(),
                     stopping: None,
+                    nonblocking: false,
                 };
                 let mut header = [0; REQUEST_SIZE];
                 channel.read_exact(&mut header).unwrap();
@@ -627,6 +631,7 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             let mut header = [0; REQUEST_SIZE];
             channel.read_exact(&mut header).unwrap();
@@ -713,6 +718,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
             stream,
             deadline: deadline(TIMEOUT).unwrap(),
             stopping: None,
+            nonblocking: false,
         };
         channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
         admitted_tx.send(()).unwrap();
@@ -798,6 +804,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             admitted_tx.send(()).unwrap();
@@ -944,6 +951,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
                 stream,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             if index == 0 {

@@ -29,13 +29,60 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Socket progress
+
+The current v21 source adds a concrete TcpTask shared by ordinary TCP and remote
+staging. It owns partial request/reply/payload/ACK positions, a bounded snapshot
+and the actual local registration. Scoped control operations preserve partial
+receipts; each session has one framing owner and never interleaves protocol bytes.
+TCP CROSS keeps outer header, inner transfer and final scoped receipt distinct.
+Staging local failure/stop can cancel pending socket I/O before its original
+deadline, then joins native drain and task destruction before owner retirement.
+
+CPU controls cover byte-fragmented replies, READ guards and EOF, real WRITE
+backpressure with snapshot/registration retention, and a peer withholding a
+partial Delegate reply or TCP payload through local failure and worker exit.
+The latter checks exact partial bytes, missing Unpin, healthy drain and retained
+GPU owners when context restoration is uncertain. Existing shared-QP/native
+cleanup failures and both feature families remain required regression gates.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/staging-control-progress-20261030/`.
+At `736a16a`, stable and Rust 1.85 each pass default, RDMA-only, CUDA-only and
+combined tests and Clippy. Each combined run passes 322 unit tests, eight
+integration tests and one doctest with two CPUs. Both compiler relay gates,
+all 51 CPU controller controls, the 25-observation Rust trace fixture and strict
+docs/local-link checks pass. `gates.json` records all 23 primary gates;
+`source-manifest.json` binds them to the frozen source.
+
+Independent source review accepts `736a16a` for this source/CPU scope.
+`independent-review/source-review-736a16a.json` records the diff and 21 independently
+rerun feature/compiler/relay/format/docs gates. Controller and trace results
+are audited primary evidence, not additional independent executions.
+`blocking-socket-control/manifest.json` records the same public cancellation
+control failing as expected when only `poll_read` is replaced with bounded
+blocking `read_exact`. The reviewer verifies the unique change and matching
+archive, test and log hashes; this negative control is an audited primary run.
+The new stalled-socket profiles cover TCP framing plus local CUDA failure;
+existing native acceptance and failed-QP cleanup controls pass separately. No
+new combined partial-control/held-native-WR cleanup-failure profile is claimed.
+This is source/CPU work only: current installed v21 execution, DMA overlap and
+performance remain unqualified; hardware requests remain paused. Connect/Pin,
+native RDMA setup/finish, source handlers and ordinary local GPU snapshot/commit
+remain synchronous. Ordinary active batch cancellation, readiness notification,
+location selection and full ProxyManager/API/wire parity remain outside this
+substage. Frozen TENT's ordinary TcpTask uses synchronous workers; its separate
+hp_tcp async provider is not implemented by this change.
+
 ## Remote Delegate progress
 
-The v21 source submits CUDA Delegate work independently of completion at every
+The source accepted at `3767dc5` submits CUDA Delegate work independently of completion at every
 remote ring width. Scoped QueryDelegate results gate READ CROSS, WRITE slot
 reuse and final Unpin, while other submitted native CROSS owners can progress.
 This corresponds to frozen TENT's `submitRemoteStage`, `INFLIGHT_REMOTE` and
-`tryTakeResult` ownership; socket exchanges, Pin and TCP payload remain synchronous.
+`tryTakeResult` ownership. Socket exchanges, Pin and TCP payload were synchronous
+at that revision; the current bounded socket boundary is recorded
+[above](#socket-progress).
 
 CPU controls hold a source PRE/POST NOT_READY while another native CROSS
 finishes, verify bytes and guards with unequal rings and a short final chunk,
@@ -72,8 +119,10 @@ not a second execution of the negative control.
 
 Current v21 installed execution, DMA overlap and performance remain unqualified;
 hardware requests remain paused. Earlier installed profiles stay bound to their
-original revisions. Asynchronous TCP/control progress, location selection and
-full ProxyManager parity remain open.
+original revisions. At `3767dc5`, asynchronous TCP/control progress, location
+selection and full ProxyManager parity remained open. See
+[socket progress](#socket-progress) for the subsequent implementation and its
+remaining blocking boundaries.
 
 ## Concurrent RDMA CROSS
 

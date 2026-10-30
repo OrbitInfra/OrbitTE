@@ -23,6 +23,7 @@ fn channels() -> (ControlChannel<'static>, ControlChannel<'static>) {
         stream: listener.accept().unwrap().0,
         deadline: deadline(TIMEOUT).unwrap(),
         stopping: None,
+        nonblocking: false,
     };
     (sender, receiver)
 }
@@ -137,6 +138,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
                 stream: listener.accept().unwrap().0,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             let request = crate::runtime::control_plane::tests::read_request(&mut channel);
             let descriptor = Descriptor {

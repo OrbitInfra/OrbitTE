@@ -502,6 +502,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 stream: listener.accept().unwrap().0,
                 deadline: deadline(TIMEOUT).unwrap(),
                 stopping: None,
+                nonblocking: false,
             };
             let mut server =
                 ControlChannel::connect(source_address, deadline(TIMEOUT).unwrap()).unwrap();
@@ -803,6 +804,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                     stream: listener.accept().unwrap().0,
                     deadline: deadline(TIMEOUT).unwrap(),
                     stopping: None,
+                    nonblocking: false,
                 };
                 let mut server =
                     ControlChannel::connect(target, deadline(TIMEOUT).unwrap()).unwrap();
