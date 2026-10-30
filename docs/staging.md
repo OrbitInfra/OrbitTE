@@ -58,7 +58,7 @@ CPU requester scratch buffers and public `allocate_pinned_host` / standalone
 
 | Setting | Behavior |
 | --- | --- |
-| `StagingLocation::Any` (default) | CUDA `cuMemHostAlloc`, corresponding to the wildcard `*`; no NUMA placement claim |
+| `StagingLocation::Any` (default) | Preserve CUDA `cuMemHostAlloc`; no NUMA placement claim |
 | `StagingLocation::Auto` | Query the actual context device's PCI BDF, read its sysfs NUMA node, prefer that eligible node, otherwise choose the lowest eligible node |
 | `StagingLocation::Cpu(N)` | Require host location `cpu:N`; unavailable nodes fail before allocation |
 
@@ -69,6 +69,10 @@ mean node zero. Auto then selects the first eligible host node, as TENT's
 Discovery errors, an empty eligible set and a selected node's allocation/binding
 failure are errors. They do not silently switch to the wildcard allocator.
 No topology is exchanged in the v21 wire protocol.
+
+`Any` preserves OrbitTE's existing driver policy. TENT also spells a wildcard
+location `*`, but its frozen host allocator resolves that wildcard to node zero;
+the two default allocation policies are not claimed equivalent.
 
 The NUMA backing owns a fresh, page-rounded anonymous private mapping. It applies
 `mbind(MPOL_BIND | MPOL_F_STATIC_NODES)` before touching pages, then registers the

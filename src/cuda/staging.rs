@@ -342,7 +342,7 @@ impl Context {
             StagingLocation::Any => return Ok(None),
             StagingLocation::Cpu(node) => node,
             StagingLocation::Auto => {
-                let mut pci = [0i8; 20];
+                let mut pci = [0 as std::ffi::c_char; 20];
                 self.current(|| {
                     check("cuDeviceGetPCIBusId", unsafe {
                         (self.driver.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, self.device)

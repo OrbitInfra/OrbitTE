@@ -152,7 +152,7 @@ pub(crate) struct MappedMemory {
     pub(crate) length: usize,
     numa: &'static Numa,
     close_attempted: bool,
-    released: bool,
+    close_error: Option<i32>,
 }
 
 impl MappedMemory {
@@ -177,7 +177,7 @@ impl MappedMemory {
             length,
             numa,
             close_attempted: false,
-            released: false,
+            close_error: None,
         };
         if let Err(error) = (numa.bind)(address, length, node) {
             mapping.close()?;
@@ -193,15 +193,20 @@ impl MappedMemory {
     pub(crate) fn close(&mut self) -> Result<()> {
         if !self.close_attempted {
             self.close_attempted = true;
-            self.released = (self.numa.unmap)(self.address, self.length).is_ok();
+            self.close_error = (self.numa.unmap)(self.address, self.length)
+                .err()
+                .map(|error| match error {
+                    Error::Io(error) => error.raw_os_error().unwrap_or(-1),
+                    Error::Backend { code, .. } | Error::Unquiesced { code, .. } => code,
+                    _ => -1,
+                });
         }
-        if self.released {
-            Ok(())
-        } else {
-            Err(Error::Unquiesced {
+        match self.close_error {
+            None => Ok(()),
+            Some(code) => Err(Error::Unquiesced {
                 operation: "staging host munmap",
-                code: -1,
-            })
+                code,
+            }),
         }
     }
 }

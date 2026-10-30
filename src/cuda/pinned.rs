@@ -220,17 +220,22 @@ impl PinnedAllocation {
             self.context.poisoned.store(true, Ordering::Release);
             RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(Arc::clone(&self.context));
-            Err(Error::Unquiesced {
-                operation: if self.native_freed {
-                    "CUDA pinned cleanup context restoration"
-                } else {
-                    "CUDA pinned cleanup"
-                },
-                code: match result {
-                    Err(Error::Backend { code, .. } | Error::Unquiesced { code, .. }) => code,
-                    _ => -1,
-                },
-            })
+            match result {
+                Err(error @ Error::Unquiesced { .. }) => Err(error),
+                Err(error) => Err(Error::Unquiesced {
+                    operation: if self.native_freed {
+                        "CUDA pinned cleanup context restoration"
+                    } else {
+                        "CUDA pinned cleanup"
+                    },
+                    code: match error {
+                        Error::Backend { code, .. } => code,
+                        Error::Io(error) => error.raw_os_error().unwrap_or(-1),
+                        _ => -1,
+                    },
+                }),
+                Ok(()) => Err(Error::Internal("missing pinned cleanup error")),
+            }
         }
     }
 }

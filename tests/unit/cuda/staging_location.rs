@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicI32;
 use std::time::Instant;
 
-static SERIAL: Mutex<()> = Mutex::new(());
+pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 static MAPPINGS: OnceLock<Mutex<BTreeMap<usize, (usize, u32)>>> = OnceLock::new();
 static NEAR: AtomicI32 = AtomicI32::new(-1);
 static FAIL_BIND: AtomicBool = AtomicBool::new(false);
@@ -40,7 +40,7 @@ static NUMA: Numa = Numa {
     unmap: |pointer, length| {
         UNMAPS.fetch_add(1, Ordering::AcqRel);
         if FAIL_UNMAP.load(Ordering::Acquire) {
-            return Err(Error::Unavailable("test munmap"));
+            return Err(Error::Io(std::io::Error::from_raw_os_error(libc::EIO)));
         }
         MAPPINGS
             .get_or_init(Mutex::default)
@@ -51,14 +51,14 @@ static NUMA: Numa = Numa {
         Ok(())
     },
 };
-fn reset() {
+pub(super) fn reset() {
     NEAR.store(-1, Ordering::Release);
     FAIL_BIND.store(false, Ordering::Release);
     FAIL_UNMAP.store(false, Ordering::Release);
     UNMAPS.store(0, Ordering::Release);
 }
-fn pool(location: StagingLocation, count: usize) -> Arc<ProxyManager> {
-    let mut pool = ProxyManager::new(7, count, location).unwrap();
+pub(super) fn pool(chunk: usize, location: StagingLocation, count: usize) -> Arc<ProxyManager> {
+    let mut pool = ProxyManager::new(chunk, count, location).unwrap();
     Arc::get_mut(&mut pool).unwrap().numa = &NUMA;
     pool
 }
@@ -73,7 +73,7 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
     let owner = allocation(&[0x57; 16]);
     owner.ordinal.store(130, Ordering::Release);
     let gpu = memory(&owner);
-    let pool = pool(StagingLocation::Auto, 1);
+    let pool = pool(7, StagingLocation::Auto, 1);
     let physical = page_round(7).unwrap();
     for node in [130, 130, 2] {
         NEAR.store(node, Ordering::Release);
@@ -130,7 +130,7 @@ fn unknown_gpu_uses_first_eligible_node_but_explicit_denied_and_binding_failure_
         (StagingLocation::Cpu(2), true, None),
     ] {
         FAIL_BIND.store(bind_failure, Ordering::Release);
-        let pool = pool(location, 1);
+        let pool = pool(7, location, 1);
         let result = gpu.copy_staged(0, &mut [0; 16], None, &pool, deadline());
         assert_eq!(result.is_ok(), expected.is_some());
         if let Some(node) = expected {
@@ -160,7 +160,7 @@ fn mapped_pin_failures_retain_backing_context_and_charge_without_repeating_nativ
         let owner = allocation(&[0x57; 16]);
         let weak = Arc::downgrade(&owner);
         let gpu = memory(&owner);
-        let manager = pool(StagingLocation::Cpu(2), 1);
+        let manager = pool(7, StagingLocation::Cpu(2), 1);
         if case == "register" {
             owner.pin_error.store(1, Ordering::Release);
         }
@@ -225,7 +225,7 @@ fn mapped_pin_failures_retain_backing_context_and_charge_without_repeating_nativ
 }
 
 fn engine(transport: Transport) -> TransferEngine {
-    let proxy = pool(StagingLocation::Auto, 3);
+    let proxy = pool(7, StagingLocation::Auto, 3);
     let config = EngineConfig {
         remote_staging: true,
         staging_chunk_size: 7,
@@ -263,9 +263,11 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
         for operation in [TransferOp::Read, TransferOp::Write] {
             let source = engine(transport);
             let requester = engine(transport);
-            let a = allocation(&[0x57; 64]);
+            let source_bytes: [u8; 64] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+            let local_bytes: [u8; 64] = std::array::from_fn(|i| (i * 19 + 53) as u8);
+            let a = allocation(&source_bytes);
             a.ordinal.store(2, Ordering::Release);
-            let b = allocation(&[0xcc; 64]);
+            let b = allocation(&local_bytes);
             b.ordinal.store(130, Ordering::Release);
             let source_gpu = memory(&a);
             let local_gpu = memory(&b);
@@ -329,12 +331,12 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
                     }
                 }
             }
-            let mut expected_source = [0x57; 64];
-            let mut expected_local = [0xcc; 64];
+            let mut expected_source = source_bytes;
+            let mut expected_local = local_bytes;
             if operation == TransferOp::Read {
-                expected_local[2..43].fill(0x57);
+                expected_local[2..43].copy_from_slice(&source_bytes[1..42]);
             } else {
-                expected_source[1..42].fill(0xcc);
+                expected_source[1..42].copy_from_slice(&local_bytes[2..43]);
             }
             let mut bytes = [0; 64];
             source_gpu.read(0, &mut bytes).unwrap();
@@ -348,4 +350,50 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
             }
         }
     }
+}
+
+#[test]
+fn unmap_failure_preserves_its_errno_and_mapping_after_successful_unregister() {
+    let _serial = SERIAL.lock().unwrap();
+    reset();
+    let owner = allocation(&[0x57; 16]);
+    let weak = Arc::downgrade(&owner);
+    let gpu = memory(&owner);
+    let context = gpu.allocation.lock().unwrap().context.clone();
+    let buffer = PinnedAllocation::new_at(&context, 7, Some(2), &NUMA).unwrap();
+    let address = buffer.address;
+    FAIL_UNMAP.store(true, Ordering::Release);
+    assert!(matches!(
+        buffer.close(),
+        Err(Error::Unquiesced {
+            operation: "staging host munmap",
+            code: libc::EIO
+        })
+    ));
+    assert_eq!(UNMAPS.load(Ordering::Acquire), 1);
+    assert!(owner.host_registrations.lock().unwrap().is_empty());
+    assert!(
+        MAPPINGS
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .contains_key(&(address.as_ptr() as usize))
+    );
+    let mut resident = 0u8;
+    assert_eq!(
+        unsafe {
+            libc::mincore(
+                address.as_ptr().cast(),
+                page_round(7).unwrap(),
+                &mut resident,
+            )
+        },
+        0
+    );
+    drop(context);
+    drop(gpu);
+    drop(owner);
+    assert!(weak.upgrade().is_some());
+    reset();
 }

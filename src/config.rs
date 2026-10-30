@@ -7,7 +7,7 @@ use crate::{Error, Result};
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StagingLocation {
-    /// CUDA driver allocation (TENT's wildcard `*`); no NUMA placement claim.
+    /// Preserve CUDA driver allocation; no NUMA placement claim.
     #[default]
     Any,
     /// Prefer the GPU's NUMA node, then the first eligible host node.
