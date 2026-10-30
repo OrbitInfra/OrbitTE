@@ -612,7 +612,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [connection lifetime](qualification.md#connection-and-pin-lifetime).
   Requester native finish now polls completion SEND and sealed reusable-grant
   cleanup and retains partial DONE/ACK/READY frames while other CROSS payloads
-  remain queryable. Source review is pending; see
+  remain queryable. Independent source review accepts `e2f4037`; see
   [finish progress](qualification.md#native-rdma-finish-progress).
   Complete native setup and remaining synchronous retirement/source boundaries, location selection
   and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
@@ -912,7 +912,8 @@ Connect/Pin and native handshake socket waits are implemented with a single
 connection, full Pin validation and existing native drain ownership. Independent
 source review accepts `a2d1b9e`; see [connection lifetime](qualification.md#connection-and-pin-lifetime).
 Requester native finish progress is implemented with one framing owner, shared
-SEND/drain validation and partial completion frames; source review is pending.
+SEND/drain validation and partial completion frames. Independent source review
+accepts `e2f4037`; see [finish progress](qualification.md#native-rdma-finish-progress).
 The next implementation boundary is asynchronous native RDMA setup, followed by
 location selection. Nonreusable retirement, copyback and source handlers retain
 explicit synchronous limits. Current v21 hardware qualification and full

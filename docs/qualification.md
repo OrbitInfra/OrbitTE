@@ -52,7 +52,25 @@ Healthy controls split Reply, ACK and READY, resume the same connection, and
 check all payload/guard bytes, one SEND per slice and QP reuse. A changed ACK
 binding fails before a chunk completes. Evidence is selected outside Git at
 `/root/orbitte-artifacts/rdma-finish-progress-20261030/`.
-Source review and final gates are pending.
+Independent source review accepts `e2f4037` for this source/CPU boundary.
+`gates.json` records 22 primary gates: stable and Rust 1.85 tests/Clippy for all
+four feature profiles, both relay gates, the 25-observation Rust CPU trace, format
+and strict documentation/local-link checks. Each combined run passes 332 unit
+tests, eight integration tests and one doctest; five hardware units and the integration
+subprocess fixture are marked ignored in the parent runner. Source and tool hashes are recorded in
+`source-manifest.json` and `build-environment.json`.
+
+`independent-review/source-review-e2f4037.json` selects 21 independently rerun
+gates, using a fresh stable target and the final-source MSRV artifacts. An older
+cross-archive target reused a stale stable binary; its results are excluded and
+preserved. The reviewer audits primary evidence and verifies all 281 files in
+`blocking-finish-control-e2f4037/`: only the finish progress body changes to the
+synchronous protocol. Both unchanged failure-observation and SEND-stop tests
+then fail their two-second assertions before the ten-second request deadline.
+The earlier CUDA-only warning and POST/next-PRE priority regression are preserved
+with their failed runs; the final source passes the unchanged panic/effect test.
+GitHub CI also passes 8/8 profiles, the frozen TENT CPU comparison and docs at
+this implementation revision; see `ci-source-e2f4037.json`.
 
 Pin, native setup, nonreusable QP retirement/copyback, cache fallback retirement,
 failure drain and source handlers retain synchronous boundaries. Provider calls
