@@ -1,3 +1,8 @@
+#[cfg(feature = "cuda")]
+mod connection;
+#[cfg(feature = "cuda")]
+pub(crate) use connection::Connecting;
+
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -315,10 +320,28 @@ pub(crate) fn notify(
     result.map_err(|error| NotificationFailure { error, effect })
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Stop<'a> {
+    Source(&'a AtomicBool),
+    #[cfg(feature = "cuda")]
+    Task(&'a AtomicBool),
+}
+
+impl Stop<'_> {
+    fn check(self) -> Result<()> {
+        match self {
+            Self::Source(flag) if flag.load(Ordering::Acquire) => Err(Error::SourceClosed),
+            #[cfg(feature = "cuda")]
+            Self::Task(flag) if flag.load(Ordering::Acquire) => Err(Error::Cancelled),
+            _ => Ok(()),
+        }
+    }
+}
+
 pub(crate) struct ControlChannel<'a> {
     pub(crate) stream: TcpStream,
     pub(crate) deadline: Instant,
-    pub(crate) stopping: Option<&'a AtomicBool>,
+    pub(crate) stopping: Option<Stop<'a>>,
     pub(crate) nonblocking: bool,
 }
 
@@ -335,11 +358,8 @@ impl ControlChannel<'_> {
     }
 
     fn poll_timeout(&self) -> Result<Duration> {
-        if self
-            .stopping
-            .is_some_and(|flag| flag.load(Ordering::Acquire))
-        {
-            return Err(Error::SourceClosed);
+        if let Some(stopping) = self.stopping {
+            stopping.check()?;
         }
         Ok(remaining(self.deadline)?.min(IO_POLL))
     }
@@ -471,7 +491,7 @@ impl ControlService {
                         let mut channel = ControlChannel {
                             stream,
                             deadline,
-                            stopping: Some(&stopping),
+                            stopping: Some(Stop::Source(&stopping)),
                             nonblocking: false,
                         };
                         // A failed connection is isolated and closed, never replayed.

@@ -7,6 +7,7 @@ use crate::{
     BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport,
 };
 
+mod connect_progress;
 mod ipc;
 mod ipc_cache;
 mod ipc_host;

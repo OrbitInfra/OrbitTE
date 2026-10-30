@@ -605,8 +605,13 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   return pending with bounded socket work. Local failure can cancel and join
   without the peer releasing its partial response; ordinary TCP shares TcpTask.
   Independent source review accepts `736a16a`; see [socket progress](qualification.md#socket-progress).
-  Complete remaining Connect/Pin and native RDMA setup/finish progress, location
-  selection and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Cancellable Connect/Pin and native handshake socket waits are implemented:
+  one pending socket keeps its original deadline and task stop; complete Pin
+  validation precedes publication, and cancellation still joins native drain.
+  Independent source review accepts `a2d1b9e`; see
+  [connection lifetime](qualification.md#connection-and-pin-lifetime).
+  Complete native RDMA setup/finish asynchronous progress, location selection
+  and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -898,9 +903,12 @@ scoped event-query completion and retaining per-slot generations through pending
 results. Independent source review accepts `3767dc5`; see [the evidence](qualification.md#remote-delegate-progress).
 TCP payload and scoped staging control receipts now have bounded nonblocking
 progress and retain one framing owner. Independent source review accepts
-`736a16a`; see [socket progress](qualification.md#socket-progress). The next implementation
-boundary is remaining connection/Pin and native RDMA setup/finish control progress,
-followed by location selection. Current v21 hardware qualification and full
+`736a16a`; see [socket progress](qualification.md#socket-progress). Cancellable
+Connect/Pin and native handshake socket waits are implemented with a single
+connection, full Pin validation and existing native drain ownership. Independent
+source review accepts `a2d1b9e`; see [connection lifetime](qualification.md#connection-and-pin-lifetime).
+The next implementation boundary is asynchronous
+native RDMA setup/finish progress, followed by location selection. Current v21 hardware qualification and full
 ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

@@ -29,6 +29,52 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Connection and Pin lifetime
+
+The current v21 source retains one nonblocking staging connection attempt through
+success, stop or the original deadline. Typed task stop reaches the subsequent
+Pin and native handshake socket waits. Pin validates the full header and success
+tail before exposing a chunk. Source stop retains its distinct error identity.
+Cancellation does not bypass native abort, drain or uncertain-owner retention.
+
+CPU controls use real loopback sockets: a saturated accept queue holds a pending
+connect, fragmented Pin replies remain withheld through requester terminal,
+source errors provide no success tail, and invalid negotiation never starts
+CROSS. Internal staging worker stop and the public request deadline are tested
+separately. Native setup and finish controls combine partial socket replies with
+accepted CROSS work, successful drain and injected QP cleanup failure. The
+actual local GPU shim owner is retained when native cleanup is unproven.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/staging-connect-progress-20261030/`.
+At `a2d1b9e`, stable and Rust 1.85 pass all four feature profiles' tests and
+Clippy. Each combined run passes 329 unit tests, eight integration tests and one
+doctest with two CPUs. Both relay gates, the 25-observation Rust CPU trace and
+strict docs/local-link checks pass. `gates.json` records 22 primary gates;
+`source-manifest.json` and `build-environment.json` bind the source and tools.
+
+Independent source review accepts `a2d1b9e` for this source/CPU boundary.
+`independent-review/source-review-a2d1b9e.json` records the inspected diff and 21
+independently rerun feature/compiler/relay/format/docs gates. The reviewer also
+audits the primary CPU trace and negative controls. The unchanged controller
+suite is not repeated locally; GitHub CI executes its existing CPU gate.
+`stop-ignorant-control/manifest.json` records a fresh archive with only the
+channel's task stop removed. The unchanged partial-Pin and held-WR setup tests
+both fail their two-second stop assertion while the original request deadline
+is ten seconds. The independently checked archive and per-file hashes confirm
+the unique mutation and unchanged tests.
+
+The new Pin profiles cover READ and WRITE; the combined native socket stop and
+cleanup-failure profiles cover READ setup and finish. Existing WRITE-effect
+regressions pass separately. Source EOF cleanup remains withheld until after
+requester terminal, so the tests distinguish requester retirement from remote
+loan release. This does not qualify installed v21 execution, real DMA overlap
+or performance; hardware tasks remain paused. Pin and native handshakes still occupy their session worker, native/CQ
+waits remain synchronous, and public active cancellation and engine close order
+are unchanged. Full asynchronous control progress, location selection and full
+ProxyManager/API/wire parity remain open. Frozen TENT likewise pins remote stage
+buffers synchronously before using them in its chunk event loop.
+
 ## Socket progress
 
 The current v21 source adds a concrete TcpTask shared by ordinary TCP and remote
@@ -67,9 +113,11 @@ The new stalled-socket profiles cover TCP framing plus local CUDA failure;
 existing native acceptance and failed-QP cleanup controls pass separately. No
 new combined partial-control/held-native-WR cleanup-failure profile is claimed.
 This is source/CPU work only: current installed v21 execution, DMA overlap and
-performance remain unqualified; hardware requests remain paused. Connect/Pin,
-native RDMA setup/finish, source handlers and ordinary local GPU snapshot/commit
-remain synchronous. Ordinary active batch cancellation, readiness notification,
+performance remain unqualified; hardware requests remain paused. At this source
+boundary Connect/Pin and native handshake waits had no task stop token; see
+[connection lifetime](#connection-and-pin-lifetime) for the subsequent change.
+Pin, native RDMA setup/finish, source handlers and ordinary local GPU
+snapshot/commit remain synchronous within their workers. Ordinary active batch cancellation, readiness notification,
 location selection and full ProxyManager/API/wire parity remain outside this
 substage. Frozen TENT's ordinary TcpTask uses synchronous workers; its separate
 hp_tcp async provider is not implemented by this change.

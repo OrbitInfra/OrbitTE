@@ -421,9 +421,15 @@ ownership. Final Unpin waits for every local copy and terminal remote result.
 and its actual local registration. Ordinary TCP and staging use the same bounded
 nonblocking progress. `ControlOperation` retains one scoped partial response;
 `TcpCross` sequences its outer header, TCP task and CROSS receipt. The session
-never interleaves another operation into a partial frame. Connect/Pin, native
-RDMA setup/finish and source handlers remain synchronous; their control progress
-and location scheduling remain open. The slot retains both handles across sessions; close
+never interleaves another operation into a partial frame.
+`control_plane/connection.rs::Connecting` owns one nonblocking connect attempt,
+checks both socket error and connected peer, and transfers that same socket into
+`ControlChannel`. Its original deadline and typed `Stop::Task` follow the channel
+through Pin and native RDMA handshake I/O; source handlers use `Stop::Source`.
+Pin validates the full success response before publishing chunk geometry. Native
+abort/close still drains accepted work, with uncertain cleanup retaining owners.
+Pin and RDMA setup/finish remain synchronous within the session worker; fully
+asynchronous control progress, source handlers and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

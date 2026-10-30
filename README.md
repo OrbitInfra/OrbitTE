@@ -113,8 +113,11 @@ acceptance and completion are separate: scoped event queries keep other
 submitted CROSS owners moving while a remote copy is pending. TCP payload and
 staging Delegate/query/Unpin receipts now use bounded nonblocking socket progress,
 retaining partial frames and actual memory owners. Staging cancellation from a
-local failure can join while the peer still withholds bytes. Connection/Pin,
-RDMA setup/finish and source handlers retain synchronous boundaries. Current v21
+local failure can join while the peer still withholds bytes. Staging connection
+setup now retains one pending socket with the original deadline; worker stop
+also interrupts Pin and native handshake socket waits. Incomplete Pin replies
+never publish a chunk. Pin and RDMA setup/finish still run synchronously within
+the session worker, and source handlers retain synchronous boundaries. Current v21
 hardware qualification is pending; earlier H20 results apply to their recorded
 artifacts. Remaining control progress and location selection stay open.
 Broader IPC parity, optional SSD transports and
