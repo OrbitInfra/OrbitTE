@@ -143,7 +143,7 @@ use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::{RemoteEffect, SourceEpoch};
 use std::time::Instant;
 
-fn pin(
+pub(super) fn pin(
     source: &TransferEngine,
     memory: &crate::RegisteredMemory,
     write: bool,
@@ -644,144 +644,177 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
 }
 
 #[test]
-fn lost_unpin_receipt_keeps_chunk_effects_but_cannot_report_success() {
-    use std::io::{Read, copy};
+fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
+    use std::io::{Read, Write, copy};
     use std::net::{Shutdown, TcpListener, TcpStream};
-    for (operation, depth, device_requester) in [
-        (TransferOp::Read, 1, false),
-        (TransferOp::Write, 1, false),
-        (TransferOp::Read, 2, false),
-        (TransferOp::Write, 2, false),
-        (TransferOp::Read, 3, true),
-        (TransferOp::Write, 3, true),
-    ] {
-        let source = super::staging_pipeline::engine(Transport::Tcp, depth);
-        let requester = super::staging_pipeline::engine(Transport::Tcp, depth);
-        let a = allocation(&[0x57; 12]);
-        let gpu = memory(&a);
-        let remote = source
-            .register_cuda_memory_batch(&[(gpu.clone(), 0, 12)], Permission::RemoteReadWrite)
-            .unwrap()
-            .remove(0);
-        let b = allocation(&[0xcc; 10]);
-        let local = if device_requester {
-            requester
-                .register_cuda_memory_batch(&[(memory(&b), 0, 10)], Permission::LocalOnly)
+    for lost_query in [false, true] {
+        for (operation, depth, device_requester) in [
+            (TransferOp::Read, 1, false),
+            (TransferOp::Write, 1, false),
+            (TransferOp::Read, 2, false),
+            (TransferOp::Write, 2, false),
+            (TransferOp::Read, 3, true),
+            (TransferOp::Write, 3, true),
+        ] {
+            let source = super::staging_pipeline::engine(Transport::Tcp, depth);
+            let requester = super::staging_pipeline::engine(Transport::Tcp, depth);
+            let a = allocation(&[0x57; 12]);
+            let gpu = memory(&a);
+            let remote = source
+                .register_cuda_memory_batch(&[(gpu.clone(), 0, 12)], Permission::RemoteReadWrite)
                 .unwrap()
-                .remove(0)
-        } else {
-            requester
-                .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
-                .unwrap()
-        };
-        let mut peer = requester
-            .open_segment(
-                source.endpoint(),
-                source.source_epoch(),
-                Duration::from_secs(2),
-            )
-            .unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        peer.endpoint = listener.local_addr().unwrap();
-        let target = source.endpoint();
-        let relay = std::thread::spawn(move || {
-            let (mut client, _) = listener.accept().unwrap();
-            let mut server = TcpStream::connect(target).unwrap();
-            server
-                .set_read_timeout(Some(Duration::from_secs(2)))
+                .remove(0);
+            let b = allocation(&[0xcc; 10]);
+            let local = if device_requester {
+                requester
+                    .register_cuda_memory_batch(&[(memory(&b), 0, 10)], Permission::LocalOnly)
+                    .unwrap()
+                    .remove(0)
+            } else {
+                requester
+                    .register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)
+                    .unwrap()
+            };
+            let mut peer = requester
+                .open_segment(
+                    source.endpoint(),
+                    source.source_epoch(),
+                    Duration::from_secs(2),
+                )
                 .unwrap();
-            let mut input = client.try_clone().unwrap();
-            let mut output = server.try_clone().unwrap();
-            let upstream = std::thread::spawn(move || {
-                let _ = copy(&mut input, &mut output);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            peer.endpoint = listener.local_addr().unwrap();
+            let target = source.endpoint();
+            let relay = std::thread::spawn(move || {
+                let (mut client, _) = listener.accept().unwrap();
+                let mut server = TcpStream::connect(target).unwrap();
+                server
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut input = client.try_clone().unwrap();
+                let mut output = server.try_clone().unwrap();
+                let upstream = std::thread::spawn(move || {
+                    let _ = copy(&mut input, &mut output);
+                });
+                // Pin has a fixed nonce/depth extension. Subsequent replies carry
+                // their own payload length, including any number of pending queries.
+                let mut pin = [0; 54];
+                server.read_exact(&mut pin).unwrap();
+                client.write_all(&pin).unwrap();
+                loop {
+                    let mut header = [0; 36];
+                    server.read_exact(&mut header).unwrap();
+                    let length = crate::runtime::control_plane::u64_at(&header, 28) as usize;
+                    assert!(length <= 53);
+                    let mut payload = vec![0; length];
+                    server.read_exact(&mut payload).unwrap();
+                    if length == 52 || length == 53 {
+                        let frame = Request::decode(payload[..52].try_into().unwrap()).unwrap();
+                        if lost_query
+                            && frame.operation == Operation::QueryDelegate
+                            && frame.offset == 0
+                            && payload[52] == 1
+                        {
+                            break;
+                        }
+                        if frame.operation == Operation::Unpin {
+                            assert_eq!(header[10], 0);
+                            assert_eq!((frame.offset, frame.length), (8, 0));
+                            break;
+                        }
+                    }
+                    client.write_all(&header).unwrap();
+                    client.write_all(&payload).unwrap();
+                }
+                client.shutdown(Shutdown::Both).unwrap();
+                let _ = server.shutdown(Shutdown::Both);
+                upstream.join().unwrap();
             });
-            // Pin header/nonce, then exactly three Delegate + CROSS exchanges.
-            // This wire-level control reads the real source's final receipt but
-            // drops it before the requester can observe it.
-            let preceding = 54
-                + if operation == TransferOp::Read {
-                    3 * (212 + 88) + 8
-                } else {
-                    3 * (248 + 88)
-                };
-            assert_eq!(
-                copy(&mut (&mut server).take(preceding), &mut client).unwrap(),
-                preceding
+            let report = requester
+                .submit_and_wait(
+                    operation,
+                    &peer,
+                    &[TransferRequest {
+                        transport: Transport::Tcp,
+                        local_address: local.base_address() + 1,
+                        remote_address: remote.base_address() + 1,
+                        length: 8,
+                    }],
+                    Duration::from_secs(2),
+                )
+                .unwrap();
+            relay.join().unwrap();
+            assert!(
+                !report.is_complete() && report.locally_drained,
+                "{report:?}"
             );
-            let mut final_receipt = [0; 88];
-            server.read_exact(&mut final_receipt).unwrap();
-            assert_eq!(final_receipt[10], 0);
-            client.shutdown(Shutdown::Both).unwrap();
-            let _ = server.shutdown(Shutdown::Both);
-            upstream.join().unwrap();
-        });
-        let report = requester
-            .submit_and_wait(
-                operation,
-                &peer,
-                &[TransferRequest {
-                    transport: Transport::Tcp,
-                    local_address: local.base_address() + 1,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
-                Duration::from_secs(2),
-            )
-            .unwrap();
-        relay.join().unwrap();
-        assert!(
-            !report.is_complete() && report.locally_drained,
-            "{report:?}"
-        );
-        assert_eq!(
-            (report.completed_requests, report.transferred_bytes),
-            (0, 0)
-        );
-        assert_eq!(
-            report.failure.unwrap().remote_effect,
-            if operation == TransferOp::Write {
-                RemoteEffect::Unknown
-            } else {
-                RemoteEffect::None
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (0, 0)
+            );
+            assert_eq!(
+                report.failure.unwrap().remote_effect,
+                if operation == TransferOp::Write {
+                    RemoteEffect::Unknown
+                } else {
+                    RemoteEffect::None
+                }
+            );
+            if device_requester {
+                let local_copies = if lost_query && operation == TransferOp::Read {
+                    0
+                } else {
+                    3
+                };
+                assert_eq!(
+                    b.event_query_successes.load(Ordering::Acquire),
+                    local_copies
+                );
+                assert_eq!(b.event_waits.load(Ordering::Acquire), 0);
+                assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+                assert_eq!(
+                    requester.stats().unwrap().staging.completed_chunks,
+                    local_copies as u64
+                );
             }
-        );
-        if device_requester {
-            assert_eq!(b.event_query_successes.load(Ordering::Acquire), 3);
-            assert_eq!(b.event_waits.load(Ordering::Acquire), 0);
-            assert!(b.streams.lock().unwrap().values().all(Option::is_none));
-            assert_eq!(requester.stats().unwrap().staging.completed_chunks, 3);
-        }
-        let mut observed = [0; 10];
-        local.read(0, &mut observed).unwrap();
-        let mut expected = [0xcc; 10];
-        if operation == TransferOp::Read {
-            expected[1..9].fill(0x57);
-        }
-        assert_eq!(observed, expected);
-        let mut bytes = [0; 8];
-        let stats = source.stats().unwrap().staging;
-        assert_eq!(
-            (
-                stats.remote_pins,
-                stats.remote_delegates,
-                stats.remote_crosses,
-                stats.remote_unpins
-            ),
-            (1, 3, 3, 1)
-        );
-        gpu.read(1, &mut bytes).unwrap();
-        assert_eq!(
-            bytes,
-            if operation == TransferOp::Write {
-                [0xcc; 8]
-            } else {
-                [0x57; 8]
+            let mut observed = [0; 10];
+            local.read(0, &mut observed).unwrap();
+            let mut expected = [0xcc; 10];
+            if operation == TransferOp::Read && !lost_query {
+                expected[1..9].fill(0x57);
             }
-        );
-        for engine in [&requester, &source] {
-            engine.close(Duration::from_secs(2)).unwrap();
+            assert_eq!(observed, expected);
+            let mut bytes = [0; 8];
+            source.close(Duration::from_secs(2)).unwrap();
+            let stats = source.stats().unwrap().staging;
+            assert_eq!(
+                (
+                    stats.remote_pins,
+                    stats.remote_delegates,
+                    stats.remote_crosses,
+                    stats.remote_unpins
+                ),
+                if lost_query {
+                    if operation == TransferOp::Read {
+                        (1, depth as u64, 0, 0)
+                    } else {
+                        (1, 1, 1, 0)
+                    }
+                } else {
+                    (1, 3, 3, 1)
+                }
+            );
+            gpu.read(1, &mut bytes).unwrap();
+            let mut expected = [0x57; 8];
+            if operation == TransferOp::Write {
+                expected[..if lost_query { 3 } else { 8 }].fill(0xcc);
+            }
+            assert_eq!(bytes, expected);
+            for engine in [&requester, &source] {
+                engine.close(Duration::from_secs(2)).unwrap();
+            }
+            assert!(b.pins.lock().unwrap().is_empty());
         }
-        assert!(b.pins.lock().unwrap().is_empty());
     }
 }
 
@@ -815,13 +848,8 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
     let b_peer = b
         .open_segment(a.endpoint(), a.source_epoch(), Duration::from_secs(2))
         .unwrap();
-    let mut gates = Vec::new();
     for owner in [&a_owner, &b_owner] {
-        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-        let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-        // Stop source PRE completion while both range loans and rings coexist.
-        *owner.event_gate.lock().unwrap() = Some((entered, blocked));
-        gates.push((waiting, resume));
+        owner.query_hold.store(true, Ordering::Release);
     }
     std::thread::scope(|scope| {
         fn run(
@@ -847,8 +875,8 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
         }
         let left = scope.spawn(|| run(&a, &a_peer, &a_memory, &b_memory));
         let right = scope.spawn(|| run(&b, &b_peer, &b_memory, &a_memory));
-        for (waiting, _) in &gates {
-            waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        for owner in [&a_owner, &b_owner] {
+            wait_pending(owner, 3);
         }
         for owner in [&a_owner, &b_owner] {
             assert_eq!(owner.pins.lock().unwrap().len(), 6);
@@ -872,8 +900,8 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
             assert_eq!(allocation.dma.len(), 2);
             assert!(allocation.dma.contains(&(0..8)) && allocation.dma.contains(&(12..20)));
         }
-        for (_, resume) in gates {
-            resume.send(()).unwrap();
+        for owner in [&a_owner, &b_owner] {
+            owner.query_hold.store(false, Ordering::Release);
         }
         left.join().unwrap();
         right.join().unwrap();

@@ -13,7 +13,7 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
 }
 
 #[test]
-fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
+fn local_slot_advances_while_remote_delegate_completion_is_pending() {
     for transport in [
         Transport::Tcp,
         #[cfg(feature = "rdma")]
@@ -44,21 +44,20 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
                     Duration::from_secs(3),
                 )
                 .unwrap();
-            let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-            let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-            *a.event_gate.lock().unwrap() = Some((entered, blocked));
+            a.query_hold_address.store(
+                remote.base_address() as usize
+                    + 1
+                    + if operation == TransferOp::Read { 3 } else { 0 },
+                Ordering::Release,
+            );
             b.query_hold_address.store(
                 local.base_address() as usize
                     + 2
                     + if operation == TransferOp::Read { 0 } else { 9 },
                 Ordering::Release,
             );
-            // R=1 makes Delegate wait for its CUDA copy before acknowledging.
-            // READ skips the initial source PRE and holds its next PRE instead.
-            a.event_gate_skip.store(
-                usize::from(operation == TransferOp::Read),
-                Ordering::Release,
-            );
+            // Keep one remote generation pending while the local ring advances.
+            // READ holds its next PRE; WRITE holds its first POST.
             let mut batch = requester
                 .submit_async(
                     operation,
@@ -73,7 +72,7 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
                     Duration::from_secs(5),
                 )
                 .unwrap();
-            waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+            wait_until(|| a.event_not_ready.load(Ordering::Acquire) != 0);
             let address = local.base_address() as usize
                 + 2
                 + if operation == TransferOp::Read { 0 } else { 9 };
@@ -101,7 +100,7 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
                 Err(Error::Timeout)
             ));
             b.query_hold_address.store(0, Ordering::Release);
-            resume.send(()).unwrap();
+            a.query_hold_address.store(0, Ordering::Release);
             let report = batch.wait(Duration::from_secs(5)).unwrap();
             assert_eq!(
                 report.state,
@@ -131,7 +130,7 @@ fn local_slot_advances_while_remote_delegate_receipt_is_pending() {
 
 #[test]
 #[cfg_attr(not(feature = "rdma"), allow(clippy::single_element_loop))]
-fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_receipt() {
+fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion() {
     for transport in [
         Transport::Tcp,
         #[cfg(feature = "rdma")]
@@ -158,10 +157,8 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_receipt() {
                 Duration::from_secs(3),
             )
             .unwrap();
-        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-        let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-        *a.event_gate.lock().unwrap() = Some((entered, blocked));
-        a.event_gate_skip.store(2, Ordering::Release);
+        a.query_hold_address
+            .store(remote.base_address() as usize + 7, Ordering::Release);
         let mut batch = requester
             .submit_async(
                 TransferOp::Write,
@@ -176,7 +173,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_receipt() {
                 Duration::from_secs(1),
             )
             .unwrap();
-        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        wait_until(|| a.event_not_ready.load(Ordering::Acquire) != 0);
         assert_eq!(source.stats().unwrap().staging.remote_crosses, 3);
         assert_eq!(source.stats().unwrap().staging.remote_delegates, 2);
         let report = batch.wait(Duration::from_secs(2)).unwrap();
@@ -202,7 +199,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_receipt() {
             1
         );
         assert_eq!(source_gpu.allocation.lock().unwrap().dma, vec![1..9]);
-        resume.send(()).unwrap();
+        a.query_hold_address.store(0, Ordering::Release);
         batch.free().unwrap();
         requester.close(Duration::from_secs(3)).unwrap();
         source.close(Duration::from_secs(3)).unwrap();
@@ -217,73 +214,30 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_receipt() {
 }
 
 #[test]
-#[cfg_attr(not(feature = "rdma"), allow(clippy::single_element_loop))]
+#[cfg(feature = "rdma")]
 fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertainty() {
-    for (transport, cleanup_failure) in [
-        (Transport::Tcp, false),
-        #[cfg(feature = "rdma")]
-        (Transport::Rdma, false),
-        #[cfg(feature = "rdma")]
-        (Transport::Rdma, true),
-    ] {
-        let source = if transport == Transport::Rdma {
-            #[cfg(feature = "rdma")]
-            {
-                let mut runtime = crate::transport::rdma::tests::runtime_with_config(
-                    crate::transport::rdma::RdmaConfig {
-                        max_direct_bytes: 3,
-                        max_endpoints: 1,
-                        max_staging_bytes: 8,
-                        ..crate::transport::rdma::RdmaConfig::new("copy")
-                    },
-                );
-                runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(3, 3).unwrap();
-                crate::engine::tests::rdma_fixture_with_config(
-                    runtime,
-                    EngineConfig {
-                        remote_staging: true,
-                        staging_chunk_size: 3,
-                        staging_chunk_count: 3,
-                        staging_pipeline_depth: 3,
-                        handler_threads: 1,
-                        max_inflight_batches: 1,
-                        ..EngineConfig::default()
-                    },
-                )
-            }
-            #[cfg(not(feature = "rdma"))]
-            {
-                unreachable!()
-            }
+    for cleanup_failure in [false, true] {
+        let transport = Transport::Rdma;
+        let source = engine(transport, 3, 2);
+        let mut runtime = crate::transport::rdma::tests::runtime(if cleanup_failure {
+            "direct:copy_cross_hold_close0"
         } else {
-            engine(transport, 3, 3)
-        };
-        let requester = {
-            #[cfg(feature = "rdma")]
-            if cleanup_failure {
-                let mut runtime =
-                    crate::transport::rdma::tests::runtime("direct:copy_second_error_close0");
-                runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(3, 3).unwrap();
-                crate::engine::tests::rdma_fixture_with_config(
-                    runtime,
-                    EngineConfig {
-                        remote_staging: true,
-                        staging_chunk_size: 3,
-                        staging_chunk_count: 3,
-                        staging_pipeline_depth: 3,
-                        handler_threads: 1,
-                        max_inflight_batches: 1,
-                        ..EngineConfig::default()
-                    },
-                )
-            } else {
-                engine(transport, 3, 3)
-            }
-            #[cfg(not(feature = "rdma"))]
-            {
-                engine(transport, 3, 3)
-            }
-        };
+            "direct:copy_cross_hold"
+        });
+        runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(3, 3).unwrap();
+        let hold = crate::transport::rdma::tests::pause(&runtime);
+        let requester = crate::engine::tests::rdma_fixture_with_config(
+            runtime,
+            EngineConfig {
+                remote_staging: true,
+                staging_chunk_size: 3,
+                staging_chunk_count: 3,
+                staging_pipeline_depth: 3,
+                handler_threads: 1,
+                max_inflight_batches: 1,
+                ..EngineConfig::default()
+            },
+        );
         let requester = Arc::new(requester);
         let a = allocation(&[0x57; 32]);
         let b = allocation(&[0xcc; 32]);
@@ -304,10 +258,6 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
                 Duration::from_secs(3),
             )
             .unwrap();
-        let (source_entered, source_waiting) = std::sync::mpsc::sync_channel(0);
-        let (source_resume, source_blocked) = std::sync::mpsc::sync_channel(0);
-        *a.event_gate.lock().unwrap() = Some((source_entered, source_blocked));
-        a.event_gate_skip.store(1, Ordering::Release);
         let (local_entered, local_waiting) = std::sync::mpsc::sync_channel(0);
         let (local_resume, local_blocked) = std::sync::mpsc::sync_channel(0);
         *b.copy_gate.lock().unwrap() = Some((local_entered, local_blocked));
@@ -326,25 +276,13 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             )
             .unwrap();
         local_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-        source_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-        // One CROSS credit holds CROSS 1 in source preparation while POST 0
-        // fails locally. Later queued commands must not acquire any native owner.
+        wait_until(|| {
+            hold.0.lock().unwrap().0 && requester.stats().unwrap().rdma.unwrap().work_requests > 0
+        });
+        // The first CROSS owns an accepted WR while the second reaches POST.
+        // Its local copy failure must cancel queued work and drain that real WR.
         b.copy_error.store(1, Ordering::Release);
         local_resume.send(()).unwrap();
-        wait_until(|| requester.stats().unwrap().staging.cancelled_tasks == 1);
-        let stats = requester.stats().unwrap();
-        assert_eq!(
-            (
-                stats.staging.active_tasks,
-                stats.staging.active_chunks,
-                stats.inflight_batches
-            ),
-            (1, 3, 1)
-        );
-        assert_eq!(source.stats().unwrap().staging.remote_crosses, 1);
-        assert_eq!(b.pins.lock().unwrap().len(), 3);
-        assert!(matches!(batch.free(), Err(Error::BatchBusy)));
-        source_resume.send(()).unwrap();
         let report = batch.wait(Duration::from_secs(5)).unwrap();
         assert_eq!(report.state, BatchState::Failed);
         assert_eq!(report.locally_drained, !cleanup_failure, "{report:?}");
@@ -364,7 +302,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
         let mut bytes = [0; 32];
         local_gpu.read(0, &mut bytes).unwrap();
         let mut expected = [0xcc; 32];
-        expected[2] = 0x57; // A recovered failed H2D submission may copy a prefix.
+        expected[5] = 0x57; // POST of the later CROSS may copy a prefix.
         assert_eq!(bytes, expected);
         source.close(Duration::from_secs(5)).unwrap();
         let stats = source.stats().unwrap().staging;

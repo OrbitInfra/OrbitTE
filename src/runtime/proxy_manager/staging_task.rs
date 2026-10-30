@@ -144,12 +144,14 @@ impl<'a> StagingTask<'a> {
         effect: &mut RemoteEffect,
         inflight: &mut [Option<Cross>],
     ) -> Result<()> {
+        let mut remote_operations = vec![None; self.remote_width];
         if self.operation == TransferOp::Read {
-            for slot in 0..self.remote_width {
+            for (slot, pending) in remote_operations.iter_mut().enumerate() {
                 if stopping.load(Ordering::Acquire) {
                     return Err(Error::Cancelled);
                 }
                 self.delegate(slot * self.chunk)?;
+                *pending = Some(slot * self.chunk);
             }
         }
         let mut expected = 0;
@@ -161,6 +163,20 @@ impl<'a> StagingTask<'a> {
                 return Err(Error::Cancelled);
             }
             let mut progress = false;
+            for pending in &mut remote_operations {
+                let Some(offset) = *pending else { continue };
+                if stopping.load(Ordering::Acquire) {
+                    return Err(Error::Cancelled);
+                }
+                if self.remote.query_delegate(
+                    &mut self.channel,
+                    offset,
+                    self.chunk.min(self.request.length - offset),
+                )? {
+                    *pending = None;
+                    progress = true;
+                }
+            }
             while inflight.iter().filter(|slot| slot.is_some()).count() < self.cross_width {
                 if stopping.load(Ordering::Acquire) {
                     return Err(Error::Cancelled);
@@ -179,7 +195,7 @@ impl<'a> StagingTask<'a> {
                             return Err(Error::Internal("staging CROSS submission order"));
                         }
                         let slot = (offset / self.chunk) % self.remote_width;
-                        if inflight[slot].is_some() {
+                        if inflight[slot].is_some() || remote_operations[slot].is_some() {
                             pending = Some(Command::Cross { local, offset });
                             break;
                         }
@@ -191,6 +207,10 @@ impl<'a> StagingTask<'a> {
                     Command::Unpin => {
                         if expected != self.request.length || inflight.iter().any(Option::is_some) {
                             return Err(Error::Internal("staging Unpin before all CROSS"));
+                        }
+                        if remote_operations.iter().any(Option::is_some) {
+                            pending = Some(Command::Unpin);
+                            break;
                         }
                         self.remote
                             .send(&mut self.channel, Operation::Unpin, expected, 0)?;
@@ -232,6 +252,7 @@ impl<'a> StagingTask<'a> {
                         next,
                         self.chunk.min(self.request.length - next),
                     )?;
+                    remote_operations[(offset / self.chunk) % self.remote_width] = Some(next);
                 }
                 complete.send(offset).map_err(|_| Error::Cancelled)?;
                 if let Some(next) = next {

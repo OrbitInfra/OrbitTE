@@ -29,6 +29,52 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Remote Delegate progress
+
+The v21 source submits CUDA Delegate work independently of completion at every
+remote ring width. Scoped QueryDelegate results gate READ CROSS, WRITE slot
+reuse and final Unpin, while other submitted native CROSS owners can progress.
+This corresponds to frozen TENT's `submitRemoteStage`, `INFLIGHT_REMOTE` and
+`tryTakeResult` ownership; socket exchanges, Pin and TCP payload remain synchronous.
+
+CPU controls hold a source PRE/POST NOT_READY while another native CROSS
+finishes, verify bytes and guards with unequal rings and a short final chunk,
+and reject early, duplicate or mismatched queries before touching CUDA. Query
+and context-restoration failures compose with held native work and failed QP
+cleanup, retaining actual GPU/pin owners and admission. Lost terminal queries
+and Unpin receipts cannot report success. Existing cancellation and source
+sibling-drain controls use the new completion boundary.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/remote-operation-progress-20261030/`.
+Stable and Rust 1.85 combined runs at `2d3a6a3` each pass 318 unit tests,
+eight integration tests and one doctest. CUDA-only tests and Clippy, combined
+Clippy, the v21 relay, all 51 controller controls and strict docs pass;
+`gates.json` and `source-manifest.json` bind those 13 gates to the source.
+The test-only change at `3767dc5` waits for an accepted WR before injecting
+cancellation, removing a preparation-versus-posting race without weakening
+byte, cleanup or owner assertions. `incremental-gates.json` and `incremental-source-manifest.json` record both
+compiler checks and the unchanged production source.
+
+Independent source review accepts `3767dc5` for this source/CPU ownership
+scope. `independent-review/source-review-3767dc5.json` binds the frozen diff,
+13 independently rerun feature/compiler/relay/docs gates and the final test
+correction. The cancellation control passes 20/20 accepted two-CPU repeats:
+ten stable and ten freshly compiled MSRV runs. Earlier MSRV repetitions whose
+rebuild freshness was not established are retained but excluded. Failed development runs are
+also retained with their corrected gates.
+
+`synchronous-query-control/manifest.json` records the same public progress
+control failing as expected when only source event query is replaced by a
+blocking wait. The reviewer verifies that unique source change and the archive,
+test and execution hashes; this is an independently audited primary execution,
+not a second execution of the negative control.
+
+Current v21 installed execution, DMA overlap and performance remain unqualified;
+hardware requests remain paused. Earlier installed profiles stay bound to their
+original revisions. Asynchronous TCP/control progress, location selection and
+full ProxyManager parity remain open.
+
 ## Concurrent RDMA CROSS
 
 The v20 source separates RDMA submission, payload query and bilateral finish.

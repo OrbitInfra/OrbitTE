@@ -96,9 +96,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                     if op == TransferOp::Write {
                         local.write(1, &write_bytes).unwrap();
                     }
-                    let (entered, waiting) = std::sync::mpsc::sync_channel(0);
-                    let (resume, blocked) = std::sync::mpsc::sync_channel(0);
-                    *a.event_gate.lock().unwrap() = Some((entered, blocked));
+                    a.query_hold.store(true, Ordering::Release);
                     let mut batch = requester
                         .submit_async(
                             op,
@@ -113,18 +111,11 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                             Duration::from_secs(10),
                         )
                         .unwrap();
-                    waiting.recv_timeout(Duration::from_secs(10)).unwrap();
-                    // The shim keeps real source/destination pointers pending
-                    // until the event wait. A serial implementation has only one.
+                    // Every source copy remains pending until the test releases
+                    // its event. Querying one slot must not block other submissions.
+                    wait_pending(&a, depth);
                     let accepted = pending(&a);
-                    if op == TransferOp::Read {
-                        assert_eq!(accepted, depth);
-                    } else {
-                        assert!(
-                            (depth.min(2)..=depth).contains(&accepted),
-                            "{transport:?}/{op:?}/{length}: {accepted}"
-                        );
-                    }
+                    assert_eq!(accepted, depth);
                     let stats = source.stats().unwrap();
                     assert_eq!(stats.active_source_operations, 1);
                     assert_eq!(stats.staging.active_chunks, depth);
@@ -134,7 +125,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                         (round * chunks + if op == TransferOp::Write { accepted } else { 0 })
                             as u64
                     );
-                    resume.send(()).unwrap();
+                    a.query_hold.store(false, Ordering::Release);
                     let report = batch.wait(Duration::from_secs(10)).unwrap();
                     assert_eq!(
                         report.state,
@@ -259,9 +250,13 @@ fn pipeline_cross_and_abort_drain_other_slots_without_reusing_the_wrong_generati
             frame(&mut channel, nonce, &remote, Operation::Delegate, offset);
             receipt(&mut channel, nonce);
         }
-        // All PRE operations have been accepted; the source may already be
-        // waiting on the first event, so only the second is guaranteed pending.
+        // CROSS requires a scoped terminal PRE result; acceptance is insufficient.
         if fault != "eof" {
+            frame(&mut channel, nonce, &remote, Operation::QueryDelegate, 0);
+            assert_eq!(Reply::read(&mut channel, nonce).unwrap().length, 53);
+            let mut progress = [0; 53];
+            channel.read_exact(&mut progress).unwrap();
+            assert_eq!(progress[52], 1);
             frame(
                 &mut channel,
                 nonce,
@@ -306,7 +301,10 @@ fn pipeline_cross_and_abort_drain_other_slots_without_reusing_the_wrong_generati
         drop(channel);
         source.close_source(Duration::from_secs(3)).unwrap();
         assert_eq!(pending(&a), 0);
-        assert_eq!(a.event_waits.load(Ordering::Acquire), 2);
+        assert_eq!(
+            a.event_waits.load(Ordering::Acquire) + a.event_query_successes.load(Ordering::Acquire),
+            2
+        );
         assert_eq!(source.stats().unwrap().staging.idle_chunks, 2);
         assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
         source.close(Duration::from_secs(3)).unwrap();
@@ -315,10 +313,10 @@ fn pipeline_cross_and_abort_drain_other_slots_without_reusing_the_wrong_generati
 }
 
 #[test]
-fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
+fn pipeline_failed_query_is_sticky_but_every_other_slot_is_drained() {
     for op in [TransferOp::Read, TransferOp::Write] {
         let source = engine(Transport::Tcp, 2);
-        let requester = engine(Transport::Tcp, 2);
+        let requester = Arc::new(engine(Transport::Tcp, 2));
         let a = allocation(&[0x57; 64]);
         let gpu = memory(&a);
         let remote = register(&source, gpu.clone());
@@ -332,9 +330,9 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
                 Duration::from_secs(3),
             )
             .unwrap();
-        a.event_wait_fail_at.store(1, Ordering::Release);
-        let report = requester
-            .submit_and_wait(
+        a.query_hold.store(true, Ordering::Release);
+        let mut batch = requester
+            .submit_async(
                 op,
                 &peer,
                 &[TransferRequest {
@@ -343,24 +341,28 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
                     remote_address: remote.base_address(),
                     length: 8,
                 }],
+                None,
                 Duration::from_secs(3),
             )
             .unwrap();
+        wait_pending(&a, 2);
+        a.event_query_fail_at.store(1, Ordering::Release);
+        a.query_hold.store(false, Ordering::Release);
+        let report = batch.wait(Duration::from_secs(3)).unwrap();
+        let failure = batch.submissions().unwrap().remove(0).failure.unwrap();
         assert!(
-            !report.is_complete() && report.locally_drained,
+            report.state == BatchState::Failed && report.locally_drained,
             "{report:?}"
         );
         // PRE may fail before CROSS is read; socket closure can win the race
         // with the error receipt. Both outcomes must retain the same DMA owners.
         assert!(
-            matches!(
-                report.failure.as_ref().unwrap().error,
-                Error::Backend { .. } | Error::Io(_)
-            ),
+            matches!(failure.error, Error::Backend { .. } | Error::Io(_)),
             "{report:?}"
         );
         assert_eq!(pending(&a), 1);
-        assert_eq!(a.event_waits.load(Ordering::Acquire), 2);
+        assert_eq!(a.event_waits.load(Ordering::Acquire), 1);
+        assert_eq!(a.event_query_results.load(Ordering::Acquire), 1);
         assert!(gpu.allocation.lock().unwrap().uncertain);
         assert!(matches!(
             gpu.read(0, &mut [0; 1]),
@@ -376,7 +378,7 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
         );
         assert_eq!(stats.staging.remote_delegates, 1);
         assert_eq!(
-            report.failure.as_ref().unwrap().remote_effect,
+            failure.remote_effect,
             if op == TransferOp::Write {
                 crate::RemoteEffect::Unknown
             } else {
@@ -387,6 +389,7 @@ fn pipeline_failed_wait_is_sticky_but_every_other_slot_is_drained() {
             source.close_source(Duration::from_millis(10)),
             Err(Error::Timeout)
         ));
+        batch.free().unwrap();
         requester.close(Duration::from_secs(3)).unwrap();
     }
 }

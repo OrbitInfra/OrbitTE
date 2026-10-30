@@ -12,6 +12,7 @@ mod ipc_cache;
 mod ipc_host;
 #[cfg(feature = "rdma")]
 mod rdma;
+mod remote_progress;
 mod remote_staging;
 mod requester_failures;
 mod requester_pipeline;

@@ -44,6 +44,39 @@ impl RemoteStageOperation {
         self.send(channel, operation, offset, length)
     }
 
+    pub(super) fn query_delegate(
+        &self,
+        channel: &mut ControlChannel<'_>,
+        offset: usize,
+        length: usize,
+    ) -> Result<bool> {
+        self.send(channel, Operation::QueryDelegate, offset, length)?;
+        let reply = Reply::read(channel, self.nonce)?;
+        if reply.status != 0 || reply.length != (REQUEST_SIZE + 1) as u64 {
+            return Err(Error::Protocol("staging progress receipt"));
+        }
+        self.expect(channel, Operation::QueryDelegate, offset, length)?;
+        let mut result = [0];
+        channel.read_exact(&mut result)?;
+        match result[0] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::Protocol("staging progress result")),
+        }
+    }
+
+    pub(super) fn respond_progress(
+        &self,
+        channel: &mut ControlChannel<'_>,
+        offset: usize,
+        length: usize,
+        completed: bool,
+    ) -> Result<()> {
+        channel.reply(self.nonce, 0, (REQUEST_SIZE + 1) as u64)?;
+        self.send(channel, Operation::QueryDelegate, offset, length)?;
+        channel.write_all(&[u8::from(completed)])
+    }
+
     fn frame(&self, operation: Operation, offset: usize, length: usize) -> Request {
         Request {
             operation,
@@ -113,3 +146,7 @@ impl ProxyManager {
         *count = count.saturating_add(1);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/runtime/remote_stage_operation.rs"]
+mod tests;
