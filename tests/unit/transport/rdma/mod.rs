@@ -2288,3 +2288,21 @@ pub(crate) fn gpu_runtime(mode: &str) -> RdmaTransport {
 
 #[cfg(feature = "cuda")]
 pub(crate) mod gpu_handshake;
+
+impl super::protocol::Hello {
+    pub(in crate::transport::rdma) fn write(
+        &self,
+        channel: &mut crate::runtime::control_plane::ControlChannel<'_>,
+    ) -> crate::Result<()> {
+        channel.write_all(&self.encode()?)
+    }
+}
+
+impl super::protocol::SliceRequest {
+    pub(in crate::transport::rdma) fn write(
+        &self,
+        channel: &mut crate::runtime::control_plane::ControlChannel<'_>,
+    ) -> crate::Result<()> {
+        channel.write_all(&self.encode())
+    }
+}

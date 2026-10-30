@@ -105,7 +105,9 @@ submitted CROSS owners progressing. TCP payload and Delegate/query/Unpin socket
 progress are bounded and nonblocking. Connect uses a single pending socket;
 worker stop also interrupts Pin and native setup socket waits. Requester native
 finish polls SEND and reusable-grant cleanup, retaining partial completion frames
-while other CROSS payloads remain queryable. Pin, native setup, nonreusable QP
+while other CROSS payloads remain queryable. Requester native setup also retains
+partial negotiation frames and yields to other submitted CROSS payload queries.
+Pin, cold connection acquisition, native construction, nonreusable QP
 retirement, copyback, source handlers and ordinary local GPU snapshot/commit
 retain synchronous boundaries.
 Remaining control progress and location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
@@ -282,8 +284,9 @@ Frozen TENT uses `submitRemoteStage`, `INFLIGHT_REMOTE` and
 uses explicit scoped query exchanges on its existing connection to establish
 the same separate completion/owner boundary. It does not yet provide TENT's
 fully asynchronous RPC mechanism: each session still has one framing owner,
-and Pin and RDMA setup still occupy their session worker. Requester native
-finish now has [explicit progress](#native-rdma-finish-progress). The
+and Pin still occupies its session worker. Requester native
+[setup](#native-rdma-setup-progress) and
+[finish](#native-rdma-finish-progress) now have explicit socket progress. The
 [cancellable connection](#connection-and-pin-lifetime) preserves the original
 deadline and task stop through those socket waits.
 Error/EOF cleanup still closes all accepted RDMA work, drains
@@ -325,7 +328,7 @@ workers use synchronous send/receive. Its separate `hp_tcp` provider has async
 header/body/response state. OrbitTE uses explicit socket progress in its existing
 TCP provider, and scoped control results corresponding to `delegateAsync` and
 `RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
-claims wire compatibility. Native RDMA setup, nonreusable QP retirement, source handlers,
+claims wire compatibility. Native connection acquisition/construction, nonreusable QP retirement, source handlers,
 readiness notification and full asynchronous RPC parity remain open.
 
 ### Connection and Pin lifetime
@@ -397,12 +400,53 @@ split; its grant-specific completion SEND and bilateral release protocol are
 OrbitTE contracts, not TENT wire compatibility.
 
 This is requester finish progress for reusable host Direct grants. Nonreusable
-QP retirement/copyback, cache fallback retirement, failure drain, Pin, native
-setup and source handlers retain synchronous boundaries. Native provider calls
+QP retirement/copyback, cache fallback retirement, failure drain, Pin and source
+handlers retain synchronous boundaries. Requester setup sockets are advanced by
+the [subsequent setup boundary](#native-rdma-setup-progress). Native provider calls
 and locks are not preemptible. One shard still executes one session at a time.
 No public active-cancel or engine-close ordering changes are introduced.
 [Source qualification](qualification.md#native-rdma-finish-progress) is separate
 from installed v21 execution, real DMA overlap and performance.
+
+### Native RDMA setup progress
+
+`RdmaSetup` owns a parent's device selections, grant credits, planned slices,
+actual registration and partial requester grant. `RequesterSetup` owns each
+slice's HELLO/OFFER/ACCEPT/READY/GRANT exchange. The outer CROSS header, embedded
+native exchanges and scoped CROSS receipt remain one exclusive framing operation.
+Every socket step attempts bounded I/O and retains its byte position. A pending
+setup yields to deadline/worker-stop checks and queries of previously submitted
+CROSS payloads; FinishCross, Delegate and another setup cannot interleave frames.
+The original session deadline is never restarted.
+
+Path tables and parent RQ admission are validated before per-slice construction.
+OFFER binds source epoch, PD domain, connection generation, path and release
+profile. GRANT must match the exact request binding and offered connection.
+All slices must pass these checks before the first payload WR is submitted.
+Ordinary synchronous RDMA callers drive the same parent and slice states.
+
+Only an explicit zero-length CACHE_MISS for a cached pair permits another
+handshake. The old grant must close successfully first. Retry keeps the selected
+path, original deadline and negotiated width-plus-one bound, and happens before
+payload submission. No partially executed payload is replayed. A WRITE to remote
+staging retains the existing exported-GPU effect boundary at Delegate.
+
+Failure first explicitly aborts the partial handshake, then closes all prepared
+and submitted slices before private registration retirement. Cleanup uncertainty
+overrides ordinary errors and retains the actual native/backing owners and their
+admission. Source EOF cleanup is a separate obligation; requester terminal does
+not prove that the peer has observed EOF. Completed chunks retain POST/next-PRE
+priority over admitting another ready FinishCross.
+
+This follows frozen TENT `e2d6e8e`'s ProxyManager/transport/Workers ownership split
+and submitted-batch observation. TENT's Workers can themselves perform endpoint
+bootstrap outside the endpoint lock; this change does not imply that TENT has
+universally asynchronous connection setup. OrbitTE retains its own v21 framing
+and exact-grant completion protocol. Cold-builder waits in `connection()`, native
+resource creation/open/connect/fill, failure drain and source handlers remain
+synchronous; locks and provider calls are not preemptible. Each shard still runs
+one session. [Source qualification](qualification.md#native-rdma-setup-progress)
+does not qualify installed v21 execution, real DMA overlap or performance.
 
 ### Session progress and completion
 
@@ -455,7 +499,7 @@ admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
 healthy siblings or erase an earlier `Unquiesced`. Partial TCP payload and scoped
 control receipts retain the original deadline and yield to staging cancellation.
-Blocking Pin, native RDMA setup, nonreusable retirement and provider calls keep their existing
+Blocking Pin, native connection acquisition, nonreusable retirement and provider calls keep their existing
 completion/drain obligations.
 On source EOF/error, all native CROSS owners close before CUDA drain and private
 registration retirement. The caller drops its queue

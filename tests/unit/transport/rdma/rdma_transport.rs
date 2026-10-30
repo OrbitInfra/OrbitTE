@@ -1,7 +1,7 @@
 use super::*;
 use crate::engine::deadline;
 use crate::engine::tests::{rdma_fixture, source_runtime};
-use crate::runtime::control_plane::{REQUEST_SIZE, u64_at};
+use crate::runtime::control_plane::{REQUEST_SIZE, Reply, u64_at};
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE,
     grant::RdmaGrant,

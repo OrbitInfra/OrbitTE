@@ -5,15 +5,15 @@ use std::time::Instant;
 
 use super::{RdmaTransport, connections::Connection};
 use crate::engine::{PreparedTransfer, remaining};
-use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request, u64_at};
+use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, RdmaHostMemory,
     endpoint::{EndpointKey, Peer},
     grant::{Buffer, GrantLease, GrantResources, RdmaGrant, Staging, admission::GrantCredits},
     path::NicPath,
     protocol::{
-        ACCEPT, ACK, BINDING_SIZE, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE,
-        Identity, OFFER_SIZE, READY,
+        ACK, BINDING_SIZE, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE, Identity,
+        OFFER_SIZE, READY,
     },
     qp::{ConnectionLease, ConnectionResources, Descriptor, Resources},
     quota::DeviceLease,
@@ -324,143 +324,6 @@ impl RdmaTransport {
             connection,
         )?;
         Ok(endpoint)
-    }
-
-    pub(super) fn requester_slice(
-        &self,
-        channel: &mut ControlChannel<'_>,
-        wire: &Request,
-        request: &PreparedTransfer,
-        epoch: SourceEpoch,
-        remote_path: &NicPath,
-        mut endpoint: RdmaGrant,
-    ) -> Result<Option<RdmaSlice>> {
-        let route = channel.stream.peer_addr()?;
-        let operation = if wire.operation == Operation::RdmaRead {
-            TransferOp::Read
-        } else {
-            TransferOp::Write
-        };
-        let direct = self.direct(&request.local);
-        let cached = endpoint.cached_peer;
-        let prepared = (|| {
-            if operation == TransferOp::Write {
-                endpoint.fill(
-                    &request.local,
-                    request.local_offset,
-                    #[cfg(feature = "cuda")]
-                    &self.proxy,
-                )?;
-            }
-            Hello {
-                requester: Identity::local(&endpoint, epoch)?,
-                source: cached.map(|peer| Identity {
-                    epoch: peer.epoch,
-                    connection: peer.connection,
-                }),
-                expected_domain: remote_path.domain,
-                direct,
-                qp_width: endpoint
-                    .endpoint
-                    .as_ref()
-                    .map_or(Ok(0), |owner| owner.width())?,
-                previous_grant: cached.map_or(0, |peer| peer.generation),
-            }
-            .write(channel)?;
-            let reply = Reply::read(channel, wire.epoch)?;
-            if reply.status == CACHE_MISS && reply.length == 0 && cached.is_some() {
-                return Ok(None);
-            }
-            if reply.status != 0 || reply.length != OFFER_SIZE as u64 {
-                return Err(Error::Protocol("RDMA bootstrap length/status"));
-            }
-            let mut offer = [0; OFFER_SIZE];
-            channel.read_exact(&mut offer)?;
-            let remote_identity = Identity::decode(&offer[..IDENTITY_SIZE])?;
-            if remote_identity.epoch != wire.epoch {
-                return Err(Error::EpochMismatch);
-            }
-            let profile = offer[OFFER_SIZE - 1];
-            if profile != super::super::protocol::MR_AUTHORITY
-                && remote_identity.connection.domain != remote_path.domain
-            {
-                return Err(Error::Protocol("RDMA source changed its protection domain"));
-            }
-            if cached.is_some_and(|peer| remote_identity.connection != peer.connection) {
-                return Err(Error::Protocol("RDMA source changed cached connection"));
-            }
-            let cacheable = match offer[OFFER_SIZE - 1] {
-                0 | super::super::protocol::MR_AUTHORITY if endpoint.endpoint.is_none() => false,
-                1 if direct && endpoint.endpoint.is_some() => true,
-                _ => return Err(Error::Protocol("RDMA release profile mismatch")),
-            };
-            let grant = u64_at(&offer, IDENTITY_SIZE);
-            if cached.is_some_and(|peer| grant <= peer.generation) {
-                return Err(Error::Protocol(
-                    "RDMA source reused an old grant generation",
-                ));
-            }
-            let mut descriptor = [0; DESCRIPTOR_SIZE];
-            descriptor.copy_from_slice(&offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1]);
-            let connection = Descriptor::decode_connection(&descriptor)?;
-            if !remote_path.matches_connection(&connection) {
-                return Err(Error::Protocol(
-                    "RDMA source changed its advertised NIC path",
-                ));
-            }
-            let binding = Binding::new(
-                wire,
-                remote_identity,
-                Identity::local(&endpoint, epoch)?,
-                grant,
-                profile,
-            )?;
-            binding.write(channel, ACCEPT)?;
-            channel.write_all(&endpoint.connection())?;
-            endpoint.connect(&connection)?;
-            let ready = Reply::read(channel, wire.epoch)?;
-            if ready.status != 9 || ready.length != 0 {
-                return Err(Error::Protocol("RDMA missing ready response"));
-            }
-            binding.read(channel, GRANT)?;
-            channel.read_exact(&mut descriptor)?;
-            let remote = Descriptor::decode(&descriptor)?;
-            if remote.connection_bytes() != connection.connection_bytes() {
-                return Err(Error::Protocol("RDMA grant changed its connection"));
-            }
-            let peer = Peer {
-                route: Some(route),
-                source_nic_id: remote_path.nic_id,
-                epoch: wire.epoch,
-                local: endpoint.incarnation()?,
-                connection: remote_identity.connection,
-                operation,
-                source: false,
-                generation: grant,
-            };
-            if cacheable {
-                endpoint.publish_peer(peer)?;
-            }
-            Ok(Some((binding, remote, peer)))
-        })();
-        match prepared {
-            Ok(Some((binding, remote, peer))) => Ok(Some(RdmaSlice {
-                grant: endpoint,
-                binding,
-                remote,
-                peer,
-                offset: request.local_offset,
-            })),
-            Ok(None) => {
-                endpoint.close()?;
-                Ok(None)
-            }
-            Err(error) => {
-                #[cfg(all(test, feature = "cuda"))]
-                crate::transport::rdma::cq_lane::tests::before_staging_abort(self, &endpoint);
-                Err(endpoint.abort(error))
-            }
-        }
     }
 
     pub(super) fn finish_requester_slice(

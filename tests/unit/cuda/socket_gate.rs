@@ -19,6 +19,14 @@ pub(super) enum Boundary {
     Native([u8; 36], usize),
     #[cfg(feature = "rdma")]
     Finish([u8; 36], usize, bool),
+    #[cfg(feature = "rdma")]
+    Setup {
+        reply: [u8; 36],
+        occurrence: usize,
+        payload: usize,
+        prefix: usize,
+        corrupt: Option<usize>,
+    },
 }
 
 impl SocketGate {
@@ -54,11 +62,20 @@ impl SocketGate {
                 }
                 #[cfg(feature = "rdma")]
                 native => {
-                    let (needle, occurrence, finish) = match native {
+                    let (needle, occurrence, frame) = match native {
                         Boundary::Native(needle, occurrence) => (needle, occurrence, None),
-                        Boundary::Finish(needle, prefix, corrupt) => {
-                            (needle, 1, Some((prefix, corrupt)))
-                        }
+                        Boundary::Finish(needle, prefix, corrupt) => (
+                            needle,
+                            1,
+                            Some((2 * 142, prefix, corrupt.then_some(36 + 142 - 1))),
+                        ),
+                        Boundary::Setup {
+                            reply,
+                            occurrence,
+                            payload,
+                            prefix,
+                            corrupt,
+                        } => (reply, occurrence, Some((payload, prefix, corrupt))),
                         Boundary::Pin(_) => unreachable!(),
                     };
                     // Match the complete Reply, including this source's epoch;
@@ -76,17 +93,18 @@ impl SocketGate {
                         if pending == needle {
                             count += 1;
                             if count == occurrence {
-                                if let Some((prefix, corrupt)) = finish {
+                                if let Some((payload, prefix, corrupt)) = frame {
                                     let mut frame = needle.to_vec();
-                                    frame.resize(36 + 2 * 142, 0);
+                                    frame.resize(36 + payload, 0);
                                     server.read_exact(&mut frame[36..]).unwrap();
-                                    if corrupt {
-                                        frame[36 + 142 - 1] ^= 1;
+                                    if let Some(index) = corrupt {
+                                        frame[index] ^= 1;
                                     }
                                     client.write_all(&frame[..prefix]).unwrap();
                                     rest.extend_from_slice(&frame[prefix..]);
                                 } else {
                                     client.write_all(&needle[..13]).unwrap();
+                                    rest.extend_from_slice(&needle[13..]);
                                 }
                                 break;
                             }

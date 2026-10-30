@@ -21,24 +21,6 @@ pub(super) struct RemoteStageOperation {
 }
 
 impl RemoteStageOperation {
-    #[cfg(feature = "rdma")]
-    pub(super) fn receipt(
-        &self,
-        channel: &mut ControlChannel<'_>,
-        operation: Operation,
-        offset: usize,
-        length: usize,
-    ) -> Result<()> {
-        let reply = Reply::read(channel, self.nonce)?;
-        if reply.status != 0 || reply.length != REQUEST_SIZE as u64 {
-            return Err(Error::Protocol("staging operation receipt"));
-        }
-        let request = read_request(channel)?;
-        self.validate(&request, operation, offset, length)?;
-        remaining(channel.deadline)?;
-        Ok(())
-    }
-
     pub(super) fn respond(
         &self,
         channel: &mut ControlChannel<'_>,
