@@ -600,7 +600,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Remote CUDA Delegate completion is now polled through scoped QueryDelegate
   results, including depth one. Pending remote slots defer reuse while other
   submitted CROSS owners progress; terminal confirmation gates final Unpin.
-  Source review is pending; see [remote progress](qualification.md#remote-delegate-progress).
+  Independent source review accepts `3767dc5`; see [remote progress](qualification.md#remote-delegate-progress).
   Qualify the current v21 artifact and complete asynchronous TCP/control progress
   and location selection before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -891,7 +891,7 @@ independent payload query, per-slot FinishCross and aggregate cleanup. Independe
 source review accepts `adc803f`; see [the evidence](qualification.md#concurrent-rdma-cross).
 Remote Delegate progress is now implemented in v21, separating acceptance from
 scoped event-query completion and retaining per-slot generations through pending
-results. Source review is pending; see [the evidence](qualification.md#remote-delegate-progress).
+results. Independent source review accepts `3767dc5`; see [the evidence](qualification.md#remote-delegate-progress).
 The next implementation boundary is asynchronous TCP payload and control progress,
 followed by location selection. Current v21 hardware qualification and full
 ProxyManager parity remain open.

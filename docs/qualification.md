@@ -47,11 +47,33 @@ sibling-drain controls use the new completion boundary.
 
 Evidence is outside Git at
 `/root/orbitte-artifacts/remote-operation-progress-20261030/`.
-Full gates, a synchronous-query negative control and independent source review
-are pending. Current v21 installed execution, DMA overlap and performance remain
-unqualified; hardware requests remain paused. Earlier installed profiles stay
-bound to their original revisions. Asynchronous TCP/control progress, location
-selection and full ProxyManager parity remain open.
+Stable and Rust 1.85 combined runs at `2d3a6a3` each pass 318 unit tests,
+eight integration tests and one doctest. CUDA-only tests and Clippy, combined
+Clippy, the v21 relay, all 51 controller controls and strict docs pass;
+`gates.json` and `source-manifest.json` bind those 13 gates to the source.
+The test-only change at `3767dc5` waits for an accepted WR before injecting
+cancellation, removing a preparation-versus-posting race without weakening
+byte, cleanup or owner assertions. `incremental-gates.json` and `incremental-source-manifest.json` record both
+compiler checks and the unchanged production source.
+
+Independent source review accepts `3767dc5` for this source/CPU ownership
+scope. `independent-review/source-review-3767dc5.json` binds the frozen diff,
+13 independently rerun feature/compiler/relay/docs gates and the final test
+correction. The cancellation control passes 20/20 accepted two-CPU repeats:
+ten stable and ten freshly compiled MSRV runs. Earlier MSRV repetitions that
+reused a stale build are retained but excluded. Failed development runs are
+also retained with their corrected gates.
+
+`synchronous-query-control/manifest.json` records the same public progress
+control failing as expected when only source event query is replaced by a
+blocking wait. The reviewer verifies that unique source change and the archive,
+test and execution hashes; this is an independently audited primary execution,
+not a second execution of the negative control.
+
+Current v21 installed execution, DMA overlap and performance remain unqualified;
+hardware requests remain paused. Earlier installed profiles stay bound to their
+original revisions. Asynchronous TCP/control progress, location selection and
+full ProxyManager parity remain open.
 
 ## Concurrent RDMA CROSS
 
