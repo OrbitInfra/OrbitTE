@@ -375,7 +375,11 @@ impl<'a> StagingTask<'a> {
                         ),
                     ));
                 } else {
-                    while inflight.iter().filter(|slot| slot.is_some()).count() < self.cross_width {
+                    'admission: {
+                        if inflight.iter().filter(|slot| slot.is_some()).count() >= self.cross_width
+                        {
+                            break 'admission;
+                        }
                         if stopping.load(Ordering::Acquire) {
                             return Err(Error::Cancelled);
                         }
@@ -383,7 +387,7 @@ impl<'a> StagingTask<'a> {
                             Some(command) => command,
                             None => match commands.try_recv() {
                                 Ok(command) => command,
-                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Empty) => break 'admission,
                                 Err(mpsc::TryRecvError::Disconnected) => {
                                     return Err(Error::Cancelled);
                                 }
@@ -397,7 +401,7 @@ impl<'a> StagingTask<'a> {
                                 let slot = (offset / self.chunk) % self.remote_width;
                                 if inflight[slot].is_some() || remote_operations[slot].is_some() {
                                     pending = Some(Command::Cross { local, offset });
-                                    break;
+                                    break 'admission;
                                 }
                                 let length = self.chunk.min(self.request.length - offset);
                                 inflight[slot] = Some(self.cross(local, offset, length)?);
@@ -414,7 +418,6 @@ impl<'a> StagingTask<'a> {
                                         ));
                                     }
                                 }
-                                break;
                             }
                             Command::Unpin => {
                                 if expected != self.request.length
@@ -424,14 +427,13 @@ impl<'a> StagingTask<'a> {
                                 }
                                 if remote_operations.iter().any(Option::is_some) {
                                     pending = Some(Command::Unpin);
-                                    break;
+                                    break 'admission;
                                 }
                                 control = Some((
                                     ControlAction::Unpin,
                                     self.remote.submit(Operation::Unpin, expected, 0),
                                 ));
                                 progress = true;
-                                break;
                             }
                         }
                     }
