@@ -27,7 +27,7 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
             #[cfg(feature = "rdma")]
             if route.contains(&Transport::Rdma) {
                 let mut runtime = crate::transport::rdma::tests::runtime("copy");
-                runtime.proxy = ProxyManager::new(3, 1).unwrap();
+                runtime.proxy = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
                 return crate::engine::tests::rdma_fixture_with_config(runtime, config.clone());
             }
             TransferEngine::new(config.clone()).unwrap()
@@ -121,7 +121,7 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
 
 #[test]
 fn native_context_key_reuses_wrappers_and_replaces_idle_locations_only_after_free() {
-    let pool = ProxyManager::new(3, 1).unwrap();
+    let pool = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
     let a = allocation(&[1; 8]);
     let b = allocation(&[2; 8]);
     let first = memory(&a);
@@ -144,7 +144,7 @@ fn native_context_key_reuses_wrappers_and_replaces_idle_locations_only_after_fre
 
 #[test]
 fn active_chunk_keeps_capacity_and_close_waits_for_native_completion() {
-    let pool = ProxyManager::new(3, 1).unwrap();
+    let pool = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
     let a = allocation(&[5; 8]);
     let b = allocation(&[6; 8]);
     let gpu = memory(&a);
@@ -179,7 +179,7 @@ fn active_chunk_keeps_capacity_and_close_waits_for_native_completion() {
 
 #[test]
 fn chunk_deadline_reports_partial_effect_and_reuses_only_drained_bytes() {
-    let pool = ProxyManager::new(3, 1).unwrap();
+    let pool = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
     let a = allocation(&[0xcc; 8]);
     let gpu = memory(&a);
     let (entered, wait) = std::sync::mpsc::sync_channel(0);
@@ -211,7 +211,7 @@ fn chunk_deadline_reports_partial_effect_and_reuses_only_drained_bytes() {
 #[test]
 fn chunk_errors_require_drain_and_context_restore_before_reuse() {
     for fault in ["submit", "record", "wait", "pop", "stream-create"] {
-        let pool = ProxyManager::new(3, 1).unwrap();
+        let pool = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
         let a = allocation(&[7; 8]);
         let weak = Arc::downgrade(&a);
         let gpu = memory(&a);
@@ -247,7 +247,7 @@ fn chunk_errors_require_drain_and_context_restore_before_reuse() {
 #[test]
 fn partial_pin_and_cleanup_failures_keep_quota_without_retrying_native_free() {
     for fault in ["partial-pin", "pin-pop", "free", "free-pop"] {
-        let pool = ProxyManager::new(3, 1).unwrap();
+        let pool = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
         let a = allocation(&[7; 8]);
         let weak = Arc::downgrade(&a);
         let gpu = memory(&a);

@@ -1449,3 +1449,30 @@ An external byte-for-byte archive and SHA-256 manifest are also retained at
 Original experiment directories remain in place. This reorganization changes
 navigation and removes duplicate status prose; it grants no new hardware
 qualification.
+
+## Host staging location
+
+This source stage adds opt-in `Auto` / explicit CPU NUMA location selection to
+engine-owned CUDA chunks. The default wildcard allocation profile is preserved.
+The maintained [contract](staging.md#host-staging-location) separates logical
+chunk sizes from page-rounded host backing and names the remaining limits.
+
+External evidence directory:
+`/root/orbitte-artifacts/staging-location-selection-20261030/`.
+Frozen TENT design input is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`;
+`independent-review/design-review-60fe19b.json` records the initial independent
+owner/placement review. Final source acceptance is pending.
+
+The CPU controls use actual anonymous mapped bytes, simulated NUMA binding and
+CUDA registration, real TCP control/payload sockets and the existing verbs ABI
+fixture. They cover both public transfer directions, different endpoint GPU
+locations, repeated ring reuse, tails/sentinels, location changes under a single
+budget, unknown/denied locations, sparse node masks, and registration/unregister/
+context restoration/unmap failures. Failed cleanup retains actual backing and
+CUDA owners; no fallback allocation or repeated release is allowed.
+
+No hardware task was requested. Native NUMA binding, CUDA host registration,
+page residency, current v21 installed execution, physical DMA overlap and
+performance remain unqualified. Earlier installed evidence covers its recorded
+wildcard profile and cannot qualify this new allocator. Broader TENT location
+routing, remote topology publication and P6 selection remain open.

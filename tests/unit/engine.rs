@@ -913,3 +913,41 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
         source.close(Duration::from_secs(2)).unwrap();
     }
 }
+
+#[cfg(feature = "cuda")]
+pub(crate) fn staging_fixture(
+    config: EngineConfig,
+    proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
+    #[cfg(feature = "rdma")] rdma: Option<crate::transport::rdma::RdmaTransport>,
+) -> TransferEngine {
+    config.validate().unwrap();
+    let epoch = SourceEpoch::generate().unwrap();
+    let source = Arc::new(Source {
+        remote_staging: config.remote_staging,
+        staging_pipeline_depth: config.staging_pipeline_depth,
+        proxy,
+        nvlink: None,
+        epoch,
+        #[cfg(feature = "rdma")]
+        rdma: rdma.map(Arc::new),
+        registry: MemoryRegistry::new(
+            epoch,
+            config.max_registered_regions,
+            config.max_registered_bytes,
+        ),
+        notifications: NotificationInbox::new(8, 4096, 1024),
+        admission: Mutex::new(SourceAdmission {
+            open: true,
+            active: 0,
+        }),
+        drained: Condvar::new(),
+    });
+    let control = ControlService::start(Arc::clone(&source), &config).unwrap();
+    TransferEngine {
+        config,
+        source,
+        control,
+        batches: Arc::default(),
+        allocations: Arc::new(AllocationBudget::new()),
+    }
+}

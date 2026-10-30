@@ -15,7 +15,8 @@ use std::time::Instant;
 use crate::cuda::PinnedAllocation;
 use crate::engine::remaining;
 use crate::memory::Allocation;
-use crate::{Error, RegisteredMemory, Result};
+use crate::platform::numa::{NATIVE, Numa, page_round};
+use crate::{Error, RegisteredMemory, Result, StagingLocation};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StagingStats {
@@ -69,17 +70,34 @@ pub(crate) struct ProxyManager {
     workers: worker_shard::Workers,
     cancelled_tasks: AtomicU64,
     chunk_size: usize,
+    allocation_size: usize,
+    pub(crate) location: StagingLocation,
+    pub(crate) numa: &'static Numa,
     buffers: Mutex<StageBuffers>,
     changed: Condvar,
 }
 
 impl ProxyManager {
-    pub(crate) fn new(chunk_size: usize, chunk_count: usize) -> Result<Arc<Self>> {
+    pub(crate) fn new(
+        chunk_size: usize,
+        chunk_count: usize,
+        location: StagingLocation,
+    ) -> Result<Arc<Self>> {
+        if matches!(location, StagingLocation::Cpu(node) if node >= 65536) {
+            return Err(Error::InvalidConfig(
+                "staging NUMA node must be below 65536",
+            ));
+        }
+        let allocation_size = if location == StagingLocation::Any {
+            chunk_size
+        } else {
+            page_round(chunk_size)?
+        };
         if chunk_size == 0
             || chunk_size > 64 << 20
             || chunk_count == 0
             || chunk_count > 4096
-            || chunk_size
+            || allocation_size
                 .checked_mul(chunk_count)
                 .is_none_or(|bytes| bytes > 1 << 30)
         {
@@ -91,6 +109,9 @@ impl ProxyManager {
             workers: worker_shard::Workers::default(),
             cancelled_tasks: AtomicU64::new(0),
             chunk_size,
+            allocation_size,
+            location,
+            numa: &NATIVE,
             buffers: Mutex::new(StageBuffers {
                 open: true,
                 slots: (0..chunk_count).map(|_| StageBuffer::Vacant).collect(),
@@ -110,6 +131,7 @@ impl ProxyManager {
     pub(crate) fn pin_stage_buffer(
         self: &Arc<Self>,
         context: usize,
+        numa_node: Option<u32>,
         allocate: impl FnOnce(usize) -> Result<PinnedAllocation>,
     ) -> Result<StageBufferLease> {
         let (index, previous, reused) = {
@@ -121,7 +143,7 @@ impl ProxyManager {
                 return Err(Error::RequesterClosed);
             }
             let matching = state.slots.iter().position(
-                |slot| matches!(slot, StageBuffer::Idle(buffer) if buffer.context_id() == context),
+                |slot| matches!(slot, StageBuffer::Idle(buffer) if buffer.context_id() == context && buffer.numa_node == numa_node),
             );
             let index = matching
                 .or_else(|| {
@@ -144,7 +166,7 @@ impl ProxyManager {
             (index, previous, matching.is_some())
         };
         let buffer = if let StageBuffer::Idle(buffer) = previous {
-            if buffer.context_id() == context {
+            if buffer.context_id() == context && buffer.numa_node == numa_node {
                 Ok(buffer)
             } else {
                 // A location change never spends a second slot before the old
@@ -222,7 +244,7 @@ impl ProxyManager {
         }
         drop(state);
         self.workers.stats(&mut stats);
-        stats.reserved_bytes = stats.reserved_chunks * self.chunk_size;
+        stats.reserved_bytes = stats.reserved_chunks * self.allocation_size;
         Ok(stats)
     }
 

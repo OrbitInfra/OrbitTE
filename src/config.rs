@@ -3,6 +3,19 @@ use std::time::Duration;
 
 use crate::{Error, Result};
 
+/// Host staging location, resolved independently by each GPU owner.
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StagingLocation {
+    /// CUDA driver allocation (TENT's wildcard `*`); no NUMA placement claim.
+    #[default]
+    Any,
+    /// Prefer the GPU's NUMA node, then the first eligible host node.
+    Auto,
+    /// Require this allowed, online host node (`cpu:N`); no fallback.
+    Cpu(u32),
+}
+
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -23,6 +36,9 @@ pub struct EngineConfig {
     pub staging_chunk_size: usize,
     #[cfg(feature = "cuda")]
     pub staging_chunk_count: usize,
+    /// Applies to engine-owned CUDA staging chunks, including both remote roles.
+    #[cfg(feature = "cuda")]
+    pub staging_location: StagingLocation,
     /// Maximum staging slots per session and side (1..=16), bounded by the pool.
     /// The source negotiates its width. CUDA requesters reserve up to this cap
     /// before Pin, shortened by the request's local physical-chunk count.
@@ -66,6 +82,8 @@ impl Default for EngineConfig {
             staging_chunk_size: 4 << 20,
             #[cfg(feature = "cuda")]
             staging_chunk_count: 64,
+            #[cfg(feature = "cuda")]
+            staging_location: StagingLocation::Any,
             #[cfg(feature = "cuda")]
             remote_staging: false,
             #[cfg(feature = "cuda")]

@@ -17,7 +17,7 @@ fn engine(transport: Transport) -> TransferEngine {
         let mut runtime = crate::transport::rdma::tests::runtime_with_config(
             crate::transport::rdma::RdmaConfig::new("copy"),
         );
-        runtime.proxy = ProxyManager::new(3, 16).unwrap();
+        runtime.proxy = ProxyManager::new(3, 16, crate::StagingLocation::Any).unwrap();
         return crate::engine::tests::rdma_fixture_with_config(runtime, config);
     }
     let _ = transport;

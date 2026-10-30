@@ -24,6 +24,9 @@ pub(super) struct Device {
     >,
     pub(super) bytes: UnsafeCell<Box<[u8]>>,
     pub(super) pins: Mutex<BTreeMap<usize, Box<[u8]>>>,
+    pub(super) host_registrations: Mutex<BTreeMap<usize, usize>>,
+    pub(super) ordinal: AtomicI32,
+    pub(super) pci_device: AtomicI32,
     pub(super) streams: Mutex<BTreeMap<usize, Option<PendingCopy>>>,
     pub(super) submitted_copies: Mutex<Vec<(usize, usize, usize)>>,
     pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
@@ -471,7 +474,9 @@ unsafe extern "C" fn attribute(
             PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED => {
                 *output.cast::<u32>() = device.managed.load(Ordering::Acquire) as u32
             }
-            PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => *output.cast::<i32>() = 0,
+            PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => {
+                *output.cast::<i32>() = device.ordinal.load(Ordering::Acquire)
+            }
             _ => return Status::CUDA_ERROR_INVALID_VALUE,
         }
     }
@@ -521,6 +526,9 @@ pub(super) fn driver() -> Arc<Driver> {
         event_query,
         host_allocate,
         host_free,
+        host_register,
+        host_unregister,
+        pci_bus_id,
         pointer_attribute: attribute,
         address_range: range,
     })
@@ -531,6 +539,9 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         event_gate: Mutex::new(None),
         bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
         pins: Mutex::default(),
+        host_registrations: Mutex::default(),
+        ordinal: AtomicI32::new(0),
+        pci_device: AtomicI32::new(-1),
         streams: Mutex::default(),
         submitted_copies: Mutex::default(),
         completions: Mutex::default(),
@@ -784,4 +795,77 @@ pub(super) fn wait_pending(device: &Device, count: usize) {
         );
         std::thread::yield_now();
     }
+}
+
+unsafe extern "C" fn host_register(pointer: *mut c_void, length: usize, flags: c_uint) -> Status {
+    assert_eq!(flags, 1);
+    assert_eq!(
+        pointer as usize % crate::platform::numa::page_round(1).unwrap(),
+        0
+    );
+    event("host-register");
+    assert!(
+        current()
+            .host_registrations
+            .lock()
+            .unwrap()
+            .insert(pointer as usize, length)
+            .is_none()
+    );
+    if current().pop_after_pin.load(Ordering::Acquire) {
+        current().pop_error.store(201, Ordering::Release);
+    }
+    status(current().pin_error.load(Ordering::Acquire))
+}
+unsafe extern "C" fn host_unregister(pointer: *mut c_void) -> Status {
+    event("host-unregister");
+    let mut resident = 0u8;
+    assert_eq!(
+        unsafe {
+            libc::mincore(
+                pointer,
+                crate::platform::numa::page_round(1).unwrap(),
+                &mut resident,
+            )
+        },
+        0,
+        "unregister lost its actual mapped backing"
+    );
+    assert!(
+        current()
+            .streams
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .all(|copy| copy.source != pointer as usize && copy.destination != pointer as usize)
+    );
+    let error = current().free_error.load(Ordering::Acquire);
+    if error == 0 {
+        assert!(
+            current()
+                .host_registrations
+                .lock()
+                .unwrap()
+                .remove(&(pointer as usize))
+                .is_some()
+        );
+    }
+    if current().pop_after_unpin.load(Ordering::Acquire) {
+        current().pop_error.store(201, Ordering::Release);
+    }
+    status(error)
+}
+unsafe extern "C" fn pci_bus_id(
+    out: *mut std::ffi::c_char,
+    length: c_int,
+    device: c_int,
+) -> Status {
+    current().pci_device.store(device, Ordering::Release);
+    let id = format!("0000:{device:02x}:00.0\0");
+    assert!(id.len() <= length as usize);
+    unsafe {
+        std::ptr::copy_nonoverlapping(id.as_ptr(), out.cast(), id.len());
+    }
+    SUCCESS
 }

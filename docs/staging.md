@@ -15,12 +15,14 @@ actual `CudaMemory` allocation lock remains held across all chunks. Public
 
 The pool bounds pinned copy bytes across source and requester operations and
 all local CUDA contexts. Size/count must be positive, size at most 64 MiB, count
-at most 4096, and their product at most 1 GiB. Active, constructing, closing and
+at most 4096, and their physical allocation product at most 1 GiB.
+NUMA-backed slots include page padding in that product and in `reserved_bytes`. Active, constructing, closing and
 retained chunks count against the bound. Capacity exhaustion returns
 `ResourceExhausted`; it does not create an uncharged allocation or wait for a
 nested request. TCP payload buffers and RDMA staging/MR quotas remain separate.
 
-Idle chunks reuse their retained native CUDA context. A different context may
+Idle chunks reuse their retained native CUDA context and resolved host location.
+A different context or location may
 replace an idle chunk only after its native release and caller-context restore
 both succeed. Native allocation, copy and cleanup never run under the pool map
 lock. The retained context prevents address reuse while a chunk is cached.
@@ -45,6 +47,58 @@ cleanup remains retained. `EngineStats.staging` exposes reserved/idle/active/
 retained chunk counts and allocation, reuse, completed-chunk and byte counters.
 Chunk byte counters describe local copy progress, including a completed prefix
 of a failed logical request; batch completion remains a separate contract.
+
+## Host staging location
+
+`EngineConfig.staging_location` applies to engine-owned CUDA staging chunks in
+local copies and both roles of a remote session. Each endpoint resolves its own
+actual GPU context; a peer's CUDA ordinal is never used as a local device id.
+CPU requester scratch buffers and public `allocate_pinned_host` / standalone
+`CudaMemory::read/write` retain their existing allocation paths.
+
+| Setting | Behavior |
+| --- | --- |
+| `StagingLocation::Any` (default) | CUDA `cuMemHostAlloc`, corresponding to the wildcard `*`; no NUMA placement claim |
+| `StagingLocation::Auto` | Query the actual context device's PCI BDF, read its sysfs NUMA node, prefer that eligible node, otherwise choose the lowest eligible node |
+| `StagingLocation::Cpu(N)` | Require host location `cpu:N`; unavailable nodes fail before allocation |
+
+Eligible nodes have online memory and appear in the calling thread's allowed
+memory-node set. Missing or negative GPU locality stays unknown; it does not
+mean node zero. Auto then selects the first eligible host node, as TENT's
+`Topology::findNearMem` does after failing to find a matching NUMA location.
+Discovery errors, an empty eligible set and a selected node's allocation/binding
+failure are errors. They do not silently switch to the wildcard allocator.
+No topology is exchanged in the v21 wire protocol.
+
+The NUMA backing owns a fresh, page-rounded anonymous private mapping. It applies
+`mbind(MPOL_BIND | MPOL_F_STATIC_NODES)` before touching pages, then registers the
+whole mapping with `cuMemHostRegister`. Logical chunk lengths remain unchanged.
+This follows Linux's [range-policy semantics](https://man7.org/linux/man-pages/man2/mbind.2.html)
+and CUDA's [registered-host lifetime](https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__MEM.html).
+No thread memory policy or existing application page is changed. The pool still
+has one global slot/byte bound across contexts and locations; moving an idle
+slot frees the old allocation before constructing its replacement.
+
+Private MRs retire before a drained chunk returns to the pool. Final pool cleanup
+closes its copy streams/events, calls `cuMemHostUnregister`, restores the CUDA
+context, and only then unmaps the host pages. A failed registration or uncertain
+unregister/context restoration/unmap retains the actual mapping, context and
+slot charge. Repeated close/Drop cannot repeat a native release. The original
+`cuMemHostAlloc` backing continues to pair with `cuMemFreeHost`.
+
+The platform boundary lives in `platform/numa.rs`, CUDA registration/backing in
+`cuda/pinned.rs`, selection beside the actual context in `cuda/staging.rs`, and
+reuse/budgets in `runtime/proxy_manager.rs`. This matches TENT's
+`findStagingPolicy` → `Topology::findNearMem` → per-location `StageBuffers` →
+platform allocator responsibilities. OrbitTE limits this stage to host staging
+for its current CUDA owners. It does not yet add arbitrary GPU staging locations,
+automatic transport choice, topology publication or GPU-near RDMA rail routing.
+
+CPU fixtures exercise real mapped bytes and public TCP/RDMA paths with simulated
+CUDA and NUMA binding. They do not establish physical page residency, actual
+CUDA registration, DMA overlap or performance. A successful binding policy is
+not a lasting residency guarantee if the OS/cpuset changes. Hardware requests
+remain paused; see [qualification](qualification.md#host-staging-location).
 
 ## TENT correspondence
 
@@ -110,7 +164,7 @@ partial negotiation frames and yields to other submitted CROSS payload queries.
 Pin, cold connection acquisition, native construction, nonreusable QP
 retirement, copyback, source handlers and ordinary local GPU snapshot/commit
 retain synchronous boundaries.
-Remaining control progress and location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
+Remaining control progress and broader location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
 ## Serial remote staging
@@ -653,4 +707,5 @@ source PRE/POST while another submitted CROSS completes; query/context errors
 compose with native cleanup failure and preserve actual owners. Socket controls
 hold a real partial reply/payload through local failure and task join, test real
 TCP write backpressure and preserve READ guards and uncertain GPU owners.
-Remaining blocking control boundaries and location selection stay in P5.5b.
+Host staging location selection is implemented with the limits above.
+Remaining blocking control boundaries and current-profile qualification stay in P5.5b.

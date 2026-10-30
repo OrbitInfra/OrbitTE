@@ -1,11 +1,21 @@
 //! CUDA-pinned host allocation, copy stream and deallocation ownership.
 
+use std::mem::ManuallyDrop;
+
 use super::*;
+use crate::platform::numa::{MappedMemory, Numa};
+
+enum Backing {
+    Driver,
+    Mapped(ManuallyDrop<MappedMemory>),
+}
 
 pub(crate) struct PinnedAllocation {
     pub(super) context: Arc<Context>,
     pub(crate) address: NonNull<u8>,
     pub(crate) length: usize,
+    pub(crate) numa_node: Option<u32>,
+    backing: Backing,
     pub(super) copy_stream: Mutex<Option<CopyStream>>,
     cleanup_attempted: bool,
     released: bool,
@@ -73,12 +83,60 @@ impl PinnedAllocation {
             context: Arc::clone(context),
             address,
             length,
+            numa_node: None,
+            backing: Backing::Driver,
             copy_stream: Mutex::new(None),
             cleanup_attempted: false,
             released: false,
             native_freed: false,
         })
     }
+    pub(super) fn new_at(
+        context: &Arc<Context>,
+        length: usize,
+        node: Option<u32>,
+        numa: &'static Numa,
+    ) -> Result<Self> {
+        let Some(node) = node else {
+            return Self::new(context, length);
+        };
+        let mut mapping = MappedMemory::new(length, node, numa)?;
+        let mut attempted = false;
+        let result = context.current(|| {
+            attempted = true;
+            // Portable registration is owned together with this fresh mapping.
+            check("cuMemHostRegister", unsafe {
+                (context.driver.host_register)(mapping.address.as_ptr().cast(), mapping.length, 1)
+            })
+        });
+        if let Err(error) = result {
+            if attempted {
+                RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
+                std::mem::forget((mapping, Arc::clone(context)));
+                return Err(Error::Unquiesced {
+                    operation: "CUDA host registration",
+                    code: match error {
+                        Error::Backend { code, .. } | Error::Unquiesced { code, .. } => code,
+                        _ => -1,
+                    },
+                });
+            }
+            mapping.close()?;
+            return Err(error);
+        }
+        Ok(Self {
+            address: mapping.address,
+            context: Arc::clone(context),
+            length,
+            numa_node: Some(node),
+            backing: Backing::Mapped(ManuallyDrop::new(mapping)),
+            copy_stream: Mutex::new(None),
+            cleanup_attempted: false,
+            released: false,
+            native_freed: false,
+        })
+    }
+
     pub(crate) fn bytes(&self) -> &[u8] {
         // SAFETY: initialized stable bytes, no DMA remains at callers of this method.
         unsafe { std::slice::from_raw_parts(self.address.as_ptr(), self.length) }
@@ -138,13 +196,23 @@ impl PinnedAllocation {
             streams_closed.and_then(|()| {
                 self.context.current(|| {
                     // Record native release before restoring the caller context.
-                    let status =
-                        unsafe { (self.context.driver.host_free)(self.address.as_ptr().cast()) };
+                    let (operation, status) = match &self.backing {
+                        Backing::Driver => ("cuMemFreeHost", unsafe {
+                            (self.context.driver.host_free)(self.address.as_ptr().cast())
+                        }),
+                        Backing::Mapped(_) => ("cuMemHostUnregister", unsafe {
+                            (self.context.driver.host_unregister)(self.address.as_ptr().cast())
+                        }),
+                    };
                     self.native_freed = status == SUCCESS;
-                    check("cuMemFreeHost", status)
+                    check(operation, status)
                 })
             })
         };
+        let result = result.and_then(|()| match &mut self.backing {
+            Backing::Driver => Ok(()),
+            Backing::Mapped(mapping) => mapping.close(),
+        });
         if result.is_ok() {
             self.released = true;
             Ok(())

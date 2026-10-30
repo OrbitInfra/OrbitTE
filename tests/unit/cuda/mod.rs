@@ -29,6 +29,7 @@ mod staging;
 #[cfg(feature = "rdma")]
 mod staging_cross;
 mod staging_events;
+mod staging_location;
 mod staging_pipeline;
 mod staging_progress;
 mod staging_shards;

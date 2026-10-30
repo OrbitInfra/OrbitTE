@@ -16,7 +16,7 @@ pub(super) fn engine(transport: Transport, chunk: usize, depth: usize) -> Transf
     #[cfg(feature = "rdma")]
     if transport == Transport::Rdma {
         let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
-        runtime.proxy = ProxyManager::new(chunk, depth).unwrap();
+        runtime.proxy = ProxyManager::new(chunk, depth, crate::StagingLocation::Any).unwrap();
         return crate::engine::tests::rdma_fixture_with_config(runtime, config);
     }
     let _ = transport;
@@ -150,7 +150,7 @@ fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
 fn staging_range_loans_interlock_with_cpu_rdma_and_whole_allocation_ipc() {
     let a = allocation(&[0x57; 64]);
     let gpu = super::ipc::owned(&a, true);
-    let manager = ProxyManager::new(3, 2).unwrap();
+    let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     gpu.with_staging(4, 8, &manager, 1, |copy, mut stages| {
         assert!(gpu.allocation.try_lock().is_ok());
         assert!(matches!(
@@ -214,7 +214,7 @@ fn successful_sibling_drain_cannot_clear_failed_range_or_release_actual_owner() 
     let a = allocation(&[0x57; 64]);
     let gpu = memory(&a);
     let weak = Arc::downgrade(&gpu);
-    let manager = ProxyManager::new(3, 2).unwrap();
+    let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     gpu.with_staging(0, 3, &manager, 1, |first, mut first_slots| {
         gpu.with_staging(6, 3, &manager, 1, |second, mut second_slots| {
             first.begin(&mut first_slots[0], 0, 3, false).unwrap();

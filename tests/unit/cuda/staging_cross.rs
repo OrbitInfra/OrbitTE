@@ -17,7 +17,7 @@ pub(super) fn engine(
     config.max_direct_bytes = chunk * 2;
     config.block_size = 1;
     let mut runtime = verbs::runtime_with_config(config);
-    runtime.proxy = ProxyManager::new(chunk, depth).unwrap();
+    runtime.proxy = ProxyManager::new(chunk, depth, crate::StagingLocation::Any).unwrap();
     let hold = verbs::pause(&runtime);
     (
         crate::engine::tests::rdma_fixture_with_config(

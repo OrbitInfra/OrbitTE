@@ -17,7 +17,7 @@ fn engine(transport: Transport) -> TransferEngine {
     #[cfg(feature = "rdma")]
     if transport == Transport::Rdma {
         let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
-        runtime.proxy = ProxyManager::new(3, 1).unwrap();
+        runtime.proxy = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
         return crate::engine::tests::rdma_fixture_with_config(runtime, config());
     }
     let _ = transport;
@@ -509,8 +509,12 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
                     } else {
                         "direct:copy"
                     });
-                    runtime.proxy =
-                        crate::runtime::proxy_manager::ProxyManager::new(3, depth).unwrap();
+                    runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(
+                        3,
+                        depth,
+                        crate::StagingLocation::Any,
+                    )
+                    .unwrap();
                     crate::engine::tests::rdma_fixture_with_config(
                         runtime,
                         EngineConfig {

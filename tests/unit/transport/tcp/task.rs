@@ -37,7 +37,9 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             length: 19,
         };
         #[cfg(feature = "cuda")]
-        let proxy = crate::runtime::proxy_manager::ProxyManager::new(32, 1).unwrap();
+        let proxy =
+            crate::runtime::proxy_manager::ProxyManager::new(32, 1, crate::StagingLocation::Any)
+                .unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut task = TcpTask::new(
             TransferOp::Read,
@@ -137,7 +139,9 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         length: size,
     };
     #[cfg(feature = "cuda")]
-    let proxy = crate::runtime::proxy_manager::ProxyManager::new(32, 1).unwrap();
+    let proxy =
+        crate::runtime::proxy_manager::ProxyManager::new(32, 1, crate::StagingLocation::Any)
+            .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut task = TcpTask::new(
         TransferOp::Write,

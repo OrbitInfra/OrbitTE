@@ -24,8 +24,9 @@ impl CudaMemory {
             .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
         allocation.check_dma(&range)?;
         let context = Arc::clone(&allocation.context);
-        let mut stage = manager.pin_stage_buffer(context.raw.as_ptr() as usize, |size| {
-            PinnedAllocation::new(&context, size)
+        let node = context.staging_node(manager.location, manager.numa)?;
+        let mut stage = manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, |size| {
+            PinnedAllocation::new_at(&context, size, node, manager.numa)
         })?;
         if allocation.copy_stream.is_none() {
             match CopyStream::new(&context) {
@@ -130,11 +131,12 @@ impl CudaMemory {
             pending: 0,
             failed: false,
         };
+        let node = context.staging_node(manager.location, manager.numa)?;
         let mut stages = Vec::with_capacity(depth);
         for _ in 0..depth {
             stages.push(
-                manager.pin_stage_buffer(context.raw.as_ptr() as usize, |size| {
-                    PinnedAllocation::new(&context, size)
+                manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, |size| {
+                    PinnedAllocation::new_at(&context, size, node, manager.numa)
                 })?,
             );
         }
@@ -320,5 +322,51 @@ impl Drop for StagingCopy {
         } else {
             allocation.dma.retain(|range| *range != self.range);
         }
+    }
+}
+
+impl Context {
+    fn staging_node(
+        self: &Arc<Self>,
+        location: crate::StagingLocation,
+        numa: &crate::platform::numa::Numa,
+    ) -> Result<Option<u32>> {
+        use crate::StagingLocation;
+        if location == StagingLocation::Any {
+            return Ok(None);
+        }
+        let mut nodes = (numa.nodes)()?;
+        nodes.sort_unstable();
+        nodes.dedup();
+        let node = match location {
+            StagingLocation::Any => return Ok(None),
+            StagingLocation::Cpu(node) => node,
+            StagingLocation::Auto => {
+                let mut pci = [0i8; 20];
+                self.current(|| {
+                    check("cuDeviceGetPCIBusId", unsafe {
+                        (self.driver.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, self.device)
+                    })
+                })?;
+                let end = pci
+                    .iter()
+                    .position(|c| *c == 0)
+                    .ok_or(Error::Protocol("CUDA PCI bus id"))?;
+                let pci: String = pci[..end]
+                    .iter()
+                    .map(|c| (*c as u8 as char).to_ascii_lowercase())
+                    .collect();
+                (numa.gpu_node)(&pci)
+                    .filter(|node| nodes.contains(node))
+                    .or_else(|| nodes.first().copied())
+                    .ok_or(Error::Unavailable("no allowed host staging node"))?
+            }
+        };
+        if !nodes.contains(&node) {
+            return Err(Error::Unavailable(
+                "host staging node is not allowed or has no online memory",
+            ));
+        }
+        Ok(Some(node))
     }
 }
