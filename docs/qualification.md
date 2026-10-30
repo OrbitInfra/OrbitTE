@@ -60,8 +60,8 @@ Independent source review accepts `3767dc5` for this source/CPU ownership
 scope. `independent-review/source-review-3767dc5.json` binds the frozen diff,
 13 independently rerun feature/compiler/relay/docs gates and the final test
 correction. The cancellation control passes 20/20 accepted two-CPU repeats:
-ten stable and ten freshly compiled MSRV runs. Earlier MSRV repetitions that
-reused a stale build are retained but excluded. Failed development runs are
+ten stable and ten freshly compiled MSRV runs. Earlier MSRV repetitions whose
+rebuild freshness was not established are retained but excluded. Failed development runs are
 also retained with their corrected gates.
 
 `synchronous-query-control/manifest.json` records the same public progress
