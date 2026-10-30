@@ -278,7 +278,7 @@ impl<'a> StagingTask<'a> {
                     cross.ready = cross.query()?;
                 }
             }
-            if control.is_none() && !tcp_active {
+            if control.is_none() && !tcp_active && finished.is_none() {
                 if let Some(slot) = inflight
                     .iter()
                     .position(|cross| cross.as_ref().is_some_and(|c| c.ready))

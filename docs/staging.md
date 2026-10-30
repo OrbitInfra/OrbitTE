@@ -372,7 +372,8 @@ completion exchange, then the scoped FinishCross receipt. `RdmaTransfer` remains
 in its original inflight slot throughout. Its finish cursor owns one slice and
 one bounded partial frame; no other exchange enters that socket while pending.
 Other submitted CROSS payloads are still queried every sweep, so their errors
-can close the session while the peer withholds an ACK.
+can close the session while the peer withholds an ACK. A completed chunk's
+POST/next PRE takes priority over starting another ready chunk's finish.
 
 `CqLane::submit_completion` validates the exact claim, completed payload and key,
 submits the completion SEND once and wakes the shared Workers pool. Its separate
