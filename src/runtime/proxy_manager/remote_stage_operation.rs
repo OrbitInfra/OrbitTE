@@ -172,15 +172,26 @@ impl ControlOperation {
         self.sent == REQUEST_SIZE
     }
 
+    pub(super) fn progress_send(
+        &mut self,
+        channel: &mut ControlChannel<'_>,
+        advanced: &mut bool,
+    ) -> Result<bool> {
+        if !self.sent() {
+            let count = channel.poll_write(&self.request.encode()[self.sent..])?;
+            self.sent += count;
+            *advanced |= count != 0;
+        }
+        Ok(self.sent())
+    }
+
     pub(super) fn progress(
         &mut self,
         channel: &mut ControlChannel<'_>,
         advanced: &mut bool,
     ) -> Result<Option<bool>> {
         if !self.sent() {
-            let count = channel.poll_write(&self.request.encode()[self.sent..])?;
-            self.sent += count;
-            *advanced |= count != 0;
+            self.progress_send(channel, advanced)?;
             // Let the caller publish CROSS after Delegate send, before waiting
             // on its acceptance receipt.
             return Ok(None);

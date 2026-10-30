@@ -610,7 +610,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   validation precedes publication, and cancellation still joins native drain.
   Independent source review accepts `a2d1b9e`; see
   [connection lifetime](qualification.md#connection-and-pin-lifetime).
-  Complete native RDMA setup/finish asynchronous progress, location selection
+  Requester native finish now polls completion SEND and sealed reusable-grant
+  cleanup and retains partial DONE/ACK/READY frames while other CROSS payloads
+  remain queryable. Source review is pending; see
+  [finish progress](qualification.md#native-rdma-finish-progress).
+  Complete native setup and remaining synchronous retirement/source boundaries, location selection
   and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
@@ -907,8 +911,11 @@ progress and retain one framing owner. Independent source review accepts
 Connect/Pin and native handshake socket waits are implemented with a single
 connection, full Pin validation and existing native drain ownership. Independent
 source review accepts `a2d1b9e`; see [connection lifetime](qualification.md#connection-and-pin-lifetime).
-The next implementation boundary is asynchronous
-native RDMA setup/finish progress, followed by location selection. Current v21 hardware qualification and full
+Requester native finish progress is implemented with one framing owner, shared
+SEND/drain validation and partial completion frames; source review is pending.
+The next implementation boundary is asynchronous native RDMA setup, followed by
+location selection. Nonreusable retirement, copyback and source handlers retain
+explicit synchronous limits. Current v21 hardware qualification and full
 ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

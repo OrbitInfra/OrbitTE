@@ -8,6 +8,8 @@ use crate::{
 };
 
 mod connect_progress;
+#[cfg(feature = "rdma")]
+mod finish_progress;
 mod ipc;
 mod ipc_cache;
 mod ipc_host;
@@ -19,6 +21,7 @@ mod requester_failures;
 mod requester_pipeline;
 mod requester_staging;
 mod shim;
+mod socket_gate;
 mod socket_progress;
 mod staging;
 #[cfg(feature = "rdma")]

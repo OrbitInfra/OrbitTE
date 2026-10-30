@@ -9,6 +9,8 @@ pub(crate) struct RdmaTransfer {
     pub(super) memory: RegisteredMemory,
     pub(super) requester: bool,
     pub(super) epoch: SourceEpoch,
+    #[cfg(feature = "cuda")]
+    pub(super) finish: super::finish::FinishProgress,
 }
 
 impl RdmaTransfer {

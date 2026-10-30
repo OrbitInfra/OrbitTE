@@ -103,9 +103,11 @@ Source CUDA Delegate submits an event at every ring width. Scoped
 `QueryDelegate` polls its completion once, so NOT_READY can leave other
 submitted CROSS owners progressing. TCP payload and Delegate/query/Unpin socket
 progress are bounded and nonblocking. Connect uses a single pending socket;
-worker stop also interrupts Pin and native handshake socket waits. Pin, RDMA
-setup/bilateral finish, source handlers and ordinary local GPU snapshot/commit
-still run synchronously within their worker.
+worker stop also interrupts Pin and native setup socket waits. Requester native
+finish polls SEND and reusable-grant cleanup, retaining partial completion frames
+while other CROSS payloads remain queryable. Pin, native setup, nonreusable QP
+retirement, copyback, source handlers and ordinary local GPU snapshot/commit
+retain synchronous boundaries.
 Remaining control progress and location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
@@ -280,7 +282,8 @@ Frozen TENT uses `submitRemoteStage`, `INFLIGHT_REMOTE` and
 uses explicit scoped query exchanges on its existing connection to establish
 the same separate completion/owner boundary. It does not yet provide TENT's
 fully asynchronous RPC mechanism: each session still has one framing owner,
-and Pin and RDMA handshakes still occupy their session worker. The
+and Pin and RDMA setup still occupy their session worker. Requester native
+finish now has [explicit progress](#native-rdma-finish-progress). The
 [cancellable connection](#connection-and-pin-lifetime) preserves the original
 deadline and task stop through those socket waits.
 Error/EOF cleanup still closes all accepted RDMA work, drains
@@ -300,8 +303,9 @@ still does not interrupt an already running ordinary TCP operation.
 
 For remote staging, `TcpCross` sequences outer CROSS header, inner `TcpTask` and
 scoped CROSS receipt. `ControlOperation` separately owns Delegate, QueryDelegate,
-TCP FinishCross and Unpin request/response bytes. It attempts at most two small
-reads or one small write per turn; complete response framing and scope validation
+FinishCross and Unpin request/response bytes. Sending a request and receiving its
+scoped receipt are separate so RDMA can own its intervening native exchange.
+Socket work is bounded to the small header and at most two small reads per turn; complete response framing and scope validation
 precede any state transition. An incomplete socket result differs from a fully
 received QueryDelegate NOT_READY. Initial queries follow Delegate acceptance
 before admission of more CROSS work; later queries rotate across pending slots.
@@ -321,7 +325,7 @@ workers use synchronous send/receive. Its separate `hp_tcp` provider has async
 header/body/response state. OrbitTE uses explicit socket progress in its existing
 TCP provider, and scoped control results corresponding to `delegateAsync` and
 `RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
-claims wire compatibility. Native RDMA setup/bilateral finish, source handlers,
+claims wire compatibility. Native RDMA setup, nonreusable QP retirement, source handlers,
 readiness notification and full asynchronous RPC parity remain open.
 
 ### Connection and Pin lifetime
@@ -343,12 +347,14 @@ connection; it cannot append Unpin to an incomplete frame. Source EOF cleanup
 owns any remote pin already allocated. Requester terminal is not a source drain
 receipt, and WRITE still has no user-data effect before Delegate.
 
-The same task stop reaches native RDMA setup and completion socket waits. An
+The same task stop reaches native RDMA setup socket waits and the requester
+[finish event loop](#native-rdma-finish-progress). An
 interrupted handshake still aborts its constructed grant and closes every
 accepted CROSS; CUDA siblings and private registrations keep their existing
 drain order. A native drain error may supersede cancellation, and `Unquiesced`
-retains actual owners and admission. Native provider calls and CQ waits are not
-preempted by this socket token. Each shard still runs one session at a time.
+retains actual owners and admission. Native provider calls and synchronous
+setup/source CQ waits are not preempted by this socket token. Each shard still
+runs one session at a time.
 Public active `Batch::cancel` is unchanged, and whole-engine close still drains
 accepted batches before stopping the staging pool.
 
@@ -358,6 +364,44 @@ OrbitTE follows this admission boundary and TENT's separation between shared
 ProxyManager workers and transport-owned native batches. The single cancellable
 socket is OrbitTE's control implementation, not a claim of identical RPC or wire
 behavior. See [source qualification](qualification.md#connection-and-pin-lifetime).
+
+### Native RDMA finish progress
+
+The staging session keeps one framing owner: outer FinishCross request, native
+completion exchange, then the scoped FinishCross receipt. `RdmaTransfer` remains
+in its original inflight slot throughout. Its finish cursor owns one slice and
+one bounded partial frame; no other exchange enters that socket while pending.
+Other submitted CROSS payloads are still queried every sweep, so their errors
+can close the session while the peer withholds an ACK.
+
+`CqLane::submit_completion` validates the exact claim, completed payload and key,
+submits the completion SEND once and wakes the shared Workers pool. Its separate
+query requires SEND work, not the prior payload completion. Reusable Direct
+grants then enter the same sealed `GrantDrain` validation as synchronous callers.
+The drain query requires the current claim and Drained phase, with no remaining
+finish operation, work or native grant. Native cleanup still belongs to CqLane.
+
+Only then does the requester send bound DONE and consume the full Reply, bound
+ACK and, for reusable grants, bound READY. Partial reads/writes retain position;
+malformed bindings fail without replay. A connection becomes cacheable only
+after READY. The outer scoped receipt still gates slot reuse and local POST or
+remote WRITE Delegate. An interrupted finish closes every accepted native owner;
+failed retirement retains actual memory and admission. A native cleanup error
+may supersede worker cancellation; neither proves remote EOF cleanup occurred.
+
+This follows frozen TENT `e2d6e8e`'s `ProxyManager::transferEventLoop`: `INFLIGHT`
+queries `progressBatch`, leaves pending chunks queued, and advances other owners.
+TENT's transport Workers own native CQ progress. OrbitTE keeps that resource
+split; its grant-specific completion SEND and bilateral release protocol are
+OrbitTE contracts, not TENT wire compatibility.
+
+This is requester finish progress for reusable host Direct grants. Nonreusable
+QP retirement/copyback, cache fallback retirement, failure drain, Pin, native
+setup and source handlers retain synchronous boundaries. Native provider calls
+and locks are not preemptible. One shard still executes one session at a time.
+No public active-cancel or engine-close ordering changes are introduced.
+[Source qualification](qualification.md#native-rdma-finish-progress) is separate
+from installed v21 execution, real DMA overlap and performance.
 
 ### Session progress and completion
 
@@ -410,7 +454,7 @@ admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
 healthy siblings or erase an earlier `Unquiesced`. Partial TCP payload and scoped
 control receipts retain the original deadline and yield to staging cancellation.
-Blocking Pin, native RDMA setup/finish and provider calls keep their existing
+Blocking Pin, native RDMA setup, nonreusable retirement and provider calls keep their existing
 completion/drain obligations.
 On source EOF/error, all native CROSS owners close before CUDA drain and private
 registration retirement. The caller drops its queue

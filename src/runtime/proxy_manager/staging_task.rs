@@ -187,7 +187,31 @@ impl<'a> StagingTask<'a> {
             let mut finished = None;
             if let Some((action, operation)) = control.as_mut() {
                 let mut advanced = false;
-                let result = operation.progress(&mut self.channel, &mut advanced)?;
+                #[allow(unused_mut)]
+                let mut ready = operation.progress_send(&mut self.channel, &mut advanced)?;
+                #[cfg(feature = "rdma")]
+                if ready {
+                    if let ControlAction::Finish { offset } = action {
+                        let cross = inflight[(*offset / self.chunk) % self.remote_width]
+                            .as_mut()
+                            .ok_or(Error::Internal("missing staging CROSS"))?;
+                        if let Some(transfer) = cross.rdma.as_mut() {
+                            ready = transfer.progress_finish(
+                                self.source
+                                    .rdma
+                                    .as_ref()
+                                    .ok_or(Error::Unavailable("RDMA is not configured"))?,
+                                &mut self.channel,
+                                &mut advanced,
+                            )?;
+                        }
+                    }
+                }
+                let result = if ready {
+                    operation.progress(&mut self.channel, &mut advanced)?
+                } else {
+                    None
+                };
                 if !matches!(action, ControlAction::Query { .. }) {
                     progress |= advanced;
                 }
@@ -215,7 +239,14 @@ impl<'a> StagingTask<'a> {
                         }
                         ControlAction::Finish { offset } => {
                             let slot = (offset / self.chunk) % self.remote_width;
-                            drop(inflight[slot].take());
+                            let cross = inflight[slot]
+                                .take()
+                                .ok_or(Error::Internal("missing staging CROSS"))?;
+                            #[cfg(feature = "rdma")]
+                            if let Some(transfer) = cross.rdma {
+                                transfer.close(Ok(()))?;
+                            }
+                            drop(cross.local);
                             finished = Some(offset);
                         }
                         ControlAction::Unpin => return Ok(()),
@@ -239,8 +270,11 @@ impl<'a> StagingTask<'a> {
                         ));
                         progress = true;
                     }
-                } else {
-                    // Native completion/error observation needs no control bytes.
+                } else if !control.as_ref().is_some_and(|(action, _)| {
+                    matches!(action, ControlAction::Finish { offset } if *offset == cross.offset)
+                }) {
+                    // The active finish owns its SEND/drain phase; all other
+                    // native payloads remain observable during partial frames.
                     cross.ready = cross.query()?;
                 }
             }
@@ -249,12 +283,18 @@ impl<'a> StagingTask<'a> {
                     .iter()
                     .position(|cross| cross.as_ref().is_some_and(|c| c.ready))
                 {
-                    let cross = inflight[slot]
-                        .take()
-                        .ok_or(Error::Internal("missing staging CROSS"))?;
-                    let offset = cross.offset;
-                    self.finish_cross(cross)?;
-                    finished = Some(offset);
+                    let offset = inflight[slot]
+                        .as_ref()
+                        .ok_or(Error::Internal("missing staging CROSS"))?
+                        .offset;
+                    control = Some((
+                        ControlAction::Finish { offset },
+                        self.remote.submit(
+                            Operation::FinishCross,
+                            offset,
+                            self.chunk.min(self.request.length - offset),
+                        ),
+                    ));
                     progress = true;
                 }
             }
@@ -380,34 +420,6 @@ impl<'a> StagingTask<'a> {
                 idle = idle.saturating_add(1);
             }
         }
-    }
-
-    fn finish_cross(&mut self, cross: Cross) -> Result<()> {
-        let offset = cross.offset;
-        let length = self.chunk.min(self.request.length - offset);
-        #[cfg(feature = "rdma")]
-        let mut rdma = cross.rdma;
-        let result = (|| {
-            self.remote
-                .send(&mut self.channel, Operation::FinishCross, offset, length)?;
-            #[cfg(feature = "rdma")]
-            if let Some(transfer) = rdma.take() {
-                transfer.finish(
-                    self.source
-                        .rdma
-                        .as_ref()
-                        .ok_or(Error::Unavailable("RDMA is not configured"))?,
-                    &mut self.channel,
-                )?;
-            }
-            self.remote
-                .receipt(&mut self.channel, Operation::FinishCross, offset, length)
-        })();
-        #[cfg(feature = "rdma")]
-        if let Some(transfer) = rdma {
-            return transfer.close(result);
-        }
-        result
     }
 
     fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
