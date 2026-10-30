@@ -31,6 +31,71 @@ impl CqLane {
         done: Option<&BoundDone>,
         deadline: Instant,
     ) -> Result<()> {
+        self.begin_finish(record, claim, binding, done, deadline)?;
+        let mut request = record.lock()?;
+        loop {
+            request.check_claim(claim)?;
+            if Self::grant_finished(&request)? {
+                return Ok(());
+            }
+            let duration = remaining(deadline).map_err(|_| Error::Unquiesced {
+                operation: "RDMA grant cleanup deadline",
+                code: libc::ETIMEDOUT,
+            })?;
+            request = record
+                .changed
+                .wait_timeout(request, duration)
+                .map_err(|_| Error::Unquiesced {
+                    operation: "RDMA grant wait poisoned",
+                    code: libc::EIO,
+                })?
+                .0;
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(in crate::transport::rdma) fn begin_finish_sent(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        binding: &[u8; COMPLETION_MESSAGE_SIZE],
+        deadline: Instant,
+    ) -> Result<()> {
+        self.begin_finish(record, claim, binding, None, deadline)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(in crate::transport::rdma) fn query_finish(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+    ) -> Result<bool> {
+        record.require_live()?;
+        let request = record.lock()?;
+        request.check_claim(claim)?;
+        Self::grant_finished(&request)
+    }
+
+    fn grant_finished(request: &Request) -> Result<bool> {
+        if request.phase != Phase::Drained {
+            return Err(Error::Internal("RDMA grant cleanup query before drain"));
+        }
+        Ok(request.finish.is_none()
+            && request.work.is_none()
+            && request
+                .resources
+                .as_ref()
+                .is_some_and(|r| r.grant.is_none()))
+    }
+
+    fn begin_finish(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        binding: &[u8; COMPLETION_MESSAGE_SIZE],
+        done: Option<&BoundDone>,
+        deadline: Instant,
+    ) -> Result<()> {
         remaining(deadline)?;
         record.require_live()?;
         let mut request = record.lock()?;
@@ -116,30 +181,7 @@ impl CqLane {
         record.actions.fetch_or(FINISH, Ordering::Release);
         drop(request);
         self.shared.signal();
-        let mut request = record.lock()?;
-        loop {
-            request.check_claim(claim)?;
-            if request.finish.is_none()
-                && request
-                    .resources
-                    .as_ref()
-                    .is_some_and(|r| r.grant.is_none())
-            {
-                return Ok(());
-            }
-            let duration = remaining(deadline).map_err(|_| Error::Unquiesced {
-                operation: "RDMA grant cleanup deadline",
-                code: libc::ETIMEDOUT,
-            })?;
-            request = record
-                .changed
-                .wait_timeout(request, duration)
-                .map_err(|_| Error::Unquiesced {
-                    operation: "RDMA grant wait poisoned",
-                    code: libc::EIO,
-                })?
-                .0;
-        }
+        Ok(())
     }
 
     pub(in crate::transport::rdma) fn claim(

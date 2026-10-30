@@ -264,6 +264,18 @@ impl CqLane {
         rkey: u32,
         deadline: Instant,
     ) -> Result<()> {
+        self.submit_completion(record, claim, binding, rkey, deadline)?;
+        self.wait(record, claim, deadline)
+    }
+
+    pub(in crate::transport::rdma) fn submit_completion(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+        binding: [u8; COMPLETION_MESSAGE_SIZE],
+        rkey: u32,
+        deadline: Instant,
+    ) -> Result<()> {
         remaining(deadline)?;
         self.shared.asynchronous.check()?;
         record.require_live()?;
@@ -313,7 +325,28 @@ impl CqLane {
             record.send_namespace.store(namespace, Ordering::Release);
             request.phase = Phase::Queued;
         }
-        self.wait(record, claim, deadline)
+        record.actions.fetch_or(WORK, Ordering::Release);
+        self.shared.signal();
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(in crate::transport::rdma) fn query_completion(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+    ) -> Result<bool> {
+        record.require_live()?;
+        let request = record.lock()?;
+        request.check_claim(claim)?;
+        let work = request
+            .work
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA SEND work"))?;
+        if !request.message_sent || work.operation != slice::Operation::Send {
+            return Err(Error::Internal("RDMA completion query without SEND"));
+        }
+        Ok(work.queue.finished())
     }
 
     #[cfg(feature = "cuda")]

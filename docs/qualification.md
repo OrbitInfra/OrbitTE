@@ -29,6 +29,56 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Native RDMA finish progress
+
+Requester FinishCross now retains its RDMA transfer while polling completion
+SEND, reusable-grant cleanup and partial DONE/Reply/ACK/READY frames. Other
+submitted CROSS payloads stay queryable. The scoped outer receipt still gates
+chunk reuse and GPU POST/Delegate. Shared synchronous/native callers consume the
+same SEND submission and sealed grant-drain validation; the wire remains v21.
+
+CPU controls combine actual production owners with the existing verbs/CUDA
+shims and real loopback sockets. A later CROSS's partial native Reply remains withheld
+while an earlier accepted payload WR reports failure; terminal delivery and
+client EOF must precede relay release. A separate accepted SEND with its CQE
+withheld must permit internal worker stop before the original deadline. Both
+controls run READ/WRITE with successful QP retirement and injected retirement
+failure, checking drain, unchanged GPU bytes, no Unpin and actual owner retention.
+WRITE has no exported-GPU effect before its Delegate, even if CROSS touched
+remote pinned staging. Successful cleanup preserves cancellation or its native
+drain error; failed cleanup must remain `Unquiesced`.
+
+Healthy controls split Reply, ACK and READY, resume the same connection, and
+check all payload/guard bytes, one SEND per slice and QP reuse. A changed ACK
+binding fails before a chunk completes. Evidence is selected outside Git at
+`/root/orbitte-artifacts/rdma-finish-progress-20261030/`.
+Independent source review accepts `e2f4037` for this source/CPU boundary.
+`gates.json` records 22 primary gates: stable and Rust 1.85 tests/Clippy for all
+four feature profiles, both relay gates, the 25-observation Rust CPU trace, format
+and strict documentation/local-link checks. Each combined run passes 332 unit
+tests, eight integration tests and one doctest; five hardware units and the integration
+subprocess fixture are marked ignored in the parent runner. Source and tool hashes are recorded in
+`source-manifest.json` and `build-environment.json`.
+
+`independent-review/source-review-e2f4037.json` selects 21 independently rerun
+gates, using a fresh stable target and the final-source MSRV artifacts. An older
+cross-archive target reused a stale stable binary; its results are excluded and
+preserved. The reviewer audits primary evidence and verifies all 281 files in
+`blocking-finish-control-e2f4037/`: only the finish progress body changes to the
+synchronous protocol. Both unchanged failure-observation and SEND-stop tests
+then fail their two-second assertions before the ten-second request deadline.
+The earlier CUDA-only warning and POST/next-PRE priority regression are preserved
+with their failed runs; the final source passes the unchanged panic/effect test.
+GitHub CI also passes 8/8 profiles, the frozen TENT CPU comparison and docs at
+this implementation revision; see `ci-source-e2f4037.json`.
+
+Pin, native setup, nonreusable QP retirement/copyback, cache fallback retirement,
+failure drain and source handlers retain synchronous boundaries. Provider calls
+and locks are not preemptible. No new hardware task is requested; installed v21,
+real DMA overlap and performance remain unqualified. Frozen TENT correspondence
+and the exact owner boundaries are documented in
+[the staging contract](staging.md#native-rdma-finish-progress).
+
 ## Connection and Pin lifetime
 
 The current v21 source retains one nonblocking staging connection attempt through
@@ -69,8 +119,9 @@ cleanup-failure profiles cover READ setup and finish. Existing WRITE-effect
 regressions pass separately. Source EOF cleanup remains withheld until after
 requester terminal, so the tests distinguish requester retirement from remote
 loan release. This does not qualify installed v21 execution, real DMA overlap
-or performance; hardware tasks remain paused. Pin and native handshakes still occupy their session worker, native/CQ
-waits remain synchronous, and public active cancellation and engine close order
+or performance; hardware tasks remain paused. At that revision Pin and native
+handshakes still occupy their session worker and native/CQ waits remain synchronous;
+requester finish is advanced by the [subsequent boundary](#native-rdma-finish-progress), and public active cancellation and engine close order
 are unchanged. Full asynchronous control progress, location selection and full
 ProxyManager/API/wire parity remain open. Frozen TENT likewise pins remote stage
 buffers synchronously before using them in its chunk event loop.

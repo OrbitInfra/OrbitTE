@@ -433,6 +433,8 @@ impl RdmaTransport {
                 memory: request.local.clone(),
                 requester: true,
                 epoch: peer.epoch,
+                #[cfg(feature = "cuda")]
+                finish: finish::FinishProgress::default(),
             })
         })();
         result.map_err(|error| (error, effect))
@@ -553,6 +555,8 @@ impl RdmaTransport {
             memory: memory.clone(),
             requester: false,
             epoch,
+            #[cfg(feature = "cuda")]
+            finish: finish::FinishProgress::default(),
         }))
     }
 }
@@ -567,6 +571,8 @@ impl Drop for RdmaTransport {
 
 pub(super) mod connections;
 mod contexts;
+#[cfg(feature = "cuda")]
+mod finish;
 mod handshake;
 mod transfer;
 pub(crate) use transfer::RdmaTransfer;

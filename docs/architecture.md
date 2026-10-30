@@ -428,8 +428,12 @@ checks both socket error and connected peer, and transfers that same socket into
 through Pin and native RDMA handshake I/O; source handlers use `Stop::Source`.
 Pin validates the full success response before publishing chunk geometry. Native
 abort/close still drains accepted work, with uncertain cleanup retaining owners.
-Pin and RDMA setup/finish remain synchronous within the session worker; fully
-asynchronous control progress, source handlers and location scheduling remain open. The slot retains both handles across sessions; close
+`rdma_transport/finish.rs` owns requester completion SEND, sealed grant drain and
+partial DONE/Reply/ACK/READY progress. The active FinishCross stays in its inflight
+slot through the outer scoped receipt; other native payloads remain queryable.
+CqLane shares the same SEND submission and grant-drain validation with synchronous
+callers. Pin, native setup, nonreusable QP retirement, copyback and source handlers
+retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

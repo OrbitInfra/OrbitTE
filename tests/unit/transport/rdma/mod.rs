@@ -806,7 +806,13 @@ unsafe extern "C" fn post(
                 mode == "wc"
                     || mode == "wc_close0"
                     || (mode == "copy_second_error_close0" && ordinal == 2)
-                    || (failed == Some((state.qpn, request.id))),
+                    || (failed == Some((state.qpn, request.id)))
+                    || (mode.starts_with("copy_cross_hold_first_error")
+                        && device
+                            .held_payload
+                            .lock()
+                            .unwrap()
+                            .contains(&(state.qpn, request.id))),
             ),
             vendor_error: 0,
             ..Default::default()
@@ -986,6 +992,10 @@ unsafe extern "C" fn send_completion(
         }
     }
     drop(routes);
+    if device.mode.starts_with("copy_send_hold") {
+        device.pause.0.lock().unwrap().0 = true;
+        device.pause.1.notify_all();
+    }
     unsafe { &*qp.cq }
         .completions
         .lock()
@@ -1023,6 +1033,11 @@ unsafe extern "C" fn poll(
                 // until the first MR owns an accepted WR; other CQEs free quota.
                 !(held.contains(&key) || held.is_empty() && failed == Some(key))
             })
+            .and_then(|index| queue.remove(index))
+    } else if device.mode.starts_with("copy_send_hold") && !device.pause.0.lock().unwrap().1 {
+        queue
+            .iter()
+            .position(|wc| wc.opcode != 0 || wc.status != 0)
             .and_then(|index| queue.remove(index))
     } else if device.mode.contains("reverse") {
         queue.pop_back()

@@ -182,15 +182,23 @@ impl Binding {
     }
 
     pub(super) fn write(&self, channel: &mut ControlChannel<'_>, phase: u8) -> Result<()> {
+        channel.write_all(&self.frame(phase))
+    }
+
+    pub(super) fn frame(&self, phase: u8) -> [u8; 1 + BINDING_SIZE] {
         let mut bytes = [0; 1 + BINDING_SIZE];
         bytes[0] = phase;
         bytes[1..].copy_from_slice(&self.0);
-        channel.write_all(&bytes)
+        bytes
     }
 
     pub(super) fn read(&self, channel: &mut ControlChannel<'_>, phase: u8) -> Result<()> {
         let mut bytes = [0; 1 + BINDING_SIZE];
         channel.read_exact(&mut bytes)?;
+        self.validate(&bytes, phase)
+    }
+
+    pub(super) fn validate(&self, bytes: &[u8; 1 + BINDING_SIZE], phase: u8) -> Result<()> {
         if bytes[0] != phase || bytes[1..] != self.0 {
             return Err(Error::Protocol("RDMA phase or grant binding mismatch"));
         }
