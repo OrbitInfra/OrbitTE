@@ -29,6 +29,32 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Connection and Pin lifetime
+
+The current v21 source retains one nonblocking staging connection attempt through
+success, stop or the original deadline. Typed task stop reaches the subsequent
+Pin and native handshake socket waits. Pin validates the full header and success
+tail before exposing a chunk. Source stop retains its distinct error identity.
+Cancellation does not bypass native abort, drain or uncertain-owner retention.
+
+CPU controls use real loopback sockets: a saturated accept queue holds a pending
+connect, fragmented Pin replies remain withheld through requester terminal,
+source errors provide no success tail, and invalid negotiation never starts
+CROSS. Internal staging worker stop and the public request deadline are tested
+separately. Native setup and finish controls combine partial socket replies with
+accepted CROSS work, successful drain and injected QP cleanup failure. The
+actual local GPU shim owner is retained when native cleanup is unproven.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/staging-connect-progress-20261030/`.
+Source/CPU gates and independent acceptance are pending. This does not qualify
+installed v21 execution, real DMA overlap or performance; hardware tasks remain
+paused. Pin and native handshakes still occupy their session worker, native/CQ
+waits remain synchronous, and public active cancellation and engine close order
+are unchanged. Full asynchronous control progress, location selection and full
+ProxyManager/API/wire parity remain open. Frozen TENT likewise pins remote stage
+buffers synchronously before using them in its chunk event loop.
+
 ## Socket progress
 
 The current v21 source adds a concrete TcpTask shared by ordinary TCP and remote
@@ -67,9 +93,11 @@ The new stalled-socket profiles cover TCP framing plus local CUDA failure;
 existing native acceptance and failed-QP cleanup controls pass separately. No
 new combined partial-control/held-native-WR cleanup-failure profile is claimed.
 This is source/CPU work only: current installed v21 execution, DMA overlap and
-performance remain unqualified; hardware requests remain paused. Connect/Pin,
-native RDMA setup/finish, source handlers and ordinary local GPU snapshot/commit
-remain synchronous. Ordinary active batch cancellation, readiness notification,
+performance remain unqualified; hardware requests remain paused. At this source
+boundary Connect/Pin and native handshake waits had no task stop token; see
+[connection lifetime](#connection-and-pin-lifetime) for the subsequent change.
+Pin, native RDMA setup/finish, source handlers and ordinary local GPU
+snapshot/commit remain synchronous within their workers. Ordinary active batch cancellation, readiness notification,
 location selection and full ProxyManager/API/wire parity remain outside this
 substage. Frozen TENT's ordinary TcpTask uses synchronous workers; its separate
 hp_tcp async provider is not implemented by this change.

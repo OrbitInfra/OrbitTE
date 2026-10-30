@@ -48,6 +48,7 @@ impl ProxyManager {
                                 &task_source,
                                 chunk_size,
                                 deadline,
+                                &stop,
                             )?;
                             pin.send(task.chunk).map_err(|_| Error::Cancelled)?;
                             task.progress(commands, complete, &stop, &mut effect)

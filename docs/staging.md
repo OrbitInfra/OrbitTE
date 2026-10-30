@@ -102,8 +102,10 @@ by exponential delays from one to 200 microseconds, bounded by the deadline.
 Source CUDA Delegate submits an event at every ring width. Scoped
 `QueryDelegate` polls its completion once, so NOT_READY can leave other
 submitted CROSS owners progressing. TCP payload and Delegate/query/Unpin socket
-progress are bounded and nonblocking. Connect/Pin, RDMA setup/bilateral finish,
-source handlers and ordinary local GPU snapshot/commit remain synchronous.
+progress are bounded and nonblocking. Connect uses a single pending socket;
+worker stop also interrupts Pin and native handshake socket waits. Pin, RDMA
+setup/bilateral finish, source handlers and ordinary local GPU snapshot/commit
+still run synchronously within their worker.
 Remaining control progress and location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
@@ -278,7 +280,9 @@ Frozen TENT uses `submitRemoteStage`, `INFLIGHT_REMOTE` and
 uses explicit scoped query exchanges on its existing connection to establish
 the same separate completion/owner boundary. It does not yet provide TENT's
 fully asynchronous RPC mechanism: each session still has one framing owner,
-and connection setup, Pin and RDMA handshakes retain blocking boundaries.
+and Pin and RDMA handshakes still occupy their session worker. The
+[cancellable connection](#connection-and-pin-lifetime) preserves the original
+deadline and task stop through those socket waits.
 Error/EOF cleanup still closes all accepted RDMA work, drains
 all accepted CUDA siblings and only then retires private registrations. An
 unconfirmed remote reply is never a native drain proof.
@@ -317,8 +321,43 @@ workers use synchronous send/receive. Its separate `hp_tcp` provider has async
 header/body/response state. OrbitTE uses explicit socket progress in its existing
 TCP provider, and scoped control results corresponding to `delegateAsync` and
 `RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
-claims wire compatibility. Connect/Pin, native RDMA setup/bilateral finish, source
-handlers, readiness notification and full asynchronous RPC parity remain open.
+claims wire compatibility. Native RDMA setup/bilateral finish, source handlers,
+readiness notification and full asynchronous RPC parity remain open.
+
+### Connection and Pin lifetime
+
+`Connecting` creates one nonblocking socket and issues connect once. A pending
+result retains that socket and the original deadline. Success requires both no
+socket error and a connected peer; a terminal error or stop drops the socket.
+There is no retry, second connection or replay. The successful channel carries
+`Stop::Task` through every later control read/write. Source shutdown uses a
+separate `Stop::Source`, preserving `Cancelled` versus `SourceClosed`.
+
+Pin stays on the same worker. Its existing synchronous read/write loops retain
+partial positions and recheck stop/deadline with at most 25 ms socket timeouts.
+Decode the complete 36-byte Reply before reading its 18-byte success tail:
+source errors have no tail. Only a valid chunk size, remote ring width and CROSS
+width, followed by a final stop/deadline check, permit chunk publication. Before
+that boundary no local PRE, Delegate or CROSS can start. Failure drops the
+connection; it cannot append Unpin to an incomplete frame. Source EOF cleanup
+owns any remote pin already allocated. Requester terminal is not a source drain
+receipt, and WRITE still has no user-data effect before Delegate.
+
+The same task stop reaches native RDMA setup and completion socket waits. An
+interrupted handshake still aborts its constructed grant and closes every
+accepted CROSS; CUDA siblings and private registrations keep their existing
+drain order. A native drain error may supersede cancellation, and `Unquiesced`
+retains actual owners and admission. Native provider calls and CQ waits are not
+preempted by this socket token. Each shard still runs one session at a time.
+Public active `Batch::cancel` is unchanged, and whole-engine close still drains
+accepted batches before stopping the staging pool.
+
+Frozen TENT's `StageBufferCache::allocateRemote` calls synchronous
+`ControlClient::pinStageBuffer` before using that remote buffer in its event loop.
+OrbitTE follows this admission boundary and TENT's separation between shared
+ProxyManager workers and transport-owned native batches. The single cancellable
+socket is OrbitTE's control implementation, not a claim of identical RPC or wire
+behavior. See [source qualification](qualification.md#connection-and-pin-lifetime).
 
 ### Session progress and completion
 

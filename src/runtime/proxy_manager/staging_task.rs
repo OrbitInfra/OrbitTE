@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use super::remote_stage_operation::{ControlOperation, RemoteStageOperation};
 use crate::engine::{PreparedTransfer, Source, remaining};
-use crate::runtime::control_plane::{ControlChannel, Operation, REQUEST_SIZE, Reply, Request};
+use crate::runtime::control_plane::{
+    Connecting, ControlChannel, Operation, REQUEST_SIZE, Reply, Request, Stop,
+};
 use crate::transport::tcp::TcpTask;
 use crate::{
     Error, Permission, RegisteredMemory, RemoteEffect, RemoteRegion, RemoteSegment, Result,
@@ -44,6 +46,7 @@ impl<'a> StagingTask<'a> {
         source: &'a Source,
         chunk_size: usize,
         deadline: Instant,
+        stopping: &'a AtomicBool,
     ) -> Result<Self> {
         let cross_limit = match request.transport {
             #[cfg(feature = "rdma")]
@@ -54,7 +57,20 @@ impl<'a> StagingTask<'a> {
                 .staging_concurrency(chunk_size),
             _ => 1,
         };
-        let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
+        let mut connecting = Connecting::new(peer.endpoint, deadline, Stop::Task(stopping))?;
+        let mut idle = 0u32;
+        let mut channel = loop {
+            if let Some(channel) = connecting.poll()? {
+                break channel;
+            }
+            if idle < 128 {
+                std::thread::yield_now();
+            } else {
+                let delay = Duration::from_micros((1u64 << (idle - 128).min(8)).min(200));
+                std::thread::park_timeout(delay.min(remaining(deadline)?));
+            }
+            idle = idle.saturating_add(1);
+        };
         channel.write_all(
             &Request {
                 operation: if operation == TransferOp::Read {
@@ -99,6 +115,10 @@ impl<'a> StagingTask<'a> {
         if cross_width == 0 || cross_width > cross_limit || cross_width > remote_width {
             return Err(Error::Protocol("Pin CROSS depth"));
         }
+        if stopping.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        remaining(deadline)?;
         Ok(Self {
             channel,
             remote: RemoteStageOperation {
