@@ -63,6 +63,16 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                     )
                     .unwrap();
                 wait_pending(&b, 3);
+                // A queued copy precedes its event record. Hold all initial
+                // generations until the refill fault can no longer hit setup.
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                while b.completions.lock().unwrap().values().flatten().count() != 3 {
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "initial events not recorded"
+                    );
+                    std::thread::yield_now();
+                }
                 assert_eq!(pending(&b), 3);
                 if fault == "submit" {
                     b.copy_error.store(1, Ordering::Release);
@@ -137,14 +147,34 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                 let mut observed = [0; 64];
                 let mut expected = [0xcc; 64];
                 if operation == TransferOp::Read {
-                    let changed = if fault == "submit" { 10 } else { 12 };
-                    expected[2..2 + changed].fill(0x57);
+                    let copies = b.submitted_copies.lock().unwrap();
+                    assert_eq!(copies.len(), 4);
+                    for (index, &(_, address, length)) in copies.iter().enumerate() {
+                        let offset = address - local.base_address() as usize;
+                        assert!(offset >= 2 && offset + length <= 34 && (offset - 2) % 3 == 0);
+                        assert_eq!(
+                            length,
+                            if index == 3 && fault == "submit" {
+                                1
+                            } else {
+                                3
+                            }
+                        );
+                        expected[offset..offset + length].fill(0x57);
+                    }
                 }
                 local_gpu.read(0, &mut observed).unwrap();
                 assert_eq!(observed, expected, "{transport:?}/{operation:?}/{fault}");
                 let mut expected = [0x57; 64];
                 if operation == TransferOp::Write {
-                    expected[1..1 + source_stats.remote_delegates as usize * 3].fill(0xcc);
+                    let copies = a.submitted_copies.lock().unwrap();
+                    assert_eq!(copies.len(), source_stats.remote_delegates as usize);
+                    for &(_, address, length) in copies.iter() {
+                        let offset = address - remote.base_address() as usize;
+                        assert!(offset >= 1 && offset + length <= 33 && (offset - 1) % 3 == 0);
+                        assert_eq!(length, 3);
+                        expected[offset..offset + length].fill(0xcc);
+                    }
                 }
                 source_gpu.read(0, &mut observed).unwrap();
                 assert_eq!(observed, expected);

@@ -116,14 +116,23 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                     waiting.recv_timeout(Duration::from_secs(10)).unwrap();
                     // The shim keeps real source/destination pointers pending
                     // until the event wait. A serial implementation has only one.
-                    assert_eq!(pending(&a), depth, "{transport:?}/{op:?}/{length}");
+                    let accepted = pending(&a);
+                    if op == TransferOp::Read {
+                        assert_eq!(accepted, depth);
+                    } else {
+                        assert!(
+                            (depth.min(2)..=depth).contains(&accepted),
+                            "{transport:?}/{op:?}/{length}: {accepted}"
+                        );
+                    }
                     let stats = source.stats().unwrap();
                     assert_eq!(stats.active_source_operations, 1);
                     assert_eq!(stats.staging.active_chunks, depth);
                     assert_eq!(stats.staging.remote_delegates, (round * chunks) as u64);
                     assert_eq!(
                         stats.staging.remote_crosses,
-                        (round * chunks + if op == TransferOp::Write { depth } else { 0 }) as u64
+                        (round * chunks + if op == TransferOp::Write { accepted } else { 0 })
+                            as u64
                     );
                     resume.send(()).unwrap();
                     let report = batch.wait(Duration::from_secs(10)).unwrap();
@@ -200,12 +209,13 @@ fn pin(
         .unwrap();
     channel.write_all(&[0, depth]).unwrap();
     channel.write_all(&3u64.to_be_bytes()).unwrap();
+    channel.write_all(&[1]).unwrap();
     Reply::read(&mut channel, source.source_epoch()).unwrap();
     let mut nonce = [0; 16];
     channel.read_exact(&mut nonce).unwrap();
-    let mut negotiated = [0];
+    let mut negotiated = [0; 2];
     channel.read_exact(&mut negotiated).unwrap();
-    assert_eq!(negotiated, [depth]);
+    assert_eq!(negotiated, [depth, 1]);
     (channel, SourceEpoch(nonce))
 }
 

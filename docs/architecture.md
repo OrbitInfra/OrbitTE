@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v19 messages; moving them into their own module does not make this
+OrbitTE v20 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## RDMA resource owners
@@ -121,7 +121,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v19 handshake can attach independent grants to a
+QP creation lock. The public v20 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction
@@ -397,15 +397,23 @@ after CROSS and local READ slots after POST, matching TENT's separate local and
 remote stage ownership. `requester_task.rs` owns the bounded local chunk event loop and CROSS
 queues. Each PRE/POST queries its recorded CUDA event; NOT_READY retains its
 physical owners, while success requires context restoration. A ready slot can
-refill without waiting for the rest of a window; `staging_task.rs::StagingTask` owns one session's connection and ordered
-remote phases. `worker_shard.rs::Workers` assigns sessions to at most eight shared
+refill without waiting for the rest of a window. `staging_task.rs::StagingTask`
+owns one session's connection and bounded concurrent RDMA CROSS owners.
+`rdma_transport/transfer.rs::RdmaTransfer` retains the submitted slices and
+registration, queries exact payload work, then runs the existing bilateral
+finish/cleanup. The synchronous RDMA entry point consumes the same owner.
+CROSS admission is ordered; completion can reorder across slots. A scoped
+`FinishCross` selects the native SEND/RQ/ACK/READY exchange before the terminal
+receipt. Pin negotiates CROSS capacity separately from CUDA ring width;
+per-CROSS slice caps and actual native credits prevent self-exhaustion. `worker_shard.rs::Workers` assigns sessions to at most eight shared
 `WorkerShard`s, following TENT's per-shard task queue. Threads start on demand;
 each queue holds at most 64 sessions. Pin starts only after dequeue. A task
 terminal receipt follows destruction of its closure, including all private
 registration and source references. The caller waits for this receipt before
 retiring registrations, including cancellation and unwind. `source_task.rs` owns
 source phases. Final Unpin waits for every local copy and remote receipt.
-Concurrent CROSS on the wire and general remote-operation scheduling remain open. The slot retains both handles across sessions; close
+TCP payload and control exchanges remain synchronous; general remote-operation
+progress and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

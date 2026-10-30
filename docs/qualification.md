@@ -29,9 +29,68 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Concurrent RDMA CROSS
+
+The v20 source separates RDMA submission, payload query and bilateral finish.
+One staging connection admits multiple CROSS chunks within a separately
+negotiated native window. Each concrete `RdmaTransfer` owns its slices and
+registration and uses the existing transport CQ workers. Admission remains
+ordered; completion may reorder across remote slots. A scoped `FinishCross`
+selects the original SEND/RQ/ACK/READY and cleanup exchange before terminal
+publication. Source Bind completion cannot substitute for payload completion.
+This corresponds to frozen TENT's `submitCrossStage` / `progressBatch` split.
+
+Per-CROSS slice caps account for the whole concurrent window while existing
+grant, receive and byte credits still charge actual work. The public-path CPU
+control uses L/R=3/2, two slices per CROSS, one physical QP and a short final chunk.
+It holds one exact payload CQE from the first private MR while the second CROSS completes, checks exact
+bytes/guards and verifies the first still owns its native credits and GPU range.
+A second control fails the later CROSS with an earlier payload pending; all
+owners must drain, or failed QP cleanup must preserve `Unquiesced` and actual
+pins, GPU owners and parent admission. A further control expires the first
+CROSS after the second has already changed bytes: READ preserves the exact
+noncontiguous POST range, WRITE keeps `RemoteEffect::Unknown`, and uncertain
+native cleanup retains the actual owners. Source scope controls reject early,
+duplicate and stale FinishCross and premature Unpin. Existing CUDA failure
+controls check actual submitted ranges because completed READ chunks need not
+form a prefix.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/staging-concurrent-cross-20261029/`.
+Production gates at `9280d1f` pass stable/MSRV tests and Clippy, CUDA-only
+checks, all 51 controller controls, the CPU trace fixture and strict docs.
+The final source at `adc803f` adds test-only corrections and the partial-effects
+regression. Stable (restricted to two CPUs) and Rust 1.85 combined runs each pass
+314 unit tests, eight integration tests and one doctest; combined Clippy and
+format checks pass. `gates.json`, `final-gates.json`,
+`final-correction-gates.json` and the source manifests
+bind the commands, revisions and unchanged production files.
+
+`serialized-current-control/manifest.json` records a clean `665a32c` archive
+with only the CROSS window forced to one; the same healthy progress control
+fails as expected. The final test-only change normalizes an equivalent Boolean
+predicate for MSRV Clippy; the original warning and corrected gate are retained.
+Independent source review accepts `adc803f` for this source/CPU ownership
+scope. `independent-review/source-review-adc803f.json` binds the frozen diff,
+feature/compiler gates and final incremental checks. The corrected fault
+controls pass 20/20 independent two-CPU repeats. Earlier repeated controls
+include failures before the first payload was accepted; only the corrected
+run is accepted. Failed development and CI runs are retained separately. The first fault shim used post-call ordinals, which could
+hold all CQ credits or select a slice refill; it now binds an actual private MR
+and a single accepted WR. The second MR's one error CQE is delivered only after
+the first MR owns an accepted WR; other completions can still return credits.
+This also removes the assumption that preparation order implies posting order.
+Refill fault injection waits for all initial CUDA event records. Native-failure checks require a consumed error CQE while allowing the
+caller to observe either the original error or the asynchronously retired lane.
+These corrections retain the exact byte, drain and uncertain-owner assertions.
+Hardware requests remain paused: installed v20 execution, DMA overlap and performance are unqualified.
+TCP payload, control exchanges and source CUDA preparation retain their
+synchronous boundaries; general remote-operation progress, asynchronous TCP
+payload, location selection and full ProxyManager parity remain open.
+
 ## Requester chunk event loop
 
-The current v19 requester uses a bounded PRE/CROSS/POST event loop. Each local
+The accepted v19 requester at `1ac1d01` uses a bounded PRE/CROSS/POST event loop. Each local
 slot queries its recorded CUDA completion and advances independently; ordered
 CROSS commands retain the existing connection protocol. NOT_READY keeps the
 same generation and physical owners. Query success requires context restoration
@@ -68,13 +127,14 @@ pass stable/MSRV tests and Clippy for both CUDA and RDMA+CUDA;
 Earlier failed assertions, the sampling-race control and a stale reviewer build
 attempt are preserved and excluded from the accepted results.
 
-No new hardware task is requested. Current installed v19 execution, physical
-overlap and performance remain unqualified. Concurrent CROSS, general remote
-operation scheduling, location selection and full ProxyManager parity remain open.
+No new hardware task is requested. Installed execution, physical overlap and
+performance remain unqualified for that v19 source. The concurrent RDMA CROSS
+substage above extends its connection progress; general remote-operation
+scheduling, location selection and full ProxyManager parity remain open.
 
 ## Shared staging worker shards
 
-The current v19 source replaces per-session thread creation with a lazily started
+The accepted v19 source at `3db26ee` replaces per-session thread creation with a lazily started
 pool of at most eight shared shards. An idle shard is reused; queued tasks have
 bounded admission and retain their original deadline. Pin starts after dequeue.
 Queued cancellation destroys the actual task captures before its terminal receipt;
@@ -106,8 +166,8 @@ and [documentation checks](https://github.com/OrbitInfra/OrbitTE/actions/runs/40
 also pass for that source. No new hardware task is requested.
 Installed v19 execution, physical overlap and performance remain unqualified.
 The requester event-loop substage above supersedes the local window barrier.
-Concurrent CROSS and location selection remain open; shared threads alone do not
-establish complete ProxyManager parity.
+The concurrent RDMA CROSS substage above extends connection progress; shared
+threads alone do not establish complete ProxyManager parity.
 
 ## Bounded session progress
 
@@ -115,7 +175,7 @@ The accepted v19 source at `4441017` adds bounded CROSS command/completion queue
 joined connection worker per admitted staging request. Local CUDA progress can
 continue while a CROSS or Delegate receipt is pending. CROSS remains ordered on
 one connection. The shared-shard substage above supersedes its per-session worker;
-multiple CROSS operations on the wire remain open. See [the ownership contract](staging.md#session-progress-and-completion).
+the concurrent RDMA CROSS substage above extends its serialized native work. See [the ownership contract](staging.md#session-progress-and-completion).
 
 CPU controls hold a local CUDA event while CROSS progresses, hold a source
 Delegate receipt while local PRE/POST starts, and lose the final Delegate reply
@@ -146,7 +206,7 @@ their original artifact boundaries.
 
 ## Requester CUDA pipeline
 
-The current wire-v19 implementation adds an independent bounded requester ring
+The accepted wire-v19 implementation at `c87c403` adds an independent bounded requester ring
 to the accepted source pipeline. CUDA WRITE prequeues local PREs; READ can keep
 POSTs pending until local slot reuse. Every final local POST drains before
 Unpin. The request-local `StageBufferCache` retains private registrations, and
@@ -182,7 +242,8 @@ persistent stream/events and physical pinned bytes. Neither these CPU controls
 nor earlier v18 hardware runs qualify the current artifact or demonstrate
 physical overlap or throughput. The session progress and shared-shard substages
 above extend this source boundary. The chunk event-loop substage supersedes its
-local window barrier; concurrent CROSS on the wire and location selection remain open.
+local window barrier; concurrent RDMA CROSS is covered above and location
+selection remains open.
 
 ## Bounded requester CUDA staging
 

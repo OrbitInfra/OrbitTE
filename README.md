@@ -106,9 +106,12 @@ are accepted for that recorded artifact. Requester staging now uses a bounded
 ring with per-chunk PRE/CROSS/POST progress, nonblocking CUDA event queries,
 negotiated chunk sizes and a bounded CROSS queue. Up to eight shared staging worker shards progress network operations
 while local CUDA advances; queued cancellation precedes Pin, and final success
-still requires remote receipts and full drain. Its v19
-hardware qualification is pending; earlier H20 results apply to their recorded
-artifacts. Concurrent CROSS on the wire and location selection remain open.
+still requires remote receipts and full drain. RDMA now admits several CROSS
+chunks on the same connection, queries their payload completion independently,
+and releases each slot only after bilateral cleanup. TCP payload remains
+synchronous. Current v20 hardware qualification is pending; earlier H20 results
+apply to their recorded artifacts. General remote-operation progress and
+location selection remain open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;

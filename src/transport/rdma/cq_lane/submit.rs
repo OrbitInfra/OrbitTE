@@ -316,6 +316,20 @@ impl CqLane {
         self.wait(record, claim, deadline)
     }
 
+    #[cfg(feature = "cuda")]
+    pub(in crate::transport::rdma) fn query(
+        &self,
+        record: &Arc<Record>,
+        claim: u64,
+    ) -> Result<bool> {
+        let request = record.lock()?;
+        request.check_claim(claim)?;
+        Ok(request
+            .work
+            .as_ref()
+            .is_some_and(|work| work.queue.finished()))
+    }
+
     pub(in crate::transport::rdma) fn wait(
         &self,
         record: &Arc<Record>,

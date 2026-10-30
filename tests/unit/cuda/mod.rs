@@ -18,6 +18,8 @@ mod requester_pipeline;
 mod requester_staging;
 mod shim;
 mod staging;
+#[cfg(feature = "rdma")]
+mod staging_cross;
 mod staging_events;
 mod staging_pipeline;
 mod staging_progress;

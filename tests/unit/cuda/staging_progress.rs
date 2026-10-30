@@ -226,7 +226,38 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
         #[cfg(feature = "rdma")]
         (Transport::Rdma, true),
     ] {
-        let source = engine(transport, 3, 3);
+        let source = if transport == Transport::Rdma {
+            #[cfg(feature = "rdma")]
+            {
+                let mut runtime = crate::transport::rdma::tests::runtime_with_config(
+                    crate::transport::rdma::RdmaConfig {
+                        max_direct_bytes: 3,
+                        max_endpoints: 1,
+                        max_staging_bytes: 8,
+                        ..crate::transport::rdma::RdmaConfig::new("copy")
+                    },
+                );
+                runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(3, 3).unwrap();
+                crate::engine::tests::rdma_fixture_with_config(
+                    runtime,
+                    EngineConfig {
+                        remote_staging: true,
+                        staging_chunk_size: 3,
+                        staging_chunk_count: 3,
+                        staging_pipeline_depth: 3,
+                        handler_threads: 1,
+                        max_inflight_batches: 1,
+                        ..EngineConfig::default()
+                    },
+                )
+            }
+            #[cfg(not(feature = "rdma"))]
+            {
+                unreachable!()
+            }
+        } else {
+            engine(transport, 3, 3)
+        };
         let requester = {
             #[cfg(feature = "rdma")]
             if cleanup_failure {
@@ -296,8 +327,8 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             .unwrap();
         local_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
         source_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-        // POST 0 is held in submit; CROSS 1 is inside transfer_on, and CROSS 2
-        // remains queued. A local failure must not free any of their slots.
+        // One CROSS credit holds CROSS 1 in source preparation while POST 0
+        // fails locally. Later queued commands must not acquire any native owner.
         b.copy_error.store(1, Ordering::Release);
         local_resume.send(()).unwrap();
         wait_until(|| requester.stats().unwrap().staging.cancelled_tasks == 1);
@@ -341,9 +372,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             stats.remote_crosses <= 2,
             "queued CROSS 2 must never start: {stats:?}"
         );
-        if !cleanup_failure {
-            assert_eq!(stats.remote_crosses, 2);
-        }
+        assert!(stats.remote_crosses >= 1);
         assert_eq!(stats.remote_unpins, 0);
         if cleanup_failure {
             assert_eq!(requester.stats().unwrap().staging.retained_chunks, 3);

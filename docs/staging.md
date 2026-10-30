@@ -68,7 +68,7 @@ The new bounded remote mode follows `transferEventLoop`'s ring of at most 16
 stage buffers (`id % kStageBuffers`). `source_task.rs` owns source `Chunk`
 scheduling; `requester_task.rs` reserves the local ring and full GPU range loan.
 `requester_task.rs` also owns local PRE/POST scheduling and bounded CROSS queues.
-`staging_task.rs::StagingTask` owns the connection and ordered remote phases;
+`staging_task.rs::StagingTask` owns the connection and bounded CROSS progress;
 `worker_shard.rs` queues these sessions on shared `WorkerShard`s. `StageBufferCache` retains the request's private
 registrations and buffers, following the resource role of TENT's cache of the
 same name. `stage_registration.rs::PinnedStage` owns the actual pinned lease,
@@ -83,8 +83,12 @@ after CROSS, and local READ slots after POST. The requester event loop tracks at
 most `L` chunks and submits CROSS commands in logical order, while querying each
 local PRE/POST independently. A ready slot immediately starts its next chunk;
 there is no whole-window refill barrier. Local progress continues while a CROSS
-or Delegate receipt is pending. The worker still serializes CROSS and scoped
-receipts on one connection.
+or Delegate receipt is pending. The worker submits multiple RDMA CROSS chunks
+on one connection and queries their payload completion independently.
+`rdma_transport/transfer.rs::RdmaTransfer` owns the actual slices and registration,
+matching TENT's submitted internal batch and `progressBatch` boundary. The
+existing transport workers still own CQ progress. Each control exchange is
+serialized, and TCP payload retains its synchronous path.
 Frozen TENT creates eight shared worker shards; each dequeues one task and runs
 its chunk event loop to completion. OrbitTE starts at most eight shards on demand,
 reuses an idle shard and otherwise selects the smallest queue with rotating ties.
@@ -94,8 +98,9 @@ at its own phase boundary. OrbitTE uses the same chunk phases for requester
 progress, with `CopyStream` querying the recorded CUDA event and the connection
 worker publishing CROSS receipts. Idle sweeps follow TENT's 128 yields followed
 by exponential delays from one to 200 microseconds, bounded by the deadline.
-Concurrent CROSS on the wire and general remote-operation/location scheduling
-remain in the existing P5/P6 queue. CPU controls establish scheduling and owner
+Source CUDA preparation and Delegate handling may still block the connection
+worker. General remote-operation polling, asynchronous TCP payload and location
+scheduling remain in the existing P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
 
 ## Serial remote staging
@@ -113,7 +118,7 @@ new payload transport is introduced. The flag defaults to false.
 | Pin | Validate source epoch/region/range/permission; borrow its GPU range and pin its slots | Same |
 | PRE | Source GPU → pinned source slot, with event/context completion before CROSS | Local range → requester slot, with event/context completion before CROSS |
 | CROSS | TCP/RDMA source slot → requester slot | Requester slot → TCP/RDMA source slot |
-| POST | After the scoped CROSS receipt, requester slot → local range | Delegate source slot → source GPU |
+| POST | After the scoped FinishCross receipt, requester slot → local range | Delegate source slot → source GPU |
 | Unpin | Drain accepted copies, retire private registrations/MRs and release source slots/range, then acknowledge | Same |
 | Request completion | Require final Unpin receipt and requester slot/MR retirement | Same |
 
@@ -154,19 +159,23 @@ A busy metadata mutex fails admission with `ResourceExhausted`. Pool exhaustion
 also fails explicitly; no hidden pool or silent reduction of source depth is used.
 
 Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
-18 added pipeline width. Current version **19** also carries the requester chunk
-cap in Pin. Both peers must use version 19; older headers are rejected.
+18 added pipeline width and version 19 added the requester chunk cap.
+Current version **20** negotiates a separate CROSS capacity and introduces
+`FinishCross`. Both peers must use version 20; older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
 outside their session. These identities fence reuse; they are not authentication.
 
-CROSS receipts follow actual transport grant cleanup. Unpin first unregisters
+The CROSS receipt confirms acceptance of its native owner. A later scoped
+`FinishCross` selects that owner's original SEND/RQ/ACK/READY exchange; its
+terminal receipt follows actual transport grant cleanup. Local progress cannot
+consume acceptance as completion. Unpin first unregisters
 the private view, retires every native MR and verifies no private registration
 borrower remains, then explicitly releases the chunk and GPU range loan. A transport
 ACK alone never completes a remote GPU WRITE. Lost POST/Unpin replies leave WRITE
 with `RemoteEffect::Unknown`. READ commits each completed chunk after its scoped
-CROSS receipt; a lost Unpin receipt still fails the request even when all chunks
+FinishCross receipt; a lost Unpin receipt still fails the request even when all chunks
 are visible. A failed request contributes zero completed requests/bytes, but may
 have changed bytes. Independent local POST streams can complete out of order;
 a native failure does not establish an exact visible prefix. `locally_drained`
@@ -196,6 +205,7 @@ bytes, physical chunk sizes `C_local` / `C_source` and configured depth caps
 | CUDA requester width `L`, reserved before Pin | `min(D_local, ceil(N / C_local))` |
 | Source width `R`, negotiated by Pin | `min(D_local, D_source, ceil(N / C))` |
 | CPU requester width | One ordinary host buffer, no CUDA pool charge |
+| Concurrent CROSS window `W` | RDMA: minimum of both peers' native limits and `R`; TCP: one |
 
 The requester reserves its entire local ring and full GPU range before opening
 the control connection. The source checks out its entire negotiated ring before
@@ -205,6 +215,15 @@ limit `L` even when the smaller negotiated chunks would permit more concurrency.
 There is no late expansion after Pin. The requester uses asynchronous copies
 and queries even at width one. The source keeps its existing synchronous copy
 at width one and accepted-copy pipeline at larger widths.
+
+RDMA advertises a separate native capacity in Pin. `W` is bounded by grant,
+CQ/receive, endpoint and byte limits, up to 16. Each peer divides its per-CROSS
+slice cap by `W`; the peer-advertised cap is already divided. A chunk may still
+use multiple rails/slices, and every actual slice consumes the existing grant,
+receive and byte credits. Competing requests can fail admission explicitly;
+this session never waits for credits held by its own unfinished CROSS. The
+requester may conservatively advertise fewer CROSS owners when its physical
+chunk is larger than the negotiated chunk. CUDA ring sizes do not shrink.
 
 Logical chunk `i` uses local slot `i % L` and source slot `i % R`. Each CUDA slot
 owns its actual pinned allocation, a persistent stream/event and a private
@@ -217,8 +236,8 @@ charged without a Drop retry.
 
 | Direction | Scheduling and completion |
 | --- | --- |
-| READ | Delegate prefills `R` source PREs. CROSS waits for its source slot and any previous POST in its local slot. Its scoped receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
-| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After CROSS's scoped receipt and the Delegate send, the freed local slot queues PRE at `i + L` without waiting for that Delegate receipt; other PREs and source POSTs can remain pending. |
+| READ | Delegate prefills `R` source PREs. CROSS waits for its source slot and any previous POST in its local slot. Its terminal FinishCross receipt permits local POST to begin; the freed source slot queues the next PRE at `i + R`. Other local POSTs can remain pending until local slot reuse. |
+| WRITE | Prefill `L` local PREs. CROSS waits for its local PRE and any previous POST in the source slot. After FinishCross's terminal receipt and the Delegate send, the freed local slot queues PRE at `i + L` without waiting for that Delegate receipt; other PREs and source POSTs can remain pending. |
 | Final Unpin | Drain all local POSTs before sending Unpin. The source drains every accepted PRE/POST, retires private registrations/MRs and releases its range before replying. Only the matching receipt and local retirement complete the request. |
 
 A pipelined Delegate receipt confirms **acceptance**, not CUDA completion.
@@ -241,7 +260,7 @@ actual captures are destroyed before terminal publication, without Pin, payload
 I/O or waiting for an unrelated active native call. An active session negotiates
 Pin on its shard, then publishes the negotiated chunk size to the caller.
 Command and CROSS completion queues each hold at most `L` entries. The event
-loop retains one chunk state per slot and references at most `L` registrations. The shard owns the control connection;
+loop retains one chunk state per slot and references at most `L` registrations. The shard owns the control connection and at most `W` active RDMA transfers;
 local CUDA owners remain in the caller. TCP still transports TCP payload; RDMA uses its existing shared
 verbs workers/CQ lanes and uses TCP only for control.
 
@@ -250,9 +269,14 @@ blocking on an individual CUDA event or CROSS completion. A WRITE's PRE must
 complete before its ordered CROSS; a READ's POST must complete before its slot
 can receive another CROSS. Other slots continue to progress. CROSS results are
 consumed individually and start the corresponding local POST or next PRE.
-A CROSS result is published
-only after actual transport grant cleanup and the scoped source receipt; the
-worker drops its local registration clone first. It sends the required Delegate
+The shard admits CROSS offsets in order, but can finalize any payload-ready
+owner. If the next offset maps to an occupied remote slot, it defers that command
+and continues querying active owners. Each result must match the local slot's
+current absolute offset and phase; a previous slot generation cannot release it.
+A CROSS result is published only after the exact payload WRs finish, actual
+transport grant cleanup and the scoped FinishCross receipt; the worker drops
+its local registration clone first. Source MW Bind completion is never queried
+as payload completion. It sends the required Delegate
 before publishing CROSS completion, records WRITE uncertainty before that send,
 then waits for the remote receipt independently of local CUDA progress. CROSS
 ready releases the local slot, not the remote operation or the whole request.
@@ -271,9 +295,12 @@ After consuming all CROSS results, the caller drains every accepted local copy
 and queues Unpin. The worker processes Unpin only after every preceding Delegate
 receipt succeeds. A missing final Delegate receipt therefore fails the request
 even when every CROSS result was received. On failure, the caller stops queue
-admission and cancels commands that have not started. The active CROSS continues
-through the existing transport drain protocol under its original deadline;
-cancellation does not interrupt its control channel. The caller drops its queue
+admission and cancels commands that have not started. Every accepted RDMA owner
+is closed before private registrations retire; one failed cleanup cannot skip
+healthy siblings or erase an earlier `Unquiesced`. Active control exchanges keep
+their original deadline; cancellation does not interrupt their control channel.
+On source EOF/error, all native CROSS owners close before CUDA drain and private
+registration retirement. The caller drops its queue
 handles and waits for a separate task terminal receipt before private MR
 retirement. That receipt is sent only after the task closure, command receiver,
 registration clones and connection have been destroyed. It cannot be blocked by
@@ -315,8 +342,9 @@ is required.
 This source implementation has deterministic CPU controls for multiple pending
 copies during network progress, depth negotiation, short tails, stream reuse,
 partial admission, wrong slot/scope, EOF, lost final receipts and failed
-completion/construction/destruction. CROSS setup and PRE drain errors use the
-nested transport's source epoch; Delegate and Unpin use the staging nonce.
+completion/construction/destruction. CROSS setup, FinishCross and PRE drain
+errors use the nested transport's source epoch; Delegate and Unpin use the
+staging nonce.
 An error after a partial native wire exchange may still require closing the
 connection with an unknown remote effect. A requester still writing CROSS may
 observe a socket error before it can read the source's error receipt. Long RDMA sessions rotate exhausted
@@ -408,9 +436,15 @@ execution: native receipts do not establish execution overlap or throughput.
 The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
 earlier serial evidence remains bound to its original observer and wire version.
-The current requester ring requires its own v19 artifact and evidence. Its
+The current v20 requester ring and concurrent RDMA CROSS require their own artifact and evidence. Its
 controller supports independent widths and conservative local capacity, but
 hardware execution is deferred while new resource requests are paused. The
 shared worker shards and requester query event loop also require fresh installed
-evidence; the CPU controls prove ownership and scheduling only. Concurrent CROSS
-on the wire and location selection remain in P5.5b.
+evidence; the CPU controls prove ownership and scheduling only. The shared-QP
+control holds the first native payload completion while a second CROSS finishes,
+with exact bytes, guards and retained grant/RQ/range owners. Native fault injection
+selects an actual private MR and exact WR identity, independently of posting
+batch sizes. A serialized CROSS control fails that progress condition. Expiring
+the first CROSS after a later chunk finishes preserves exact partial effects;
+unproven cleanup retains the real owners. General remote-operation progress,
+asynchronous TCP payload and location selection remain in P5.5b.

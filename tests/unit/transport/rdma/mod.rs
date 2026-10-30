@@ -28,6 +28,9 @@ pub(crate) struct FakeDevice {
     pub(super) after_open: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     endpoints: AtomicUsize,
     payload_posts: AtomicUsize,
+    held_payload: Mutex<Vec<(u32, u64)>>,
+    first_payload_mr: AtomicUsize,
+    failed_payload: Mutex<Option<(u32, u64)>>,
     mrs: AtomicUsize,
     windows: AtomicUsize,
     window_indices: Mutex<std::collections::HashMap<u32, usize>>,
@@ -144,6 +147,9 @@ pub(super) unsafe extern "C" fn open_device(
         after_open: Mutex::new(None),
         endpoints: AtomicUsize::new(0),
         payload_posts: AtomicUsize::new(0),
+        held_payload: Mutex::default(),
+        first_payload_mr: AtomicUsize::new(0),
+        failed_payload: Mutex::new(None),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
         window_indices: Mutex::default(),
@@ -380,6 +386,14 @@ unsafe extern "C" fn prepare_grant(
                 return code;
             }
         }
+    }
+    if device.mode.starts_with("copy_cross_hold") && permission == 0 {
+        let _ = device.first_payload_mr.compare_exchange(
+            0,
+            unsafe { (*memory).mr } as usize,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
     qp.grants.lock().unwrap().insert(
         memory as usize,
@@ -735,6 +749,34 @@ unsafe extern "C" fn post(
     } else {
         count
     };
+    let first_mr = device.first_payload_mr.load(Ordering::Acquire);
+    let own_mr = unsafe { (*memory).mr } as usize;
+    if mode.starts_with("copy_cross_hold") && own_mr == first_mr && accepted > 0 {
+        // A post can refill a slice or fill the whole CQ. Hold one exact WR
+        // from the first private registration, leaving credit for other chunks.
+        let inserted = {
+            let mut held = device.held_payload.lock().unwrap();
+            if held.is_empty() {
+                held.push((state.qpn, requests[0].id));
+                true
+            } else {
+                false
+            }
+        };
+        if inserted {
+            device.pause.0.lock().unwrap().0 = true;
+            device.pause.1.notify_all();
+        }
+    }
+    let failed = if mode.starts_with("copy_cross_hold_error") && own_mr != first_mr {
+        let mut failed = device.failed_payload.lock().unwrap();
+        if let Some(request) = requests[..accepted].first() {
+            failed.get_or_insert((state.qpn, request.id));
+        }
+        *failed
+    } else {
+        None
+    };
     for request in &requests[..accepted] {
         assert!(request.offset as usize + request.length as usize <= local_length);
         if mode.contains("copy") {
@@ -763,7 +805,8 @@ unsafe extern "C" fn post(
             status: u32::from(
                 mode == "wc"
                     || mode == "wc_close0"
-                    || (mode == "copy_second_error_close0" && ordinal == 2),
+                    || (mode == "copy_second_error_close0" && ordinal == 2)
+                    || (failed == Some((state.qpn, request.id))),
             ),
             vendor_error: 0,
             ..Default::default()
@@ -969,7 +1012,19 @@ unsafe extern "C" fn poll(
         return -1;
     }
     let mut queue = state.completions.lock().unwrap();
-    let value = if device.mode.contains("reverse") {
+    let value = if device.mode.starts_with("copy_cross_hold") && !device.pause.0.lock().unwrap().1 {
+        let held = device.held_payload.lock().unwrap();
+        let failed = *device.failed_payload.lock().unwrap();
+        queue
+            .iter()
+            .position(|wc| {
+                let key = (wc.qpn, wc.id);
+                // A worker may post the second MR first. Delay its one error
+                // until the first MR owns an accepted WR; other CQEs free quota.
+                !(held.contains(&key) || held.is_empty() && failed == Some(key))
+            })
+            .and_then(|index| queue.remove(index))
+    } else if device.mode.contains("reverse") {
         queue.pop_back()
     } else {
         queue.pop_front()
