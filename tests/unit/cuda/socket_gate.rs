@@ -42,7 +42,10 @@ impl SocketGate {
                 let _ = copy(&mut input, &mut output);
                 let _ = gone.send(());
             });
+            #[cfg(feature = "rdma")]
             let mut rest = Vec::new();
+            #[cfg(not(feature = "rdma"))]
+            let rest = Vec::new();
             match boundary {
                 Boundary::Pin(prefix) => {
                     let mut response = [0; 54];

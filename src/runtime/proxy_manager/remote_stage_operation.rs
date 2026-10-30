@@ -21,6 +21,7 @@ pub(super) struct RemoteStageOperation {
 }
 
 impl RemoteStageOperation {
+    #[cfg(feature = "rdma")]
     pub(super) fn receipt(
         &self,
         channel: &mut ControlChannel<'_>,
@@ -32,7 +33,10 @@ impl RemoteStageOperation {
         if reply.status != 0 || reply.length != REQUEST_SIZE as u64 {
             return Err(Error::Protocol("staging operation receipt"));
         }
-        self.expect(channel, operation, offset, length)
+        let request = read_request(channel)?;
+        self.validate(&request, operation, offset, length)?;
+        remaining(channel.deadline)?;
+        Ok(())
     }
 
     pub(super) fn respond(
@@ -84,19 +88,6 @@ impl RemoteStageOperation {
             offset: offset as u64,
             length: length as u64,
         }
-    }
-
-    pub(super) fn expect(
-        &self,
-        channel: &mut ControlChannel<'_>,
-        operation: Operation,
-        offset: usize,
-        length: usize,
-    ) -> Result<()> {
-        let request = read_request(channel)?;
-        self.validate(&request, operation, offset, length)?;
-        remaining(channel.deadline)?;
-        Ok(())
     }
 
     pub(super) fn validate(
