@@ -604,7 +604,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   TCP payload and scoped staging control receipts now retain partial frames and
   return pending with bounded socket work. Local failure can cancel and join
   without the peer releasing its partial response; ordinary TCP shares TcpTask.
-  Source review is pending; see [socket progress](qualification.md#socket-progress).
+  Independent source review accepts `736a16a`; see [socket progress](qualification.md#socket-progress).
   Complete remaining Connect/Pin and native RDMA setup/finish progress, location
   selection and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -897,8 +897,8 @@ Remote Delegate progress is now implemented in v21, separating acceptance from
 scoped event-query completion and retaining per-slot generations through pending
 results. Independent source review accepts `3767dc5`; see [the evidence](qualification.md#remote-delegate-progress).
 TCP payload and scoped staging control receipts now have bounded nonblocking
-progress and retain one framing owner. Source review is pending; see
-[socket progress](qualification.md#socket-progress). The next implementation
+progress and retain one framing owner. Independent source review accepts
+`736a16a`; see [socket progress](qualification.md#socket-progress). The next implementation
 boundary is remaining connection/Pin and native RDMA setup/finish control progress,
 followed by location selection. Current v21 hardware qualification and full
 ProxyManager parity remain open.

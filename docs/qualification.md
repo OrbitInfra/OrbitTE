@@ -48,7 +48,24 @@ cleanup failures and both feature families remain required regression gates.
 
 Evidence is outside Git at
 `/root/orbitte-artifacts/staging-control-progress-20261030/`.
-Full gates, blocking-I/O negative control and independent source review are pending.
+At `736a16a`, stable and Rust 1.85 each pass default, RDMA-only, CUDA-only and
+combined tests and Clippy. Each combined run passes 322 unit tests, eight
+integration tests and one doctest with two CPUs. Both compiler relay gates,
+all 51 CPU controller controls, the 25-observation Rust trace fixture and strict
+docs/local-link checks pass. `gates.json` records all 23 primary gates;
+`source-manifest.json` binds them to the frozen source.
+
+Independent source review accepts `736a16a` for this source/CPU scope.
+`independent-review/source-review-736a16a.json` records the diff and 21 independently
+rerun feature/compiler/relay/format/docs gates. Controller and trace results
+are audited primary evidence, not additional independent executions.
+`blocking-socket-control/manifest.json` records the same public cancellation
+control failing as expected when only `poll_read` is replaced with bounded
+blocking `read_exact`. The reviewer verifies the unique change and matching
+archive, test and log hashes; this negative control is an audited primary run.
+The new stalled-socket profiles cover TCP framing plus local CUDA failure;
+existing native acceptance and failed-QP cleanup controls pass separately. No
+new combined partial-control/held-native-WR cleanup-failure profile is claimed.
 This is source/CPU work only: current installed v21 execution, DMA overlap and
 performance remain unqualified; hardware requests remain paused. Connect/Pin,
 native RDMA setup/finish, source handlers and ordinary local GPU snapshot/commit
@@ -59,11 +76,13 @@ hp_tcp async provider is not implemented by this change.
 
 ## Remote Delegate progress
 
-The v21 source submits CUDA Delegate work independently of completion at every
+The source accepted at `3767dc5` submits CUDA Delegate work independently of completion at every
 remote ring width. Scoped QueryDelegate results gate READ CROSS, WRITE slot
 reuse and final Unpin, while other submitted native CROSS owners can progress.
 This corresponds to frozen TENT's `submitRemoteStage`, `INFLIGHT_REMOTE` and
-`tryTakeResult` ownership; socket exchanges, Pin and TCP payload remain synchronous.
+`tryTakeResult` ownership. Socket exchanges, Pin and TCP payload were synchronous
+at that revision; the current bounded socket boundary is recorded
+[above](#socket-progress).
 
 CPU controls hold a source PRE/POST NOT_READY while another native CROSS
 finishes, verify bytes and guards with unequal rings and a short final chunk,
@@ -100,8 +119,10 @@ not a second execution of the negative control.
 
 Current v21 installed execution, DMA overlap and performance remain unqualified;
 hardware requests remain paused. Earlier installed profiles stay bound to their
-original revisions. Asynchronous TCP/control progress, location selection and
-full ProxyManager parity remain open.
+original revisions. At `3767dc5`, asynchronous TCP/control progress, location
+selection and full ProxyManager parity remained open. See
+[socket progress](#socket-progress) for the subsequent implementation and its
+remaining blocking boundaries.
 
 ## Concurrent RDMA CROSS
 
