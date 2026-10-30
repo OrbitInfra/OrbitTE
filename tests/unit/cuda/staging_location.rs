@@ -81,8 +81,8 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
         gpu.copy_staged(0, &mut bytes, None, &pool, deadline())
             .unwrap();
         assert_eq!(bytes, [0x57; 16]);
-        let map = MAPPINGS.get().unwrap().lock().unwrap();
-        let registered = owner.host_registrations.lock().unwrap();
+        let map = MAPPINGS.get().unwrap().lock().unwrap().clone();
+        let registered = owner.host_registrations.lock().unwrap().clone();
         assert_eq!(registered.len(), 1);
         let (&pointer, &length) = registered.first_key_value().unwrap();
         assert_eq!(map[&pointer], (physical, node as u32));
