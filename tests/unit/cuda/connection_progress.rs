@@ -124,6 +124,8 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
     if matches!(outcome, Outcome::Complete) {
         drop(cold.take());
     } else if matches!(outcome, Outcome::Stop) {
+        wait_until(|| requester.stats().unwrap().rdma.unwrap().work_requests == 0);
+        cold.as_ref().unwrap().assert_held();
         source_runtime(&requester)
             .proxy
             .close(Instant::now() + Duration::from_secs(2))
