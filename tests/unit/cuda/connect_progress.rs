@@ -263,7 +263,7 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                 (false, true) => "direct:copy_close0",
                 (false, false) => "direct:copy",
             });
-            runtime.proxy = ProxyManager::new(3, 3).unwrap();
+            runtime.proxy = ProxyManager::new(3, 3, crate::StagingLocation::Any).unwrap();
             let hold = verbs::pause(&runtime);
             let requester = crate::engine::tests::rdma_fixture_with_config(
                 runtime,

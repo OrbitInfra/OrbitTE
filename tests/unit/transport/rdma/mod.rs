@@ -1433,7 +1433,8 @@ static ASYNC_VERBS: sys::Verbs = sys::Verbs {
 
 #[cfg(feature = "cuda")]
 pub(crate) fn proxy() -> Arc<crate::runtime::proxy_manager::ProxyManager> {
-    crate::runtime::proxy_manager::ProxyManager::new(4 << 20, 64).unwrap()
+    crate::runtime::proxy_manager::ProxyManager::new(4 << 20, 64, crate::StagingLocation::Any)
+        .unwrap()
 }
 
 pub(crate) fn runtime(mode: &str) -> RdmaTransport {

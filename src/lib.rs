@@ -41,7 +41,7 @@ mod engine;
 mod error;
 mod memory;
 mod notification;
-#[cfg(feature = "rdma")]
+#[cfg(any(feature = "rdma", feature = "cuda"))]
 mod platform;
 mod runtime;
 mod segment;
@@ -57,6 +57,8 @@ pub use runtime::proxy_manager::StagingStats;
 pub use transport::nvlink::NVLinkStats;
 
 pub use config::EngineConfig;
+#[cfg(feature = "cuda")]
+pub use config::StagingLocation;
 pub use engine::{
     BatchReport, EngineStats, RemoteEffect, TransferEngine, TransferFailure, TransferOp,
     TransferRequest, Transport,

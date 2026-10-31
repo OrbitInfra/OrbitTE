@@ -20,7 +20,7 @@ pub(super) fn engine(transport: Transport, depth: usize) -> TransferEngine {
     #[cfg(feature = "rdma")]
     if transport == Transport::Rdma {
         let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
-        runtime.proxy = ProxyManager::new(3, depth).unwrap();
+        runtime.proxy = ProxyManager::new(3, depth, crate::StagingLocation::Any).unwrap();
         return crate::engine::tests::rdma_fixture_with_config(runtime, config(depth));
     }
     let _ = transport;
@@ -404,7 +404,7 @@ fn pipeline_stream_construction_and_destroy_failures_keep_physical_slot_budget()
     ] {
         let a = allocation(&[0x57; 64]);
         let gpu = memory(&a);
-        let manager = ProxyManager::new(3, 2).unwrap();
+        let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
         if fault == "partial-stream" {
             a.stream_create_error.store(1, Ordering::Release);
             a.stream_partial_create.store(true, Ordering::Release);
@@ -467,7 +467,7 @@ fn pipeline_slot_restore_failure_fences_a_new_gpu_context_wrapper() {
     let a = allocation(&[0x57; 64]);
     let first = memory(&a);
     let second = memory(&a);
-    let manager = ProxyManager::new(3, 2).unwrap();
+    let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     first
         .with_staging(0, 3, &manager, 2, |copy, mut stages| {
             copy.begin(&mut stages[0], 0, 3, false)?;
@@ -502,9 +502,9 @@ fn pipeline_depth_and_partial_pool_admission_remain_bounded() {
     let a = allocation(&[0x57; 64]);
     let gpu = memory(&a);
     let context = gpu.allocation.lock().unwrap().context.clone();
-    let manager = ProxyManager::new(3, 2).unwrap();
+    let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     let held = manager
-        .pin_stage_buffer(context.raw.as_ptr() as usize, |size| {
+        .pin_stage_buffer(context.raw.as_ptr() as usize, None, |size| {
             PinnedAllocation::new(&context, size)
         })
         .unwrap();
@@ -566,7 +566,7 @@ fn pipeline_recovered_submit_failure_drains_accepted_pre_and_releases_admission(
 fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
     for op in [TransferOp::Read, TransferOp::Write] {
         let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
-        runtime.proxy = ProxyManager::new(3, 2).unwrap();
+        runtime.proxy = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
         for _ in 0..254 {
             runtime.staging_endpoint(3, 1).unwrap().close().unwrap();
         }

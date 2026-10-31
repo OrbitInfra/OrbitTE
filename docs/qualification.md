@@ -1449,3 +1449,53 @@ An external byte-for-byte archive and SHA-256 manifest are also retained at
 Original experiment directories remain in place. This reorganization changes
 navigation and removes duplicate status prose; it grants no new hardware
 qualification.
+
+## Host staging location
+
+This source stage adds opt-in `Auto` / explicit CPU NUMA location selection to
+engine-owned CUDA chunks. The default wildcard allocation profile is preserved.
+The maintained [contract](staging.md#host-staging-location) separates logical
+chunk sizes from page-rounded host backing and names the remaining limits.
+
+External evidence directory:
+`/root/orbitte-artifacts/staging-location-selection-20261030/`.
+Frozen TENT design input is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`;
+`independent-review/design-review-60fe19b.json` records the initial independent
+owner/placement review. Independent source review accepts `ab309f4`, whose
+production code is identical to `2c1872d`. The only subsequent source change
+releases test observation locks before assertions. The acceptance record is
+`independent-review/source-review-ab309f4.json`
+(SHA-256 `b428cbb3b99dee1caf52aa14e2d40b5d550ae1888c52f9004b6e4d984c453289`).
+
+Both the implementation and independent reviewer pass 11 source gates at
+`2c1872d`: stable/Rust 1.85 CUDA and combined tests, all-target Clippy, formatting,
+strict documentation and local links. Each compiler passes 126 CUDA unit tests
+and 340 combined unit tests, eight integrations and one doctest. Existing
+hardware fixtures remain ignored. The test-only `ab309f4` change passes focused
+regression checks; the reviewer verifies all 286 other tracked files unchanged.
+Source CI at `2c1872d` passes all eight feature/compiler jobs, the frozen TENT CPU
+comparison and documentation. Exact commands, logs and hashes are in
+`gates.json`, `test-only-ab309f4-gates.json`, `ci-source-2c1872d.json` and the
+independent acceptance record.
+
+The independent negative control removes only the two NUMA-location reuse
+guards. The unchanged test detects reuse of node 130 when node 2 was requested
+and exits with one ordinary failed test. Its manifest is
+`independent-review/context-only-negative-ab309f4/manifest.json`. The first
+negative run also reached this assertion, but poisoned fixture locks caused a
+secondary FFI abort; that superseded run is preserved and is not the accepted
+control. No production fix was needed for the fixture unwind.
+
+The CPU controls use actual anonymous mapped bytes, simulated NUMA binding and
+CUDA registration, real TCP control/payload sockets and the existing verbs ABI
+fixture. They cover both public transfer directions, different endpoint GPU
+locations, repeated ring reuse, tails/sentinels, location changes under a single
+budget, unknown/denied locations, sparse node masks, and registration/unregister/
+context restoration/unmap failures. Failed cleanup retains actual backing and
+CUDA owners; no fallback allocation or repeated release is allowed.
+
+No hardware task was requested. Native NUMA binding, CUDA host registration,
+page residency, current v21 installed execution, physical DMA overlap and
+performance remain unqualified. Earlier installed evidence covers its recorded
+wildcard profile and cannot qualify this new allocator. Broader TENT location
+routing, remote topology publication and P6 selection remain open.

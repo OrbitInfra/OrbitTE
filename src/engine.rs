@@ -126,6 +126,7 @@ impl TransferEngine {
         let proxy = crate::runtime::proxy_manager::ProxyManager::new(
             config.staging_chunk_size,
             config.staging_chunk_count,
+            config.staging_location,
         )?;
         #[cfg(feature = "rdma")]
         let rdma = config

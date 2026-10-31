@@ -275,7 +275,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
-| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
+| Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs`, `platform/numa.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
 
 `rdma_transport/contexts.rs` extends `RdmaTransport`; `context_set.rs` owns only
@@ -376,7 +376,13 @@ lazy nonblocking stream, reusable completion event and pending-work state.
 `cuda::driver` supplies fallibly loaded Driver API functions. Each copy holds
 pinned staging until its event completes. Engine TCP/RDMA paths consume the
 shared `runtime/proxy_manager.rs` chunk owner through `cuda/staging.rs`; public
-allocation read/write retains private one-shot staging. See [local staging](staging.md). An enqueue/record failure
+allocation read/write retains private one-shot staging. Engine chunks can opt into
+actual-owner GPU/NUMA location selection. `platform/numa.rs` owns fresh mapped
+host backing and per-range placement; `cuda/pinned.rs` pairs that mapping with
+CUDA host registration. The pool keys reuse by context and resolved location,
+including page padding in its global budget. Registration/unregister/restoration
+or unmap uncertainty retains backing and capacity. This is separate from the
+RDMA rail selector and has no measured page-residency claim. See [local staging](staging.md). An enqueue/record failure
 requires a successful stream drain; an ambiguous wait retains the allocation,
 staging, stream/event and context. Native destroy success alone never proves
 DMA complete. Handle cleanup failures retain the unresolved handles/context.

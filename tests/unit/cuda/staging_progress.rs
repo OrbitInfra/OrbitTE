@@ -224,7 +224,9 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
         } else {
             "direct:copy_cross_hold"
         });
-        runtime.proxy = crate::runtime::proxy_manager::ProxyManager::new(3, 3).unwrap();
+        runtime.proxy =
+            crate::runtime::proxy_manager::ProxyManager::new(3, 3, crate::StagingLocation::Any)
+                .unwrap();
         let hold = crate::transport::rdma::tests::pause(&runtime);
         let requester = crate::engine::tests::rdma_fixture_with_config(
             runtime,

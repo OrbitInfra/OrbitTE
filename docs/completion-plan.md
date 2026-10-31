@@ -618,7 +618,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   admission and per-slice rendezvous, shared synchronous callers, and explicit
   current-grant/sibling cleanup. Independent source review accepts `b2d9d3a`;
   see [setup progress](qualification.md#native-rdma-setup-progress).
-  Complete location selection, remaining synchronous connection/resource/retirement/source
+  Host staging location selection is implemented: opt-in owner-derived GPU/NUMA
+  placement, mapped CUDA-registered backing, context/location reuse and physical
+  page accounting. Independent source review accepts `ab309f4`; hardware placement
+  remains unqualified. See [host staging location](qualification.md#host-staging-location).
+  Complete remaining synchronous connection/resource/retirement/source
   boundaries and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
@@ -921,9 +925,10 @@ accepts `e2f4037`; see [finish progress](qualification.md#native-rdma-finish-pro
 Requester native setup socket progress is implemented with one outer framing
 owner and shared parent/slice states. Independent source review accepts
 `b2d9d3a`; see [setup progress](qualification.md#native-rdma-setup-progress).
-The next implementation boundary is location selection. Cold connection
-acquisition, native construction/connect/copy, nonreusable retirement and source
-handlers retain explicit synchronous limits. Current v21 hardware qualification and full
+Host staging location selection is implemented and independently source-accepted
+at `ab309f4`. The next implementation boundary is cold connection acquisition progress.
+Native construction/connect/copy, nonreusable retirement and source handlers
+retain explicit synchronous limits. Current v21 hardware qualification and full
 ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

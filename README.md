@@ -124,7 +124,10 @@ all slice grants must validate before any payload is submitted. Pin, cold
 connection acquisition, native resource creation, nonreusable QP retirement,
 copyback and source handlers retain synchronous boundaries. Current v21
 hardware qualification is pending; earlier H20 results apply to their recorded
-artifacts. Remaining control progress and location selection stay open.
+artifacts. Opt-in [host staging location selection](docs/staging.md#host-staging-location)
+now supports GPU-near or explicit NUMA host buffers, with location-aware reuse
+and page-rounded budgets. CPU source checks cover this path; hardware locality
+and performance remain unqualified. Remaining control progress stays open.
 Broader IPC parity, optional SSD transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
