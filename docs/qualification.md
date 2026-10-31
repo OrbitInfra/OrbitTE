@@ -29,6 +29,42 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Mixed GPU batches
+
+Source `5bdf4f2` checks RDMA readiness once per submission, using the transport's
+own retained-resource state rather than a full statistics snapshot. Per-request
+range/permission validation and native dispatch checks remain in place. See the
+[batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions).
+
+The existing mixed path passes six CPU controls before and after this change:
+READ/WRITE with a held middle TCP GPU copy, healthy completion, drained copy
+failure and uncertain event completion. They verify exact bytes/guards and
+completed prefixes, no early notification or later RDMA dispatch, pinned-buffer
+reuse and actual GPU-owner retention. These controls use real sockets and the
+CPU verbs/CUDA ABI fixtures; they do not qualify native DMA.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/mixed-gpu-batches-20261031/`.
+Independent source review accepts `5bdf4f2` in
+`independent-review/source-review-5bdf4f2.json`. The reviewer independently passes
+the six-branch mixed control and combined all-target Clippy. Primary combined
+validation passes 356 unit tests, eight integration tests and one doctest, plus
+formatting and Clippy; five hardware units and one subprocess fixture are ignored.
+
+An isolated release-build CPU comparison measures only preparation and dropping
+the prepared request owner, after warmup. Both versions use identical workloads,
+the CPU verbs fixture and CPUs 0/1. Across 21 alternating baseline/candidate
+pairs, median preparation costs fall from 10.47 to 5.45 microseconds for 64
+requests and from 162.20 to 80.82 microseconds for 1,024 requests. The original
+seven-pair measurement and all 56 raw logs are preserved under `perf/`, alongside
+both source snapshots, workload/runner, build environment and binary hashes.
+Both measurements show lower preparation cost for these batch sizes; the
+single-request direction changes between measurements and has overlapping
+ranges, so it does not establish a stable benefit. The independent performance
+audit checks source, log and statistic provenance without rerunning timing.
+These results do not measure DMA, end-to-end throughput or performance against
+TENT. Installed v21 execution and full P5 remain unqualified.
+
 ## Nonreusable QP retirement progress
 
 Requester nonreusable QP retirement now yields through the existing CQ worker

@@ -637,6 +637,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
+  The existing explicit GPU Direct RDMA / local TCP staging combination passes
+  the six READ/WRITE completion/failure controls. Source `5bdf4f2` removes repeated
+  per-request RDMA preflight scans/statistics sampling; native dispatch remains
+  authoritative. See [mixed batches](qualification.md#mixed-gpu-batches).
+  Per-request remote Pin/Direct selection and installed qualification remain open.
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
 processes, CUDA/GDR/NVLink/MNNVL profile-specific tests, context/copy failures,
@@ -948,20 +953,24 @@ and source handlers retain explicit synchronous limits. Frozen TENT also uses
 synchronous source Pin/Delegate helpers and native provider calls; their remaining
 synchronous execution alone is not a missing parity contract.
 
-The next delivery is the existing P5 mixed direct/staged batch boundary. Use one
-public Batch with explicit GPU Direct RDMA, GPU-over-TCP staging, then GPU Direct
-RDMA requests (`cuda_memory=Direct`, `remote_staging=false`). For READ and WRITE,
-check disjoint nonuniform ranges and guards, hold the middle CUDA completion,
-and verify exact completed prefixes, task outcomes, notification timing and
-source/destination ownership. Clean failure and native uncertainty must preserve
-the declared effects, later skipped work and actual owner/budget retention.
-Repair demonstrated composition defects within the existing owners. Keep the
-producer-ready-before-handoff and consumer-waits-for-completion contract; this
-substage does not add arbitrary external CUDA events or automatic fallback.
-Global remote Pin staging currently redirects TCP/RDMA and rejects Direct CUDA
-configuration, so this delivery does not claim mixed remote Pin/GPU Direct
-selection. Current v21 installed qualification and full P5/ProxyManager parity
-remain open.
+The explicit GPU Direct RDMA / local TCP staging batch boundary is implemented
+with six READ/WRITE completion and failure controls. The once-per-submission
+RDMA preflight optimization is source `5bdf4f2`; see
+[mixed batches](qualification.md#mixed-gpu-batches). Keep implementation and
+execution efficiency as the delivery focus, with tests scoped to the affected
+contracts and existing CI gates rather than expanding an independent test backlog.
+
+The next functional delivery remains P5.5b/F19: per-request direct or remote
+staging selection, so Direct RDMA and Pin/Delegate/Unpin requests can share an
+engine and batch. Follow TENT's per-owner staging plan; staging remains an
+orchestration choice, not a new payload transport. Keep the source Pin capability
+as an engine configuration and carry explicit staging intent with each prepared
+request. Check source memory type, permissions and generation at the authoritative
+owner, and apply host RDMA registration policy to staging chunks. Preserve direct
+GPU registration and native grant isolation, bounded staging allocation,
+completed prefixes and failure ownership. Keep producer readiness as an explicit caller handoff and leave
+automatic routing/QoS to P6. Current v21 installed qualification and full
+P5/ProxyManager parity remain open.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
