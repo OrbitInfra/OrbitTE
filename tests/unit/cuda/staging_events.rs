@@ -68,19 +68,13 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                             }
                         },
                     );
-                    let pending = b
-                        .streams
-                        .lock()
-                        .unwrap()
-                        .values()
-                        .filter_map(Option::as_ref)
-                        .any(|copy| {
-                            if operation == TransferOp::Read {
-                                copy.destination == base + held * 3
-                            } else {
-                                copy.source == base + held * 3
-                            }
-                        });
+                    let pending = b.streams.lock().unwrap().values().flatten().any(|copy| {
+                        if operation == TransferOp::Read {
+                            copy.destination == base + held * 3
+                        } else {
+                            copy.source == base + held * 3
+                        }
+                    });
                     if advanced && pending && b.event_not_ready.load(Ordering::Acquire) != 0 {
                         break;
                     }

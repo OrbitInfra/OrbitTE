@@ -360,7 +360,7 @@ fn remote_query_failure_closes_active_cross_and_retains_uncertain_cuda_owners() 
                     source.close_source(Duration::from_millis(5)),
                     Err(Error::Timeout)
                 ));
-                assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+                assert!(b.streams.lock().unwrap().values().all(Vec::is_empty));
                 assert!(gpu_b.allocation.lock().unwrap().dma.is_empty());
                 if !cleanup_failure {
                     batch.free().unwrap();

@@ -40,7 +40,7 @@ fn pending(device: &Device) -> usize {
         .lock()
         .unwrap()
         .values()
-        .filter(|copy| copy.is_some())
+        .filter(|copy| !copy.is_empty())
         .count()
 }
 

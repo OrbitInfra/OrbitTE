@@ -61,6 +61,27 @@ struct HostAccess {
     dma: Vec<Range<usize>>,
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) struct CudaHostAccess<'a> {
+    backing: std::sync::MutexGuard<'a, HostAccess>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaHostAccess<'_> {
+    pub(crate) fn allocation(&self) -> Result<&crate::cuda::PinnedAllocation> {
+        match &self.backing.bytes {
+            HostBacking::CudaPinned(allocation) => Ok(allocation),
+            _ => Err(Error::Unavailable(
+                "NVLink host requester requires allocate_pinned_host",
+            )),
+        }
+    }
+
+    pub(crate) fn fence(&mut self) {
+        self.backing.cuda_uncertain = true;
+    }
+}
+
 impl HostAccess {
     fn check_access(&self, range: &Range<usize>) -> Result<()> {
         #[cfg(feature = "cuda")]
@@ -174,26 +195,15 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn with_cuda_pinned<T>(
-        &self,
-        range: Range<usize>,
-        operation: impl FnOnce(&crate::cuda::PinnedAllocation) -> Result<T>,
-    ) -> Result<T> {
-        let mut backing = self
+    pub(crate) fn lock_cuda_pinned(&self) -> Result<CudaHostAccess<'_>> {
+        let backing = self
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
-        let result = match &backing.bytes {
-            HostBacking::CudaPinned(allocation) => operation(allocation),
-            _ => Err(Error::Unavailable(
-                "NVLink host requester requires allocate_pinned_host",
-            )),
-        };
-        if matches!(result, Err(Error::Unquiesced { .. })) {
-            backing.cuda_uncertain = true;
-        }
-        result
+        backing.check_access(&(0..self.length))?;
+        let access = CudaHostAccess { backing };
+        access.allocation()?;
+        Ok(access)
     }
 
     #[cfg(feature = "cuda")]

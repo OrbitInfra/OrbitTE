@@ -18,9 +18,10 @@ pub(crate) fn run_case(
     let cancelled = case.starts_with("cancel-");
     let uncertain = matches!(
         case,
-        "wait-second" | "pop-second" | "close" | "cancel-close" | "cancel-restore-close"
+        "group-wait" | "group-restore" | "close" | "cancel-close" | "cancel-restore-close"
     );
-    let clean_failure = case == "copy-second" || cancelled;
+    let prefix_failure = case == "copy-second" || cancelled;
+    let clean_failure = prefix_failure || case == "group-record";
     let loss = matches!(case, "ack-loss" | "prefix-ack-loss" | "cancel-ack-loss");
     let complete = !uncertain && !clean_failure && !loss;
     let engine = Arc::new(
@@ -225,15 +226,16 @@ pub(crate) fn run_case(
             }
         }
     });
-    let prefix = if (clean_failure && !uncertain && !loss) || case == "prefix-ack-loss" {
+    let prefix = if (prefix_failure && !uncertain && !loss) || case == "prefix-ack-loss" {
         1
     } else {
         0
     };
-    let affected = if case == "ack-loss" || case == "close" {
+    let affected = if matches!(
+        case,
+        "ack-loss" | "close" | "group-record" | "group-wait" | "group-restore"
+    ) {
         3
-    } else if matches!(case, "wait-second" | "pop-second") {
-        2
     } else {
         1
     };
@@ -388,7 +390,7 @@ pub(crate) fn run_case(
         let mut actual = [0; 128];
         remote.read(0, &mut actual).unwrap();
         let mut expected = [0x5a; 128];
-        let copied = if clean_failure {
+        let copied = if prefix_failure {
             1
         } else if case == "prefix-ack-loss" {
             2
@@ -407,13 +409,7 @@ pub(crate) fn run_case(
         );
     } else {
         assert!(remote.read(0, &mut [0; 1]).is_err());
-        for memory in registrations.iter().take(if cancelled {
-            1
-        } else if case == "close" {
-            3
-        } else {
-            2
-        }) {
+        for memory in registrations.iter().take(if cancelled { 1 } else { 3 }) {
             assert!(memory.read(0, &mut [0; 1]).is_err());
         }
     }

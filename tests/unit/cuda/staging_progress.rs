@@ -78,18 +78,13 @@ fn local_slot_advances_while_remote_delegate_completion_is_pending() {
                 + 2
                 + if operation == TransferOp::Read { 0 } else { 9 };
             wait_until(|| {
-                b.streams
-                    .lock()
-                    .unwrap()
-                    .values()
-                    .filter_map(Option::as_ref)
-                    .any(|copy| {
-                        if operation == TransferOp::Read {
-                            copy.destination == address
-                        } else {
-                            copy.source == address
-                        }
-                    })
+                b.streams.lock().unwrap().values().flatten().any(|copy| {
+                    if operation == TransferOp::Read {
+                        copy.destination == address
+                    } else {
+                        copy.source == address
+                    }
+                })
             });
             assert_eq!(source.stats().unwrap().staging.remote_crosses, 1);
             assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
@@ -196,7 +191,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
                 .lock()
                 .unwrap()
                 .values()
-                .filter(|c| c.is_some())
+                .filter(|c| !c.is_empty())
                 .count(),
             1
         );
@@ -458,7 +453,7 @@ fn worker_panic_retains_actual_owners_and_possible_write_effect() {
             (0, 3, 1)
         );
         assert_eq!(stats.staging.cancelled_tasks, 1);
-        assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+        assert!(b.streams.lock().unwrap().values().all(Vec::is_empty));
         assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
         assert_eq!(b.pins.lock().unwrap().len(), 3);
         assert!(matches!(batch.free(), Err(Error::BatchBusy)));

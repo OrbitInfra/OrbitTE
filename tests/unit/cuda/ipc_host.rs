@@ -28,7 +28,7 @@ fn ipc_host_read_write_preserve_guards_reuse_stream_and_free_real_pin() {
     mapping.open(export.handle).unwrap();
     for to_remote in [false, true, false] {
         mapping
-            .copy(&Allocation::Host(host.clone()), 11, 7, 17, to_remote)
+            .copy_one(&Allocation::Host(host.clone()), 11, 7, 17, to_remote)
             .unwrap();
     }
     let mut actual = [0; 128];
@@ -72,8 +72,9 @@ fn ipc_host_and_mixed_subbatches_keep_failure_scope_and_actual_owners() {
         for case in [
             "success",
             "copy-second",
-            "wait-second",
-            "pop-second",
+            "group-record",
+            "group-wait",
+            "group-restore",
             "close",
             "ack-loss",
             "cancel-second",
@@ -103,8 +104,9 @@ fn ipc_host_and_mixed_subbatches_keep_failure_scope_and_actual_owners() {
                 .collect();
             match case {
                 "copy-second" => destination.ipc_copy_fail_at.store(2, Ordering::Release),
-                "wait-second" => destination.ipc_wait_fail_at.store(2, Ordering::Release),
-                "pop-second" => destination.ipc_pop_fail_at.store(2, Ordering::Release),
+                "group-record" => destination.record_error.store(1, Ordering::Release),
+                "group-wait" => destination.ipc_wait_fail_at.store(2, Ordering::Release),
+                "group-restore" => destination.ipc_pop_fail_at.store(2, Ordering::Release),
                 "close" | "cancel-close" => destination.ipc_close_error.store(1, Ordering::Release),
                 _ => (),
             }
@@ -116,7 +118,7 @@ fn ipc_host_and_mixed_subbatches_keep_failure_scope_and_actual_owners() {
             );
             let uncertain = matches!(
                 case,
-                "wait-second" | "pop-second" | "close" | "cancel-close"
+                "group-wait" | "group-restore" | "close" | "cancel-close"
             );
             assert_eq!(
                 !destination.pins.lock().unwrap().is_empty(),
@@ -179,7 +181,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
             "free" => destination.free_error.store(1, Ordering::Release),
             _ => unreachable!(),
         }
-        let result = mapping.copy(&Allocation::Host(host.clone()), 11, 7, 17, false);
+        let result = mapping.copy_one(&Allocation::Host(host.clone()), 11, 7, 17, false);
         assert_eq!(
             result.is_err(),
             !matches!(fault, "close" | "free"),
@@ -230,7 +232,7 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
         let owner = Allocation::Host(copy_host);
         let mut mapping = IpcMapping::new(&owner).unwrap();
         mapping.open(handle).unwrap();
-        mapping.copy(&owner, 11, 7, 17, false).unwrap();
+        mapping.copy_one(&owner, 11, 7, 17, false).unwrap();
         mapping.close().unwrap();
     });
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -264,4 +266,89 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
     assert!(host.read(0, &mut [0; 1]).is_err());
     assert!(host.write(0, &[1]).is_err());
     assert!(region.dma_lease(100, 1).is_err());
+}
+
+#[test]
+fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
+    use crate::cuda::ipc::IpcCopy;
+    use std::sync::{Barrier, mpsc};
+
+    let source = allocation(&[0x5a; 128]);
+    let destination = allocation(&[0; 128]);
+    let gpu = owned(&destination, false);
+    let context = gpu.allocation.lock().unwrap().context.clone();
+    let host = pinned(&context, 0);
+    let mut export = IpcExport::new(owned(&source, true)).unwrap();
+    export.expose();
+    let barrier = Arc::new(Barrier::new(2));
+    let (done_tx, done_rx) = mpsc::channel();
+    let workers: Vec<_> = [false, true]
+        .into_iter()
+        .map(|reverse| {
+            let mut copies: Vec<_> = (0..4)
+                .map(|index| IpcCopy {
+                    memory: if index % 2 == 0 {
+                        Allocation::Cuda(gpu.clone())
+                    } else {
+                        Allocation::Host(host.clone())
+                    },
+                    local_offset: index * 8,
+                    remote_offset: index * 8,
+                    length: 8,
+                })
+                .collect();
+            if reverse {
+                copies.reverse();
+            }
+            let barrier = barrier.clone();
+            let done = done_tx.clone();
+            let handle = export.handle;
+            std::thread::spawn(move || {
+                let mut mapping = IpcMapping::new(&copies[0].memory).unwrap();
+                mapping.open(handle).unwrap();
+                barrier.wait();
+                let completion = mapping.copy_group(&copies, false, |_| Ok(()));
+                completion.result.unwrap();
+                assert_eq!((completion.completed, completion.attempted), (4, 4));
+                // The fixture requires all copies drained before any import closes.
+                barrier.wait();
+                mapping.close().unwrap();
+                done.send(()).unwrap();
+            })
+        })
+        .collect();
+    for _ in &workers {
+        done_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    {
+        let events = destination.events.lock().unwrap();
+        for (kind, count) in [
+            ("record", 2),
+            ("event-sync", 2),
+            ("DtoD", 4),
+            ("DtoH", 4),
+            ("stream-create", 2),
+        ] {
+            assert_eq!(
+                events.iter().filter(|&&event| event == kind).count(),
+                count,
+                "{kind}"
+            );
+        }
+    }
+    let mut actual = [0; 128];
+    gpu.read(0, &mut actual).unwrap();
+    let mut expected = [0; 128];
+    expected[..8].fill(0x5a);
+    expected[16..24].fill(0x5a);
+    assert_eq!(actual, expected);
+    host.read(0, &mut actual).unwrap();
+    let mut expected = [0; 128];
+    expected[8..16].fill(0x5a);
+    expected[24..32].fill(0x5a);
+    assert_eq!(actual, expected);
+    export.finish();
 }

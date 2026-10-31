@@ -3,6 +3,9 @@
 use super::*;
 use crate::memory::Allocation;
 
+mod copy;
+pub(crate) use copy::IpcCopy;
+
 pub(crate) struct IpcExport {
     memory: Option<Arc<CudaMemory>>,
     pub(crate) handle: [u8; 64],
@@ -230,115 +233,5 @@ impl Allocation {
     /// Actual retained native context identity, including portable pinned owners.
     pub(crate) fn ipc_context(&self) -> Result<usize> {
         Ok(self.ipc_owner_context()?.raw.as_ptr() as usize)
-    }
-}
-
-impl IpcMapping {
-    pub(crate) fn copy(
-        &mut self,
-        memory: &Allocation,
-        remote_offset: usize,
-        local_offset: usize,
-        length: usize,
-        to_remote: bool,
-    ) -> Result<()> {
-        let range = checked_range(local_offset, length, memory.len())?;
-        if memory.ipc_context()? != self.context.raw.as_ptr() as usize {
-            return Err(Error::Unavailable(
-                "CUDA IPC import belongs to another context",
-            ));
-        }
-        if self.address == 0 || self.pending || self.uncertain {
-            return Err(Error::Unavailable("CUDA IPC import is not ready"));
-        }
-        let remote = self
-            .address
-            .checked_add(remote_offset as u64)
-            .ok_or(Error::InvalidRange)?;
-        remote
-            .checked_add(length as u64)
-            .ok_or(Error::InvalidRange)?;
-        self.memories
-            .try_reserve(1)
-            .map_err(|_| Error::ResourceExhausted)?;
-        self.memories.push(memory.clone());
-        let result = match memory {
-            Allocation::Cuda(memory) => self.copy_device(memory, remote, range, to_remote),
-            Allocation::Host(memory) => memory.with_cuda_pinned(range.clone(), |allocation| {
-                let mut slot = allocation
-                    .copy_stream
-                    .lock()
-                    .map_err(|_| Error::Unquiesced {
-                        operation: "CUDA pinned copy stream",
-                        code: -1,
-                    })?;
-                if slot.is_none() {
-                    *slot = Some(CopyStream::new(&allocation.context)?);
-                }
-                let stream = slot
-                    .as_mut()
-                    .ok_or(Error::Internal("CUDA pinned stream missing"))?;
-                // SAFETY: HostAccess excludes CPU access and RDMA loans until
-                // this event and context restoration complete. Both owners are retained.
-                let host = unsafe {
-                    NonNull::new_unchecked(allocation.address.as_ptr().add(local_offset))
-                };
-                // Preserve the pending owner if native submission unwinds.
-                #[allow(unused_assignments)]
-                {
-                    self.pending = true;
-                }
-                let result = unsafe { stream.copy(remote, host, length, to_remote) };
-                self.pending = !stream.quiescent();
-                result
-            }),
-        };
-        if matches!(result, Err(Error::Unquiesced { .. })) {
-            self.uncertain = true;
-        }
-        result
-    }
-
-    fn copy_device(
-        &mut self,
-        memory: &CudaMemory,
-        remote: u64,
-        range: Range<usize>,
-        to_remote: bool,
-    ) -> Result<()> {
-        let local_offset = range.start;
-        let length = range.len();
-        let mut allocation = memory
-            .allocation
-            .lock()
-            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
-        allocation.check_dma(&range)?;
-        let context = Arc::clone(&allocation.context);
-        let result = (|| {
-            if allocation.copy_stream.is_none() {
-                allocation.copy_stream = Some(CopyStream::new(&context)?);
-            }
-            let stream = allocation
-                .copy_stream
-                .as_mut()
-                .ok_or(Error::Internal("CUDA stream missing"))?;
-            let local = memory.address + local_offset as u64;
-            let (destination, source) = if to_remote {
-                (remote, local)
-            } else {
-                (local, remote)
-            };
-            self.pending = true;
-            // SAFETY: this lock owns local bytes, and the mapping retains remote
-            // bytes via the source grant. Neither is released before completion.
-            let result = unsafe { stream.copy_device(destination, source, length) };
-            self.pending = !stream.quiescent();
-            result
-        })();
-        if matches!(result, Err(Error::Unquiesced { .. })) {
-            self.uncertain = true;
-            allocation.uncertain = true;
-        }
-        result
     }
 }

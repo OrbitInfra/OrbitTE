@@ -601,8 +601,8 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
                             crate::RemoteEffect::None
                         }
                     );
-                    assert!(a.streams.lock().unwrap().values().all(Option::is_none));
-                    assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+                    assert!(a.streams.lock().unwrap().values().all(Vec::is_empty));
+                    assert!(b.streams.lock().unwrap().values().all(Vec::is_empty));
                     assert!(source_gpu.allocation.lock().unwrap().dma.is_empty());
                     assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
                     let bad = if source_fault { &source } else { &requester };
@@ -815,7 +815,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                     local_copies
                 );
                 assert_eq!(b.event_waits.load(Ordering::Acquire), 0);
-                assert!(b.streams.lock().unwrap().values().all(Option::is_none));
+                assert!(b.streams.lock().unwrap().values().all(Vec::is_empty));
                 assert_eq!(
                     requester.stats().unwrap().staging.completed_chunks,
                     local_copies as u64
@@ -931,7 +931,7 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
                     .lock()
                     .unwrap()
                     .values()
-                    .filter(|v| v.is_some())
+                    .filter(|v| !v.is_empty())
                     .count(),
                 3
             );

@@ -85,12 +85,15 @@ impl CopyStream {
     ) -> Result<()> {
         // SAFETY: the caller retains the GPU and pinned host allocations.
         unsafe {
-            self.submit(|driver, stream| {
-                if to_device {
-                    (driver.to_device)(device, host.as_ptr().cast(), length, stream)
-                } else {
-                    (driver.to_host)(host.as_ptr().cast(), device, length, stream)
-                }
+            self.copy_group(|driver, stream| {
+                check(
+                    "CUDA async copy",
+                    if to_device {
+                        (driver.to_device)(device, host.as_ptr().cast(), length, stream)
+                    } else {
+                        (driver.to_host)(host.as_ptr().cast(), device, length, stream)
+                    },
+                )
             })
         }
     }
@@ -109,11 +112,14 @@ impl CopyStream {
             // SAFETY: the caller retains both allocations beyond this call.
             unsafe {
                 self.enqueue(|driver, stream| {
-                    if to_device {
-                        (driver.to_device)(device, host.as_ptr().cast(), length, stream)
-                    } else {
-                        (driver.to_host)(host.as_ptr().cast(), device, length, stream)
-                    }
+                    check(
+                        "CUDA async copy",
+                        if to_device {
+                            (driver.to_device)(device, host.as_ptr().cast(), length, stream)
+                        } else {
+                            (driver.to_host)(host.as_ptr().cast(), device, length, stream)
+                        },
+                    )
                 })
             }
         })
@@ -149,22 +155,11 @@ impl CopyStream {
         Ok(ready)
     }
 
-    /// The caller retains both device allocations/mappings through completion.
-    pub(super) unsafe fn copy_device(
+    /// Enqueue an ordered group, then record and wait on one completion event.
+    /// The caller retains every touched allocation through completion/recovery.
+    pub(super) unsafe fn copy_group(
         &mut self,
-        destination: u64,
-        source: u64,
-        length: usize,
-    ) -> Result<()> {
-        // SAFETY: both UVA ranges belong to the retained current context.
-        unsafe {
-            self.submit(|driver, stream| (driver.copy_device)(destination, source, length, stream))
-        }
-    }
-
-    unsafe fn submit(
-        &mut self,
-        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> super::driver::Status,
+        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> Result<()>,
     ) -> Result<()> {
         let context = Arc::clone(&self.context);
         context.current(|| {
@@ -177,7 +172,7 @@ impl CopyStream {
     /// Requires the owning context to be current and both allocations retained.
     unsafe fn enqueue(
         &mut self,
-        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> super::driver::Status,
+        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> Result<()>,
     ) -> Result<()> {
         if !self.quiescent() || self.cleanup_attempted {
             return Err(Error::Unquiesced {
@@ -188,8 +183,7 @@ impl CopyStream {
         let stream = self.stream.ok_or(Error::Internal("CUDA stream missing"))?;
         let event = self.event.ok_or(Error::Internal("CUDA event missing"))?;
         self.pending = true;
-        let submitted = submit(&self.context.driver, stream.as_ptr());
-        let result = check("CUDA async copy", submitted).and_then(|()| {
+        let result = submit(&self.context.driver, stream.as_ptr()).and_then(|()| {
             // SAFETY: both handles were created in the current context.
             check("cuEventRecord copy", unsafe {
                 (self.context.driver.event_record)(event.as_ptr(), stream.as_ptr())

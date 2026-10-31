@@ -248,7 +248,7 @@ fn successful_sibling_drain_cannot_clear_failed_range_or_release_actual_owner() 
             .lock()
             .unwrap()
             .values()
-            .filter(|v| v.is_some())
+            .filter(|v| !v.is_empty())
             .count(),
         1
     );

@@ -67,6 +67,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
     expected_pins = (2 if batched else 1) if memory == 'host' else 1 if memory == 'mixed' else 0
     assert len(pins) == (0 if mode == 'stale' else expected_pins), 'persistent pinned requester count'
     copies = []
+    completion_groups = 0
     source_alloc = select(source, 'allocate')
     assert len(source_alloc) == 1 and source_alloc[0]['length'] == ((payload + 134 + (2 << 20)-1) & ~((2 << 20)-1)), 'export allocation extent'
     initialized = select(source, 'memset')
@@ -112,7 +113,6 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         if cached and mode == 'healthy': slices *= 5
         for part, (copy, (offset, length)) in enumerate(zip(cycle_copies, slices)):
             if cached: read = mode == 'healthy' and part < 12
-            next_copy = next((r['seq'] for r in cycle if r['seq'] > copy['seq'] and r['tid'] == copy['tid'] and r['kind'] in ('copy','htod','dtoh')), boundary)
             assert opened['seq'] < copy['seq'] < boundary, 'copy outside its import cycle'
             if not cached: assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
             allocation = local[(part % 3 if cached else part) % len(local)]
@@ -121,24 +121,31 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
             remote, own = opened['address']+67+offset, allocation['address']+67+offset
             assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
-            events = [r for r in select(cycle, 'record') if copy['seq'] < r['seq'] < next_copy and r['stream'] == copy['stream']]
-            assert events, 'copy has no completion event'
+        group_size = 3 if batched else 1
+        for start in range(0, len(cycle_copies), group_size):
+            group = cycle_copies[start:start+group_size]
+            first, last = group[0], group[-1]
+            next_copy = next((r['seq'] for r in cycle if r['seq'] > last['seq'] and r['tid'] == first['tid'] and r['kind'] in ('copy','htod','dtoh')), boundary)
+            assert all((r['stream'], r['tid']) == (first['stream'], first['tid']) for r in group), 'group stream/thread mismatch'
+            interleaved = [r for r in cycle if first['seq'] <= r['seq'] <= last['seq'] and r['kind'] in ('copy','htod','dtoh')]
+            assert interleaved == group, 'foreign copy interleaved in IPC group'
+            events = [r for r in select(cycle, 'record') if first['seq'] < r['seq'] < next_copy and r['tid'] == first['tid']]
+            assert len(events) == 1 and last['seq'] < events[0]['seq'] and events[0]['stream'] == first['stream'], 'group has no single trailing completion event'
             event = events[0]
-            waits = [r for r in select(cycle, 'wait') if event['seq'] < r['seq'] < next_copy and r['event'] == event['event']]
-            assert waits, 'copy has no completed event'
+            waits = [r for r in select(cycle, 'wait') if event['seq'] < r['seq'] < next_copy and r['event'] == event['event'] and r['tid'] == first['tid']]
+            assert len(waits) == 1, 'group has no completed event'
             wait = waits[0]
-            pops = [row for row in select(cycle, 'pop') if row['tid'] == copy['tid']]
-            assert event['tid'] == wait['tid'] == copy['tid'], 'completion thread mismatch'
-            assert not any(copy['seq'] < r['seq'] < event['seq'] and r['kind'] in ('copy','htod','dtoh') for r in cycle), 'completion event belongs to a later copy'
-            assert not any(copy['seq'] < r['seq'] < wait['seq'] and r['kind'] in ('pin','allocate','unpin','free') for r in cycle), 'allocation changed before payload drain'
-            assert not any(copy['seq'] < p['seq'] < event['seq'] for p in pops), 'copy escaped owning context before event record'
-            restored = [r for r in cycle if r['seq'] > wait['seq'] and r['tid'] == copy['tid']]
-            assert restored and restored[0]['kind'] == 'pop' and restored[0]['seq'] < next_copy, 'copy context not immediately restored'
+            pops = [row for row in select(cycle, 'pop') if row['tid'] == first['tid']]
+            assert not any(first['seq'] < r['seq'] < wait['seq'] and r['kind'] in ('pin','allocate','unpin','free') for r in cycle), 'allocation changed before payload drain'
+            assert not any(first['seq'] < p['seq'] < wait['seq'] for p in pops), 'group escaped owning context before completion'
+            restored = [r for r in cycle if r['seq'] > wait['seq'] and r['tid'] == first['tid']]
+            assert restored and restored[0]['kind'] == 'pop' and restored[0]['seq'] < next_copy, 'group context not immediately restored'
+            completion_groups += 1
             if mode != 'requester-exit':
                 close = closes[index]
                 assert close['address'] == opened['address'] and wait['seq'] < close['seq'] < boundary, 'close before matching DMA drain'
-                assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'copy context not restored'
-                if not cached: assert close['tid'] == copy['tid'], 'close/import thread mismatch'
+                assert any(wait['seq'] < p['seq'] < close['seq'] for p in pops), 'group context not restored'
+                if not cached: assert close['tid'] == first['tid'], 'close/import thread mismatch'
                 after_close = [r for r in cycle if r['seq'] > close['seq'] and r['tid'] == close['tid']]
                 assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
     assert len(copies) == (15 if cached and mode=='healthy' else expected*(3 if batched else 1)), 'native IPC copy count'
@@ -163,7 +170,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'htod', 'dtoh', 'record', 'wait', 'close')), 'allocation freed before its last native use'
             if rows is requester and closes:
                 assert any(closes[-1]['seq'] < pop['seq'] < frees[0]['seq'] for pop in select(rows, 'pop')), 'requester allocation freed before close context restoration'
-    return {'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes), 'host_copies': sum(r['kind']!='copy' for r in copies), 'pinned_requesters': len(pins)}
+    return {'completion_groups': completion_groups, 'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes), 'host_copies': sum(r['kind']!='copy' for r in copies), 'pinned_requesters': len(pins)}
 
 
 def run(args):
