@@ -537,7 +537,7 @@ There is no per-request thread or new wire frame. Native registration runs on
 its actual creator, outside the cache lock; it is not moved onto CQ workers.
 Provider calls and their context locks, CQ/QP creation, eviction, connect/fill,
 failure drain and source handlers remain synchronous. Nonreusable requester
-retirement uses the pollable state below.
+retirement uses the [pollable retirement state](#nonreusable-qp-retirement-progress).
 
 Frozen TENT's `LocalBufferManager` indexes registered buffers by range and
 `RdmaContext`; `RdmaContext::registerMemReg` performs native registration.

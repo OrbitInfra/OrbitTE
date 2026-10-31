@@ -631,7 +631,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [MR publication progress](qualification.md#persistent-mr-publication-progress).
   Nonreusable requester QP retirement is implemented through the existing CQ
   worker, with busy cleanup locks yielding and retained output awaiting a complete
-  lane receipt. Source/independent validation is in progress; see
+  lane receipt. Independent source review accepts `b2a0aba`; see
   [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
   Reconcile remaining resource/source control boundaries with frozen TENT and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -941,13 +941,30 @@ one grant lease and the canonical endpoint array. Independent source review
 accepts `06f685d`; see [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
 Persistent MR publication wait is implemented through an admitted grant owner;
 independent source review accepts `e69c47a`. Nonreusable requester QP retirement
-progress is implemented; independent source acceptance is in progress. Native
-provider calls, resource creation/connect/copy, aggregate failure drain and source
-handlers retain explicit synchronous limits. Reconcile those limits against the
-frozen reference before selecting the next missing P5 contract; asynchronous
-provider execution is not itself a TENT parity requirement. Current v21 hardware qualification and full
-ProxyManager parity remain open.
-New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
+progress is independently source-accepted at `b2a0aba`; see
+[retirement progress](qualification.md#nonreusable-qp-retirement-progress).
+Native provider calls, resource creation/connect/copy, aggregate failure drain
+and source handlers retain explicit synchronous limits. Frozen TENT also uses
+synchronous source Pin/Delegate helpers and native provider calls; their remaining
+synchronous execution alone is not a missing parity contract.
+
+The next delivery is the existing P5 mixed direct/staged batch boundary. Use one
+public Batch with explicit GPU Direct RDMA, GPU-over-TCP staging, then GPU Direct
+RDMA requests (`cuda_memory=Direct`, `remote_staging=false`). For READ and WRITE,
+check disjoint nonuniform ranges and guards, hold the middle CUDA completion,
+and verify exact completed prefixes, task outcomes, notification timing and
+source/destination ownership. Clean failure and native uncertainty must preserve
+the declared effects, later skipped work and actual owner/budget retention.
+Repair demonstrated composition defects within the existing owners. Keep the
+producer-ready-before-handoff and consumer-waits-for-completion contract; this
+substage does not add arbitrary external CUDA events or automatic fallback.
+Global remote Pin staging currently redirects TCP/RDMA and rejects Direct CUDA
+configuration, so this delivery does not claim mixed remote Pin/GPU Direct
+selection. Current v21 installed qualification and full P5/ProxyManager parity
+remain open.
+
+New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
+OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
 resources provide RoCE without a disposable physical port or InfiniBand fabric.
 Do not reopen completed source work or repeat unaffected matrices.
