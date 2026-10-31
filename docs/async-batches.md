@@ -88,7 +88,8 @@ invalidate existing status/free operations or claim that a remote ACK was read.
 
 One submission can alternate explicit `Transport::Rdma` GPU Direct requests and
 `Transport::Tcp` GPU staging requests. Configure RDMA `cuda_memory=Direct` and
-leave `remote_staging=false`. Each request keeps its own transport and checked
+set `TransferRequest.remote_staging=false` for these ordinary transfers. Each
+request keeps its own transport and checked
 local/remote ranges; requests execute in input order. A completed RDMA operation
 releases its range loan before the next CUDA copy. The TCP copy drains its event
 before the following RDMA request begins. Callers finish producer work before
@@ -111,8 +112,11 @@ reuse its bounded pinned chunks and allocation-owned stream/event.
 
 The [source controls](qualification.md#mixed-gpu-batches) cover READ and WRITE
 with healthy completion, a drained copy error and uncertain event completion.
-This does not enable mixed remote Pin/Direct selection: the global
-`remote_staging` option still conflicts with Direct CUDA. Installed v21 DMA,
+Per-request `remote_staging=true` also permits remote Pin/Delegate/Unpin over
+TCP/RDMA in the same engine and batch; only the source needs its incoming Pin
+capability enabled. The source validates the actual CUDA allocation. Private
+host staging grants follow host RDMA policy independently of GPU Direct. See
+[remote selection](staging.md#serial-remote-staging). Installed v21 DMA,
 concurrent transport dispatch and end-to-end throughput remain separate work.
 
 Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and

@@ -641,7 +641,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   the six READ/WRITE completion/failure controls. Source `5bdf4f2` removes repeated
   per-request RDMA preflight scans/statistics sampling; native dispatch remains
   authoritative. See [mixed batches](qualification.md#mixed-gpu-batches).
-  Per-request remote Pin/Direct selection and installed qualification remain open.
+  Per-request remote Pin/Direct selection is implemented at `27b73b5`, with
+  independent incoming Pin capability and existing host grant/registration policy;
+  see [remote selection](qualification.md#per-request-remote-staging).
+  Current installed qualification remains open.
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
 processes, CUDA/GDR/NVLink/MNNVL profile-specific tests, context/copy failures,
@@ -960,17 +963,23 @@ RDMA preflight optimization is source `5bdf4f2`; see
 execution efficiency as the delivery focus, with tests scoped to the affected
 contracts and existing CI gates rather than expanding an independent test backlog.
 
-The next functional delivery remains P5.5b/F19: per-request direct or remote
-staging selection, so Direct RDMA and Pin/Delegate/Unpin requests can share an
-engine and batch. Follow TENT's per-owner staging plan; staging remains an
-orchestration choice, not a new payload transport. Keep the source Pin capability
-as an engine configuration and carry explicit staging intent with each prepared
-request. Check source memory type, permissions and generation at the authoritative
-owner, and apply host RDMA registration policy to staging chunks. Preserve direct
-GPU registration and native grant isolation, bounded staging allocation,
-completed prefixes and failure ownership. Keep producer readiness as an explicit caller handoff and leave
-automatic routing/QoS to P6. Current v21 installed qualification and full
-P5/ProxyManager parity remain open.
+P5.5b/F19 explicit per-request remote staging is implemented at `27b73b5`.
+Direct RDMA and remote Pin requests share an engine and ordered batch, with
+independent incoming Pin capability and actual source authorization. Prepared
+owners retain staging intent; payload CROSS stays in TCP/RDMA and private host
+MRs follow host policy. See [remote selection](qualification.md#per-request-remote-staging).
+Producer readiness remains an explicit caller handoff; automatic routing/QoS
+remains P6. Current v21 installed qualification and full P5 remain open.
+
+The next functional delivery is the existing P5.4d bounded CUDA IPC cache
+eviction/continuing-flush gap. Current `RelocationCache::checkout` returns
+`ResourceExhausted` when a new key meets a full cache, even if old entries are idle.
+Add reclaim of idle mappings through the existing relocation/export owners so
+changing working sets can continue within the configured capacity. Native import
+close and the source release receipt must complete before releasing capacity;
+active, constructing or uncertain mappings stay owned. Keep provider work and
+control I/O outside the map lock. Preserve one construction owner per key,
+cooperative exporter lifetime and explicit retention on cleanup failure.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

@@ -175,12 +175,47 @@ lifetime; physical DMA overlap and throughput require hardware measurement.
 
 ## Serial remote staging
 
-Set `EngineConfig.remote_staging = true` on both peers, built with `cuda`.
-This explicitly selects remote GPU staging for TCP/RDMA submissions; the remote
-registered range must be CUDA. Requester ranges may be CPU or CUDA. NVLink keeps
-its own path. Remote host ranges, an opted-out source and a config combining
-this flag with `RdmaCudaMemory::Direct` are rejected. No automatic fallback or
-new payload transport is introduced. The flag defaults to false.
+Build with `cuda` and set `EngineConfig.remote_staging = true` on the source
+whose CUDA registrations may accept Pin. Select
+`TransferRequest.remote_staging = true` for each outgoing TCP/RDMA request that
+should use Pin/Delegate/Unpin.
+The requester need not accept incoming Pin itself. Both CUDA Direct registration
+and incoming Pin may be enabled in one engine.
+
+| Setting | Responsibility |
+| --- | --- |
+| `EngineConfig.remote_staging` | Source capability: allow Pin against actual CUDA ranges; defaults to false |
+| `TransferRequest.remote_staging` | Per-request choice: true selects remote staging, false uses ordinary transport/memory policy |
+
+Every request literal now supplies `remote_staging`. Migrate ordinary requests
+with `false` and old remote-staging submissions with `true`; enabling only the
+engine capability no longer redirects outgoing traffic. False does not force
+GPUDirect: `RdmaCudaMemory` still selects Direct or local staging for ordinary
+RDMA, and ordinary GPU-over-TCP still uses local staging.
+
+Remote host ranges and an opted-out source are rejected by the source. Its
+control owner checks epoch, registration, range and permission before Pin checks
+the actual allocation type. Discovery descriptors do not contain remote memory
+type, so this rejection is authoritative at the source, not a local type guess.
+Requester ranges may be CPU or CUDA. Remote staging with NVLink, or without the
+`cuda` feature, fails during whole-submission preparation before earlier requests
+can execute. TCP/RDMA remain the payload transports; selection is explicit.
+
+One ordered batch can mix GPU Direct RDMA, remote TCP/RDMA staging and ordinary
+host transfers. Prepared owners retain each request's choice. Nested CROSS and
+RDMA slices clear remote-staging intent and call their payload transport directly.
+The private chunks are host memory: `RdmaHostMemory` controls their grants even
+when `RdmaCudaMemory::Direct` is enabled. Direct host MRs are acquired lazily in
+the used context, reused across chunks and retired at session completion.
+GPU MRs may stay cached, while each request releases its active range loan before
+the next staging or direct operation. Staging chunks, copy streams/events and
+worker shards keep their existing bounded reuse.
+
+Frozen TENT's `PreparedSubmit::Owner` stores a route and staging plan;
+`commitPreparedSubmit` dispatches staging owners to `ProxyManager` and direct
+owners to their transport. OrbitTE follows that ownership split with explicit
+request choices; TENT's automatic selector and subbatch scheduling remain P6.
+See [source qualification](qualification.md#per-request-remote-staging).
 
 | Phase | READ | WRITE |
 | --- | --- | --- |

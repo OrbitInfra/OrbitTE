@@ -29,6 +29,37 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Per-request remote staging
+
+Source `27b73b5` separates the incoming Pin capability from each outgoing
+request's remote-staging choice. One engine/batch can mix GPU Direct RDMA and
+Pin/Delegate/Unpin over TCP/RDMA. Private host grants retain their existing host
+registration policy, per-context lazy MR reuse and session retirement; source
+epoch/range/permission/allocation checks remain authoritative. Wire v21 is
+unchanged. The public `TransferRequest` gains a required `remote_staging` field;
+see [selection and caller migration](staging.md#serial-remote-staging).
+
+One six-branch public control covers READ/WRITE with remote TCP, RDMA host Staged
+and RDMA host Direct between two GPU Direct requests. A held middle CUDA event
+preserves the completed prefix, waiting tail, admission and notification order.
+The requester rejects incoming Pin while successfully issuing outgoing staging.
+Nonuniform bytes, guards, a short tail, a second batch, fixed pinned allocations,
+private MR retirement and persistent GPU MRs are checked. Existing whole-batch
+validation covers unsupported staging choices before any early effects; existing
+remote failure controls now select staging explicitly.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/per-request-staging-20261031/`.
+Independent source review accepts `df46eab` (production `27b73b5`) in
+`independent-review/source-review-df46eab.json`. The reviewer passes the mixed
+control, whole-batch preflight and combined Clippy. Primary combined execution
+passes 357 unit tests, eight integration tests and one doctest, with five hardware
+units and one subprocess fixture ignored. The final test-only portability fix
+passes combined/default preflight, formatting and Clippy; unchanged production
+and mixed controls are bound by exact input hashes. These CPU verbs/CUDA ABI
+controls establish source behavior, not native DMA or a throughput improvement.
+Current installed v21 execution and full P5 remain unqualified.
+
 ## Mixed GPU batches
 
 Source `5bdf4f2` checks RDMA readiness once per submission, using the transport's
