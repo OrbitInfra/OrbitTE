@@ -54,7 +54,9 @@ with available hardware. The [GPU Direct profile](qualification.md#gpudirect-rdm
 passes 72 installed H20/RoCE cases with an explicit host-wide context inventory
 limit. The cooperative [CUDA IPC/NVLink path](cuda-ipc.md) is implemented, with
 48 installed H20 cases passing. Bounded subbatch import reuse passes 28
-additional installed cases on two H20 hosts. OrbitKV integration remains deferred.
+additional installed cases on two H20 hosts. Current source groups CUDA copies
+under one completion event; [current-artifact qualification](qualification.md#cuda-ipc-group-completion)
+is still open. OrbitKV integration remains deferred.
 [Capabilities](capabilities.md) distinguishes current paths from later work,
 including broader GPU/IPC qualification and full TENT compatibility. For code
 navigation, use the [architecture reading order](architecture.md#source-reading-order).

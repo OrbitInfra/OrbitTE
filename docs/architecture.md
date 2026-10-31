@@ -479,7 +479,11 @@ bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
 `cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
 one imported native reference, its context and every touched local allocation.
 `transport/nvlink/mapping.rs::OpenedMapping` owns the mapping charge and explicit
-native close. `subbatch.rs` groups consecutive same-region/context requests.
+native close. `subbatch.rs::NVLinkSubBatch` owns resolved consecutive
+same-region/context copies. `cuda/ipc/copy.rs` acquires actual GPU/pinned host
+owners in one deduplicated lock order, then submits the group on the first
+owner's reusable stream. It holds all memory guards through shared completion
+and context restoration, releasing them before control I/O.
 The optional `cache.rs::RelocationCache` owns bounded single-flight imports.
 At capacity it selects an idle LRU owner, reserves both old and replacement
 keys, and closes outside the map lock before committing the replacement.
@@ -494,9 +498,10 @@ before incoming exports. Legacy uncertain handlers and current uncertain
 requester DMA still retain their admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
-stream/event completion. One grant now covers a bounded group, with per-slice
-events and one final import close/source receipt. Shared cleanup failure has an
-explicit affected task span. Native TENT keeps a transport-wide relocation cache;
+stream/event completion. One grant covers a bounded ordered group, with one
+trailing event and a final import close/source receipt. A clean enqueue failure
+can confirm a recovered prefix; shared record/wait/restore failure covers the
+whole attempted group. Native uncertainty retains and fences actual owners. Native TENT keeps a transport-wide relocation cache;
 OrbitTE closes imports at each subbatch boundary by default. With
 `nvlink_cache_entries` enabled, imports survive until idle reclamation, explicit
 cache flush or requester close. The initial
