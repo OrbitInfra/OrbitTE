@@ -120,8 +120,10 @@ never publish a chunk. Requester RDMA finish now polls its completion SEND and
 reusable-grant cleanup, retaining partial ACK/READY frames while other submitted
 CROSS errors remain observable. Requester RDMA setup also retains partial path,
 admission, OFFER and GRANT frames while observing other submitted CROSS owners;
-all slice grants must validate before any payload is submitted. Pin, cold
-connection acquisition, native resource creation, nonreusable QP retirement,
+all slice grants must validate before any payload is submitted. Waiting for a
+cold QP builder now yields while retaining one grant lease and the canonical
+endpoint array; other CROSS errors, worker stop and deadlines remain observable.
+Pin, native resource creation, nonreusable QP retirement,
 copyback and source handlers retain synchronous boundaries. Current v21
 hardware qualification is pending; earlier H20 results apply to their recorded
 artifacts. Opt-in [host staging location selection](docs/staging.md#host-staging-location)

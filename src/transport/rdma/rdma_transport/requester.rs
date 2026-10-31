@@ -2,15 +2,18 @@
 
 use std::time::Duration;
 
-use super::RdmaTransport;
+use super::{
+    RdmaTransport,
+    connections::{Connecting, Connection},
+};
 use crate::engine::{PreparedTransfer, remaining};
 use crate::runtime::control_plane::{
     ControlChannel, Operation, REPLY_SIZE, Reply, Request, u64_at,
 };
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, Descriptor,
-    endpoint::Peer,
-    grant::RdmaGrant,
+    endpoint::{EndpointKey, Peer},
+    grant::{GrantLease, RdmaGrant},
     path::NicPath,
     protocol::{
         ACCEPT, BINDING_SIZE, Binding, CACHE_MISS, GRANT, HELLO_SIZE, Hello, IDENTITY_SIZE,
@@ -21,6 +24,7 @@ use crate::transport::rdma::{
 use crate::{Error, Result, SourceEpoch, TransferOp};
 
 enum Phase {
+    Acquire,
     Prepare,
     Hello,
     OfferReply,
@@ -42,7 +46,10 @@ struct Offer {
 }
 
 pub(super) struct RequesterSetup {
-    endpoint: RdmaGrant,
+    endpoint: Option<RdmaGrant>,
+    lease: Option<GrantLease>,
+    connecting: Option<Connecting>,
+    width: usize,
     wire: Request,
     request: PreparedTransfer,
     epoch: SourceEpoch,
@@ -60,15 +67,19 @@ impl RequesterSetup {
         request: PreparedTransfer,
         epoch: SourceEpoch,
         remote_path: NicPath,
-        endpoint: RdmaGrant,
+        lease: GrantLease,
+        width: usize,
     ) -> Self {
         Self {
-            endpoint,
+            endpoint: None,
+            lease: Some(lease),
+            connecting: None,
+            width,
             wire,
             request,
             epoch,
             remote_path,
-            phase: Phase::Prepare,
+            phase: Phase::Acquire,
             bytes: [0; 1 + BINDING_SIZE],
             position: 0,
             offer: None,
@@ -83,6 +94,60 @@ impl RequesterSetup {
         advanced: &mut bool,
     ) -> Result<bool> {
         remaining(channel.deadline)?;
+        if matches!(self.phase, Phase::Acquire) {
+            if self.connecting.is_none() {
+                let lease = self
+                    .lease
+                    .as_ref()
+                    .ok_or(Error::Internal("missing RDMA grant lease"))?;
+                let device = transport.device_at(lease._selection.device_id())?;
+                device.check_address()?;
+                if transport.direct(&self.request.local) && self.width != 0 {
+                    self.connecting = Some(transport.connecting(
+                        device,
+                        EndpointKey {
+                            route: Some(channel.stream.peer_addr()?),
+                            epoch: self.wire.epoch,
+                            domain: self.remote_path.domain,
+                            operation: if self.wire.operation == Operation::RdmaRead {
+                                TransferOp::Read
+                            } else {
+                                TransferOp::Write
+                            },
+                            source: false,
+                            source_nic_id: self.remote_path.nic_id,
+                        },
+                        self.width,
+                        None,
+                    )?);
+                    *advanced = true;
+                }
+            }
+            let connection = if let Some(connecting) = self.connecting.as_mut() {
+                let Some(connection) = connecting.poll(transport, channel.deadline)? else {
+                    return Ok(false);
+                };
+                connection
+            } else {
+                Connection::Fresh(None)
+            };
+            self.endpoint = Some(
+                transport.prepare_grant(
+                    self.lease
+                        .take()
+                        .ok_or(Error::Internal("missing RDMA grant lease"))?,
+                    &self.request.local,
+                    self.request.local_offset..self.request.local_offset + self.request.length,
+                    0,
+                    channel.deadline,
+                    connection,
+                )?,
+            );
+            self.connecting = None;
+            self.phase = Phase::Prepare;
+            *advanced = true;
+            return Ok(false);
+        }
         let write_length = match self.phase {
             Phase::Hello => HELLO_SIZE,
             Phase::Accept => 1 + BINDING_SIZE,
@@ -108,27 +173,31 @@ impl RequesterSetup {
                 return Ok(false);
             }
         }
+        let endpoint = self
+            .endpoint
+            .as_mut()
+            .ok_or(Error::Internal("missing requester grant"))?;
         self.phase = match self.phase {
+            Phase::Acquire => return Err(Error::Internal("RDMA acquisition did not advance")),
             Phase::Prepare => {
                 if self.wire.operation == Operation::RdmaWrite {
-                    self.endpoint.fill(
+                    endpoint.fill(
                         &self.request.local,
                         self.request.local_offset,
                         #[cfg(feature = "cuda")]
                         &transport.proxy,
                     )?;
                 }
-                let cached = self.endpoint.cached_peer;
+                let cached = endpoint.cached_peer;
                 let hello = Hello {
-                    requester: Identity::local(&self.endpoint, self.epoch)?,
+                    requester: Identity::local(endpoint, self.epoch)?,
                     source: cached.map(|peer| Identity {
                         epoch: peer.epoch,
                         connection: peer.connection,
                     }),
                     expected_domain: self.remote_path.domain,
                     direct: transport.direct(&self.request.local),
-                    qp_width: self
-                        .endpoint
+                    qp_width: endpoint
                         .endpoint
                         .as_ref()
                         .map_or(Ok(0), |owner| owner.width())?,
@@ -142,9 +211,7 @@ impl RequesterSetup {
                 let mut bytes = [0; REPLY_SIZE];
                 bytes.copy_from_slice(&self.bytes[..REPLY_SIZE]);
                 let reply = Reply::decode(&bytes, self.wire.epoch)?;
-                if reply.status == CACHE_MISS
-                    && reply.length == 0
-                    && self.endpoint.cached_peer.is_some()
+                if reply.status == CACHE_MISS && reply.length == 0 && endpoint.cached_peer.is_some()
                 {
                     Phase::Complete
                 } else if reply.status == 0 && reply.length == OFFER_SIZE as u64 {
@@ -160,7 +227,7 @@ impl RequesterSetup {
                 Phase::Accept
             }
             Phase::Accept => {
-                self.bytes[..DESCRIPTOR_SIZE].copy_from_slice(&self.endpoint.connection());
+                self.bytes[..DESCRIPTOR_SIZE].copy_from_slice(&endpoint.connection());
                 Phase::Connection
             }
             Phase::Connection => Phase::Connect,
@@ -169,7 +236,7 @@ impl RequesterSetup {
                     .offer
                     .as_ref()
                     .ok_or(Error::Internal("missing RDMA offer"))?;
-                self.endpoint.connect(&offer.connection)?;
+                endpoint.connect(&offer.connection)?;
                 Phase::Ready
             }
             Phase::Ready => {
@@ -201,7 +268,7 @@ impl RequesterSetup {
                     return Err(Error::Protocol("RDMA grant changed its connection"));
                 }
                 if offer.cacheable {
-                    self.endpoint.publish_peer(offer.peer)?;
+                    endpoint.publish_peer(offer.peer)?;
                 }
                 self.remote = Some(remote);
                 Phase::Complete
@@ -218,6 +285,10 @@ impl RequesterSetup {
         transport: &RdmaTransport,
         channel: &ControlChannel<'_>,
     ) -> Result<Offer> {
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .ok_or(Error::Internal("missing requester grant"))?;
         let remote_identity = Identity::decode(&self.bytes[..IDENTITY_SIZE])?;
         if remote_identity.epoch != self.wire.epoch {
             return Err(Error::EpochMismatch);
@@ -226,13 +297,13 @@ impl RequesterSetup {
         if profile != MR_AUTHORITY && remote_identity.connection.domain != self.remote_path.domain {
             return Err(Error::Protocol("RDMA source changed its protection domain"));
         }
-        let cached = self.endpoint.cached_peer;
+        let cached = endpoint.cached_peer;
         if cached.is_some_and(|peer| remote_identity.connection != peer.connection) {
             return Err(Error::Protocol("RDMA source changed cached connection"));
         }
         let cacheable = match profile {
-            0 | MR_AUTHORITY if self.endpoint.endpoint.is_none() => false,
-            1 if transport.direct(&self.request.local) && self.endpoint.endpoint.is_some() => true,
+            0 | MR_AUTHORITY if endpoint.endpoint.is_none() => false,
+            1 if transport.direct(&self.request.local) && endpoint.endpoint.is_some() => true,
             _ => return Err(Error::Protocol("RDMA release profile mismatch")),
         };
         let grant = u64_at(&self.bytes, IDENTITY_SIZE);
@@ -253,7 +324,7 @@ impl RequesterSetup {
             binding: Binding::new(
                 &self.wire,
                 remote_identity,
-                Identity::local(&self.endpoint, self.epoch)?,
+                Identity::local(endpoint, self.epoch)?,
                 grant,
                 profile,
             )?,
@@ -262,7 +333,7 @@ impl RequesterSetup {
                 route: Some(channel.stream.peer_addr()?),
                 source_nic_id: self.remote_path.nic_id,
                 epoch: self.wire.epoch,
-                local: self.endpoint.incarnation()?,
+                local: endpoint.incarnation()?,
                 connection: remote_identity.connection,
                 operation: if self.wire.operation == Operation::RdmaRead {
                     TransferOp::Read
@@ -278,33 +349,42 @@ impl RequesterSetup {
 
     pub(super) fn finish(mut self) -> Result<Option<RdmaSlice>> {
         if !matches!(self.phase, Phase::Complete) {
-            return Err(self
-                .endpoint
-                .abort(Error::Internal("RDMA setup is not complete")));
+            return Err(self.abort_grant(Error::Internal("RDMA setup is not complete")));
         }
+        let mut endpoint = self
+            .endpoint
+            .take()
+            .ok_or(Error::Internal("missing requester grant"))?;
         match (self.offer, self.remote) {
             (Some(offer), Some(remote)) => Ok(Some(RdmaSlice {
-                grant: self.endpoint,
+                grant: endpoint,
                 binding: offer.binding,
                 remote,
                 peer: offer.peer,
                 offset: self.request.local_offset,
             })),
             (None, None) => {
-                self.endpoint.close()?;
+                endpoint.close()?;
                 Ok(None)
             }
-            _ => Err(self
-                .endpoint
-                .abort(Error::Internal("incomplete RDMA grant"))),
+            _ => Err(endpoint.abort(Error::Internal("incomplete RDMA grant"))),
         }
     }
 
-    pub(super) fn abort(mut self, transport: &RdmaTransport, error: Error) -> Error {
+    pub(super) fn abort(self, transport: &RdmaTransport, error: Error) -> Error {
         let _ = transport;
         #[cfg(all(test, feature = "cuda"))]
-        crate::transport::rdma::cq_lane::tests::before_staging_abort(transport, &self.endpoint);
-        self.endpoint.abort(error)
+        if let Some(endpoint) = &self.endpoint {
+            crate::transport::rdma::cq_lane::tests::before_staging_abort(transport, endpoint);
+        }
+        self.abort_grant(error)
+    }
+
+    fn abort_grant(mut self, error: Error) -> Error {
+        match self.endpoint.as_mut() {
+            Some(endpoint) => endpoint.abort(error),
+            None => error,
+        }
     }
 }
 
@@ -312,14 +392,8 @@ impl RdmaTransport {
     pub(super) fn requester_slice(
         &self,
         channel: &mut ControlChannel<'_>,
-        wire: &Request,
-        request: &PreparedTransfer,
-        epoch: SourceEpoch,
-        remote_path: &NicPath,
-        endpoint: RdmaGrant,
+        mut setup: RequesterSetup,
     ) -> Result<Option<RdmaSlice>> {
-        let mut setup =
-            RequesterSetup::new(*wire, request.clone(), epoch, remote_path.clone(), endpoint);
         loop {
             let mut advanced = false;
             match setup.progress(self, channel, &mut advanced) {

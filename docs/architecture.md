@@ -440,11 +440,15 @@ slot through the outer scoped receipt; other native payloads remain queryable.
 CqLane shares the same SEND submission and grant-drain validation with synchronous
 callers. `rdma_transport/setup.rs::RdmaSetup` owns the parent plan, grant credits,
 selected devices, pending requester handshake and prepared slices.
-`rdma_transport/requester.rs::RequesterSetup` owns that handshake's actual grant,
-partial frames and validated connection/binding. Staging keeps one outer CROSS
+`rdma_transport/requester.rs::RequesterSetup` owns a slice's pending grant lease,
+then its actual grant, partial frames and validated connection/binding.
+`rdma_transport/connections.rs::Connecting` retains the canonical endpoint array
+and CQ lanes across cold-construction polls. It uses the same claim/reserve/share
+order as synchronous source acquisition. Pending requester polls retain admission
+without constructing extra QPs or waiting for another builder. Staging keeps one outer CROSS
 framing owner through setup and its scoped receipt while observing other submitted
 payloads. Ordinary synchronous RDMA drives the same setup states and validators.
-Pin, cold connection acquisition, native construction/connect/copy, nonreusable
+Pin, native construction/connect/copy, nonreusable
 QP retirement and source handlers retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over

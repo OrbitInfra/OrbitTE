@@ -2307,3 +2307,8 @@ impl super::protocol::SliceRequest {
         channel.write_all(&self.encode())
     }
 }
+
+#[cfg(feature = "cuda")]
+pub(crate) use super::rdma_transport::connections::tests::{
+    hold_second_connection, two_rail_runtime,
+};

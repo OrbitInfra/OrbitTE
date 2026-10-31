@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::{RdmaTransport, connections::Connection};
-use crate::engine::{PreparedTransfer, remaining};
+use crate::engine::remaining;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, RdmaHostMemory,
@@ -277,53 +277,6 @@ impl RdmaTransport {
         } else {
             self.config.host_memory == RdmaHostMemory::Direct
         }
-    }
-
-    pub(super) fn requester_grant(
-        &self,
-        channel: &ControlChannel<'_>,
-        wire: &Request,
-        request: &PreparedTransfer,
-        grant_lease: GrantLease,
-        remote_path: &NicPath,
-        width: usize,
-    ) -> Result<RdmaGrant> {
-        let route = channel.stream.peer_addr()?;
-        let operation = if wire.operation == Operation::RdmaRead {
-            TransferOp::Read
-        } else {
-            TransferOp::Write
-        };
-        let direct = self.direct(&request.local);
-        let device = self.device_at(grant_lease._selection.device_id())?;
-        device.check_address()?;
-        let connection = if direct && width != 0 {
-            self.connection(
-                device,
-                EndpointKey {
-                    route: Some(route),
-                    epoch: wire.epoch,
-                    domain: remote_path.domain,
-                    operation,
-                    source: false,
-                    source_nic_id: remote_path.nic_id,
-                },
-                width,
-                None,
-                channel.deadline,
-            )?
-        } else {
-            Connection::Fresh(None)
-        };
-        let endpoint = self.prepare_grant(
-            grant_lease,
-            &request.local,
-            request.local_offset..request.local_offset + request.length,
-            0,
-            channel.deadline,
-            connection,
-        )?;
-        Ok(endpoint)
     }
 
     pub(super) fn finish_requester_slice(
