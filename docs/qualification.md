@@ -34,7 +34,8 @@ qualification and complete acceptance remain in the existing P4 queue.
 Requester grant construction now yields while an existing persistent MR creator
 has not published its handle. The [contract](staging.md#persistent-mr-publication-progress)
 keeps the cache creator, grant admission and connection ownership distinct.
-The wire remains v21. Independent source acceptance is pending.
+The wire remains v21. Independent source review accepts `e69c47a` (production
+`b99dfbe`) for this source/CPU boundary.
 
 CPU controls gate an actual cache entry after native registration returns and
 before publication, outside provider/context/cache locks. Public READ/WRITE
@@ -49,6 +50,24 @@ MR cleanup failure and a provider returning after its original deadline.
 
 Evidence is selected outside Git at
 `/root/orbitte-artifacts/native-grant-progress-20261031/`.
+`independent-review/source-review-e69c47a.json` records acceptance and the
+11 independently verified gates. Stable and Rust 1.85 each pass 233 RDMA units
+or 351 combined units, eight integration tests and one doctest; five native
+units and one integration subprocess fixture remain ignored. CI passes all
+eight profiles, frozen TENT CPU comparison and documentation.
+
+`primary-e69c47a/gates.json` binds the 11 primary gates. Unchanged RDMA inputs
+carry forward the passed `16847d8` gates; the final combined gates use `e69c47a`.
+All 292 tracked files are bound by source manifests. The initial combined run
+exposed a fixture observation race: the provider flag preceded production WR
+accounting. `e69c47a` waits for actual accepted-WR counters without changing
+production code or weakening the assertions; that failure log is preserved.
+
+`independent-review/blocking-mr-control-e69c47a/manifest.json` binds a fresh-target
+negative control that only restores blocking MR acquisition. The unchanged
+public error-observation test fails its first READ case at the two-second report
+wait (2.01 seconds measured), before the ten-second request deadline. It reaches
+the actual pending entry; later negative branches are not claimed as executed.
 Failed development controls remain alongside final gate logs. No hardware task
 was requested. Current installed v21 execution, real DMA overlap and performance
 remain unqualified. Native provider calls and context-lock contention are not

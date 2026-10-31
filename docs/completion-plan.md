@@ -627,7 +627,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
   Pending persistent MR publication now yields through `GrantConstruction`,
   preserving the original admission and connection claim with explicit cleanup.
-  Independent source acceptance is pending; see
+  Independent source review accepts `e69c47a`; see
   [MR publication progress](qualification.md#persistent-mr-publication-progress).
   Complete remaining synchronous resource/retirement/source
   boundaries and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
@@ -937,7 +937,7 @@ at `ab309f4`. Requester cold connection acquisition yields while retaining
 one grant lease and the canonical endpoint array. Independent source review
 accepts `06f685d`; see [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
 Persistent MR publication wait is implemented through an admitted grant owner;
-independent source acceptance is pending. The next implementation boundary is
+independent source review accepts `e69c47a`. The next implementation boundary is
 nonreusable requester QP retirement progress. Native provider calls, resource
 creation/connect/copy and source handlers retain explicit synchronous limits. Current v21 hardware qualification and full
 ProxyManager parity remain open.
