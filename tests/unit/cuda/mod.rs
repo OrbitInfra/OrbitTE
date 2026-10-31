@@ -16,6 +16,8 @@ mod ipc;
 mod ipc_cache;
 mod ipc_host;
 #[cfg(feature = "rdma")]
+mod mixed_batches;
+#[cfg(feature = "rdma")]
 mod rdma;
 mod remote_progress;
 mod remote_staging;

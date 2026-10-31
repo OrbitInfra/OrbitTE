@@ -118,6 +118,24 @@ impl RdmaTransport {
         self.registrations.publish(&devices, &memory, deadline)
     }
 
+    /// Submission readiness is sampled once; native dispatch rechecks its owners.
+    pub(crate) fn check_ready(&self) -> Result<()> {
+        self.recover_progress()?;
+        let usage = self
+            .usage
+            .lock()
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
+        if usage.retained_endpoints != 0
+            || usage.retained_devices != 0
+            || usage.retained_cqs != 0
+            || usage.retained_persistent_mrs != 0
+            || usage.progress_failures != usage.progress_recoveries
+        {
+            return Err(Error::Unavailable("RDMA retained native resources"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn stats(&self) -> Result<RdmaStats> {
         let mut stats = *self
             .usage
