@@ -495,8 +495,9 @@ locks and returns it before mapping-close/control I/O. The pool matches the
 retained actual context and survives changes of first allocation. Memory guards
 protect publication of whole-allocation loans and enqueue. `IpcCopyGroup` owns
 those loans and the stream handle across completion polls without holding the
-allocation mutexes. `progress.rs` owns one lazy worker, bounded by stream
-admission; it queries every pending group in its retained native context.
+allocation mutexes. `progress.rs` first queries on the caller, so already-ready
+events avoid a channel allocation and worker hop. Pending events use one lazy
+worker, bounded by stream admission; it queries every pending group in its retained native context.
 `NOT_READY` yields to other groups. Proven completion plus restoration releases
 loans/stream before the caller performs source receipt or mapping-close I/O.
 Conflicting NVLink allocation waits obey the request deadline; CPU/RDMA access

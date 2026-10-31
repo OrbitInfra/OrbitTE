@@ -117,9 +117,10 @@ See [source evidence and current limits](qualification.md#cuda-ipc-stream-pool).
 ## Event completion progress
 
 After ordered copy enqueue and the trailing event record, the caller restores
-its CUDA context and hands an `IpcCopyGroup` to the transport's shared completion
-worker. The group owns its exclusive stream handle and actual GPU/pinned host
-allocation loans. The submitting caller retains the import lease, source grant
+its CUDA context and queries the event once. Already-ready groups complete on
+the caller without a completion channel or worker wakeup. A NOT_READY result
+hands the `IpcCopyGroup` to shared progress. The group owns its exclusive stream
+handle and actual GPU/pinned host allocation loans. The submitting caller retains the import lease, source grant
 and control channel until the group returns its physical completion outcome.
 
 One lazy worker per `NVLinkTransport` polls every pending group using
@@ -243,8 +244,9 @@ The default per-subbatch profile proceeds as follows:
    GPU/pinned host owner once in a common address order. All slices enqueue
    in request order on that stream, using `cuMemcpyAsync` for device/device or
    the direction-specific host/device API above. The requester records one
-   trailing event, restores context and hands the stream/whole-allocation loans
-   to shared progress. Guards end after enqueue; loans survive all queries. A
+   trailing event and restores context. A ready first query completes on the
+   caller; otherwise the stream/whole-allocation loans move to shared progress.
+   Guards end after enqueue; loans survive all queries. A
    ready query plus context restoration establishes group completion, and the
    mapping retains touched owners until close. Both READ and WRITE
    may modify destination bytes before their final report, including on failure.

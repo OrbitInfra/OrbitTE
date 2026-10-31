@@ -565,7 +565,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   charged without reuse or native destroy retries. Group completion and receipts
   are unchanged. Current installed DMA and performance remain unqualified; see
   [stream ownership](qualification.md#cuda-ipc-stream-pool).
-  **P5.4g — shared event completion (source implemented at `550475e`):**
+  **P5.4g — shared event completion (source implemented at `0daa0a1`):**
+  already-ready events complete on the caller without a channel/worker hop;
   one lazy NVLink completion worker queries all pending groups in their retained
   native contexts. `IpcCopyGroup` owns actual whole-allocation loans and the
   exclusive stream handle across NOT_READY, so independent submissions can
@@ -1014,8 +1015,9 @@ owners; hardware qualification remains separate. See
 [cache reclamation](qualification.md#cuda-ipc-cache-reclamation).
 
 P5.4e/f/g implement ordered NVLink group enqueue, transport-owned stream/event
-reuse and shared event-query completion. Current source `550475e` replaces the
-previous blocking wait with one lazy completion worker. Whole-allocation loans
+reuse and shared event-query completion. Current source `0daa0a1` replaces the
+previous blocking wait with an inline ready-event fast path and one lazy
+completion worker for pending events. Whole-allocation loans
 and exclusive stream handles survive NOT_READY; independent groups can finish
 while another remains pending. Ready query and context restoration release local
 loans before source receipts; deadline/query/restore uncertainty retains touched

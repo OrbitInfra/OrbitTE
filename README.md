@@ -101,8 +101,8 @@ continuing flush and [grouped CUDA submission](docs/cuda-ipc.md#completion-and-s
 ordered copies share one completion event. A bounded [CUDA stream/event pool](docs/cuda-ipc.md#shared-cuda-stream-pool)
 reuses resources across changing local allocations in the same native context.
 [Shared NVLink event progress](docs/cuda-ipc.md#event-completion-progress) lets
-independent groups complete while another CUDA event is pending, retaining actual
-memory owners until proven completion. These changes have source checks; their current installed DMA and performance
+independent groups complete while another CUDA event is pending; already-ready
+copies avoid a worker hop. Actual memory owners survive until proven completion. These changes have source checks; their current installed DMA and performance
 qualification remain open. Source allocations stay loaned until acknowledged
 mapping close.
 [Local staging chunks](docs/staging.md) share pinned buffers across TCP and

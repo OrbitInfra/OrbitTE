@@ -1819,7 +1819,8 @@ parity and OrbitKV integration remain open.
 
 ## CUDA IPC event progress
 
-Source `550475e` adds one lazy transport completion worker. A group's actual
+Source `0daa0a1` adds an inline ready-event fast path and one lazy transport
+completion worker for pending events. A group's actual
 whole-allocation GPU/pinned loans and exclusive stream lease survive NOT_READY;
 ready query and owning-context restoration precede release. The caller retains
 its import, source grant and receipts while the worker polls. Original deadlines
@@ -1830,14 +1831,17 @@ progress, then closes the stream pool.
 
 Focused source gates pass three stream-pool tests, 29 IPC-related tests and ten
 native-observer/validator controls, plus format and RDMA/CUDA all-target Clippy.
-The new public-engine controls hold one GPU event pending while another pinned
+The existing changing-owner control observes zero worker creation for immediate
+completion; the concurrency control requires both groups actually enter the
+shared poller before releasing one. The new public-engine controls hold one GPU event pending while another pinned
 host group completes on the same worker, verify exact bytes, running cancellation,
 owner-wait deadline and close retry, and preserve actual owners on pending
 deadline/NOT_READY context-restore failure. Existing mixed/reversed-owner,
 source-receipt and partial-failure controls remain in the affected gate. The
 native observer now records query results outside staging too; its validator
 requires the matching ready event generation, enqueue context restoration and
-every query context restoration before close/free. Historical wait-based traces
+every query context restoration before close/free. Cross-thread re-recording
+of the same event cannot provide completion for an older generation. Historical wait-based traces
 remain readable. These are CPU shim/validator checks, not installed DMA results.
 
 Evidence: `/root/orbitte-artifacts/nvlink-event-progress-20261101/`.
