@@ -125,7 +125,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         for start in range(0, len(cycle_copies), group_size):
             group = cycle_copies[start:start+group_size]
             first, last = group[0], group[-1]
-            next_copy = next((r['seq'] for r in cycle if r['seq'] > last['seq'] and r['tid'] == first['tid'] and r['kind'] in ('copy','htod','dtoh')), boundary)
+            next_copy = next((r['seq'] for r in cycle if r['seq'] > last['seq'] and r['kind'] in ('copy','htod','dtoh') and (r['tid'] == first['tid'] or r['stream'] == first['stream'])), boundary)
             assert all((r['stream'], r['tid']) == (first['stream'], first['tid']) for r in group), 'group stream/thread mismatch'
             interleaved = [r for r in cycle if first['seq'] <= r['seq'] <= last['seq'] and r['kind'] in ('copy','htod','dtoh')]
             assert interleaved == group, 'foreign copy interleaved in IPC group'

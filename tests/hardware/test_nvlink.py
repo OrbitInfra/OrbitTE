@@ -103,6 +103,20 @@ class NativeEvidence(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaises(AssertionError):
                 nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
 
+        source, requester = self.evidence('cache-healthy')
+        copies = [r for r in requester if r['kind']=='copy']
+        requester.insert(requester.index(copies[-3]), dict(
+            pid=102, tid=2, code=0, kind='pin', address=6000, length=151, flags=1))
+        requester.insert(requester.index(copies[-1])+1, dict(
+            pid=102, tid=2, code=0, kind='dtoh', source=2000,
+            destination=6000, length=151, stream=4))
+        close = next(i for i,r in enumerate(requester) if r['kind']=='close')
+        requester[close:close] = [dict(pid=102, tid=2, code=0, kind='pop'),
+                                 dict(pid=102, tid=2, code=0, kind='unpin', address=6000)]
+        for i,row in enumerate(requester): row['seq'] = i+1
+        with self.subTest(fault='cross-thread-same-stream'), self.assertRaises(AssertionError):
+            nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
+
     def test_host_and_mixed_need_actual_pinned_owners_and_direct_copy_apis(self):
         for memory in ('host','mixed'):
             for mode in ('batch-healthy','batch-graceful','batch-requester-exit'):
