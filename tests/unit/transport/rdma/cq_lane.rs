@@ -1209,6 +1209,7 @@ fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
                         remote_address: remote.base_address(),
@@ -1315,6 +1316,7 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),

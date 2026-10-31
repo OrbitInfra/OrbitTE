@@ -83,6 +83,7 @@ fn exchange(
             op,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + 4,
                 remote_address: remote.base_address() + 4,
@@ -702,6 +703,7 @@ fn one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_repo
                 op,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 4,
                     remote_address: remote.base_address() + 4,
@@ -1086,6 +1088,7 @@ fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recove
                     .unwrap()
                 });
                 let request = TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 4,
                     remote_address: remote.base_address() + 4,
@@ -1191,6 +1194,7 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            remote_staging: false,
                             transport: Transport::Rdma,
                             local_address: local.base_address() + 2,
                             remote_address: remote.base_address() + 2,
@@ -1313,6 +1317,7 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 2,

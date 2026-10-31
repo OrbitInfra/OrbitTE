@@ -47,6 +47,7 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            remote_staging: true,
                             transport,
                             local_address: base as u64,
                             remote_address: remote.base_address() + 1,
@@ -173,6 +174,7 @@ fn not_ready_followed_by_context_restore_failure_retains_actual_owners() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport: Transport::Tcp,
                     local_address: local.base_address() + 2,
                     remote_address: remote.base_address() + 1,

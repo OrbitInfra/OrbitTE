@@ -197,6 +197,7 @@ fn connected_endpoint_peer() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: memory.base_address() + local_offset as u64,
                         remote_address: remote + remote_offset as u64,

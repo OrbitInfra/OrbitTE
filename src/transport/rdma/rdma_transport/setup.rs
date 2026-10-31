@@ -166,6 +166,8 @@ impl RdmaSetup {
                         return Err(Error::Protocol("RDMA repeated slice cache miss"));
                     }
                     let child = PreparedTransfer {
+                        #[cfg(feature = "cuda")]
+                        remote_staging: false,
                         transport: self.request.transport,
                         local: self.request.local.clone(),
                         local_offset: self.request.local_offset + entry.range.offset,

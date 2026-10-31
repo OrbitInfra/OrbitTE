@@ -153,6 +153,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
             },
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: memory.base_address()
                     + if case.read { case.destination() } else { GUARD } as u64,

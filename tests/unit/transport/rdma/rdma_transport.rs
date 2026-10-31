@@ -393,6 +393,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: 0x1000,

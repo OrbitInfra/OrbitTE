@@ -67,6 +67,7 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
         .enumerate()
         .map(
             |(i, &(local_offset, remote_offset, length))| TransferRequest {
+                remote_staging: false,
                 transport: if i == 1 {
                     Transport::Tcp
                 } else {
@@ -252,4 +253,188 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
     source.close(Duration::from_secs(3)).unwrap();
     drop((batch, requester, local, local_gpu, b));
     assert_eq!(weak.upgrade().is_some(), retained);
+}
+
+#[test]
+fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
+    for (transport, mode) in [
+        (Transport::Tcp, "copy"),
+        (Transport::Rdma, "copy"),
+        (Transport::Rdma, "direct:copy"),
+    ] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            let build = |allow_pin| {
+                let mut runtime = gpu_runtime(mode);
+                runtime.proxy = ProxyManager::new(7, 2, crate::StagingLocation::Any).unwrap();
+                rdma_fixture_with_config(
+                    runtime,
+                    EngineConfig {
+                        remote_staging: allow_pin,
+                        staging_chunk_size: 7,
+                        staging_chunk_count: 2,
+                        staging_pipeline_depth: 2,
+                        handler_threads: 1,
+                        max_inflight_batches: 1,
+                        ..Default::default()
+                    },
+                )
+            };
+            let source = build(true);
+            // Outgoing selection does not require accepting incoming Pin.
+            let requester = Arc::new(build(false));
+            let source_bytes: [u8; 96] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+            let local_bytes: [u8; 96] = std::array::from_fn(|i| (i * 19 + 53) as u8);
+            let a = allocation(&source_bytes);
+            let b = allocation(&local_bytes);
+            let source_gpu = memory(&a);
+            let local_gpu = memory(&b);
+            let remote = source
+                .register_cuda_memory_batch(
+                    &[(source_gpu.clone(), 0, 96)],
+                    Permission::RemoteReadWrite,
+                )
+                .unwrap()
+                .remove(0);
+            let local = requester
+                .register_cuda_memory_batch(&[(local_gpu.clone(), 0, 96)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0);
+            let peer = requester
+                .open_segment(
+                    source.endpoint(),
+                    source.source_epoch(),
+                    Duration::from_secs(3),
+                )
+                .unwrap();
+            let before_source = source.stats().unwrap().rdma.unwrap();
+            let before_requester = requester.stats().unwrap().rdma.unwrap();
+            let spans = [(2, 4, 5), (20, 23, 41), (74, 77, 9)];
+            let requests: Vec<_> = spans
+                .iter()
+                .enumerate()
+                .map(
+                    |(i, &(local_offset, remote_offset, length))| TransferRequest {
+                        remote_staging: i == 1,
+                        transport: if i == 1 { transport } else { Transport::Rdma },
+                        local_address: local.base_address() + local_offset,
+                        remote_address: remote.base_address() + remote_offset,
+                        length,
+                    },
+                )
+                .collect();
+            let notification = Notification {
+                name: "mixed-remote".into(),
+                message: "done".into(),
+            };
+            b.query_hold.store(true, Ordering::Release);
+            let mut batch = requester
+                .submit_async(
+                    operation,
+                    &peer,
+                    &requests,
+                    Some(&notification),
+                    Duration::from_secs(8),
+                )
+                .unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while b.event_queries.load(Ordering::Acquire) == 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "{transport:?}/{mode}/{operation:?}: middle remote staging was not reached: {:?}",
+                    batch.status()
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(
+                batch
+                    .task_statuses()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t.state)
+                    .collect::<Vec<_>>(),
+                [TaskState::Completed, TaskState::Running, TaskState::Waiting]
+            );
+            let status = batch.status().unwrap();
+            assert_eq!((status.completed_tasks, status.transferred_bytes), (1, 5));
+            assert!(!status.locally_drained);
+            assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+            assert!(source.receive_notifications().unwrap().is_empty());
+            b.query_hold.store(false, Ordering::Release);
+            let status = batch.wait(Duration::from_secs(3)).unwrap();
+            assert_eq!(
+                status.state,
+                BatchState::Completed,
+                "{transport:?}/{mode}/{operation:?}: {:?}",
+                batch.submissions().unwrap()
+            );
+            assert_eq!(
+                (
+                    status.completed_tasks,
+                    status.transferred_bytes,
+                    status.locally_drained
+                ),
+                (3, 55, true)
+            );
+            assert_eq!(source.receive_notifications().unwrap(), [notification]);
+            batch.free().unwrap();
+            let repeated = requester
+                .submit_and_wait(operation, &peer, &requests, Duration::from_secs(3))
+                .unwrap();
+            assert!(
+                repeated.is_complete() && repeated.locally_drained,
+                "{transport:?}/{mode}/{operation:?}: {repeated:?}"
+            );
+            let mut expected_a = source_bytes;
+            let mut expected_b = local_bytes;
+            for &(local, remote, length) in &spans {
+                let (local, remote) = (local as usize, remote as usize);
+                if operation == TransferOp::Read {
+                    expected_b[local..local + length]
+                        .copy_from_slice(&source_bytes[remote..remote + length]);
+                } else {
+                    expected_a[remote..remote + length]
+                        .copy_from_slice(&local_bytes[local..local + length]);
+                }
+            }
+            let mut observed = [0; 96];
+            source_gpu.read(0, &mut observed).unwrap();
+            assert_eq!(observed, expected_a);
+            local_gpu.read(0, &mut observed).unwrap();
+            assert_eq!(observed, expected_b);
+            let stats = source.stats().unwrap().staging;
+            assert_eq!(
+                (stats.remote_pins, stats.remote_unpins, stats.remote_crosses),
+                (2, 2, 12)
+            );
+            assert_eq!(requester.stats().unwrap().staging.remote_pins, 0);
+            for (engine, before) in [
+                (&source, before_source),
+                (requester.as_ref(), before_requester),
+            ] {
+                let stats = engine.stats().unwrap();
+                assert_eq!(
+                    (
+                        stats.staging.allocations,
+                        stats.staging.active_chunks,
+                        stats.staging.retained_chunks
+                    ),
+                    (2, 0, 0)
+                );
+                assert!(stats.staging.reuses >= 2);
+                let rdma = stats.rdma.unwrap();
+                assert_eq!(
+                    rdma.persistent_mrs, before.persistent_mrs,
+                    "private host MRs must retire while GPU MRs stay cached"
+                );
+                assert_eq!(rdma.retained_persistent_mrs, 0);
+                assert_eq!(
+                    rdma.opened_persistent_mrs > before.opened_persistent_mrs,
+                    transport == Transport::Rdma && mode.starts_with("direct:")
+                );
+                assert_eq!(stats.retained_regions, 1);
+                engine.close(Duration::from_secs(3)).unwrap();
+            }
+            assert!(a.pins.lock().unwrap().is_empty() && b.pins.lock().unwrap().is_empty());
+        }
+    }
 }

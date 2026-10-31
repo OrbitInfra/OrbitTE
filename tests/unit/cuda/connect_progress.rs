@@ -57,6 +57,7 @@ fn partial_pin(operation: TransferOp, stop: bool) {
             operation,
             &peer,
             &[TransferRequest {
+                remote_staging: true,
                 transport: Transport::Tcp,
                 local_address: local.base_address() + 2,
                 remote_address: remote.base_address() + 1,
@@ -190,6 +191,7 @@ fn pin_error_and_invalid_negotiation_never_wait_for_a_success_tail_or_start_cros
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport: Transport::Tcp,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),
@@ -315,6 +317,7 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 1,

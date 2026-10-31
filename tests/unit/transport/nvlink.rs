@@ -309,6 +309,7 @@ pub(crate) fn requester_case(
         }
     });
     let request = TransferRequest {
+        remote_staging: false,
         transport: Transport::Nvlink,
         local_address: registered.base_address() + 7,
         remote_address: peer.regions[0].address + 11,

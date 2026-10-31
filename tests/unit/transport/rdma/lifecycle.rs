@@ -294,6 +294,7 @@ fn round(
                 operation,
                 peer.unwrap(),
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: memory.base_address()
                         + if operation == TransferOp::Read {
@@ -667,6 +668,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     operation,
                     old,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: memory.base_address() + GUARD as u64,
                         remote_address: old.regions()[0].base_address() + GUARD as u64,

@@ -85,6 +85,7 @@ fn pending_native_finish(send_pending: bool) {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 1,
@@ -257,6 +258,7 @@ fn fragmented_native_receipts_resume_once_and_validate_the_binding() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 1,

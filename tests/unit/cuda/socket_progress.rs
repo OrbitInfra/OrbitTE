@@ -141,6 +141,7 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport: Transport::Tcp,
                     local_address: local.base_address() + 2,
                     remote_address: remote.base_address() + 1,

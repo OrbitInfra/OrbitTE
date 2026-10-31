@@ -82,6 +82,7 @@ fn fail_window(
             },
             peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: memory.base_address()
                     + if case.read { case.destination() } else { GUARD } as u64,
@@ -270,6 +271,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
             },
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: memory.base_address() + GUARD as u64,
                 remote_address: peer.regions()[0].base_address() + GUARD as u64,

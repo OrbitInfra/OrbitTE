@@ -287,6 +287,7 @@ fn rounds(
                             },
                             segment,
                             &[TransferRequest {
+                                remote_staging: false,
                                 transport: Transport::Rdma,
                                 local_address: memory.base_address()
                                     + (parent * case.bank()

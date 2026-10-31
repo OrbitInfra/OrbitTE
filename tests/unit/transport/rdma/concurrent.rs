@@ -176,6 +176,7 @@ fn transfer(
             operation,
             peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: base
                     + (parent * shape.bank
