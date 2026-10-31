@@ -1739,3 +1739,43 @@ DMA, native cleanup faults and throughput remain unqualified. Historical fixed
 working set qualification does not qualify the new reclaim path. Exporters must
 remain alive and cooperative; native provider calls remain synchronous. This
 does not complete all P5, TENT parity or OrbitKV integration.
+
+
+## CUDA IPC group completion
+
+Source `f388416` changes `NVLinkSubBatch` submission from per-slice waits to
+ordered same-stream enqueue and one trailing CUDA event. The first actual local
+allocation supplies the reused stream/event. Actual GPU and pinned host owners
+are deduplicated and locked in a common order, retained before native submission,
+and held through completion/recovery and context restoration. Memory guards are
+released before source receipts. Recovered enqueue/cancel errors preserve only
+the acknowledged prefix; shared record/wait/restore errors cover the attempted
+group. The wire and public API are unchanged.
+
+Primary source checks pass 111 CUDA/IPC/staging tests, including the
+added mixed-owner alias/reversed-concurrency control, and the two NVLink protocol
+controls. The existing subbatch table now checks one record/wait for three
+ordered copies, shared completion failure spans, partial enqueue, cancellation,
+close/ACK loss and actual backing retention. The CUDA shim queues real host-backed
+copies until event/stream drain. These checks establish CPU ownership behavior,
+not CUDA DMA or bandwidth. The installed consumer's native validator now requires
+one trailing event for each group and rejects early record/pop, split streams,
+early release and borrowing later-group or local-readback completion; its nine
+CPU validator controls pass.
+
+Evidence directory: `/root/orbitte-artifacts/nvlink-group-completion-20261031/`.
+`source-inputs.json`, `environment.json` and `gates.json` bind the frozen source,
+compiler, focused gates and log hashes. Independent review and final CI are
+recorded in that directory before PR readiness.
+
+Frozen TENT reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+Its `NVLinkSubBatch` / `startTransfer` also associates a group with one trailing
+event. OrbitTE follows the ordered async-copy path while reusing allocation-owned
+stream/event resources; native `cudaMemcpyBatchAsync`, device-wide pooling and
+nonblocking completion queries are separate work. Producer readiness remains an
+explicit handoff and final success still requires the cooperating source receipt.
+
+No new hardware task was requested. The current grouped native path, installed
+v21 DMA and matched performance remain unqualified. Historical per-slice H20
+results do not qualify the new group path. Fewer event calls are not a measured
+speedup or complete P5/TENT parity. OrbitKV integration remains deferred.

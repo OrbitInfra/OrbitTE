@@ -40,10 +40,10 @@ class NativeEvidence(unittest.TestCase):
                 remote, own = 3067+offset, (2000 if local_part%2 == 0 else 4000)+67+offset
                 add(requester, 'copy', source=remote if read else own,
                     destination=own if read else remote, length=length, stream=4)
-                add(requester, 'record', event=5, stream=4)
-                add(requester, 'pop')
-                add(requester, 'wait', event=5)
-                add(requester, 'pop')
+                if not batched or part % 3 == 2:
+                    add(requester, 'record', event=5, stream=4)
+                    add(requester, 'wait', event=5)
+                    add(requester, 'pop')
             if mode != 'requester-exit':
                 add(requester, 'close', address=3000)
                 add(requester, 'pop')
@@ -67,6 +67,7 @@ class NativeEvidence(unittest.TestCase):
                 result = nvlink_run.validate_native(*rows,17,mode,101,102,memory)
                 self.assertEqual(result['imports'],1)
                 self.assertEqual(result['copies'],15 if mode=='cache-healthy' else 3)
+                self.assertEqual(result['completion_groups'],5 if mode=='cache-healthy' else 1)
             for fault in ('missing-copy','extra-open','missing-event','wrong-direction','early-close','wrong-context-restore','unowned-staging'):
                 source, requester = self.evidence('cache-healthy',memory)
                 copies = [r for r in requester if r['kind'] in ('copy','dtoh','htod')]
@@ -101,6 +102,20 @@ class NativeEvidence(unittest.TestCase):
             for i, row in enumerate(requester): row['seq'] = i+1
             with self.subTest(missing=missing), self.assertRaises(AssertionError):
                 nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
+
+        source, requester = self.evidence('cache-healthy')
+        copies = [r for r in requester if r['kind']=='copy']
+        requester.insert(requester.index(copies[-3]), dict(
+            pid=102, tid=2, code=0, kind='pin', address=6000, length=151, flags=1))
+        requester.insert(requester.index(copies[-1])+1, dict(
+            pid=102, tid=2, code=0, kind='dtoh', source=2000,
+            destination=6000, length=151, stream=4))
+        close = next(i for i,r in enumerate(requester) if r['kind']=='close')
+        requester[close:close] = [dict(pid=102, tid=2, code=0, kind='pop'),
+                                 dict(pid=102, tid=2, code=0, kind='unpin', address=6000)]
+        for i,row in enumerate(requester): row['seq'] = i+1
+        with self.subTest(fault='cross-thread-same-stream'), self.assertRaises(AssertionError):
+            nvlink_run.validate_native(source, requester, 17, 'cache-healthy', 101, 102)
 
     def test_host_and_mixed_need_actual_pinned_owners_and_direct_copy_apis(self):
         for memory in ('host','mixed'):
@@ -194,15 +209,24 @@ class NativeEvidence(unittest.TestCase):
         with self.assertRaises(AssertionError):
             nvlink_run.validate_native(*rows, 17, 'healthy', 101, 102)
 
-    def test_subbatch_needs_each_slice_drain_and_both_local_owners(self):
-        for fault in ('missing-middle-wait', 'wrong-second-owner', 'close-before-last', 'duplicate-free'):
+    def test_subbatch_needs_shared_completion_and_both_local_owners(self):
+        for fault in ('missing-group-wait', 'wrong-second-owner', 'close-before-last', 'duplicate-free', 'early-record', 'split-stream', 'early-pop'):
             source, requester = self.evidence('batch-healthy')
-            if fault == 'missing-middle-wait':
+            if fault == 'missing-group-wait':
                 [r for r in requester if r['kind']=='wait'][1]['kind']='ignored'
             elif fault == 'wrong-second-owner':
                 [r for r in requester if r['kind']=='copy'][1]['destination']=2067
             elif fault == 'duplicate-free':
                 [r for r in requester if r['kind']=='free'][1]['address']=2000
+            elif fault == 'split-stream':
+                [r for r in requester if r['kind']=='copy'][1]['stream']=7
+            elif fault in ('early-record', 'early-pop'):
+                kind = 'record' if fault == 'early-record' else 'pop'
+                row = next(r for r in requester if r['kind']==kind)
+                requester.remove(row)
+                second = [r for r in requester if r['kind']=='copy'][1]
+                requester.insert(requester.index(second), row)
+                for index,row in enumerate(requester): row['seq']=index+1
             else:
                 close=next(r for r in requester if r['kind']=='close')
                 requester.remove(close)

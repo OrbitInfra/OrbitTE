@@ -103,7 +103,7 @@ exposed export behind: the requester closes its original socket before issuing
 close, so a delayed offer cannot receive its answer. An unexposed reservation is
 cleaned up on EOF. Once exposed, missing grant/completion bytes retain the entry.
 
-Each subbatch drains its copy events and restores contexts before a bound
+Each subbatch drains its shared completion event and restores its context before a bound
 **operation-complete receipt**. Its ACK determines the completed prefix; it does
 not release the export or mapping. Completed local GPU/pinned-host owners are
 released at this drain boundary, so an idle import cannot accumulate every prior
@@ -166,19 +166,26 @@ The default per-subbatch profile proceeds as follows:
 2. The requester validates a grant binding the operation/range, source and
    requester epochs, and fresh grant token. It opens the handle in its local
    primary context with lazy peer access, then relocates the granted offset.
-3. Each slice's allocation-owned stream issues `cuMemcpyAsync` for device/device
-   or the direction-specific host/device API above, records and waits for a
-   completion event, and restores the calling context. The mapping retains all
-   touched local allocations until close. Both READ and WRITE may
-   modify destination bytes before their final report, including on failure.
+3. `NVLinkSubBatch` resolves the local allocation owners and offsets. The
+   requester locks each actual GPU/pinned host owner once, in a common address
+   order, then reuses the first slice owner's stream/event. All slices enqueue
+   in request order on that stream, using `cuMemcpyAsync` for device/device or
+   the direction-specific host/device API above. One trailing event and one
+   context restoration establish group completion. Guards survive the wait and
+   recovery; the mapping retains touched owners until close. Both READ and WRITE
+   may modify destination bytes before their final report, including on failure.
 4. Only a successful native IPC close and context restoration permit a matching
    success/clean-abort receipt. The source releases its loan and quota, then
    acknowledges. WRITE failure may have `RemoteEffect::Unknown`; do not replay it
    automatically. An unproven local drain reports `locally_drained = false`.
 
-Only source-acknowledged requests enter the completed prefix. If a copy fails
-cleanly or a later task is cancelled, a successful shared close/ACK confirms the
-copied prefix. If native cleanup or the final ACK fails, every attempted request
+Only source-acknowledged requests enter the completed prefix. If enqueue fails
+or a later task is cancelled, successful stream recovery and the shared close/ACK
+confirm only the earlier submitted prefix. Failure of the shared record, wait or
+context restoration covers the entire attempted group, even if record recovery
+proved local drain. Native uncertainty retains actual touched owners. Memory
+guards are released before control I/O, while the mapping/lease owns cleanup.
+If native cleanup or the final ACK fails, every attempted request
 in that group belongs to `TransferFailure.affected_requests`, starting at
 `request_index`. Async tasks in that span share the failure; they are never
 reported as skipped. Only requests after the span were not attempted. Uncertain
@@ -217,14 +224,21 @@ TENT's `relocateSharedMemoryAddress` caches imports in its transport relocation
 map, while `NVLinkSubBatch` owns task streams/events. OrbitTE's
 `transport/nvlink/cache.rs::RelocationCache` follows that transport-level
 placement. `mapping.rs::OpenedMapping` owns one native import and its charge;
-`export.rs::ExportCache` separately owns source lifetime. `subbatch.rs` only
-selects consecutive same-region/context slices. `cuda/ipc.rs::IpcMapping` owns
-the native reference, retained context and current touched allocations. Each
-local allocation reuses its stream/event. TENT's cache closes in `uninstall`;
+`export.rs::ExportCache` separately owns source lifetime. `subbatch.rs::NVLinkSubBatch`
+resolves consecutive same-region/context slices and their actual owners.
+`cuda/ipc.rs::IpcMapping` owns the native reference, retained context and current
+touched allocations; `cuda/ipc/copy.rs` owns grouped access and submission.
+Like TENT's `startTransfer` ordered-copy fallback, all group copies use one
+stream and one trailing event. OrbitTE reuses the first local allocation's
+stream/event and waits once before the source receipt. TENT can also use native
+`cudaMemcpyBatchAsync` and query task completion asynchronously; these are not
+claimed by this synchronous group path. TENT's cache closes in `uninstall`;
 OrbitTE additionally requires explicit cooperating source close receipts. Its
 bounded LRU and continuing flush extend that ownership model; they are not
 features copied from the frozen TENT cache. Device-wide stream pooling and
-broader scheduling remain separate work.
+broader scheduling remain separate work. Grouped completion is source-validated;
+[its current installed DMA/performance qualification](qualification.md#cuda-ipc-group-completion)
+remains open. Producer readiness stays an explicit caller handoff.
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
 (`transports/nvlink/host_register`, default false), but its remote relocation

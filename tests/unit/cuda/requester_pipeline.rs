@@ -7,7 +7,7 @@ fn pending(device: &Device) -> usize {
         .lock()
         .unwrap()
         .values()
-        .filter(|v| v.is_some())
+        .filter(|v| !v.is_empty())
         .count()
 }
 
@@ -88,7 +88,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                     .lock()
                     .unwrap()
                     .values()
-                    .filter_map(|copy| copy.as_ref())
+                    .flatten()
                     .map(|copy| {
                         if operation == TransferOp::Read {
                             copy.destination

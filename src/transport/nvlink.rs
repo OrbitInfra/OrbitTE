@@ -13,7 +13,7 @@ pub use budget::NVLinkStats;
 use cache::{RelocationCache, RelocationKey};
 use export::ExportCache;
 use mapping::OpenedMapping;
-use subbatch::subbatch_len;
+use subbatch::{NVLinkSubBatch, subbatch_len};
 
 use crate::cuda::ipc::IpcExport;
 use crate::engine::{PreparedSubmission, remaining};
@@ -248,26 +248,21 @@ impl NVLinkTransport {
                         if needs_open {
                             batch.mapping.open(handle)?;
                         }
-                        for (index, request) in requests.iter().enumerate() {
-                            // The engine began the first task before acquiring the grant.
-                            if index != 0 && !begin(index) {
-                                return Err(Error::Cancelled);
-                            }
-                            remaining(deadline)?;
-                            attempted = index + 1;
-                            let (memory, offset) = request
-                                .local
-                                .allocation_range(request.local_offset, request.length)?;
-                            batch.mapping.copy(
-                                &memory,
-                                remote_offset + (request.remote_offset - start),
-                                offset,
-                                request.length,
-                                operation == TransferOp::Write,
-                            )?;
-                            copied += 1;
-                        }
-                        Ok(())
+                        let subbatch = NVLinkSubBatch::new(requests, start, remote_offset)?;
+                        let completion = batch.mapping.copy_group(
+                            &subbatch.copies,
+                            operation == TransferOp::Write,
+                            |index| {
+                                // The engine began task zero before acquiring the grant.
+                                if index != 0 && !begin(index) {
+                                    return Err(Error::Cancelled);
+                                }
+                                remaining(deadline).map(|_| ())
+                            },
+                        );
+                        copied = completion.completed;
+                        attempted = completion.attempted;
+                        completion.result
                     })();
                     if let Some(entry) = lease.as_mut().and_then(|lease| lease.entry.as_mut()) {
                         let drained = batch.mapping.finish_copies();
@@ -315,7 +310,11 @@ impl NVLinkTransport {
                 // Without the shared close ACK, none of this group's attempted
                 // requests is confirmed. Never call an already copied WRITE skipped.
                 request_index: if acknowledged { copied } else { 0 },
-                affected_requests: if acknowledged { 1 } else { attempted.max(1) },
+                affected_requests: if acknowledged {
+                    attempted.saturating_sub(copied).max(1)
+                } else {
+                    attempted.max(1)
+                },
                 remote_effect: if acknowledged && matches!(error, Error::Cancelled) {
                     RemoteEffect::None
                 } else {

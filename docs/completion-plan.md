@@ -547,6 +547,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   remain unqualified. Remote host exports and broader stream scheduling remain
   open; exporter-crash safety is explicitly unqualified. See
   [the transport contract](cuda-ipc.md).
+  **P5.4e — grouped CUDA submission (source implemented at `f388416`):**
+  `NVLinkSubBatch` resolves actual allocation owners; one deduplicated GPU/host
+  lock order protects all copies through drain. Ordered enqueue shares the
+  first owner's reusable stream/event, with one trailing completion wait.
+  Clean submit/cancel recovery preserves the acknowledged prefix; shared
+  record/wait/restore failure covers every attempted request. CPU controls cover
+  mixed owners, aliases, reversed concurrent groups and failure spans. Current
+  installed DMA and performance qualification remain open; see
+  [group completion](qualification.md#cuda-ipc-group-completion).
 - [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
   Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
   requester and contexts. TCP and staged RDMA consume the same owner; full-range
@@ -984,16 +993,24 @@ admission. Active, constructing and uncertain mappings retain their existing
 owners; hardware qualification remains separate. See
 [cache reclamation](qualification.md#cuda-ipc-cache-reclamation).
 
-The next functional delivery is P5 NVLink group submission/completion efficiency.
-Current `NVLinkTransport::transfer` groups requests under one import, but
-`IpcMapping::copy` still records and waits for each slice's event before issuing
-the next. Follow frozen TENT's `NVLinkSubBatch` / `startTransfer` ownership to
-enqueue a same-context group and observe its shared completion, reusing native
-stream/event resources instead of synchronizing each slice. Keep actual touched
-allocations and mapping leases until native drain, preserve ordered reports and
-affected-task spans, and keep producer handoff explicit. Use the existing CUDA
-owner and IPC controls for changed completion/failure contracts; do not create
-a separate test backlog or claim throughput from operation counts.
+P5 NVLink grouped submission is implemented at `f388416`. Same-context copies
+now enqueue in request order and share one completion event and restoration,
+reusing the first allocation's native stream/event. Actual owners remain locked
+through drain and are retained on native uncertainty. Clean enqueue/cancel
+failures preserve the source-acknowledged prefix; shared completion failures
+cover the whole attempted group. See [group completion](qualification.md#cuda-ipc-group-completion)
+for source evidence and the open installed boundary.
+
+The next functional delivery is bounded shared CUDA stream/event ownership for
+NVLink. Follow frozen TENT's `platform_->getStreamFromPool` and
+`NVLinkSubBatch` stream handles: reuse native resources across changing local
+allocations within the same actual context, rather than creating a new stream
+for each new first owner. Keep leases bounded and exclusive through completion,
+context restoration and failure recovery; uncertain resources cannot return to
+the pool. Preserve the current ordered group/receipt contract and explicit
+producer handoff. Native batch-copy APIs and event-query scheduling remain
+separate P5 work. Focus verification on the changed pool/owner lifecycle; do
+not reopen completed stages or claim speedup from API operation counts.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

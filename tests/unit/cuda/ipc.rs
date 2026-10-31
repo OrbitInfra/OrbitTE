@@ -197,12 +197,35 @@ fn ipc_public_requester_retains_real_owners_and_reports_partial_writes() {
     }
 }
 
+impl IpcMapping {
+    pub(super) fn copy_one(
+        &mut self,
+        memory: &Allocation,
+        remote_offset: usize,
+        local_offset: usize,
+        length: usize,
+        to_remote: bool,
+    ) -> Result<()> {
+        self.copy_group(
+            &[crate::cuda::ipc::IpcCopy {
+                memory: memory.clone(),
+                remote_offset,
+                local_offset,
+                length,
+            }],
+            to_remote,
+            |_| Ok(()),
+        )
+        .result
+    }
+}
+
 fn copy_ipc(local: &Arc<CudaMemory>, handle: [u8; 64], to_remote: bool) -> Result<()> {
     let local = Allocation::Cuda(local.clone());
     let mut mapping = IpcMapping::new(&local)?;
     let result = mapping
         .open(handle)
-        .and_then(|()| mapping.copy(&local, 11, 7, 17, to_remote));
+        .and_then(|()| mapping.copy_one(&local, 11, 7, 17, to_remote));
     mapping.close()?;
     result
 }
@@ -213,8 +236,9 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
         for case in [
             "success",
             "copy-second",
-            "wait-second",
-            "pop-second",
+            "group-record",
+            "group-wait",
+            "group-restore",
             "close",
             "ack-loss",
             "prefix-ack-loss",
@@ -251,8 +275,9 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             }
             match case {
                 "copy-second" => owners[0].ipc_copy_fail_at.store(2, Ordering::Release),
-                "wait-second" => owners[0].ipc_wait_fail_at.store(2, Ordering::Release),
-                "pop-second" => owners[0].ipc_pop_fail_at.store(2, Ordering::Release),
+                "group-record" => owners[0].record_error.store(1, Ordering::Release),
+                "group-wait" => owners[0].ipc_wait_fail_at.store(2, Ordering::Release),
+                "group-restore" => owners[0].ipc_pop_fail_at.store(2, Ordering::Release),
                 "close" | "cancel-close" => owners[0].ipc_close_error.store(1, Ordering::Release),
                 "cancel-restore-close" => {
                     owners[0].ipc_pop_after_close.store(true, Ordering::Release)
@@ -276,7 +301,14 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                 expected,
                 "{case}"
             );
-            let closes = if matches!(case, "wait-second" | "pop-second") {
+            if matches!(case, "success" | "overlap" | "ack-hold") {
+                assert_eq!(events.iter().filter(|&&e| e == "record").count(), 1);
+                assert_eq!(events.iter().filter(|&&e| e == "event-sync").count(), 1);
+                assert_eq!(events.iter().filter(|&&e| e == "stream-create").count(), 1);
+                let record = events.iter().position(|&e| e == "record").unwrap();
+                assert_eq!(events[..record].iter().filter(|&&e| e == "DtoD").count(), 3);
+            }
+            let closes = if matches!(case, "group-wait" | "group-restore") {
                 0
             } else {
                 expected
@@ -305,7 +337,7 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
         let mut mapping = IpcMapping::new(&Allocation::Cuda(local.clone())).unwrap();
         mapping.open(export.handle).unwrap();
         mapping
-            .copy(&Allocation::Cuda(local.clone()), 11, 7, 17, false)
+            .copy_one(&Allocation::Cuda(local.clone()), 11, 7, 17, false)
             .unwrap();
         drop(local);
         assert!(weak.upgrade().is_some());

@@ -7,7 +7,7 @@ fn pending(device: &Device) -> usize {
         .lock()
         .unwrap()
         .values()
-        .filter(|v| v.is_some())
+        .filter(|v| !v.is_empty())
         .count()
 }
 
@@ -353,7 +353,7 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                         .lock()
                         .unwrap()
                         .values()
-                        .filter(|v| v.is_some())
+                        .filter(|v| !v.is_empty())
                         .count(),
                     1
                 );

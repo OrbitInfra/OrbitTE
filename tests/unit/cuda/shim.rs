@@ -27,7 +27,7 @@ pub(super) struct Device {
     pub(super) host_registrations: Mutex<BTreeMap<usize, usize>>,
     pub(super) ordinal: AtomicI32,
     pub(super) pci_device: AtomicI32,
-    pub(super) streams: Mutex<BTreeMap<usize, Option<PendingCopy>>>,
+    pub(super) streams: Mutex<BTreeMap<usize, Vec<PendingCopy>>>,
     pub(super) submitted_copies: Mutex<Vec<(usize, usize, usize)>>,
     pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
     next_handle: AtomicUsize,
@@ -172,7 +172,7 @@ unsafe extern "C" fn stream_create(output: *mut sys::CUstream, flags: c_uint) ->
     let error = current().stream_create_error.load(Ordering::Acquire);
     if error == 0 || current().stream_partial_create.load(Ordering::Acquire) {
         let handle = current().next_handle.fetch_add(1, Ordering::Relaxed);
-        current().streams.lock().unwrap().insert(handle, None);
+        current().streams.lock().unwrap().insert(handle, Vec::new());
         unsafe {
             *output = handle as sys::CUstream;
         }
@@ -206,7 +206,7 @@ unsafe extern "C" fn stream_destroy(stream: sys::CUstream) -> Status {
             .unwrap()
             .remove(&(stream as usize))
             .unwrap();
-        assert!(pending.is_none(), "destroy is not a DMA drain receipt");
+        assert!(pending.is_empty(), "destroy is not a DMA drain receipt");
     }
     status(error)
 }
@@ -241,13 +241,13 @@ unsafe extern "C" fn event_record(completion: sys::CUevent, stream: sys::CUstrea
 fn drain(stream: usize) -> Status {
     let error = current().sync_error.load(Ordering::Acquire);
     if error == 0 {
-        if let Some(copy) = current()
+        for copy in current()
             .streams
             .lock()
             .unwrap()
             .get_mut(&stream)
             .unwrap()
-            .take()
+            .drain(..)
         {
             // Complete only here, never at enqueue: early staging release/read
             // would leave these pointers dangling or expose unchanged bytes.
@@ -273,8 +273,8 @@ fn copy_held(device: &Device, stream: usize) -> bool {
     let address = device.query_hold_address.load(Ordering::Acquire);
     address != 0
         && device.streams.lock().unwrap()[&stream]
-            .as_ref()
-            .is_some_and(|copy| copy.source == address || copy.destination == address)
+            .iter()
+            .any(|copy| copy.source == address || copy.destination == address)
 }
 
 unsafe extern "C" fn event_query(completion: sys::CUevent) -> Status {
@@ -348,18 +348,17 @@ fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usi
         .lock()
         .unwrap()
         .push((source, destination, length));
-    let previous = current()
+    current()
         .streams
         .lock()
         .unwrap()
         .get_mut(&(stream as usize))
         .unwrap()
-        .replace(PendingCopy {
+        .push(PendingCopy {
             source,
             destination,
             length,
         });
-    assert!(previous.is_none(), "copy/event reused with pending DMA");
 }
 fn enter_copy_gate() -> bool {
     let gate = current().copy_gate.lock().unwrap().take();
@@ -725,7 +724,7 @@ unsafe extern "C" fn ipc_close(address: u64) -> Status {
             .lock()
             .unwrap()
             .values()
-            .all(Option::is_none),
+            .all(Vec::is_empty),
         "close is not a DMA receipt"
     );
     let error = current().ipc_close_error.load(Ordering::Acquire);
@@ -784,7 +783,7 @@ pub(super) fn wait_pending(device: &Device, count: usize) {
             .lock()
             .unwrap()
             .values()
-            .filter(|copy| copy.is_some())
+            .filter(|copy| !copy.is_empty())
             .count();
         if pending == count && device.event_queries.load(Ordering::Acquire) != 0 {
             return;
