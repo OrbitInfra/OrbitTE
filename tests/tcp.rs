@@ -139,11 +139,7 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
         .unwrap();
     let valid = request(&local, region(&peer, export.id()), 0, 0, 8);
-    for transport in [
-        orbit_te::Transport::Nvlink,
-        #[cfg(not(feature = "cuda"))]
-        orbit_te::Transport::Tcp,
-    ] {
+    let rejects_staging = |transport| {
         let mut invalid = valid.clone();
         invalid.remote_staging = true;
         invalid.transport = transport;
@@ -152,7 +148,10 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
             Err(Error::Unavailable(_))
         ));
         assert_eq!(requester.stats().unwrap().inflight_batches, 0);
-    }
+    };
+    rejects_staging(orbit_te::Transport::Nvlink);
+    #[cfg(not(feature = "cuda"))]
+    rejects_staging(orbit_te::Transport::Tcp);
     for (label, local_address, remote_address, length, overflowing) in [
         ("local overflow", u64::MAX, valid.remote_address, 8, true),
         ("remote overflow", valid.local_address, u64::MAX, 8, true),
