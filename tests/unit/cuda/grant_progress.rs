@@ -127,6 +127,10 @@ fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
         )
         .unwrap();
     wait_until(|| hold.0.lock().unwrap().0);
+    wait_until(|| {
+        let stats = requester.stats().unwrap().rdma.unwrap();
+        stats.posted_work_requests == 1 && stats.work_requests == 1
+    });
     wait_until(|| cold.as_ref().unwrap().polls() >= if registration { 1 } else { 3 });
     cold.as_ref().unwrap().assert_held();
     let stats = requester.stats().unwrap().rdma.unwrap();
