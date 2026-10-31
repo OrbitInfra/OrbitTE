@@ -23,6 +23,7 @@ fn request(
     length: usize,
 ) -> TransferRequest {
     TransferRequest {
+        remote_staging: false,
         transport: orbit_te::Transport::Tcp,
         local_address: local.base_address() + local_offset as u64,
         remote_address: remote.base_address() + remote_offset as u64,
@@ -138,6 +139,20 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
         .unwrap();
     let valid = request(&local, region(&peer, export.id()), 0, 0, 8);
+    for transport in [
+        orbit_te::Transport::Nvlink,
+        #[cfg(not(feature = "cuda"))]
+        orbit_te::Transport::Tcp,
+    ] {
+        let mut invalid = valid.clone();
+        invalid.remote_staging = true;
+        invalid.transport = transport;
+        assert!(matches!(
+            requester.submit_and_wait(TransferOp::Write, &peer, &[valid.clone(), invalid], TIMEOUT),
+            Err(Error::Unavailable(_))
+        ));
+        assert_eq!(requester.stats().unwrap().inflight_batches, 0);
+    }
     for (label, local_address, remote_address, length, overflowing) in [
         ("local overflow", u64::MAX, valid.remote_address, 8, true),
         ("remote overflow", valid.local_address, u64::MAX, 8, true),
@@ -160,6 +175,7 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         ),
     ] {
         let invalid = TransferRequest {
+            remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address,
             remote_address,
@@ -439,12 +455,14 @@ fn two_process_restart_fences_old_authority() {
     assert_eq!(remote.base_address(), process.address);
     let requests = [
         TransferRequest {
+            remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address(),
             remote_address: process.address + 8192,
             length: 512,
         },
         TransferRequest {
+            remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address() + 512,
             remote_address: process.address + 16384,
@@ -486,6 +504,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: orbit_te::Transport::Tcp,
                     local_address: local.base_address(),
                     remote_address: process.address + 128,
@@ -545,6 +564,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Read,
                 &refreshed,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: orbit_te::Transport::Tcp,
                     local_address: local.base_address(),
                     remote_address: replacement.address,

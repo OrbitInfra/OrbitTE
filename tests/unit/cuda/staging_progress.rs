@@ -63,6 +63,7 @@ fn local_slot_advances_while_remote_delegate_completion_is_pending() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: true,
                         transport,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 1,
@@ -164,6 +165,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport,
                     local_address: local.base_address() + 2,
                     remote_address: remote.base_address() + 1,
@@ -268,6 +270,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport,
                     local_address: local.base_address() + 2,
                     remote_address: remote.base_address() + 1,
@@ -405,6 +408,7 @@ fn worker_panic_retains_actual_owners_and_possible_write_effect() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: true,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 2,
                     remote_address: remote.base_address() + 1,

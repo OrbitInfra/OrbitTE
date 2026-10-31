@@ -29,12 +29,14 @@ fn capacity_ids_append_and_sealed_status_follow_actual_tcp_bytes() {
         .unwrap();
     let requests = [
         TransferRequest {
+            remote_staging: false,
             transport: crate::Transport::Tcp,
             local_address: local.base_address(),
             remote_address: remote.base_address() + 8,
             length: 8,
         },
         TransferRequest {
+            remote_staging: false,
             transport: crate::Transport::Tcp,
             local_address: local.base_address() + 16,
             remote_address: remote.base_address(),
@@ -125,6 +127,7 @@ fn rejected_group_changes_no_tasks_and_later_groups_survive_a_failed_prefix() {
         .unwrap();
     source.unregister_memory(&retired).unwrap();
     let request = |local_offset, remote: &crate::RegisteredMemory| TransferRequest {
+        remote_staging: false,
         transport: crate::Transport::Tcp,
         local_address: local.base_address() + local_offset,
         remote_address: remote.base_address(),
@@ -132,6 +135,7 @@ fn rejected_group_changes_no_tasks_and_later_groups_survive_a_failed_prefix() {
     };
     let valid = request(0, &first);
     let invalid = TransferRequest {
+        remote_staging: false,
         transport: crate::Transport::Tcp,
         local_address: 0,
         ..valid.clone()
@@ -247,6 +251,7 @@ fn empty_batches_and_notification_failure_keep_data_completion_separate() {
     };
     source.send_local_notification(&notification).unwrap();
     let request = TransferRequest {
+        remote_staging: false,
         transport: crate::Transport::Tcp,
         local_address: local.base_address(),
         remote_address: remote.base_address(),

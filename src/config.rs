@@ -45,9 +45,9 @@ pub struct EngineConfig {
     /// One preserves serial copies; larger values overlap CUDA work and CROSS.
     #[cfg(feature = "cuda")]
     pub staging_pipeline_depth: usize,
-    /// Opt-in Pin/Delegate/Unpin sessions for remote CUDA ranges.
-    /// Both peers must enable this. TCP/RDMA remain the payload transports;
-    /// remote host memory and explicit GPU Direct RDMA are rejected.
+    /// Allow incoming Pin/Delegate/Unpin sessions for this engine's CUDA ranges.
+    /// Outgoing requests select remote staging independently. TCP/RDMA remain
+    /// the payload transports; Direct CUDA registration can coexist with Pin.
     #[cfg(feature = "cuda")]
     pub remote_staging: bool,
     #[cfg(feature = "rdma")]
@@ -127,16 +127,6 @@ impl EngineConfig {
         #[cfg(feature = "rdma")]
         if let Some(config) = &self.rdma {
             config.validate()?;
-        }
-        #[cfg(all(feature = "cuda", feature = "rdma"))]
-        if self.remote_staging
-            && self.rdma.as_ref().is_some_and(|config| {
-                config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
-            })
-        {
-            return Err(Error::InvalidConfig(
-                "remote staging conflicts with GPU Direct RDMA",
-            ));
         }
         if self.max_registered_regions == 0 || self.max_registered_regions > 4096 {
             return Err(Error::InvalidConfig(

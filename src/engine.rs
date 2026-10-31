@@ -30,6 +30,10 @@ pub enum Transport {
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 pub struct TransferRequest {
+    /// Use Pin/Delegate/Unpin for the remote CUDA range over TCP or RDMA.
+    /// The source must enable EngineConfig::remote_staging. False uses the
+    /// selected transport's ordinary memory policy, including local staging.
+    pub remote_staging: bool,
     pub transport: Transport,
     pub local_address: u64,
     pub remote_address: u64,
@@ -38,6 +42,8 @@ pub struct TransferRequest {
 
 #[derive(Clone)]
 pub(crate) struct PreparedTransfer {
+    #[cfg(feature = "cuda")]
+    pub(crate) remote_staging: bool,
     pub(crate) transport: Transport,
     pub(crate) local: RegisteredMemory,
     pub(crate) local_offset: usize,
@@ -433,6 +439,15 @@ impl TransferEngine {
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
         for request in requests {
+            if request.remote_staging && request.transport == Transport::Nvlink {
+                return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
+            }
+            #[cfg(not(feature = "cuda"))]
+            if request.remote_staging {
+                return Err(Error::Unavailable(
+                    "remote staging requires --features cuda",
+                ));
+            }
             if request.transport == Transport::Rdma {
                 #[cfg(feature = "rdma")]
                 {
@@ -479,6 +494,8 @@ impl TransferEngine {
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
             prepared.push(PreparedTransfer {
+                #[cfg(feature = "cuda")]
+                remote_staging: request.remote_staging,
                 transport: request.transport,
                 local,
                 local_offset,
@@ -566,7 +583,7 @@ impl TransferEngine {
             };
             let result = match request.transport {
                 #[cfg(feature = "cuda")]
-                Transport::Tcp | Transport::Rdma if self.config.remote_staging => {
+                Transport::Tcp | Transport::Rdma if request.remote_staging => {
                     single(self.source.proxy.transfer_remote(
                         *operation,
                         peer,

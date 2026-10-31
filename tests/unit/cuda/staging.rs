@@ -54,6 +54,7 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
             )
             .unwrap();
         let mut request = TransferRequest {
+            remote_staging: false,
             transport: route[0],
             local_address: local.base_address() + 2,
             remote_address: remote.base_address() + 1,
@@ -322,6 +323,7 @@ fn queued_cancellation_does_not_release_the_running_chunk_or_report_partial_succ
     let requests: Vec<_> = [0, 8]
         .into_iter()
         .map(|offset| TransferRequest {
+            remote_staging: false,
             transport: Transport::Tcp,
             local_address: local.base_address() + offset,
             remote_address: remote.base_address(),
@@ -416,6 +418,7 @@ fn staged_rdma_cuda_failure_survives_a_drained_cq_cleanup_error() {
                 },
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),

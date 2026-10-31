@@ -55,6 +55,7 @@ fn simultaneous_first_parents_wait_for_fixed_width_then_share_without_reopening(
                     let requester = Arc::clone(&requester);
                     let peer = peer.clone();
                     let request = TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + (parent * LENGTH) as u64,
                         remote_address: remote.base_address() + (parent * LENGTH) as u64,
@@ -221,6 +222,7 @@ fn simultaneous_bidirectional_first_contact_does_not_wait_on_the_opposite_role()
             let peer = peer.clone();
             let start = Arc::clone(&start);
             let request = TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + (parent * LENGTH) as u64,
                 remote_address: remote.base_address() + (parent * LENGTH) as u64,

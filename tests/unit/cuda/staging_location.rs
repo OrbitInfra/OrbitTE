@@ -290,6 +290,7 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
                 )
                 .unwrap();
             let request = TransferRequest {
+                remote_staging: true,
                 transport,
                 local_address: local.base_address() + 2,
                 remote_address: remote.base_address() + 1,

@@ -554,6 +554,7 @@ fn reused_grant_exhaustion_and_pre_open_async_fault_preserve_its_creating_identi
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
                         remote_address: remote.base_address(),

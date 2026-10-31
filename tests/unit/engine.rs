@@ -196,6 +196,7 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address(),
                 remote_address: remote.base_address(),
@@ -351,6 +352,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address(),
                 remote_address: remote.base_address(),
@@ -464,6 +466,7 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
                         remote_address: address,
@@ -554,6 +557,7 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
                 )
                 .unwrap();
             let request = TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + 3,
                 remote_address: remote.base_address() + 9,
@@ -633,6 +637,7 @@ fn failed_direct_write_can_change_remote_bytes_without_done_and_always_reports_u
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),
@@ -683,6 +688,7 @@ fn failed_direct_read_receipt_preserves_local_changes_and_retains_remote_access_
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address(),
                 remote_address: remote.base_address(),
@@ -756,6 +762,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address(),
                 remote_address: remote.base_address(),
@@ -868,6 +875,7 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
             });
         }
         let request = TransferRequest {
+            remote_staging: false,
             transport: Transport::Rdma,
             local_address: local.base_address(),
             remote_address: remote.base_address(),

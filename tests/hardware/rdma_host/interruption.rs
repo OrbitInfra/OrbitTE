@@ -45,6 +45,7 @@ pub(super) fn pending(
                 },
                 peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: memory.base_address()
                         + (parent * case.bank()

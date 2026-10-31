@@ -624,6 +624,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             config.staging_pipeline_depth, config.staging_chunk_count, config.staging_chunk_size
         );
     }
+    let remote_staging = config.remote_staging;
     let engine = Arc::new(TransferEngine::new(config)?);
     let source_bytes = initial(seed, payload);
     let initial_bytes = if role == "source" {
@@ -689,6 +690,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let requests: Vec<_> = entries
             .iter()
             .map(|(local, source, length)| TransferRequest {
+                remote_staging,
                 transport,
                 local_address: memory.base_address() + *local as u64,
                 remote_address: remote + *source as u64,

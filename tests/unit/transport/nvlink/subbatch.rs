@@ -89,6 +89,7 @@ pub(crate) fn run_case(
     };
     let requests: Vec<_> = (0..3)
         .map(|i| TransferRequest {
+            remote_staging: false,
             transport: Transport::Nvlink,
             local_address: registrations[i].base_address() + 7,
             remote_address: remote.base_address() + 5 + offsets[i],
@@ -248,6 +249,7 @@ pub(crate) fn run_case(
             .open_segment(tcp_source.endpoint(), tcp_source.source_epoch(), timeout)
             .unwrap();
         let tcp_request = TransferRequest {
+            remote_staging: false,
             transport: Transport::Tcp,
             local_address: tcp_local.base_address(),
             remote_address: tcp_remote.base_address(),

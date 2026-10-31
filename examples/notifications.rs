@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         TransferOp::Read,
         &peer,
         &[TransferRequest {
+            remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address(),
             remote_address: peer.regions()[0].base_address(),

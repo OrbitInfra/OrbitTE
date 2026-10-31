@@ -74,6 +74,7 @@ fn partial_native_setup_keeps_other_cross_errors_observable() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            remote_staging: true,
                             transport: Transport::Rdma,
                             local_address: local.base_address() + 2,
                             remote_address: remote.base_address() + 1,
@@ -215,6 +216,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
                         remote_address: remote.base_address() + 1,

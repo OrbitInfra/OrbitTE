@@ -370,6 +370,7 @@ fn multirail_peer() {
                                 operation,
                                 &peer,
                                 &[TransferRequest {
+                                    remote_staging: false,
                                     transport: Transport::Rdma,
                                     local_address: local,
                                     remote_address: remote

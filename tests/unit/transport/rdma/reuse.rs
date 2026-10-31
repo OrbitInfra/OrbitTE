@@ -19,6 +19,7 @@ fn transfer(
             operation,
             &peer,
             &[TransferRequest {
+                remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + offset as u64,
                 remote_address: remote.base_address() + offset as u64,
@@ -544,6 +545,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),
@@ -885,6 +887,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                     TransferOp::Write,
                     &peer,
                     &[TransferRequest {
+                        remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
                         remote_address: remote.base_address(),
@@ -1072,6 +1075,7 @@ fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
                     remote_address: remote.base_address(),
