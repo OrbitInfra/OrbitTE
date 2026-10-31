@@ -2,7 +2,7 @@ use super::ipc::owned;
 use super::*;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::Barrier;
+use std::sync::{Barrier, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -13,11 +13,14 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 // Both real engine handlers run in this process with the CUDA shim. The relay
 // substitutes only process identities, and optionally drops/mutates frames.
 // This exercises the public engine boundary; it is not hardware IPC evidence.
+type CloseGate = Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>;
+
 struct Relay {
     endpoint: SocketAddr,
     stop: Arc<AtomicBool>,
     task: Option<JoinHandle<()>>,
     fault: Arc<AtomicUsize>,
+    close_gate: Arc<Mutex<CloseGate>>,
 }
 impl Relay {
     fn new(source: SocketAddr) -> Self {
@@ -26,15 +29,17 @@ impl Relay {
         let endpoint = listener.local_addr().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let fault = Arc::new(AtomicUsize::new(0));
-        let (stopping, faults) = (stop.clone(), fault.clone());
+        let close_gate = Arc::new(Mutex::new(None));
+        let (stopping, faults, closing) = (stop.clone(), fault.clone(), close_gate.clone());
         let task = thread::spawn(move || {
             let mut children = Vec::new();
             while !stopping.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((client, _)) => {
                         let faults = faults.clone();
+                        let closing = closing.clone();
                         children.push(thread::spawn(move || {
-                            let _ = relay(client, source, &faults);
+                            let _ = relay(client, source, &faults, &closing);
                         }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -52,6 +57,7 @@ impl Relay {
             stop,
             task: Some(task),
             fault,
+            close_gate,
         }
     }
     fn peer(&self, engine: &TransferEngine, memory: &crate::RegisteredMemory) -> RemoteSegment {
@@ -75,7 +81,12 @@ impl Drop for Relay {
         self.task.take().unwrap().join().unwrap();
     }
 }
-fn relay(mut client: TcpStream, source: SocketAddr, fault: &AtomicUsize) -> std::io::Result<()> {
+fn relay(
+    mut client: TcpStream,
+    source: SocketAddr,
+    fault: &AtomicUsize,
+    close_gate: &Mutex<CloseGate>,
+) -> std::io::Result<()> {
     let mut server = TcpStream::connect(source)?;
     for socket in [&client, &server] {
         socket.set_read_timeout(Some(TIMEOUT))?;
@@ -92,6 +103,11 @@ fn relay(mut client: TcpStream, source: SocketAddr, fault: &AtomicUsize) -> std:
     let mut reply = [0; 36];
     server.read_exact(&mut reply)?;
     if request[10] == 12 {
+        let gate = close_gate.lock().unwrap().take();
+        if let Some((entered, resume)) = gate {
+            entered.send(()).unwrap();
+            resume.recv_timeout(TIMEOUT).unwrap();
+        }
         if reply[10] == 0
             && fault
                 .compare_exchange(2, 0, Ordering::AcqRel, Ordering::Acquire)
@@ -327,7 +343,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
     let remote = owned(&src, true);
     let local = owned(&dst, false);
     let source = engine();
-    let requester = engine();
+    let requester = engine_with_limit(1);
     let exported = register(&source, &remote);
     let registered = register(&requester, &local);
     let relay = Relay::new(source.endpoint());
@@ -364,6 +380,27 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
         .unwrap();
     assert!(matches!(timed_out.failure.unwrap().error, Error::Timeout));
     assert_eq!(event_count(&dst, "ipc-open"), 1);
+    assert_eq!(event_count(&dst, "ipc-close"), 0);
+    let other_device = allocation(&[0x19; 128]);
+    let other_memory = owned(&other_device, true);
+    let other = register(&source, &other_memory);
+    let rejected = requester
+        .submit_and_wait(
+            TransferOp::Read,
+            &relay.peer(&source, &other),
+            &[request(&waiting_local, &other)],
+            TIMEOUT,
+        )
+        .unwrap();
+    assert!(matches!(
+        rejected.failure.unwrap().error,
+        Error::ResourceExhausted
+    ));
+    assert!(matches!(
+        requester.flush_nvlink_cache(Duration::from_millis(5)),
+        Err(Error::Timeout)
+    ));
+    assert_eq!(event_count(&other_device, "ipc-export"), 0);
     assert_eq!(event_count(&dst, "ipc-close"), 0);
     let barrier = Arc::new(Barrier::new(8));
     let tasks: Vec<_> = (0..8)
@@ -490,12 +527,12 @@ fn mutually_cached_engines_close_outgoing_imports_before_incoming_exports() {
 }
 
 #[test]
-fn cached_ipc_entry_limit_rejects_before_export_and_native_close_is_not_retried() {
+fn cached_ipc_source_limit_rejects_before_export_and_native_close_is_not_retried() {
     for source_limit in [1, 2] {
         let dst = allocation(&[0xa5; 128]);
         let local = owned(&dst, false);
         let source = engine_with_limit(source_limit);
-        let requester = engine();
+        let requester = engine_with_limit(3);
         let registered = register(&requester, &local);
         let relay = Relay::new(source.endpoint());
         let remotes: Vec<_> = (0..3)
@@ -815,3 +852,6 @@ fn cached_export_keeps_actual_registration_and_allocation_until_close_receipt() 
         }
     }
 }
+
+#[path = "ipc_cache/reclaim.rs"]
+mod reclaim;

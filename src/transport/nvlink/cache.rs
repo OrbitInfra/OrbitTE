@@ -26,6 +26,7 @@ pub(super) struct CachedMapping {
     pub may_be_exposed: bool,
     pub closing: bool,
     pub uncertain: bool,
+    idle_since: Instant,
 }
 
 impl CachedMapping {
@@ -37,6 +38,7 @@ impl CachedMapping {
             may_be_exposed: false,
             closing: false,
             uncertain: false,
+            idle_since: Instant::now(),
         })
     }
 
@@ -95,11 +97,17 @@ impl CachedMapping {
     }
 }
 
-// None is an exclusively checked-out slot, not a missing mapping. The key stays
-// charged while its first grant/open is in flight, preventing duplicate opens.
+// A replacement reserves its new key while the old key still owns capacity.
+// Boxed idle owners keep the map and lease moves small; hits allocate nothing.
+enum RelocationSlot {
+    Idle(Box<CachedMapping>),
+    CheckedOut,
+    Reclaiming(RelocationKey),
+}
+
 pub(super) struct RelocationCache {
     pub limit: usize,
-    entries: Mutex<HashMap<RelocationKey, Option<CachedMapping>>>,
+    entries: Mutex<HashMap<RelocationKey, RelocationSlot>>,
     changed: Condvar,
 }
 
@@ -115,9 +123,11 @@ impl RelocationCache {
     pub(super) fn acquire(
         &self,
         key: RelocationKey,
+        transport: &NVLinkTransport,
+        requester: SourceEpoch,
         deadline: Instant,
     ) -> Result<RelocationLease<'_>> {
-        self.checkout(key, deadline, true)?
+        self.checkout(key, deadline, Some((transport, requester)))?
             .ok_or(Error::Internal("missing reserved relocation"))
     }
 
@@ -126,14 +136,14 @@ impl RelocationCache {
         key: RelocationKey,
         deadline: Instant,
     ) -> Result<Option<RelocationLease<'_>>> {
-        self.checkout(key, deadline, false)
+        self.checkout(key, deadline, None)
     }
 
     fn checkout(
         &self,
         key: RelocationKey,
         deadline: Instant,
-        create: bool,
+        create: Option<(&NVLinkTransport, SourceEpoch)>,
     ) -> Result<Option<RelocationLease<'_>>> {
         let mut entries = self
             .entries
@@ -142,36 +152,85 @@ impl RelocationCache {
         loop {
             remaining(deadline)?;
             if let Some(slot) = entries.get_mut(&key) {
-                if let Some(entry) = slot.take() {
+                if matches!(slot, RelocationSlot::Idle(_)) {
+                    let RelocationSlot::Idle(entry) =
+                        std::mem::replace(slot, RelocationSlot::CheckedOut)
+                    else {
+                        return Err(Error::Internal("missing idle relocation"));
+                    };
                     return Ok(Some(RelocationLease {
                         cache: self,
                         key,
                         entry: Some(entry),
                     }));
                 }
-                entries = self
-                    .changed
-                    .wait_timeout(entries, remaining(deadline)?)
-                    .map_err(|_| Error::Internal("NVLink relocation lock poisoned"))?
-                    .0;
             } else {
-                if !create {
+                let Some((transport, requester)) = create else {
                     return Ok(None);
+                };
+                // Only misses scan. A target reservation must be checked even
+                // if an unrelated close freed capacity during reclamation.
+                let replacing = entries.values().any(
+                    |slot| matches!(slot, RelocationSlot::Reclaiming(target) if *target == key),
+                );
+                if !replacing {
+                    if entries.len() < self.limit {
+                        entries
+                            .try_reserve(1)
+                            .map_err(|_| Error::ResourceExhausted)?;
+                        let entry = Box::new(CachedMapping::new()?);
+                        entries.insert(key, RelocationSlot::CheckedOut);
+                        return Ok(Some(RelocationLease {
+                            cache: self,
+                            key,
+                            entry: Some(entry),
+                        }));
+                    }
+                    let oldest = entries
+                        .iter_mut()
+                        .filter_map(|(key, slot)| match slot {
+                            RelocationSlot::Idle(entry) if !entry.uncertain => {
+                                Some((*key, entry.idle_since, slot))
+                            }
+                            _ => None,
+                        })
+                        .min_by_key(|(_, since, _)| *since);
+                    let Some((old_key, _, slot)) = oldest else {
+                        return Err(Error::ResourceExhausted);
+                    };
+                    let RelocationSlot::Idle(entry) =
+                        std::mem::replace(slot, RelocationSlot::Reclaiming(key))
+                    else {
+                        return Err(Error::Internal("missing reclaimable relocation"));
+                    };
+                    let mut lease = RelocationLease {
+                        cache: self,
+                        key: old_key,
+                        entry: Some(entry),
+                    };
+                    drop(entries);
+                    let entry = lease
+                        .entry
+                        .as_mut()
+                        .ok_or(Error::Internal("missing reclaimed relocation"))?;
+                    entry.close(transport, old_key, requester, deadline)?;
+                    **entry = CachedMapping::new()?;
+                    let mut entries = self
+                        .entries
+                        .lock()
+                        .map_err(|_| Error::Internal("NVLink relocation lock poisoned"))?;
+                    entries.remove(&old_key);
+                    entries.insert(key, RelocationSlot::CheckedOut);
+                    lease.key = key;
+                    self.changed.notify_all();
+                    return Ok(Some(lease));
                 }
-                if entries.len() >= self.limit {
-                    return Err(Error::ResourceExhausted);
-                }
-                entries
-                    .try_reserve(1)
-                    .map_err(|_| Error::ResourceExhausted)?;
-                let entry = CachedMapping::new()?;
-                entries.insert(key, None);
-                return Ok(Some(RelocationLease {
-                    cache: self,
-                    key,
-                    entry: Some(entry),
-                }));
             }
+            entries = self
+                .changed
+                .wait_timeout(entries, remaining(deadline)?)
+                .map_err(|_| Error::Internal("NVLink relocation lock poisoned"))?
+                .0;
         }
     }
 
@@ -189,14 +248,15 @@ impl RelocationCache {
 pub(super) struct RelocationLease<'a> {
     cache: &'a RelocationCache,
     pub key: RelocationKey,
-    pub entry: Option<CachedMapping>,
+    pub entry: Option<Box<CachedMapping>>,
 }
 
 impl Drop for RelocationLease<'_> {
     fn drop(&mut self) {
         let mut entries = self.cache.entries.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(entry) = self.entry.take() {
-            entries.insert(self.key, Some(entry));
+        if let Some(mut entry) = self.entry.take() {
+            entry.idle_since = Instant::now();
+            entries.insert(self.key, RelocationSlot::Idle(entry));
         } else {
             entries.remove(&self.key);
         }

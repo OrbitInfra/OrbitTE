@@ -801,6 +801,20 @@ impl TransferEngine {
         Ok(())
     }
 
+    /// Closes cached CUDA IPC imports captured at this call without fencing new
+    /// submissions. Each captured key waits for its current borrower, bounded
+    /// by the deadline; concurrent submissions can refill the cache. Stop
+    /// submitting first when a completely empty cache is required. Failures
+    /// retain close obligations, and a later flush retries only safe receipts.
+    /// Native close cannot be preempted. Disabled caching is a no-op.
+    #[cfg(feature = "cuda")]
+    pub fn flush_nvlink_cache(&self, timeout: Duration) -> Result<()> {
+        if let Some(transport) = &self.source.nvlink {
+            transport.close_imports(self.source.epoch, deadline(timeout)?)?;
+        }
+        Ok(())
+    }
+
     /// Permanently closes outgoing admission and waits for accepted calls,
     /// including queued async work, to release physical owners. Timeout leaves
     /// admission closed and permits another wait. Source admission is separate.
