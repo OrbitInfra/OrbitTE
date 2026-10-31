@@ -39,6 +39,7 @@ mod staging_location;
 mod staging_pipeline;
 mod staging_progress;
 mod staging_shards;
+mod stream_pool;
 use shim::*;
 
 #[test]

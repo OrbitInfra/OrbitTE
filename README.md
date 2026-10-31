@@ -98,7 +98,8 @@ cross-submission import caching passes 34 installed cases plus four independent
 repeats, with bounded mappings and explicit exporter close receipts for a fixed
 working set. Current source additionally supports idle LRU reclamation,
 continuing flush and [grouped CUDA submission](docs/cuda-ipc.md#completion-and-shutdown):
-ordered copies share one completion event and reuse native stream resources.
+ordered copies share one completion event. A bounded [CUDA stream/event pool](docs/cuda-ipc.md#shared-cuda-stream-pool)
+reuses resources across changing local allocations in the same native context.
 These changes have source checks; their current installed DMA and performance
 qualification remain open. Source allocations stay loaned until acknowledged
 mapping close.

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{Error, Result};
 
-/// Physical whole-allocation IPC charges, sampled independently of batch bytes.
+/// Physical IPC and stream-slot charges, sampled independently of batch bytes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NVLinkStats {
     pub exports: usize,
@@ -10,6 +10,12 @@ pub struct NVLinkStats {
     pub allocation_bytes: usize,
     pub retained_exports: usize,
     pub retained_imports: usize,
+    /// Charged stream/event slots, including construction and uncertain cleanup.
+    pub stream_slots: usize,
+    /// Slots currently borrowed, being created or being cleaned up.
+    pub active_streams: usize,
+    /// Uncertain slots excluded from reuse until process exit.
+    pub retained_streams: usize,
 }
 
 pub(super) struct MappingBudget {

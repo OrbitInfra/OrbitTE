@@ -20,11 +20,13 @@ mod pinned;
 mod rdma;
 mod staging;
 mod stream;
+mod stream_pool;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
 pub(crate) use pinned::PinnedAllocation;
 pub use pinned::allocate_pinned_host;
 pub(crate) use staging::StagingCopy;
 use stream::CopyStream;
+pub(crate) use stream_pool::{CUDAStreamHandle, CUDAStreamPool};
 
 static RETAINED_DEVICE: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_PINNED: AtomicUsize = AtomicUsize::new(0);

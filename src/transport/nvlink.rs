@@ -15,6 +15,7 @@ use export::ExportCache;
 use mapping::OpenedMapping;
 use subbatch::{NVLinkSubBatch, subbatch_len};
 
+use crate::cuda::CUDAStreamPool;
 use crate::cuda::ipc::IpcExport;
 use crate::engine::{PreparedSubmission, remaining};
 use crate::memory::checked_range;
@@ -90,21 +91,29 @@ pub(crate) struct NVLinkTransport {
     identity: Identity,
     budget: Arc<MappingBudget>,
     imports: RelocationCache,
+    pub(crate) stream_pool: Arc<CUDAStreamPool>,
     pub(crate) exports: ExportCache,
 }
 
 impl NVLinkTransport {
-    pub(crate) fn new(max_bytes: usize, cache_entries: usize) -> Result<Self> {
+    pub(crate) fn new(max_bytes: usize, cache_entries: usize, stream_count: usize) -> Result<Self> {
         Ok(Self {
             identity: Identity::local()?,
             budget: MappingBudget::new(max_bytes),
             imports: RelocationCache::new(cache_entries),
+            stream_pool: CUDAStreamPool::new(stream_count)?,
             exports: ExportCache::new(cache_entries),
         })
     }
 
     pub(crate) fn stats(&self) -> Result<NVLinkStats> {
-        self.budget.stats()
+        let mut stats = self.budget.stats()?;
+        (
+            stats.stream_slots,
+            stats.active_streams,
+            stats.retained_streams,
+        ) = self.stream_pool.stats()?;
+        Ok(stats)
     }
 
     pub(crate) fn transfer(
@@ -249,9 +258,11 @@ impl NVLinkTransport {
                             batch.mapping.open(handle)?;
                         }
                         let subbatch = NVLinkSubBatch::new(requests, start, remote_offset)?;
+                        let mut stream = self.stream_pool.acquire(&memory, deadline)?;
                         let completion = batch.mapping.copy_group(
                             &subbatch.copies,
                             operation == TransferOp::Write,
+                            &mut stream,
                             |index| {
                                 // The engine began task zero before acquiring the grant.
                                 if index != 0 && !begin(index) {
