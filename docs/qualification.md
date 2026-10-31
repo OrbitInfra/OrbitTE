@@ -29,6 +29,51 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Cold RDMA connection acquisition
+
+Requester acquisition now retains one admitted grant lease while polling the
+canonical fixed-width endpoint array. A pending cold builder no longer prevents
+the staging loop from observing another accepted CROSS failure, its original
+deadline or worker stop. Synchronous callers use the same state and selection
+rules. The [contract](staging.md#cold-rdma-connection-acquisition) defines the
+remaining synchronous native boundaries.
+
+Evidence directory: `/root/orbitte-artifacts/cold-connection-progress-20261031/`.
+Frozen TENT reference: `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+Independent source review accepts `06f685d` for this source/CPU boundary; see
+`independent-review/source-review-06f685d.json`. The CPU controls use two
+independent verbs ABI contexts, actual endpoint construction reservations and
+public GPU staging submissions. One accepted WR is withheld on the first context
+while the second CROSS repeatedly reaches the unpublished second array. READ/WRITE cases
+cover completion and pair reuse, another CROSS error, failed native cleanup,
+worker stop and deadline. Pending polls keep one charge; abort returns that lease
+without cancelling the other builder or releasing an uncertain sibling.
+The GPU copy loan can drain while RDMA uncertainty retains pinned host backing,
+the actual CUDA owner and requester admission. This is not hardware DMA evidence.
+
+`gates.json` records 11 primary gates on `173ae51`; independent fresh targets
+pass the same 11 gates. Stable and Rust 1.85 each pass 229 RDMA units or
+344 combined units, eight integration tests and one doctest; five hardware
+units and one integration subprocess fixture are ignored in the parent runner.
+The source manifests bind all 289 tracked files. `06f685d` changes only the
+stop control: consume the released payload CQE before stopping, while the cold
+reservation remains held. Primary and independent targeted reruns pass all
+three public controls (10 READ/WRITE scenarios) on both toolchains; production
+code remains byte-identical to `173ae51`. Source CI passes all eight profiles,
+the frozen TENT CPU comparison and documentation.
+
+`independent-review/blocking-acquisition-control-173ae51/manifest.json` binds
+a fresh-target negative control: only the Acquire pending branch becomes a
+blocking loop. The unchanged error-observation test fails its first READ case
+at the two-second assertion, before the ten-second request deadline; later
+branches do not execute after that failure. Failed development controls and
+their corrections remain in `development-history.json`.
+
+No hardware task was requested. Installed v21 execution, real DMA overlap and
+performance remain unqualified. Native construction/connect/fill, eviction and
+failure drain, nonreusable retirement and source handlers retain synchronous
+limits; full ProxyManager parity remains open.
+
 ## Native RDMA setup progress
 
 Requester setup now advances partial path tables, parent admission and native
@@ -75,10 +120,11 @@ identify the final archive. Earlier development cleanup-order and Clippy failure
 are preserved in `development-history.json` and `primary-ca760b3-failed/`; the final
 source passes the original stop/drain and panic/effect assertions.
 
-Cold connection acquisition, local native construction/open/connect/fill,
-nonreusable retirement/copyback, failure drain and source handlers retain explicit
-synchronous boundaries. No new hardware task is requested. Installed v21, real
-DMA overlap and performance remain unqualified; location selection remains next.
+At this setup revision, cold acquisition and native construction/open/connect/fill,
+nonreusable retirement/copyback, failure drain and source handlers retained
+synchronous boundaries. The subsequent [cold acquisition](#cold-rdma-connection-acquisition)
+and [host location](#host-staging-location) stages cover their declared source
+contracts. Installed v21, real DMA overlap and performance remain unqualified.
 See [the setup contract](staging.md#native-rdma-setup-progress) for the frozen
 TENT correspondence and resource boundaries.
 

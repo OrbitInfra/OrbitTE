@@ -188,26 +188,20 @@ impl RdmaSetup {
                         Some(selection) => selection,
                         None => transport.allocate(entry.range.length, 1u64 << entry.local_id)?,
                     };
-                    let endpoint = transport.requester_grant(
-                        channel,
-                        &wire,
-                        &child,
-                        transport.reserve_grant(
-                            selection,
-                            &child.local,
-                            self.credits
-                                .as_ref()
-                                .ok_or(Error::Internal("missing parent grant credits"))?,
-                        )?,
-                        &entry.remote,
-                        self.remote_width.min(transport.config.num_lanes),
+                    let lease = transport.reserve_grant(
+                        selection,
+                        &child.local,
+                        self.credits
+                            .as_ref()
+                            .ok_or(Error::Internal("missing parent grant credits"))?,
                     )?;
                     self.active = Some(RequesterSetup::new(
                         wire,
                         child,
                         self.epoch,
                         entry.remote.clone(),
-                        endpoint,
+                        lease,
+                        self.remote_width.min(transport.config.num_lanes),
                     ));
                     Phase::Slice
                 } else {

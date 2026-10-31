@@ -231,17 +231,15 @@ impl RdmaTransport {
                     .ok_or(Error::Internal("RDMA selector returned a masked NIC path"))?;
                 let remote = path::remote_path(local, &remote_paths)?;
                 pinned = Some((local.domain, remote.domain));
-                let endpoint = self.requester_grant(
-                    &channel,
-                    &wire,
-                    request,
+                let setup = requester::RequesterSetup::new(
+                    wire,
+                    request.clone(),
+                    epoch,
+                    remote.clone(),
                     self.reserve_grant(selection, &request.local, &credits)?,
-                    remote,
                     remote_width.min(self.config.num_lanes),
-                )?;
-                let Some(mut slice) =
-                    self.requester_slice(&mut channel, &wire, request, epoch, remote, endpoint)?
-                else {
+                );
+                let Some(mut slice) = self.requester_slice(&mut channel, setup)? else {
                     continue;
                 };
                 let transfer = (|| {

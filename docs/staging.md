@@ -165,7 +165,9 @@ worker stop also interrupts Pin and native setup socket waits. Requester native
 finish polls SEND and reusable-grant cleanup, retaining partial completion frames
 while other CROSS payloads remain queryable. Requester native setup also retains
 partial negotiation frames and yields to other submitted CROSS payload queries.
-Pin, cold connection acquisition, native construction, nonreusable QP
+Waiting for a cold requester QP builder also yields, preserving one grant lease
+and the canonical endpoint array until publication or rollback.
+Pin, native construction, nonreusable QP
 retirement, copyback, source handlers and ordinary local GPU snapshot/commit
 retain synchronous boundaries.
 Remaining control progress and broader location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
@@ -386,7 +388,7 @@ workers use synchronous send/receive. Its separate `hp_tcp` provider has async
 header/body/response state. OrbitTE uses explicit socket progress in its existing
 TCP provider, and scoped control results corresponding to `delegateAsync` and
 `RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
-claims wire compatibility. Native connection acquisition/construction, nonreusable QP retirement, source handlers,
+claims wire compatibility. Native connection construction, nonreusable QP retirement, source handlers,
 readiness notification and full asynchronous RPC parity remain open.
 
 ### Connection and Pin lifetime
@@ -466,6 +468,38 @@ No public active-cancel or engine-close ordering changes are introduced.
 [Source qualification](qualification.md#native-rdma-finish-progress) is separate
 from installed v21 execution, real DMA overlap and performance.
 
+### Cold RDMA connection acquisition
+
+Before a requester can send HELLO, `RequesterSetup::Acquire` owns exactly one
+`GrantLease`, including its parent grant credit and selected-device byte charge.
+`Connecting` retains the same `RdmaEndpoint` array and CQ lanes across polls. It
+tries idle claims, fixed-width construction reservations and published-pair
+sharing in the existing order. If another builder occupies every unpublished
+slot, it returns pending without sending HELLO or creating another QP.
+The staging loop can then query other accepted CROSS payloads and check its
+original deadline and worker stop flag. Batch cancellation semantics are unchanged.
+
+Publication makes the pair shareable; an unbound builder rollback makes only its
+slot available again. A pending waiter cannot release another builder's slot or
+recreate the canonical array. Its own lease returns on abort, even if another
+CROSS must retain a native QP, MR, host chunk and parent admission. A constructed
+grant still follows the existing abort/drain path. All parent grants must validate
+before that parent's first payload; the outer CROSS framing owner stays exclusive.
+
+Ordinary synchronous requester transfers drive the same `RequesterSetup` states.
+Passive/source connection acquisition drives the same `Connecting` selection
+logic with the existing endpoint condition-variable wait. No per-attempt thread,
+new wire frame, transport fallback or renewed deadline is introduced.
+
+Frozen TENT's `Workers::getEndpoint` / `RdmaTransport::getEndpoint`, context-owned
+`EndpointStore` and `RdmaEndPoint::connect` provide the corresponding resource
+boundaries. TENT performs a synchronous bootstrap outside its endpoint lock,
+then revalidates the peer and local QPs. This change makes OrbitTE's requester
+construction-slot wait pollable; it does not claim TENT bootstrap is asynchronous.
+Native context/CQ/QP/MR creation, connect/fill, eviction/failure drain and
+nonreusable retirement remain synchronous and are not preempted by this state.
+See [source qualification](qualification.md#cold-rdma-connection-acquisition).
+
 ### Native RDMA setup progress
 
 `RdmaSetup` owns a parent's device selections, grant credits, planned slices,
@@ -500,10 +534,10 @@ This follows frozen TENT `e2d6e8e`'s ProxyManager/transport/Workers ownership sp
 and submitted-batch observation. TENT's Workers can themselves perform endpoint
 bootstrap outside the endpoint lock; this change does not imply that TENT has
 universally asynchronous connection setup. OrbitTE retains its own v21 framing
-and exact-grant completion protocol. Cold-builder waits in `connection()`, native
-resource creation/open/connect/fill, failure drain and source handlers remain
-synchronous; locks and provider calls are not preemptible. Each shard still runs
-one session. [Source qualification](qualification.md#native-rdma-setup-progress)
+and exact-grant completion protocol. Passive/source cold-builder waits in
+`connection()`, native resource creation/open/connect/fill, failure drain and
+source handlers remain synchronous; locks and provider calls are not preemptible.
+Each shard still runs one session. [Source qualification](qualification.md#native-rdma-setup-progress)
 does not qualify installed v21 execution, real DMA overlap or performance.
 
 ### Session progress and completion
@@ -557,7 +591,7 @@ admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
 healthy siblings or erase an earlier `Unquiesced`. Partial TCP payload and scoped
 control receipts retain the original deadline and yield to staging cancellation.
-Blocking Pin, native connection acquisition, nonreusable retirement and provider calls keep their existing
+Blocking Pin, native construction, nonreusable retirement and provider calls keep their existing
 completion/drain obligations.
 On source EOF/error, all native CROSS owners close before CUDA drain and private
 registration retirement. The caller drops its queue

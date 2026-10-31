@@ -9,6 +9,8 @@ use crate::{
 
 mod connect_progress;
 #[cfg(feature = "rdma")]
+mod connection_progress;
+#[cfg(feature = "rdma")]
 mod finish_progress;
 mod ipc;
 mod ipc_cache;
