@@ -1,4 +1,4 @@
-# Asynchronous CPU batches
+# Asynchronous batches
 
 P1.4 implements a bounded CPU/TCP subset of TENT F08/F10. The
 [completion plan](completion-plan.md) remains the only execution queue. This
@@ -83,6 +83,42 @@ still create backend slices while draining. It then explicitly closes shared
 RDMA device resources. A native cleanup error is retained without retry; see
 the [device owner contract](rdma-cuda.md#failure-drain-and-resource-ownership). Closing requester admission does not
 invalidate existing status/free operations or claim that a remote ACK was read.
+
+## Mixed GPU direct and staged submissions
+
+One submission can alternate explicit `Transport::Rdma` GPU Direct requests and
+`Transport::Tcp` GPU staging requests. Configure RDMA `cuda_memory=Direct` and
+leave `remote_staging=false`. Each request keeps its own transport and checked
+local/remote ranges; requests execute in input order. A completed RDMA operation
+releases its range loan before the next CUDA copy. The TCP copy drains its event
+before the following RDMA request begins. Callers finish producer work before
+handoff and wait for the engine's completion before consumer reuse.
+
+RDMA readiness is checked once at the first RDMA request in each submission,
+without sampling the full statistics snapshot. Every request still validates
+its addresses, permissions and byte budget. This is a preflight observation,
+not a device-state snapshot or a DMA grant: actual dispatch checks the current
+context, connection, quota and native owner again. A concurrent failure can
+therefore be reported at dispatch after preparation succeeded.
+
+A pending middle copy keeps the earlier completed prefix visible and later
+tasks waiting; neither batch completion nor its notification can overtake it.
+A drained copy error leaves the completed prefix intact and skips later tasks.
+Uncertain native completion retains the actual GPU backing, pinned chunk and
+submission admission, with `locally_drained=false`. Completed-request bytes do
+not count a failed request's partial local changes. Local staging continues to
+reuse its bounded pinned chunks and allocation-owned stream/event.
+
+The [source controls](qualification.md#mixed-gpu-batches) cover READ and WRITE
+with healthy completion, a drained copy error and uncertain event completion.
+This does not enable mixed remote Pin/Direct selection: the global
+`remote_staging` option still conflicts with Direct CUDA. Installed v21 DMA,
+concurrent transport dispatch and end-to-end throughput remain separate work.
+
+Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and
+staging plan, and `ProxyManager` owns its staging resources. OrbitTE preserves
+that division. Its current ordered batch execution and explicit per-request
+transport selection do not reproduce TENT's complete selector/subbatch scheduler.
 
 ## Frozen correspondence and limits
 

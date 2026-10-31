@@ -430,24 +430,19 @@ impl TransferEngine {
         prepared
             .try_reserve_exact(requests.len())
             .map_err(|_| Error::ResourceExhausted)?;
+        #[cfg(feature = "rdma")]
+        let mut rdma_ready = false;
         for request in requests {
             if request.transport == Transport::Rdma {
                 #[cfg(feature = "rdma")]
                 {
-                    let runtime = self
-                        .source
-                        .rdma
-                        .as_ref()
-                        .ok_or(Error::Unavailable("RDMA is not configured"))?;
-                    runtime.recover_progress()?;
-                    let usage = runtime.stats()?;
-                    if usage.retained_endpoints != 0
-                        || usage.retained_devices != 0
-                        || usage.retained_cqs != 0
-                        || usage.retained_persistent_mrs != 0
-                        || usage.progress_failures != usage.progress_recoveries
-                    {
-                        return Err(Error::Unavailable("RDMA retained native resources"));
+                    if !rdma_ready {
+                        self.source
+                            .rdma
+                            .as_ref()
+                            .ok_or(Error::Unavailable("RDMA is not configured"))?
+                            .check_ready()?;
+                        rdma_ready = true;
                     }
                 }
                 #[cfg(not(feature = "rdma"))]

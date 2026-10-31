@@ -35,7 +35,9 @@ recovery policy and replica placement.
 
 - **Owned memory and explicit completion.** Registrations retain their actual
   allocations; asynchronous READ/WRITE batches, cancellation and notifications
-  share bounded admission. Failed native cleanup retains unresolved memory.
+  share bounded admission. Mixed GPU Direct RDMA and TCP staging requests preserve
+  ordered completion and reuse bounded staging resources. Failed native cleanup
+  retains unresolved memory.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
   lanes and a transport worker pool serve concurrent requests. A periodic
   monitor fences failed routes and resumes drained contexts.
