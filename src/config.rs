@@ -24,7 +24,9 @@ pub struct EngineConfig {
     #[cfg(feature = "cuda")]
     pub nvlink: bool,
     /// Maximum persistent CUDA IPC imports and exports, independently per side.
-    /// Zero closes imports after each subbatch. Nonzero requires cooperating
+    /// At capacity, cold imports reclaim the least recently used idle mapping
+    /// after native close and source acknowledgement. Active/uncertain mappings
+    /// stay charged. Zero closes imports after each subbatch. Nonzero requires cooperating
     /// peers to close requesters before releasing exporters. Cached exports keep
     /// their whole allocation loan until an explicit native-close receipt.
     #[cfg(feature = "cuda")]

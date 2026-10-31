@@ -480,7 +480,11 @@ bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
 one imported native reference, its context and every touched local allocation.
 `transport/nvlink/mapping.rs::OpenedMapping` owns the mapping charge and explicit
 native close. `subbatch.rs` groups consecutive same-region/context requests.
-The optional `cache.rs::RelocationCache` owns bounded single-flight imports;
+The optional `cache.rs::RelocationCache` owns bounded single-flight imports.
+At capacity it selects an idle LRU owner, reserves both old and replacement
+keys, and closes outside the map lock before committing the replacement.
+`flush_nvlink_cache` uses the same exclusive leases and close receipts without
+closing outgoing admission. Uncertain native owners remain charged.
 `export.rs::ExportCache` owns the independent persistent source registration,
 whole-allocation loan and physical charge. Each cached submission revalidates
 source authorization, then releases drained local owners at operation completion.
@@ -493,8 +497,9 @@ This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant now covers a bounded group, with per-slice
 events and one final import close/source receipt. Shared cleanup failure has an
 explicit affected task span. Native TENT keeps a transport-wide relocation cache;
-OrbitTE closes imports at each subbatch boundary by default, or keeps them until
-explicit requester close when `nvlink_cache_entries` is enabled. The initial
+OrbitTE closes imports at each subbatch boundary by default. With
+`nvlink_cache_entries` enabled, imports survive until idle reclamation, explicit
+cache flush or requester close. The initial
 ready-offer handshake separates unexposed reservations from exposed exporter obligations; a late first request
 cannot expose a handle after its requester already closed the original socket.
 

@@ -147,14 +147,14 @@ impl NVLinkTransport {
                         region: requests[0].remote.id,
                         context,
                     };
-                    let mut acquired = self.imports.acquire(key, deadline)?;
+                    let mut acquired = self.imports.acquire(key, self, requester, deadline)?;
                     let entry = acquired
                         .entry
                         .as_mut()
                         .ok_or(Error::Internal("missing relocation"))?;
                     if entry.closing {
                         entry.close(self, key, requester, deadline)?;
-                        *entry = cache::CachedMapping::new()?;
+                        **entry = cache::CachedMapping::new()?;
                     }
                     lease = Some(acquired);
                 }

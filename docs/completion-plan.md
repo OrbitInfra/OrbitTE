@@ -540,9 +540,13 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   source-owner retention and native cleanup faults. Stable/MSRV installed
   consumers pass 34 H20 cases plus four fresh independent repeats; source and
   this fixed-working-set profile are accepted.
-  Cache eviction/continuing flush, remote host exports and broader stream
-  scheduling remain open; exporter-crash safety is
-  explicitly unqualified. See [the transport contract](cuda-ipc.md).
+  Idle LRU reclamation and continuing flush are implemented at `fd55f15` with
+  source controls: full-cache replacement retains old capacity and a new-key
+  reservation through native close/source ACK, and explicit flush keeps outgoing
+  admission open. Their current installed dynamic-working-set DMA and performance
+  remain unqualified. Remote host exports and broader stream scheduling remain
+  open; exporter-crash safety is explicitly unqualified. See
+  [the transport contract](cuda-ipc.md).
 - [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
   Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
   requester and contexts. TCP and staged RDMA consume the same owner; full-range
@@ -971,15 +975,25 @@ MRs follow host policy. See [remote selection](qualification.md#per-request-remo
 Producer readiness remains an explicit caller handoff; automatic routing/QoS
 remains P6. Current v21 installed qualification and full P5 remain open.
 
-The next functional delivery is the existing P5.4d bounded CUDA IPC cache
-eviction/continuing-flush gap. Current `RelocationCache::checkout` returns
-`ResourceExhausted` when a new key meets a full cache, even if old entries are idle.
-Add reclaim of idle mappings through the existing relocation/export owners so
-changing working sets can continue within the configured capacity. Native import
-close and the source release receipt must complete before releasing capacity;
-active, constructing or uncertain mappings stay owned. Keep provider work and
-control I/O outside the map lock. Preserve one construction owner per key,
-cooperative exporter lifetime and explicit retention on cleanup failure.
+P5.4d idle LRU reclaim and continuing flush are implemented at `fd55f15`.
+Changing working sets can continue within the entry limit; a replacement
+reserves its target while the old key remains charged until the native-close
+receipt is acknowledged. Provider work and control I/O stay outside the map
+lock. `flush_nvlink_cache` closes captured keys without closing requester
+admission. Active, constructing and uncertain mappings retain their existing
+owners; hardware qualification remains separate. See
+[cache reclamation](qualification.md#cuda-ipc-cache-reclamation).
+
+The next functional delivery is P5 NVLink group submission/completion efficiency.
+Current `NVLinkTransport::transfer` groups requests under one import, but
+`IpcMapping::copy` still records and waits for each slice's event before issuing
+the next. Follow frozen TENT's `NVLinkSubBatch` / `startTransfer` ownership to
+enqueue a same-context group and observe its shared completion, reusing native
+stream/event resources instead of synchronizing each slice. Keep actual touched
+allocations and mapping leases until native drain, preserve ordered reports and
+affected-task spans, and keep producer handoff explicit. Use the existing CUDA
+owner and IPC controls for changed completion/failure contracts; do not create
+a separate test backlog or claim throughput from operation counts.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

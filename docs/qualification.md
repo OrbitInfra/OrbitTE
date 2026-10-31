@@ -982,8 +982,9 @@ allocation/registration retention after engine drop.
 This profile supports a fixed working set until requester shutdown. Both peers
 must enable `nvlink_cache_entries`; default zero keeps per-subbatch close. Source
 allocations remain exclusively loaned throughout the cached lifetime, and one
-allocation supports one live export token/context. There is no eviction or
-continuing flush. Requester exit is injected after event drain and before native
+allocation supports one live export token/context. That installed artifact has
+no eviction or continuing flush; the later [reclamation source stage](#cuda-ipc-cache-reclamation)
+does not extend its hardware qualification. Requester exit is injected after event drain and before native
 close: it proves exporter retention, without final source payload readback or
 in-flight GPU termination. Live trusted exporters are required. External/managed allocations,
 broader stream scheduling, MNNVL/VMM and native GPU cleanup faults retain their
@@ -1704,3 +1705,37 @@ page residency, current v21 installed execution, physical DMA overlap and
 performance remain unqualified. Earlier installed evidence covers its recorded
 wildcard profile and cannot qualify this new allocator. Broader TENT location
 routing, remote topology publication and P6 selection remain open.
+
+
+## CUDA IPC cache reclamation
+
+Source `fd55f15` adds bounded idle LRU replacement and
+`TransferEngine::flush_nvlink_cache(timeout)`. A full requester cache closes an
+idle native import, acknowledges the source release, then reuses that slot for
+a new token/key. Busy, constructing and uncertain owners stay reserved; a
+duplicate target waits on the original replacement. Explicit flush captures
+keys without closing outgoing admission. The [transport contract](cuda-ipc.md#cross-submission-relocation-cache)
+defines the separate entry/physical budgets and concurrent-refill semantics.
+
+The existing CUDA shim and real control sockets exercise rotating READ/WRITE
+working sets, exact bytes/guards, LRU hits, bounded live entries, source loan
+release and submission after flush. A held release ACK checks target
+single-flight and continued hot-key progress outside the map lock. Active-copy
+pressure covers new-key rejection and flush deadlines. Lost ACK and native
+close failure distinguish safe receipt retries from retained native owners and
+verify one-shot close. These are source/CPU controls, not native DMA or a
+performance benchmark. The new tests remain within the existing IPC owner tree.
+
+Evidence directory: `/root/orbitte-artifacts/nvlink-cache-reclaim-20261031/`.
+`source-inputs.json`, `environment.json` and `gates.json` bind the primary source,
+toolchain, focused IPC/NVLink gates, formatting and all-target Clippy. Independent
+review and final CI records are recorded in that directory before PR readiness.
+Frozen TENT reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
+transport relocation map caches imported pointers and closes them at uninstall.
+The bounded LRU and source release protocol are deliberate OrbitTE extensions.
+
+No new hardware task was requested. Current installed v21 dynamic-working-set
+DMA, native cleanup faults and throughput remain unqualified. Historical fixed
+working set qualification does not qualify the new reclaim path. Exporters must
+remain alive and cooperative; native provider calls remain synchronous. This
+does not complete all P5, TENT parity or OrbitKV integration.
