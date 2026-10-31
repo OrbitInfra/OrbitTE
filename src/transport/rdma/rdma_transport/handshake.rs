@@ -9,16 +9,15 @@ use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, RdmaHostMemory,
     endpoint::{EndpointKey, Peer},
-    grant::{Buffer, GrantLease, GrantResources, RdmaGrant, Staging, admission::GrantCredits},
+    grant::{GrantLease, RdmaGrant, admission::GrantCredits},
     path::NicPath,
     protocol::{
         ACK, BINDING_SIZE, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE, Identity,
         OFFER_SIZE, READY,
     },
-    qp::{ConnectionLease, ConnectionResources, Descriptor, Resources},
+    qp::Descriptor,
     quota::DeviceLease,
     slice::RdmaSlice,
-    sys,
 };
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp};
 
@@ -32,189 +31,22 @@ impl RdmaTransport {
         deadline: Instant,
         connection: Connection,
     ) -> Result<RdmaGrant> {
-        remaining(deadline)?;
-        let (reuse, construction) = match connection {
-            Connection::Reuse(grant) => (Some(*grant), None),
-            Connection::Fresh(slot) => (None, slot),
-        };
-        let offset = range.start;
-        let length = range.end.checked_sub(offset).ok_or(Error::InvalidRange)?;
-        if length != grant_lease.length {
-            return Err(Error::Internal("RDMA selection length mismatch"));
-        }
-        if length == 0 || length > u32::MAX as usize {
-            return Err(Error::InvalidRange);
-        }
-        crate::memory::checked_range(offset, length, memory.len())?;
-        let direct = if self.direct(memory) {
-            Some(memory.dma_lease(offset, length)?)
-        } else {
-            None
-        };
-        let is_direct = direct.is_some();
-        if reuse.is_some() && !is_direct {
-            return Err(Error::Protocol(
-                "RDMA reuse requires host Direct on both peers",
-            ));
-        }
-        if is_direct != grant_lease.is_direct {
-            return Err(Error::Internal("RDMA grant memory admission mismatch"));
-        }
-        let buffer = match direct {
-            Some(loan) => Buffer::Direct {
-                address: loan.address(),
-                length: loan.len(),
-                loan: Some(loan),
-            },
-            None => Buffer::Staged(Staging::new(length)?),
-        };
-        let device = self.device_at(grant_lease._selection.device_id())?;
-        let (progress, worker_lease) = if let Some(endpoint) = &reuse {
-            (
-                Arc::clone(&endpoint.progress),
-                self.workers.reserve(&endpoint.progress)?,
-            )
-        } else {
-            self.workers.select(&self.cq_list(Arc::clone(&device))?)?
-        };
-        let new_connection_lease = if reuse.is_none() {
-            Some(loop {
-                let mut usage = self
-                    .usage
-                    .lock()
-                    .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-                if usage.active_endpoints < self.config.max_endpoints {
-                    usage.active_endpoints += 1;
-                    break ConnectionLease {
-                        usage: Arc::clone(&self.usage),
-                        drained: Arc::clone(&self.drained),
-                    };
-                }
-                drop(usage);
-                if !self.evict_idle(deadline)? {
-                    return Err(Error::ResourceExhausted);
-                }
-            })
-        } else {
-            None
-        };
-        let remote_mr = is_direct && memory.is_cuda() && permission != 0;
-        let cached_mr = if is_direct && !remote_mr {
-            Some(self.registrations.acquire(
-                Arc::clone(&device),
-                memory,
-                permission != 0,
-                deadline,
-            )?)
-        } else {
-            None
-        };
-        let mut memory_handles = sys::MemoryHandles {
-            remote_mr,
-            ..Default::default()
-        };
-        if let Some(registration) = &cached_mr {
-            memory_handles.mr = registration.handle()?;
-        }
-        let mut grant = GrantResources {
-            _worker: worker_lease,
-            device: Arc::clone(&device),
-            handles: memory_handles,
-            cached_mr,
-            buffer,
-            _lease: grant_lease,
-            max_read_slices: if memory.is_cuda() { 32 } else { 64 },
+        let mut construction = super::super::grant::construction::GrantConstruction::new(
+            self,
+            grant_lease,
+            memory,
+            range,
             permission,
-            generation: 0,
-            rkey: 0,
-            connection: None,
-            window_used: false,
-            window_bound: false,
-            message: None,
-        };
-        let mut endpoint = if let Some(endpoint) = reuse {
-            {
-                let mut request = endpoint.record.lock()?;
-                request.check_claim(endpoint.claim)?;
-                let resources = request
-                    .resources
-                    .as_mut()
-                    .ok_or(Error::Internal("missing cached connection"))?;
-                let connection = resources.connection.lock()?;
-                if resources.grant.is_some() || !Arc::ptr_eq(&connection.device, &device) {
-                    return Err(Error::Internal("RDMA reuse grant ownership"));
-                }
-                if connection.permission != permission {
-                    return Err(Error::Protocol("RDMA reuse changed QP capability"));
-                }
-                grant.connection = connection.incarnation;
-                drop(connection);
-                resources.grant = Some(grant);
+            deadline,
+            connection,
+        )?;
+        loop {
+            match construction.poll(self, deadline) {
+                Ok(Some(grant)) => return Ok(grant),
+                Ok(None) => std::thread::park_timeout(std::time::Duration::from_micros(100)),
+                Err(error) => return Err(construction.abort(error)),
             }
-            endpoint
-        } else {
-            let connection_lease = new_connection_lease
-                .ok_or(Error::Internal("missing physical connection reservation"))?;
-            let connection_handles = sys::ConnectionHandles {
-                cq: progress.handle(false)?,
-                receive_cq: progress.handle(true)?,
-                ..Default::default()
-            };
-            let record = progress.register(Box::new(Resources {
-                connection: super::super::qp::RdmaQp::new(ConnectionResources {
-                    receive_queue: super::super::qp::receive_queue::ReceiveQueue::new(
-                        self.config.max_cqes,
-                        self.config.max_grants,
-                        Arc::clone(&self.usage),
-                    )?,
-                    device,
-                    handles: connection_handles,
-                    send_queue: super::super::qp::send_queue::SendQueue::new(
-                        self.config.max_send_wr,
-                        Arc::clone(&self.usage),
-                    )?,
-                    incarnation: None,
-                    local: Descriptor::default(),
-                    remote: None,
-                    permission,
-                    closed: false,
-                    lease: Some(connection_lease),
-                }),
-                grant: Some(grant),
-            }))?;
-            RdmaGrant {
-                record,
-                progress,
-                local: Descriptor::default(),
-                incarnation: None,
-                config: self.config.clone(),
-                deadline,
-                output: None,
-                claim: 1,
-                released: false,
-                cached_peer: None,
-                endpoint: None,
-                construction: None,
-            }
-        };
-        if let Some(slot) = construction {
-            slot.attach(&mut endpoint)?;
-            endpoint.construction = Some(slot);
         }
-        #[cfg(test)]
-        crate::transport::rdma::tests::before_grant_open(self, &endpoint);
-        let epoch = SourceEpoch::generate()?;
-        let psn = u32::from_be_bytes([0, epoch.0[0], epoch.0[1], epoch.0[2]]);
-        if let Err(error) = endpoint.open(permission, psn) {
-            return Err(endpoint.abort(error));
-        }
-        if is_direct {
-            self.usage
-                .lock()
-                .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
-                .opened_direct_endpoints += 1;
-        }
-        Ok(endpoint)
     }
 
     pub(in crate::transport::rdma) fn reserve_grant(
@@ -271,7 +103,7 @@ impl RdmaTransport {
         }
     }
 
-    pub(super) fn direct(&self, memory: &RegisteredMemory) -> bool {
+    pub(in crate::transport::rdma) fn direct(&self, memory: &RegisteredMemory) -> bool {
         if memory.is_cuda() {
             self.config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
         } else {

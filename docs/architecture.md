@@ -268,7 +268,8 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Transport entry | `transport/rdma/rdma_transport.rs` | Registration, parent dispatch and source serving |
 | Context orchestration | `rdma_transport/contexts.rs` | Transport initialization, selection, CQ attachment, recovery and shutdown |
 | Context owners | `context_set.rs`, `context.rs`, `context/key_domain.rs`, `discovery.rs`, `quota.rs` | Stable slots and reclaim, PD/key history and exhausted MWs, device discovery and NIC admission |
-| Peer rendezvous | `rdma_transport/connections.rs`, `rdma_transport/handshake.rs` | Fixed-width connection claims, grant preparation and bilateral publication |
+| Peer rendezvous | `rdma_transport/connections.rs`, `rdma_transport/handshake.rs` | Fixed-width connection claims and bilateral publication |
+| Grant construction | `grant/construction.rs`, `rdma_transport/requester.rs` | Admitted buffer/credit/connection ownership across MR publication waits; native QP handoff and explicit abort |
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
 | QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |
@@ -283,6 +284,15 @@ the slot state and its monitor-driven reclaim. The methods retain their existing
 lock scopes, call order and visibility to the RDMA module. This mirrors TENT's
 transport-owned `RdmaContextSet` and context-owned PD/CQ/endpoint resources
 without introducing a forwarding owner or changing cleanup semantics.
+
+`LocalBufferManager` retains the actual MR creator and physical registration
+charge. A requester waiting for publication owns no MR borrow yet.
+`GrantConstruction` retains its admitted buffer, worker credit and connection
+claim until that borrow is ready, then hands the complete grant to the existing
+CQ owner. Failed cleanup retains actual native resources; an unused waiter's
+credit can return independently. This follows TENT's buffer/context/endpoint
+boundaries; the explicit suspended Rust owner is described in
+[MR publication progress](staging.md#persistent-mr-publication-progress).
 
 Paths after the transport entry are relative to `src/transport/rdma/`, except
 the public, host and GPU rows, which are relative to `src/`.

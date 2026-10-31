@@ -8,6 +8,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cuda")]
+pub(crate) use super::buffers::tests::publication::HeldPublication;
+#[cfg(feature = "cuda")]
 pub(crate) use super::context::tests::after_open;
 pub(crate) use super::context::tests::{events, pause};
 pub(crate) use super::cq::tests::event_runtime;
@@ -2310,5 +2312,5 @@ impl super::protocol::SliceRequest {
 
 #[cfg(feature = "cuda")]
 pub(crate) use super::rdma_transport::connections::tests::{
-    hold_second_connection, two_rail_runtime,
+    HeldConnection, hold_second_connection, two_rail_runtime,
 };

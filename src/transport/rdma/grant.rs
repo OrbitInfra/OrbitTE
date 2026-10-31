@@ -9,6 +9,7 @@ use super::{
 use crate::{Error, RegisteredMemory, Result, TransferOp};
 
 pub(super) mod admission;
+pub(super) mod construction;
 
 pub(super) struct GrantLease {
     pub(super) _credit: admission::GrantCredit,

@@ -625,6 +625,10 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Requester cold connection acquisition retains one grant lease and a pollable
   canonical endpoint array. Independent source review accepts `06f685d`; see
   [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
+  Pending persistent MR publication now yields through `GrantConstruction`,
+  preserving the original admission and connection claim with explicit cleanup.
+  Independent source review accepts `e69c47a`; see
+  [MR publication progress](qualification.md#persistent-mr-publication-progress).
   Complete remaining synchronous resource/retirement/source
   boundaries and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
@@ -932,9 +936,10 @@ Host staging location selection is implemented and independently source-accepted
 at `ab309f4`. Requester cold connection acquisition yields while retaining
 one grant lease and the canonical endpoint array. Independent source review
 accepts `06f685d`; see [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
-The next implementation boundary is native grant construction progress.
-Native construction/connect/copy, nonreusable retirement and source handlers
-retain explicit synchronous limits. Current v21 hardware qualification and full
+Persistent MR publication wait is implemented through an admitted grant owner;
+independent source review accepts `e69c47a`. The next implementation boundary is
+nonreusable requester QP retirement progress. Native provider calls, resource
+creation/connect/copy and source handlers retain explicit synchronous limits. Current v21 hardware qualification and full
 ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available

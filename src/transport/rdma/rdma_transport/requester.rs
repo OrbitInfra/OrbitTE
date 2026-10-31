@@ -13,7 +13,7 @@ use crate::runtime::control_plane::{
 use crate::transport::rdma::{
     DESCRIPTOR_SIZE, Descriptor,
     endpoint::{EndpointKey, Peer},
-    grant::{GrantLease, RdmaGrant},
+    grant::{GrantLease, RdmaGrant, construction::GrantConstruction},
     path::NicPath,
     protocol::{
         ACCEPT, BINDING_SIZE, Binding, CACHE_MISS, GRANT, HELLO_SIZE, Hello, IDENTITY_SIZE,
@@ -25,6 +25,7 @@ use crate::{Error, Result, SourceEpoch, TransferOp};
 
 enum Phase {
     Acquire,
+    Construct,
     Prepare,
     Hello,
     OfferReply,
@@ -49,6 +50,7 @@ pub(super) struct RequesterSetup {
     endpoint: Option<RdmaGrant>,
     lease: Option<GrantLease>,
     connecting: Option<Connecting>,
+    construction: Option<GrantConstruction>,
     width: usize,
     wire: Request,
     request: PreparedTransfer,
@@ -74,6 +76,7 @@ impl RequesterSetup {
             endpoint: None,
             lease: Some(lease),
             connecting: None,
+            construction: None,
             width,
             wire,
             request,
@@ -131,19 +134,32 @@ impl RequesterSetup {
             } else {
                 Connection::Fresh(None)
             };
-            self.endpoint = Some(
-                transport.prepare_grant(
-                    self.lease
-                        .take()
-                        .ok_or(Error::Internal("missing RDMA grant lease"))?,
-                    &self.request.local,
-                    self.request.local_offset..self.request.local_offset + self.request.length,
-                    0,
-                    channel.deadline,
-                    connection,
-                )?,
-            );
+            self.construction = Some(GrantConstruction::new(
+                transport,
+                self.lease
+                    .take()
+                    .ok_or(Error::Internal("missing RDMA grant lease"))?,
+                &self.request.local,
+                self.request.local_offset..self.request.local_offset + self.request.length,
+                0,
+                channel.deadline,
+                connection,
+            )?);
             self.connecting = None;
+            self.phase = Phase::Construct;
+            *advanced = true;
+            return Ok(false);
+        }
+        if matches!(self.phase, Phase::Construct) {
+            let construction = self
+                .construction
+                .as_mut()
+                .ok_or(Error::Internal("missing grant construction"))?;
+            let Some(endpoint) = construction.poll(transport, channel.deadline)? else {
+                return Ok(false);
+            };
+            self.endpoint = Some(endpoint);
+            self.construction = None;
             self.phase = Phase::Prepare;
             *advanced = true;
             return Ok(false);
@@ -178,7 +194,9 @@ impl RequesterSetup {
             .as_mut()
             .ok_or(Error::Internal("missing requester grant"))?;
         self.phase = match self.phase {
-            Phase::Acquire => return Err(Error::Internal("RDMA acquisition did not advance")),
+            Phase::Acquire | Phase::Construct => {
+                return Err(Error::Internal("RDMA construction did not advance"));
+            }
             Phase::Prepare => {
                 if self.wire.operation == Operation::RdmaWrite {
                     endpoint.fill(
@@ -381,8 +399,12 @@ impl RequesterSetup {
     }
 
     fn abort_grant(mut self, error: Error) -> Error {
-        match self.endpoint.as_mut() {
+        let error = match self.endpoint.as_mut() {
             Some(endpoint) => endpoint.abort(error),
+            None => error,
+        };
+        match self.construction.as_mut() {
+            Some(construction) => construction.abort(error),
             None => error,
         }
     }
