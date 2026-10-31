@@ -49,8 +49,8 @@ recovery policy and replica placement.
   Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
   with allocation-range ownership and consumer visibility before completion.
   Cooperative same-host GPU IPC adds explicit export ownership and close receipts;
-  local owned pinned host READ/WRITE and bounded cross-submission import reuse
-  are also available. TCP and staged RDMA share bounded, reusable local CUDA
+  local owned pinned host READ/WRITE, bounded cross-submission import reuse,
+  idle LRU reclamation and explicit cache flush are also available. TCP and staged RDMA share bounded, reusable local CUDA
   staging chunks.
 
 ## Quick Start
@@ -95,8 +95,10 @@ with explicit exporter-lifetime limits. Bounded subbatch import reuse passes
 READ/WRITE and mixed host/GPU groups pass 30 further cases plus four independent
 repeats. These bounded profiles are independently accepted. Optional
 cross-submission import caching passes 34 installed cases plus four independent
-repeats, with bounded mappings and explicit exporter close receipts. It supports
-a fixed working set until requester shutdown; source allocations stay loaned.
+repeats, with bounded mappings and explicit exporter close receipts for a fixed
+working set. Current source additionally supports idle LRU reclamation and
+continuing flush; their dynamic-working-set hardware and performance qualification
+remain open. Source allocations stay loaned until acknowledged mapping close.
 [Local staging chunks](docs/staging.md) share pinned buffers across TCP and
 staged RDMA; 24 installed H20 cases plus four independent repeats pass for
 that bounded healthy profile. Opt-in [remote Pin/Delegate/Unpin sessions](docs/staging.md#serial-remote-staging)

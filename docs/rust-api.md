@@ -96,6 +96,13 @@ See [RDMA and CUDA](rdma-cuda.md) for exact range, grant and drain requirements.
 
 ## Close and drain
 
+With CUDA enabled, `flush_nvlink_cache(timeout)` closes a snapshot of cached
+import keys while keeping requester admission open. It waits for each captured
+key's current borrower and then uses the native-close/source-receipt protocol.
+Concurrent submissions may refill the cache; stop submitting first if it must
+be completely empty. Flush also retries outstanding safe release receipts.
+See [the cache contract](cuda-ipc.md#cross-submission-relocation-cache).
+
 `close_source` fences source admission; `close_requester` fences requester
 admission. Whole-engine `close` fences both, drains accepted work and closes
 shared native resources. A timeout does not complete pending native work.

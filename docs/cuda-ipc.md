@@ -92,8 +92,9 @@ operation. The source `ExportCache` retains the actual `RegisteredMemory`,
 `IpcExport` whole-allocation loan and physical mapping charge. One allocation
 therefore supports only one live export token/context in this profile, and
 **source-side local access and RDMA remain excluded for the entire cache
-lifetime**, including idle time. This is suited to a fixed, cooperating working
-set; it is not transparent caching of mutable source buffers.
+lifetime**, including idle time. Idle reclamation or an explicit requester
+flush releases that source loan only after native close and the source receipt.
+This remains cooperative caching, not transparent access to mutable source buffers.
 
 The first request reserves an active source entry and receives an offer with no
 handle. Only the requester's answer permits handle exposure. This ensures that
@@ -108,6 +109,37 @@ not release the export or mapping. Completed local GPU/pinned-host owners are
 released at this drain boundary, so an idle import cannot accumulate every prior
 requester's allocation. Uncertain current copies still retain their real owners.
 
+At entry capacity, a new key reclaims the least recently used idle mapping.
+Checked-out copies, initial constructions and uncertain native owners are never
+evicted. The old key and its cache slot remain reserved while `Reclaiming`
+reserves the replacement key. Duplicate cold requests wait on that reservation
+instead of evicting another entry or opening the same import twice. Hits keep
+the existing constant-time lookup; only misses scan the bounded map. Idle
+owners are boxed once, reused on replacement, and moved without copying the
+mapping state. Native close and control I/O run outside the map lock, so an
+unrelated hot key can progress while a release receipt is outstanding.
+
+Only successful native close **and** source acknowledgement commit a fresh
+token under the new key. Failure restores the old close obligation and wakes
+waiters. Lost ACKs permit receipt-only retries; uncertain native cleanup is
+never retried. A full cache without an eligible idle owner returns
+`ResourceExhausted`; waiting for the same key or its replacement obeys the
+submission deadline. The importer physical-byte charge can end at successful
+native close, but entry capacity stays occupied until the source ACK. These are
+separate budgets. Source exports cannot be evicted unilaterally; a smaller/full
+source cache may still reject a requester with spare local entry capacity.
+Automatic reclamation is triggered by entry pressure, not by byte-budget or
+source-capacity rejection.
+
+`flush_nvlink_cache(timeout)` captures the current import keys, waits for their
+exclusive leases and closes them through the same receipt protocol. Requester
+admission stays open. Replaced keys already closed by another caller may be
+skipped, and concurrent submissions may refill the cache; this is not a global
+submission barrier. Stop submitting first when a completely empty cache is
+required. Flush works after a failed requester close too, allowing safe receipt
+retries. With caching disabled it is a no-op. Native provider close cannot be
+preempted by the deadline. There is no background expiry thread.
+
 `close_requester` permanently fences new outgoing work, waits for accepted
 submissions, then closes cached imports. Native close and context restoration
 must succeed before an independent **mapping-close receipt** releases the source
@@ -119,11 +151,10 @@ and physical quota without retry. `close()` releases outgoing imports before
 waiting for incoming exports, permitting two cooperating peers to close together.
 
 Both import and export entry counts are bounded by `nvlink_cache_entries`, and
-their physical extents share the existing mapping byte budget. Full caches
-reject new keys. There is no automatic eviction, idle expiry or public flush
-that permits further submissions in this substage. Dropping the engine does not
-prove remote closure: explicit shutdown is required, and uncertain owners stay
-retained. A source-close timeout does not revoke an outstanding handle.
+their physical extents share the existing mapping byte budget. Dropping the
+engine does not prove remote closure: explicit shutdown is required, and
+uncertain owners stay retained. A source-close timeout does not revoke an
+outstanding handle.
 
 ## Completion and shutdown
 
@@ -161,12 +192,13 @@ an import closed. The source retains the real allocation and its quota on that
 ambiguity. Likewise, uncertain import/copy/close/context cleanup retains the
 actual requester allocation, context and admission; dropping a Batch or public
 memory handle cannot release it. Inspect `EngineStats.nvlink` and
-`cuda::retained_resources()` for retained resources. There is no automatic
-reclamation after a missing receipt in this substage.
+`cuda::retained_resources()` for retained resources. A missing receipt never
+proves closure; only a successful retry of the idempotent source release can
+retire that obligation.
 
 Boot/process identities and epochs detect stale or incompatible peers; they are
-not authentication. Current wire version 18 keeps per-subbatch IPC opcodes 8/9 (`NVL1`) and the previously added
-cached READ/WRITE/close opcodes 10/11/12 (`NVL2` hello). Initial cached offers use
+not authentication. Current wire version 21 keeps per-subbatch IPC opcodes 8/9
+(`NVL1`) and the previously added cached READ/WRITE/close opcodes 10/11/12 (`NVL2` hello). Initial cached offers use
 ready status 12 with no handle payload. TCP/RDMA layouts are unchanged; older
 wire versions are rejected rather than interpreted as cached completion.
 This is OrbitTE's protocol, not native TENT wire compatibility.
@@ -189,16 +221,20 @@ placement. `mapping.rs::OpenedMapping` owns one native import and its charge;
 selects consecutive same-region/context slices. `cuda/ipc.rs::IpcMapping` owns
 the native reference, retained context and current touched allocations. Each
 local allocation reuses its stream/event. TENT's cache closes in `uninstall`;
-OrbitTE additionally requires explicit cooperating source close receipts.
-Device-wide stream pooling and broader scheduling remain separate work.
+OrbitTE additionally requires explicit cooperating source close receipts. Its
+bounded LRU and continuing flush extend that ownership model; they are not
+features copied from the frozen TENT cache. Device-wide stream pooling and
+broader scheduling remain separate work.
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
 (`transports/nvlink/host_register`, default false), but its remote relocation
 accepts only CUDA buffers. OrbitTE follows that distinction: `cuda/pinned.rs`
 owns local pinned backing/stream, `HostMemory` owns CPU/RDMA exclusion, and
 `IpcMapping` retains the concrete host or device allocation. Remote grants
-remain GPU-only. Remote host exports, dynamic cache eviction, MNNVL/VMM and
-exporter-crash safety remain open in P5.4.
+remain GPU-only. Remote host exports, MNNVL/VMM and exporter-crash safety remain
+open in P5.4. Idle reclamation and continuing flush have source controls; their
+current installed dynamic-working-set DMA and performance remain unqualified.
+See [cache reclamation evidence](qualification.md#cuda-ipc-cache-reclamation).
 These limits follow the native
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
