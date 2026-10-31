@@ -8,7 +8,7 @@ use super::driver::{SUCCESS, check};
 use super::{Context, RETAINED_EVENT, RETAINED_STREAM};
 use crate::{Error, Result};
 
-/// One allocation's serialized copies reuse a private stream and completion event.
+/// Serialized copies reuse a private stream and completion event.
 pub(super) struct CopyStream {
     context: Arc<Context>,
     stream: Option<NonNull<sys::CUstream_st>>,
@@ -16,7 +16,8 @@ pub(super) struct CopyStream {
     pending: bool,
     cleanup_attempted: bool,
 }
-// SAFETY: the allocation mutex serializes submission, event reuse and teardown.
+// SAFETY: an allocation mutex or exclusive pool handle serializes submission,
+// event reuse and teardown.
 // Each Driver API call runs in the retained owning context.
 unsafe impl Send for CopyStream {}
 
@@ -69,6 +70,10 @@ impl CopyStream {
             return Err(error);
         }
         Ok(owner)
+    }
+
+    pub(super) fn context_key(&self) -> usize {
+        self.context.raw.as_ptr() as usize
     }
 
     pub(super) fn quiescent(&self) -> bool {

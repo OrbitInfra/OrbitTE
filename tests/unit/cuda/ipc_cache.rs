@@ -247,7 +247,19 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
             "idle mapping retained completed host allocation"
         );
         assert!(dst.pins.lock().unwrap().is_empty());
-        assert_eq!(requester.stats().unwrap().nvlink.unwrap().imports, 1);
+        let stats = requester.stats().unwrap().nvlink.unwrap();
+        assert_eq!(
+            (
+                stats.imports,
+                stats.stream_slots,
+                stats.active_streams,
+                stats.retained_streams
+            ),
+            (1, 1, 0, 0)
+        );
+        assert_eq!(event_count(&dst, "stream-create"), 1);
+        assert_eq!(event_count(&dst, "event-create"), 1);
+        assert_eq!(event_count(&dst, "stream-destroy"), 0);
         assert_eq!(requester.stats().unwrap().inflight_bytes, 0);
         assert!(remote.read(0, &mut [0; 1]).is_err());
     }
@@ -268,6 +280,8 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
     assert_eq!(event_count(&dst, "ipc-close"), 0);
     requester.close_requester(TIMEOUT).unwrap();
     source.close_source(TIMEOUT).unwrap();
+    assert_eq!(requester.stats().unwrap().nvlink.unwrap().stream_slots, 0);
+    assert_eq!(event_count(&dst, "stream-destroy"), 1);
     assert_eq!(event_count(&dst, "ipc-close"), 1);
     let mut actual = [0; 128];
     remote.read(0, &mut actual).unwrap();

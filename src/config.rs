@@ -31,6 +31,10 @@ pub struct EngineConfig {
     /// their whole allocation loan until an explicit native-close receipt.
     #[cfg(feature = "cuda")]
     pub nvlink_cache_entries: usize,
+    /// Shared NVLink stream/event slots across actual CUDA contexts (1..=4096).
+    /// Lazy creation, exclusive group leases; uncertain slots remain charged.
+    #[cfg(feature = "cuda")]
+    pub nvlink_stream_count: usize,
     /// Per-engine lazy CUDA-pinned staging. Local copies check out one chunk;
     /// remote sessions reserve independent source and requester rings. Idle chunks are reused
     /// until engine close. Total capacity is at most 1 GiB.
@@ -81,6 +85,8 @@ impl Default for EngineConfig {
             #[cfg(feature = "cuda")]
             nvlink_cache_entries: 0,
             #[cfg(feature = "cuda")]
+            nvlink_stream_count: 8,
+            #[cfg(feature = "cuda")]
             staging_chunk_size: 4 << 20,
             #[cfg(feature = "cuda")]
             staging_chunk_count: 64,
@@ -112,6 +118,10 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if !(1..=4096).contains(&self.nvlink_stream_count) {
+            return Err(Error::InvalidConfig("NVLink stream count must be 1..=4096"));
+        }
         #[cfg(feature = "cuda")]
         if self.nvlink_cache_entries > 4096 || (self.nvlink_cache_entries != 0 && !self.nvlink) {
             return Err(Error::InvalidConfig(

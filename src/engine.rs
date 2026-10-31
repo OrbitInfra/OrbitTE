@@ -153,6 +153,7 @@ impl TransferEngine {
                 crate::transport::nvlink::NVLinkTransport::new(
                     config.max_inflight_bytes,
                     config.nvlink_cache_entries,
+                    config.nvlink_stream_count,
                 )
             })
             .transpose()?;
@@ -845,6 +846,7 @@ impl TransferEngine {
         #[cfg(feature = "cuda")]
         if let Some(transport) = &self.source.nvlink {
             transport.close_imports(self.source.epoch, deadline)?;
+            transport.stream_pool.close(deadline)?;
         }
         Ok(())
     }

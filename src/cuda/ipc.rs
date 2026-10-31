@@ -216,7 +216,7 @@ impl CudaMemory {
 }
 
 impl Allocation {
-    fn ipc_owner_context(&self) -> Result<Arc<Context>> {
+    pub(super) fn ipc_owner_context(&self) -> Result<Arc<Context>> {
         match self {
             Self::Cuda(memory) => {
                 memory.validate_ipc_requester()?;

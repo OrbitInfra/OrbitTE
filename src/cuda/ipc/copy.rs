@@ -1,6 +1,7 @@
 use std::sync::MutexGuard;
 
 use super::*;
+use crate::cuda::CUDAStreamHandle;
 use crate::memory::CudaHostAccess;
 
 /// A resolved copy keeps the actual allocation owner, including alias offsets.
@@ -30,39 +31,6 @@ impl CopyAccess<'_> {
         }
     }
 
-    fn with_stream(&mut self, copy: impl FnOnce(&mut CopyStream) -> Result<()>) -> Result<()> {
-        match self {
-            Self::Device(allocation) => {
-                if allocation.copy_stream.is_none() {
-                    allocation.copy_stream = Some(CopyStream::new(&allocation.context)?);
-                }
-                copy(
-                    allocation
-                        .copy_stream
-                        .as_mut()
-                        .ok_or(Error::Internal("CUDA stream missing"))?,
-                )
-            }
-            Self::Host(access) => {
-                let allocation = access.allocation()?;
-                let mut slot = allocation
-                    .copy_stream
-                    .lock()
-                    .map_err(|_| Error::Unquiesced {
-                        operation: "CUDA pinned copy stream",
-                        code: -1,
-                    })?;
-                if slot.is_none() {
-                    *slot = Some(CopyStream::new(&allocation.context)?);
-                }
-                copy(
-                    slot.as_mut()
-                        .ok_or(Error::Internal("CUDA pinned stream missing"))?,
-                )
-            }
-        }
-    }
-
     fn fence(&mut self) {
         match self {
             Self::Device(allocation) => allocation.uncertain = true,
@@ -83,15 +51,20 @@ impl IpcMapping {
         &mut self,
         copies: &[IpcCopy],
         to_remote: bool,
+        stream: &mut CUDAStreamHandle,
         mut begin: impl FnMut(usize) -> Result<()>,
     ) -> IpcCopyCompletion {
         let mut attempted = 0;
         let mut submitted = 0;
         let mut submitted_all = false;
         let result = (|| {
-            let first = copies
-                .first()
-                .ok_or(Error::Internal("empty CUDA IPC group"))?;
+            if copies.is_empty() {
+                return Err(Error::Internal("empty CUDA IPC group"));
+            }
+            let stream = stream.stream()?;
+            if stream.context_key() != self.context.raw.as_ptr() as usize {
+                return Err(Error::Unavailable("CUDA stream belongs to another context"));
+            }
             if self.address == 0 || self.pending || self.uncertain {
                 return Err(Error::Unavailable("CUDA IPC import is not ready"));
             }
@@ -117,9 +90,6 @@ impl IpcMapping {
             // Aliases share an owner and must never recursively lock it.
             owners.sort_unstable_by_key(|memory| owner_key(memory));
             owners.dedup_by_key(|memory| owner_key(memory));
-            let stream_owner = owners
-                .binary_search_by_key(&owner_key(&first.memory), |m| owner_key(m))
-                .map_err(|_| Error::Internal("CUDA stream owner missing"))?;
             let mut guards = Vec::new();
             guards
                 .try_reserve(owners.len())
@@ -151,61 +121,54 @@ impl IpcMapping {
             self.memories
                 .try_reserve(copies.len())
                 .map_err(|_| Error::ResourceExhausted)?;
-            // Retain the stream owner even if stream construction partially fails.
-            self.memories.push(first.memory.clone());
-            let result = guards[stream_owner].with_stream(|stream| {
-                // Preserve native ownership if submission unwinds.
-                #[allow(unused_assignments)]
-                {
-                    self.pending = true;
-                }
-                // SAFETY: all actual local owners are locked, and the source grant
-                // retains remote bytes. Guards outlive enqueue, drain and restoration.
-                let result = unsafe {
-                    stream.copy_group(|driver, stream| {
-                        for (index, copy) in copies.iter().enumerate() {
-                            begin(index)?;
-                            if index != 0 {
-                                self.memories.push(copy.memory.clone());
+            // Preserve native ownership if submission unwinds.
+            #[allow(unused_assignments)]
+            {
+                self.pending = true;
+            }
+            // SAFETY: all actual local owners are locked, and the source grant
+            // retains remote bytes. Guards outlive enqueue, drain and restoration.
+            let result = unsafe {
+                stream.copy_group(|driver, stream| {
+                    for (index, copy) in copies.iter().enumerate() {
+                        begin(index)?;
+                        self.memories.push(copy.memory.clone());
+                        attempted = index + 1;
+                        let remote = self.address + copy.remote_offset as u64;
+                        let code = match &copy.memory {
+                            Allocation::Cuda(memory) => {
+                                let local = memory.address + copy.local_offset as u64;
+                                let (destination, source) = if to_remote {
+                                    (remote, local)
+                                } else {
+                                    (local, remote)
+                                };
+                                (driver.copy_device)(destination, source, copy.length, stream)
                             }
-                            attempted = index + 1;
-                            let remote = self.address + copy.remote_offset as u64;
-                            let code = match &copy.memory {
-                                Allocation::Cuda(memory) => {
-                                    let local = memory.address + copy.local_offset as u64;
-                                    let (destination, source) = if to_remote {
-                                        (remote, local)
-                                    } else {
-                                        (local, remote)
-                                    };
-                                    (driver.copy_device)(destination, source, copy.length, stream)
+                            Allocation::Host(memory) => {
+                                let host = (memory.base_address() + copy.local_offset as u64)
+                                    as usize
+                                    as *mut std::ffi::c_void;
+                                if to_remote {
+                                    (driver.to_device)(
+                                        remote,
+                                        host.cast_const(),
+                                        copy.length,
+                                        stream,
+                                    )
+                                } else {
+                                    (driver.to_host)(host, remote, copy.length, stream)
                                 }
-                                Allocation::Host(memory) => {
-                                    let host = (memory.base_address() + copy.local_offset as u64)
-                                        as usize
-                                        as *mut std::ffi::c_void;
-                                    if to_remote {
-                                        (driver.to_device)(
-                                            remote,
-                                            host.cast_const(),
-                                            copy.length,
-                                            stream,
-                                        )
-                                    } else {
-                                        (driver.to_host)(host, remote, copy.length, stream)
-                                    }
-                                }
-                            };
-                            check("CUDA IPC async copy", code)?;
-                            submitted += 1;
-                        }
-                        submitted_all = true;
-                        Ok(())
-                    })
-                };
-                self.pending = !stream.quiescent();
-                result
-            });
+                            }
+                        };
+                        check("CUDA IPC async copy", code)?;
+                        submitted += 1;
+                    }
+                    submitted_all = true;
+                    Ok(())
+                })
+            };
+            self.pending = !stream.quiescent();
             if matches!(result, Err(Error::Unquiesced { .. })) {
                 for (owner, access) in owners.iter().zip(&mut guards) {
                     if self

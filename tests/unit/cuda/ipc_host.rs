@@ -24,11 +24,12 @@ fn ipc_host_read_write_preserve_guards_reuse_stream_and_free_real_pin() {
     let host = pinned(&context, 0xa5);
     let remote = owned(&source, true);
     let export = IpcExport::new(remote.clone()).unwrap();
+    let pool = CUDAStreamPool::new(1).unwrap();
     let mut mapping = IpcMapping::new(&Allocation::Host(host.clone())).unwrap();
     mapping.open(export.handle).unwrap();
     for to_remote in [false, true, false] {
         mapping
-            .copy_one(&Allocation::Host(host.clone()), 11, 7, 17, to_remote)
+            .copy_one(&Allocation::Host(host.clone()), &pool, 11, 7, 17, to_remote)
             .unwrap();
     }
     let mut actual = [0; 128];
@@ -168,6 +169,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
         let host = pinned(&context, 0xa5);
         let source = allocation(&[0x5a; 128]);
         let export = IpcExport::new(owned(&source, true)).unwrap();
+        let pool = CUDAStreamPool::new(1).unwrap();
         let mut mapping = IpcMapping::new(&Allocation::Host(host.clone())).unwrap();
         mapping.open(export.handle).unwrap();
         match fault {
@@ -181,7 +183,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
             "free" => destination.free_error.store(1, Ordering::Release),
             _ => unreachable!(),
         }
-        let result = mapping.copy_one(&Allocation::Host(host.clone()), 11, 7, 17, false);
+        let result = mapping.copy_one(&Allocation::Host(host.clone()), &pool, 11, 7, 17, false);
         assert_eq!(
             result.is_err(),
             !matches!(fault, "close" | "free"),
@@ -230,9 +232,10 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
     let handle = export.handle;
     let worker = std::thread::spawn(move || {
         let owner = Allocation::Host(copy_host);
+        let pool = CUDAStreamPool::new(1).unwrap();
         let mut mapping = IpcMapping::new(&owner).unwrap();
         mapping.open(handle).unwrap();
-        mapping.copy_one(&owner, 11, 7, 17, false).unwrap();
+        mapping.copy_one(&owner, &pool, 11, 7, 17, false).unwrap();
         mapping.close().unwrap();
     });
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -281,6 +284,7 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
     let mut export = IpcExport::new(owned(&source, true)).unwrap();
     export.expose();
     let barrier = Arc::new(Barrier::new(2));
+    let pool = CUDAStreamPool::new(2).unwrap();
     let (done_tx, done_rx) = mpsc::channel();
     let workers: Vec<_> = [false, true]
         .into_iter()
@@ -303,11 +307,18 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
             let barrier = barrier.clone();
             let done = done_tx.clone();
             let handle = export.handle;
+            let pool = pool.clone();
             std::thread::spawn(move || {
                 let mut mapping = IpcMapping::new(&copies[0].memory).unwrap();
                 mapping.open(handle).unwrap();
+                let mut stream = pool
+                    .acquire(
+                        &copies[0].memory,
+                        std::time::Instant::now() + Duration::from_secs(2),
+                    )
+                    .unwrap();
                 barrier.wait();
-                let completion = mapping.copy_group(&copies, false, |_| Ok(()));
+                let completion = mapping.copy_group(&copies, false, &mut stream, |_| Ok(()));
                 completion.result.unwrap();
                 assert_eq!((completion.completed, completion.attempted), (4, 4));
                 // The fixture requires all copies drained before any import closes.

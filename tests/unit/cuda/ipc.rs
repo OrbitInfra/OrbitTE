@@ -23,6 +23,7 @@ fn ipc_explicit_export_blocks_whole_allocation_and_reuses_copy_stream() {
     ));
     remote.allocation.lock().unwrap().ipc_extent = Some(2 << 20);
     let local = owned(&destination, false);
+    let pool = CUDAStreamPool::new(1).unwrap();
     let mut export = IpcExport::new(remote.clone()).unwrap();
     export.expose();
     assert_eq!(export.extent, 2 << 20);
@@ -32,7 +33,7 @@ fn ipc_explicit_export_blocks_whole_allocation_and_reuses_copy_stream() {
     );
     assert!(IpcExport::new(remote.clone()).is_err());
     for to_remote in [false, true, false] {
-        copy_ipc(&local, export.handle, to_remote).unwrap();
+        copy_ipc(&local, &pool, export.handle, to_remote).unwrap();
         assert!(destination.imports.lock().unwrap().is_empty());
     }
     let mut bytes = [0; 128];
@@ -45,7 +46,8 @@ fn ipc_explicit_export_blocks_whole_allocation_and_reuses_copy_stream() {
             .all(|b| *b == 0xa5)
     );
     let events = destination.events.lock().unwrap();
-    assert_eq!(events.iter().filter(|&&e| e == "stream-create").count(), 1);
+    assert_eq!(events.iter().filter(|&&e| e == "stream-create").count(), 2);
+    assert_eq!(pool.stats().unwrap(), (1, 0, 0));
     assert_eq!(events.iter().filter(|&&e| e == "ipc-open").count(), 3);
     assert_eq!(events.iter().filter(|&&e| e == "ipc-close").count(), 3);
     for (index, event) in events.iter().enumerate() {
@@ -77,6 +79,7 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
         let destination = allocation(&[0xa5; 128]);
         let remote = owned(&source, true);
         let local = owned(&destination, false);
+        let pool = CUDAStreamPool::new(1).unwrap();
         let mut export = IpcExport::new(remote.clone()).unwrap();
         export.expose();
         match case {
@@ -102,7 +105,7 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
                 .store(true, Ordering::Release),
             _ => unreachable!(),
         }
-        let result = copy_ipc(&local, export.handle, true);
+        let result = copy_ipc(&local, &pool, export.handle, true);
         let uncertain = matches!(
             case,
             "wait" | "close" | "restore-open" | "restore-copy" | "restore-close"
@@ -113,6 +116,11 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
             "{case}: {result:?}"
         );
         assert!(result.is_err());
+        if matches!(case, "wait" | "restore-copy") {
+            assert_eq!(pool.stats().unwrap(), (1, 0, 1), "{case}");
+        } else if matches!(case, "copy" | "record") {
+            assert_eq!(pool.stats().unwrap(), (1, 0, 0), "{case}");
+        }
         assert_eq!(
             destination.imports.lock().unwrap().is_empty(),
             !uncertain || case == "restore-close",
@@ -201,11 +209,14 @@ impl IpcMapping {
     pub(super) fn copy_one(
         &mut self,
         memory: &Allocation,
+        pool: &Arc<CUDAStreamPool>,
         remote_offset: usize,
         local_offset: usize,
         length: usize,
         to_remote: bool,
     ) -> Result<()> {
+        let mut stream =
+            pool.acquire(memory, std::time::Instant::now() + Duration::from_secs(2))?;
         self.copy_group(
             &[crate::cuda::ipc::IpcCopy {
                 memory: memory.clone(),
@@ -214,18 +225,24 @@ impl IpcMapping {
                 length,
             }],
             to_remote,
+            &mut stream,
             |_| Ok(()),
         )
         .result
     }
 }
 
-fn copy_ipc(local: &Arc<CudaMemory>, handle: [u8; 64], to_remote: bool) -> Result<()> {
+fn copy_ipc(
+    local: &Arc<CudaMemory>,
+    pool: &Arc<CUDAStreamPool>,
+    handle: [u8; 64],
+    to_remote: bool,
+) -> Result<()> {
     let local = Allocation::Cuda(local.clone());
     let mut mapping = IpcMapping::new(&local)?;
     let result = mapping
         .open(handle)
-        .and_then(|()| mapping.copy_one(&local, 11, 7, 17, to_remote));
+        .and_then(|()| mapping.copy_one(&local, pool, 11, 7, 17, to_remote));
     mapping.close()?;
     result
 }
@@ -331,13 +348,14 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
         let destination = allocation(&[0xa5; 128]);
         let remote = owned(&source, true);
         let local = owned(&destination, false);
+        let pool = CUDAStreamPool::new(1).unwrap();
         let weak = Arc::downgrade(&local);
         let mut export = IpcExport::new(remote).unwrap();
         export.expose();
         let mut mapping = IpcMapping::new(&Allocation::Cuda(local.clone())).unwrap();
         mapping.open(export.handle).unwrap();
         mapping
-            .copy_one(&Allocation::Cuda(local.clone()), 11, 7, 17, false)
+            .copy_one(&Allocation::Cuda(local.clone()), &pool, 11, 7, 17, false)
             .unwrap();
         drop(local);
         assert!(weak.upgrade().is_some());
