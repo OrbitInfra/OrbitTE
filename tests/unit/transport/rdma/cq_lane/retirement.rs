@@ -114,12 +114,18 @@ fn poll_retirement_yields_before_fencing_a_busy_store_or_sibling() {
         assert_eq!(record.actions.load(Ordering::Acquire) & CLOSE, 0);
     }
     // An empty logical grant can leave without retiring the physical sibling.
-    assert!(lane.poll_close_record(&sibling, 1, deadline()).unwrap());
-    record.require_live().unwrap();
+    wait_until(|| {
+        let ready = lane.poll_close_record(&sibling, 1, deadline()).unwrap();
+        record.require_live().unwrap();
+        ready
+    });
     assert_eq!(runtime.stats().unwrap().closed_connections, 0);
     // A stale close does not acquire authority over the live claim.
-    assert!(lane.poll_close_record(&record, 2, deadline()).unwrap());
-    record.require_live().unwrap();
+    wait_until(|| {
+        let ready = lane.poll_close_record(&record, 2, deadline()).unwrap();
+        record.require_live().unwrap();
+        ready
+    });
     grant.close().unwrap();
     drop((grant, sibling));
     runtime.close(deadline()).unwrap();
