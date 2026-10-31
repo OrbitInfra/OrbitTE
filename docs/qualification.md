@@ -1810,8 +1810,50 @@ pattern. OrbitTE adds actual-context matching, a cross-context slot bound,
 reusable completion events and explicit quarantine/close ownership.
 
 No hardware task was requested. Current installed v21 DMA, cross-context native
-cleanup and matched throughput remain unqualified. Group completion is still a
-synchronous wait; native CUDA batch-copy dispatch and event-query scheduling
-remain separate work. Earlier H20 evidence does not qualify this new pool, and
+cleanup and matched throughput remain unqualified. At `28c673f`, group
+completion still used a synchronous wait. The following event-progress stage
+supersedes that wait; native CUDA batch-copy dispatch remains separate work. Earlier H20 evidence does not qualify this new pool, and
 reduced native construction counts do not establish a speedup. Full P5/TENT
 parity and OrbitKV integration remain open.
+
+
+## CUDA IPC event progress
+
+Source `550475e` adds one lazy transport completion worker. A group's actual
+whole-allocation GPU/pinned loans and exclusive stream lease survive NOT_READY;
+ready query and owning-context restoration precede release. The caller retains
+its import, source grant and receipts while the worker polls. Original deadlines
+bound conflicting NVLink owner waits. A still-pending deadline or query/restore
+failure retains and fences actual touched owners instead of synchronizing or
+reporting a false drain. Requester shutdown drains callers and imports, stops
+progress, then closes the stream pool.
+
+Focused source gates pass three stream-pool tests, 29 IPC-related tests and ten
+native-observer/validator controls, plus format and RDMA/CUDA all-target Clippy.
+The new public-engine controls hold one GPU event pending while another pinned
+host group completes on the same worker, verify exact bytes, running cancellation,
+owner-wait deadline and close retry, and preserve actual owners on pending
+deadline/NOT_READY context-restore failure. Existing mixed/reversed-owner,
+source-receipt and partial-failure controls remain in the affected gate. The
+native observer now records query results outside staging too; its validator
+requires the matching ready event generation, enqueue context restoration and
+every query context restoration before close/free. Historical wait-based traces
+remain readable. These are CPU shim/validator checks, not installed DMA results.
+
+Evidence: `/root/orbitte-artifacts/nvlink-event-progress-20261101/`.
+`source-manifest.json` binds source inputs and `gates.json` records commands and
+log hashes. Initial failed checks are preserved separately. Independent review
+and final CI are recorded in that directory before PR readiness.
+
+Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` retains task streams/events
+in `NVLinkSubBatch` and calls `cudaEventQuery` from `getTransferStatus`. OrbitTE's
+shared worker is the runtime adaptation of that completion lifetime. Setup,
+control receipts and each Batch's FIFO execution are unchanged; this does not
+claim a fully asynchronous scheduler, native batch-copy dispatch, automatic
+producer-stream readiness or exporter-crash safety.
+
+No hardware task was requested. Current installed v21 event-query DMA,
+concurrency, native cleanup and matched TENT performance remain unqualified.
+Historical H20 results do not qualify this changed completion path. Query API
+counts and CPU shim concurrency are not native latency/bandwidth measurements.
+Full P5/TENT parity and OrbitKV integration remain open.

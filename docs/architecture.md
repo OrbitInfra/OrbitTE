@@ -482,7 +482,8 @@ stream readiness remain P5 work.
 ## CUDA IPC transport ownership
 
 `transport/nvlink.rs::NVLinkTransport` owns same-host identity checks, grant/close
-bindings, physical mapping quotas and the shared stream pool. It is a sibling of TCP and RDMA.
+bindings, physical mapping quotas, the shared stream pool and completion
+progress. It is a sibling of TCP and RDMA.
 `cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
 one imported native reference, its context and every touched local allocation.
 `transport/nvlink/mapping.rs::OpenedMapping` owns the mapping charge and explicit
@@ -491,8 +492,15 @@ same-region/context copies. `cuda/ipc/copy.rs` acquires actual GPU/pinned host
 owners in one deduplicated lock order, then submits the group on its exclusive
 `CUDAStreamHandle`. `NVLinkTransport` acquires the handle before memory access
 locks and returns it before mapping-close/control I/O. The pool matches the
-retained actual context and survives changes of first allocation. It holds all memory guards through shared completion
-and context restoration, releasing them before control I/O.
+retained actual context and survives changes of first allocation. Memory guards
+protect publication of whole-allocation loans and enqueue. `IpcCopyGroup` owns
+those loans and the stream handle across completion polls without holding the
+allocation mutexes. `progress.rs` owns one lazy worker, bounded by stream
+admission; it queries every pending group in its retained native context.
+`NOT_READY` yields to other groups. Proven completion plus restoration releases
+loans/stream before the caller performs source receipt or mapping-close I/O.
+Conflicting NVLink allocation waits obey the request deadline; CPU/RDMA access
+to an in-flight owner fails until its loan ends.
 The optional `cache.rs::RelocationCache` owns bounded single-flight imports.
 At capacity it selects an idle LRU owner, reserves both old and replacement
 keys, and closes outside the map lock before committing the replacement.
@@ -503,13 +511,13 @@ whole-allocation loan and physical charge. Each cached submission revalidates
 source authorization, then releases drained local owners at operation completion.
 `cuda/stream.rs` owns actual copy completion. ControlService keeps cached close
 receipts available after source admission closes; Engine drains outgoing imports
-and the stream pool before incoming exports. Legacy uncertain handlers and current uncertain
+and stops completion progress/closes the stream pool before incoming exports. Legacy uncertain handlers and current uncertain
 requester DMA still retain their admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant covers a bounded ordered group, with one
 trailing event and a final import close/source receipt. A clean enqueue failure
-can confirm a recovered prefix; shared record/wait/restore failure covers the
+can confirm a recovered prefix; shared record/query/restore failure covers the
 whole attempted group. Native uncertainty retains and fences actual owners. Native TENT keeps a transport-wide relocation cache;
 OrbitTE closes imports at each subbatch boundary by default. With
 `nvlink_cache_entries` enabled, imports survive until idle reclamation, explicit
@@ -518,9 +526,13 @@ ready-offer handshake separates unexposed reservations from exposed exporter obl
 cannot expose a handle after its requester already closed the original socket.
 
 `cuda/pinned.rs::PinnedAllocation` owns real host allocation, primary context,
-and its staging copy resources. NVLink uses the separate shared stream pool. `HostMemory` holds its access lock through native
-copy/event/context completion and fences CPU/RDMA access on uncertainty.
+and its staging copy resources. NVLink uses the separate shared stream pool.
+`HostMemory` owns the exclusive IPC loan through event/context completion and
+fences CPU/RDMA access on uncertainty.
 `IpcMapping` retains the existing `Allocation::Host` / `Allocation::Cuda` owners;
 mixed groups still share only their actual native context and remote GPU grant.
+The shared query worker follows TENT's `NVLinkSubBatch` completion-event lifetime;
+TENT queries it in `getTransferStatus`. NVLink setup and receipts remain caller
+work, and submissions queued inside one Batch remain FIFO.
 See [CUDA IPC](cuda-ipc.md)
 for whole-allocation permission, exporter lifetime and remaining parity limits.

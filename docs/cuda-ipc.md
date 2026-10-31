@@ -47,8 +47,11 @@ supplied `HostMemory` are rejected by this bounded profile; there is no implicit
 registration or staging fallback. This is an OrbitTE ownership restriction,
 not a claim that CUDA or native TENT always rejects pageable memory.
 
-The `HostMemory` access lock stays held through copy, event drain and context
-restoration. CPU access and new RDMA leases wait for that critical section.
+The `HostMemory` access lock protects enqueue and publication of an exclusive
+whole-allocation IPC loan. The loan survives event queries and context
+restoration without holding the mutex. CPU access and new RDMA leases return
+`Unavailable` during the loan; subsequent NVLink groups wait for it within their
+request deadline. Uncertain owners return `Unquiesced`.
 Requester preflight conservatively rejects any existing RDMA loan on that host
 allocation, including disjoint ranges, as the existing device requester does.
 The actual slice is checked again at copy time. Uncertain completion or cleanup
@@ -103,11 +106,46 @@ Successful completion followed by idle stream-destroy failure retains native
 handles/context and capacity, without retaining already completed local buffers.
 
 `close_requester` fences outgoing admission, drains submissions, closes imports,
-then closes the stream pool. A timed-out close can wait again; quarantined slots
-remain `Unquiesced`. `flush_nvlink_cache` leaves the stream pool usable.
+then stops the completion worker and closes the stream pool. A timed-out close can wait again; quarantined slots
+remain `Unquiesced`. `flush_nvlink_cache` leaves the stream pool and completion worker usable.
 `EngineStats.nvlink` exposes `stream_slots` (including construction and retained
 slots), `active_streams` and `retained_streams`, separate from mapping bytes.
+`pending_groups` counts queued/polled completions; `progress_workers` is zero or
+one for the lazy shared worker.
 See [source evidence and current limits](qualification.md#cuda-ipc-stream-pool).
+
+## Event completion progress
+
+After ordered copy enqueue and the trailing event record, the caller restores
+its CUDA context and hands an `IpcCopyGroup` to the transport's shared completion
+worker. The group owns its exclusive stream handle and actual GPU/pinned host
+allocation loans. The submitting caller retains the import lease, source grant
+and control channel until the group returns its physical completion outcome.
+
+One lazy worker per `NVLinkTransport` polls every pending group using
+`cuEventQuery` in the group's retained context. `NOT_READY` preserves the event
+generation and yields to other groups. After short polling bursts, the worker
+parks briefly when no event advances; new work wakes it immediately. Existing
+`nvlink_stream_count` admission bounds all queued and polled groups. A ready
+query must also restore its context before releasing the loans or returning the
+stream to the pool. Conflicting NVLink requests wait on their actual allocation
+owner, using the original request deadline. CPU/RDMA users receive a busy error
+while that whole-allocation loan exists.
+
+Deadline expiry with an event still pending, query failure or failed context
+restoration returns `Unquiesced` and retains/fences touched owners, mapping and
+stream capacity. It does not synchronize the event, claim cancellation drained
+DMA, or allow reuse. Clean partial enqueue failure still uses the existing
+stream recovery before reporting its completed prefix. Queued/per-slice
+cancellation is checked before enqueue; an already submitted group must reach
+physical completion or retention before reporting an outcome.
+
+This removes blocking event synchronization from healthy NVLink completion.
+Setup, mapping operations and source receipts still run synchronously on the
+submitting caller. Independent submissions can share event progress; one Batch's
+queued submissions still run in FIFO order. Individual CUDA driver calls cannot
+be preempted. This is not a throughput claim or a complete asynchronous NVLink
+scheduler. See [source evidence](qualification.md#cuda-ipc-event-progress).
 
 ## Cross-submission relocation cache
 
@@ -174,7 +212,8 @@ retries. With caching disabled it is a no-op. Native provider close cannot be
 preempted by the deadline. There is no background expiry thread.
 
 `close_requester` permanently fences new outgoing work, waits for accepted
-submissions, then closes cached imports and the stream pool. Native close and context restoration
+submissions, then closes cached imports, stops completion progress and closes
+the stream pool. Native close and context restoration
 must succeed before an independent **mapping-close receipt** releases the source
 entry. The close endpoint remains available after source admission closes or the
 region is unregistered. A lost close ACK leaves a non-reusable close obligation;
@@ -269,14 +308,15 @@ idle pool. OrbitTE uses the same names and exclusive handle lifetime in
 OrbitTE additionally bounds slots across contexts, keys by actual retained native
 context, and quarantines uncertain cleanup. The frozen TENT pool creates streams
 when a device's idle list is empty and has no corresponding global slot bound.
-OrbitTE waits once before the source receipt. TENT can also use native
-`cudaMemcpyBatchAsync` and query task completion asynchronously; these are not
-claimed by this synchronous group path. TENT's cache closes in `uninstall`;
+TENT's `getTransferStatus` uses `cudaEventQuery` on the task completion event.
+OrbitTE now follows that event-query lifetime, with a shared completion worker
+adapting it to the existing batch API; the worker is an OrbitTE runtime choice.
+The source receipt still follows physical completion. Native
+`cudaMemcpyBatchAsync` dispatch remains separate work. TENT's cache closes in `uninstall`;
 OrbitTE additionally requires explicit cooperating source close receipts. Its
 bounded LRU and continuing flush extend that ownership model; they are not
-features copied from the frozen TENT cache. Nonblocking NVLink event-query
-scheduling and native batch-copy dispatch remain separate work. Grouped completion
-and shared stream ownership have source checks; their current installed DMA and
+features copied from the frozen TENT cache. Grouped completion, shared stream
+ownership and event-query progress have source checks; their current installed DMA and
 performance qualification remain open. Producer readiness stays an explicit caller handoff.
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
