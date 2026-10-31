@@ -23,6 +23,8 @@ mod requester_failures;
 mod requester_pipeline;
 mod requester_staging;
 #[cfg(feature = "rdma")]
+mod retirement_progress;
+#[cfg(feature = "rdma")]
 mod setup_progress;
 mod shim;
 mod socket_gate;

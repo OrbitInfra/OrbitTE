@@ -273,7 +273,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
 | QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |
-| CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, CQE dispatch and native progress |
+| CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/retirement.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, pollable retirement, CQE dispatch and native progress |
 | Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
 | Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs`, `platform/numa.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
@@ -458,8 +458,14 @@ order as synchronous source acquisition. Pending requester polls retain admissio
 without constructing extra QPs or waiting for another builder. Staging keeps one outer CROSS
 framing owner through setup and its scoped receipt while observing other submitted
 payloads. Ordinary synchronous RDMA drives the same setup states and validators.
-Pin, native construction/connect/copy, nonreusable
-QP retirement and source handlers retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
+`cq_lane/retirement.rs` fences all physical-QP affiliates before publishing CLOSE.
+Requester finish polls the same retirement state used by synchronous close;
+busy record/store locks yield before mutation. Only Closed transfers the drained
+grant output; Retained waits for the complete lane receipt and worker detachment.
+Native cleanup remains on the existing Workers pool, so a blocked provider also
+blocks other lanes assigned to that worker. See [retirement progress](staging.md#nonreusable-qp-retirement-progress).
+Pin, native construction/connect/copy, aggregate failure drain and source handlers
+retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation

@@ -1629,3 +1629,6 @@ pub(in crate::transport::rdma) fn before_staging_abort(
             Some(Fault::Backend("injected drained CQ failure", 5));
     }
 }
+
+#[path = "cq_lane/retirement.rs"]
+mod retirement;

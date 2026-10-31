@@ -12,6 +12,7 @@ enum Phase {
     Send,
     Completion,
     Drain,
+    Retire,
     Done,
     Reply,
     Ack,
@@ -81,13 +82,17 @@ impl RdmaTransfer {
                     )?;
                     Phase::Drain
                 } else {
-                    // Retirement of nonreusable QPs retains its existing join.
-                    grant.close()?;
-                    Phase::Done
+                    Phase::Retire
                 }
             }
             Phase::Drain => {
                 if !grant.progress.query_finish(&grant.record, grant.claim)? {
+                    return Ok(false);
+                }
+                Phase::Done
+            }
+            Phase::Retire => {
+                if !grant.poll_close()? {
                     return Ok(false);
                 }
                 Phase::Done

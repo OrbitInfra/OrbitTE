@@ -29,6 +29,54 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Nonreusable QP retirement progress
+
+Requester nonreusable QP retirement now yields through the existing CQ worker
+and retains the grant until native close or complete lane retention. See the
+[contract](staging.md#nonreusable-qp-retirement-progress). Wire v21 is unchanged.
+Independent source review accepts `b2a0aba` (production `4e4c4f2`) for this
+source/CPU boundary.
+
+The focused CPU controls hold actual provider destruction and verify busy
+record/store/sibling locks, stale and unattached shared claims, original cleanup
+deadlines and Retained-before-lane-detachment. Public READ/WRITE staging uses
+two CPU verbs contexts on verified independent worker IDs: one CROSS holds an
+accepted payload while another holds native QP destruction. Other-CROSS error,
+worker stop and original deadline must enter aggregate cleanup before provider
+release, while actual backing and admission stay owned. Healthy release checks
+nonuniform bytes, sentinels, a short tail and a second transfer; native cleanup
+failure retains the actual allocation and reports `Unquiesced`.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/qp-retirement-progress-20261031/`.
+`primary-b2a0aba/gates.json` records all 11 primary gates on the accepted source.
+Stable and Rust 1.85 each pass 236 RDMA units or 355 combined units, eight
+integration tests and one doctest; five hardware units and one integration
+subprocess fixture remain ignored. Source CI passes all eight profiles, the
+frozen TENT CPU comparison and documentation.
+
+`independent-review/source-review-b2a0aba.json` records source acceptance.
+The reviewer independently passes all 11 gates on `4e4c4f2`, then verifies
+295 of 296 tracked files are unchanged at `b2a0aba` and passes seven focused
+retirement, combined Clippy and format gates on fresh targets. The final primary
+matrix and CI are audited evidence, not additional independent executions.
+The initial CI failure exposed a test assuming a poll was immediately ready
+while the worker could hold its lock. `b2a0aba` replaces that assumption with
+bounded polling and checks the live sibling on every poll; production is
+unchanged. That failed CI log and development controls remain in the archive.
+
+`independent-review/blocking-retire-b2a0aba/manifest.json` records a fresh-target
+negative control that only restores blocking grant close in the Retire phase.
+The unchanged public control fails its first READ/error-observation case at
+the two-second wait (2.01 seconds measured, exit 101), while provider destruction
+is held. The fixture releases the hold on unwind; later negative branches are
+not claimed as executed. The healthy source control covers all ten READ/WRITE
+completion, error, retention, stop and deadline cases.
+
+The source gate does not qualify installed v21 DMA overlap, physical faults or
+performance. Native provider calls and aggregate error cleanup remain synchronous;
+no new hardware task was requested. Full P5 and ProxyManager parity remain open.
+
 ## Persistent MR publication progress
 
 Requester grant construction now yields while an existing persistent MR creator

@@ -71,7 +71,9 @@ impl CqLane {
         claim: u64,
     ) -> Result<bool> {
         record.require_live()?;
-        let request = record.lock()?;
+        let Some(request) = record.try_lock()? else {
+            return Ok(false);
+        };
         request.check_claim(claim)?;
         Self::grant_finished(&request)
     }

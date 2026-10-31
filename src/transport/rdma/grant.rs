@@ -538,13 +538,25 @@ impl RdmaGrant {
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {
+        while !self.poll_close()? {
+            std::thread::park_timeout(std::time::Duration::from_micros(100));
+        }
+        Ok(())
+    }
+
+    pub(super) fn poll_close(&mut self) -> Result<bool> {
         if self.released {
-            return Ok(());
+            return Ok(true);
         }
         let result = self
             .progress
-            .close_record(&self.record, self.claim, self.deadline);
-        let mut request = self.record.lock()?;
+            .poll_close_record(&self.record, self.claim, self.deadline);
+        if matches!(result, Ok(false)) {
+            return result;
+        }
+        let Some(mut request) = self.record.try_lock()? else {
+            return result.map(|_| false);
+        };
         // A consumed/stale handle has no authority over the next grant.
         if request.claim == self.claim && request.phase == Phase::Closed {
             if let Some(mut resources) = request.resources.take() {
