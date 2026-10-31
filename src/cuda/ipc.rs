@@ -1,10 +1,12 @@
 //! Cooperative whole-allocation exports and owned CUDA IPC imports.
 
+use std::time::Instant;
+
 use super::*;
 use crate::memory::Allocation;
 
 mod copy;
-pub(crate) use copy::IpcCopy;
+pub(crate) use copy::{IpcCopy, IpcCopyCompletion, IpcCopyGroup};
 
 pub(crate) struct IpcExport {
     memory: Option<Arc<CudaMemory>>,
@@ -83,8 +85,8 @@ pub(crate) struct IpcMapping {
 }
 
 impl IpcMapping {
-    pub(crate) fn new(memory: &Allocation) -> Result<Self> {
-        let context = memory.ipc_owner_context()?;
+    pub(crate) fn new(memory: &Allocation, deadline: Instant) -> Result<Self> {
+        let context = memory.ipc_owner_context(deadline)?;
         Ok(Self {
             context,
             address: 0,
@@ -201,11 +203,29 @@ impl Drop for IpcMapping {
 }
 
 impl CudaMemory {
-    pub(crate) fn validate_ipc_requester(&self) -> Result<()> {
-        let allocation = self
+    pub(super) fn lock_ipc(
+        &self,
+        deadline: Instant,
+    ) -> Result<std::sync::MutexGuard<'_, DeviceAllocation>> {
+        let mut allocation = self
             .allocation
             .lock()
             .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        while allocation.ipc_inflight
+            && !allocation.uncertain
+            && !allocation.context.poisoned.load(Ordering::Acquire)
+        {
+            allocation = self
+                .ipc_idle
+                .wait_timeout(allocation, crate::engine::remaining(deadline)?)
+                .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?
+                .0;
+        }
+        Ok(allocation)
+    }
+
+    pub(crate) fn validate_ipc_requester(&self, deadline: Instant) -> Result<()> {
+        let allocation = self.lock_ipc(deadline)?;
         if !allocation.owned {
             return Err(Error::Unavailable(
                 "CUDA IPC requester requires owned CudaMemory",
@@ -216,22 +236,22 @@ impl CudaMemory {
 }
 
 impl Allocation {
-    pub(super) fn ipc_owner_context(&self) -> Result<Arc<Context>> {
+    pub(super) fn ipc_owner_context(&self, deadline: Instant) -> Result<Arc<Context>> {
         match self {
             Self::Cuda(memory) => {
-                memory.validate_ipc_requester()?;
+                memory.validate_ipc_requester(deadline)?;
                 let allocation = memory
                     .allocation
                     .lock()
                     .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
                 Ok(Arc::clone(&allocation.context))
             }
-            Self::Host(memory) => Ok(Arc::clone(&memory.cuda_pinned()?.context)),
+            Self::Host(memory) => Ok(Arc::clone(&memory.cuda_pinned(deadline)?.context)),
         }
     }
 
     /// Actual retained native context identity, including portable pinned owners.
-    pub(crate) fn ipc_context(&self) -> Result<usize> {
-        Ok(self.ipc_owner_context()?.raw.as_ptr() as usize)
+    pub(crate) fn ipc_context(&self, deadline: Instant) -> Result<usize> {
+        Ok(self.ipc_owner_context(deadline)?.raw.as_ptr() as usize)
     }
 }

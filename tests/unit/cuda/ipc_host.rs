@@ -25,7 +25,8 @@ fn ipc_host_read_write_preserve_guards_reuse_stream_and_free_real_pin() {
     let remote = owned(&source, true);
     let export = IpcExport::new(remote.clone()).unwrap();
     let pool = CUDAStreamPool::new(1).unwrap();
-    let mut mapping = IpcMapping::new(&Allocation::Host(host.clone())).unwrap();
+    let mut mapping =
+        IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).unwrap();
     mapping.open(export.handle).unwrap();
     for to_remote in [false, true, false] {
         mapping
@@ -51,7 +52,7 @@ fn ipc_host_read_write_preserve_guards_reuse_stream_and_free_real_pin() {
         ("HtoD", 1),
         ("DtoH", 2),
         ("stream-create", 1),
-        ("event-sync", 3),
+        ("event-query", 3),
         ("ipc-close", 1),
     ] {
         assert_eq!(
@@ -154,7 +155,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
     };
     for host in [ordinary, Arc::new(external)] {
         assert!(matches!(
-            IpcMapping::new(&Allocation::Host(host)),
+            IpcMapping::new(&Allocation::Host(host), super::ipc::deadline()),
             Err(Error::Unavailable(_))
         ));
     }
@@ -170,7 +171,8 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
         let source = allocation(&[0x5a; 128]);
         let export = IpcExport::new(owned(&source, true)).unwrap();
         let pool = CUDAStreamPool::new(1).unwrap();
-        let mut mapping = IpcMapping::new(&Allocation::Host(host.clone())).unwrap();
+        let mut mapping =
+            IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).unwrap();
         mapping.open(export.handle).unwrap();
         match fault {
             "event-create" => destination.event_create_error.store(1, Ordering::Release),
@@ -207,7 +209,6 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
 #[cfg(feature = "rdma")]
 #[test]
 fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
-    use std::sync::mpsc;
     let destination = allocation(&[0; 128]);
     let context = memory(&destination)
         .allocation
@@ -221,48 +222,29 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
         .register_host_memory(host.clone(), 0, 128, Permission::LocalOnly)
         .unwrap();
     let loan = region.dma_lease(100, 1).unwrap();
-    assert!(IpcMapping::new(&Allocation::Host(host.clone())).is_err());
+    assert!(IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).is_err());
     drop(loan);
     let source = allocation(&[0x5a; 128]);
     let export = IpcExport::new(owned(&source, true)).unwrap();
-    let (entered_tx, entered_rx) = mpsc::sync_channel(0);
-    let (resume_tx, resume_rx) = mpsc::channel();
-    *destination.event_gate.lock().unwrap() = Some((entered_tx, resume_rx));
+    destination.query_hold.store(true, Ordering::Release);
     let copy_host = host.clone();
     let handle = export.handle;
     let worker = std::thread::spawn(move || {
         let owner = Allocation::Host(copy_host);
         let pool = CUDAStreamPool::new(1).unwrap();
-        let mut mapping = IpcMapping::new(&owner).unwrap();
+        let mut mapping = IpcMapping::new(&owner, super::ipc::deadline()).unwrap();
         mapping.open(handle).unwrap();
         mapping.copy_one(&owner, &pool, 11, 7, 17, false).unwrap();
         mapping.close().unwrap();
     });
-    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let (cpu_tx, cpu_rx) = mpsc::channel();
-    let read_host = host.clone();
-    let cpu = std::thread::spawn(move || {
-        let mut bytes = [0; 17];
-        read_host.read(7, &mut bytes).unwrap();
-        cpu_tx.send(bytes).unwrap();
-    });
-    let (rdma_tx, rdma_rx) = mpsc::channel();
-    let registration = region.clone();
-    let rdma = std::thread::spawn(move || {
-        let _loan = registration.dma_lease(64, 1).unwrap();
-        rdma_tx.send(()).unwrap();
-    });
-    assert!(cpu_rx.recv_timeout(Duration::from_millis(20)).is_err());
-    assert!(rdma_rx.try_recv().is_err());
-    resume_tx.send(()).unwrap();
+    super::ipc::wait_query(&destination);
+    assert!(host.read(7, &mut [0; 17]).is_err());
+    assert!(region.dma_lease(64, 1).is_err());
+    destination.query_hold.store(false, Ordering::Release);
     worker.join().unwrap();
-    assert_eq!(
-        cpu_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-        [0x5a; 17]
-    );
-    rdma_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    cpu.join().unwrap();
-    rdma.join().unwrap();
+    let mut bytes = [0; 17];
+    host.read(7, &mut bytes).unwrap();
+    assert_eq!(bytes, [0x5a; 17]);
     let loan = region.dma_lease(64, 1).unwrap();
     host.fence_cuda();
     drop(loan);
@@ -309,16 +291,24 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
             let handle = export.handle;
             let pool = pool.clone();
             std::thread::spawn(move || {
-                let mut mapping = IpcMapping::new(&copies[0].memory).unwrap();
+                let mut mapping =
+                    IpcMapping::new(&copies[0].memory, super::ipc::deadline()).unwrap();
                 mapping.open(handle).unwrap();
-                let mut stream = pool
+                let stream = pool
                     .acquire(
                         &copies[0].memory,
                         std::time::Instant::now() + Duration::from_secs(2),
                     )
                     .unwrap();
                 barrier.wait();
-                let completion = mapping.copy_group(&copies, false, &mut stream, |_| Ok(()));
+                let completion = mapping.copy_group(
+                    &copies,
+                    false,
+                    stream,
+                    super::ipc::deadline(),
+                    |_| Ok(()),
+                    super::ipc::complete_group,
+                );
                 completion.result.unwrap();
                 assert_eq!((completion.completed, completion.attempted), (4, 4));
                 // The fixture requires all copies drained before any import closes.
@@ -338,7 +328,7 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
         let events = destination.events.lock().unwrap();
         for (kind, count) in [
             ("record", 2),
-            ("event-sync", 2),
+            ("event-query", 2),
             ("DtoD", 4),
             ("DtoH", 4),
             ("stream-create", 2),

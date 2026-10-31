@@ -16,6 +16,10 @@ pub struct NVLinkStats {
     pub active_streams: usize,
     /// Uncertain slots excluded from reuse until process exit.
     pub retained_streams: usize,
+    /// Groups owned by the shared completion poller, including queued groups.
+    pub pending_groups: usize,
+    /// Lazy shared completion threads (zero or one per transport).
+    pub progress_workers: usize,
 }
 
 pub(super) struct MappingBudget {

@@ -61,6 +61,9 @@ int main(void) {
     assert(cuEventDestroy_v2_fn(event)==700 && cuStreamDestroy_v2_fn(stream)==1);
     LOAD(cuEventQuery);
     assert(cuEventQuery_fn(event)==600 && cuEventQuery_fn(event)==0 && cuEventQuery_fn(event)==700);
+    assert(unsetenv("ORBITTE_STAGING_OBSERVE")==0);
+    queries=0;
+    assert(cuEventQuery_fn(event)==600);
     assert(dlclose(library)==0);
     return 0;
 }

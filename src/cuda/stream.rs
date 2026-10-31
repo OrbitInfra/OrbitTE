@@ -160,6 +160,16 @@ impl CopyStream {
         Ok(ready)
     }
 
+    /// Enqueue/record a group and restore context while its event stays pending.
+    pub(super) unsafe fn begin_group(
+        &mut self,
+        submit: impl FnOnce(&super::driver::Driver, sys::CUstream) -> Result<()>,
+    ) -> Result<()> {
+        let context = Arc::clone(&self.context);
+        // SAFETY: the caller retains every actual allocation until query/drain.
+        context.current(|| unsafe { self.enqueue(submit) })
+    }
+
     /// Enqueue an ordered group, then record and wait on one completion event.
     /// The caller retains every touched allocation through completion/recovery.
     pub(super) unsafe fn copy_group(

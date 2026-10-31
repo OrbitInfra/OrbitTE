@@ -481,7 +481,7 @@ impl TransferEngine {
                     local
                         .allocation_range(local_offset, request.length)?
                         .0
-                        .ipc_context()?;
+                        .ipc_context(deadline)?;
                 }
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
@@ -845,8 +845,7 @@ impl TransferEngine {
         drop(usage);
         #[cfg(feature = "cuda")]
         if let Some(transport) = &self.source.nvlink {
-            transport.close_imports(self.source.epoch, deadline)?;
-            transport.stream_pool.close(deadline)?;
+            transport.close_requester(self.source.epoch, deadline)?;
         }
         Ok(())
     }

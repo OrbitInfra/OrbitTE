@@ -7,12 +7,14 @@ mod budget;
 mod cache;
 mod export;
 mod mapping;
+mod progress;
 mod subbatch;
 use budget::MappingBudget;
 pub use budget::NVLinkStats;
 use cache::{RelocationCache, RelocationKey};
 use export::ExportCache;
 use mapping::OpenedMapping;
+use progress::Progress;
 use subbatch::{NVLinkSubBatch, subbatch_len};
 
 use crate::cuda::CUDAStreamPool;
@@ -91,7 +93,8 @@ pub(crate) struct NVLinkTransport {
     identity: Identity,
     budget: Arc<MappingBudget>,
     imports: RelocationCache,
-    pub(crate) stream_pool: Arc<CUDAStreamPool>,
+    stream_pool: Arc<CUDAStreamPool>,
+    progress: Progress,
     pub(crate) exports: ExportCache,
 }
 
@@ -102,6 +105,7 @@ impl NVLinkTransport {
             budget: MappingBudget::new(max_bytes),
             imports: RelocationCache::new(cache_entries),
             stream_pool: CUDAStreamPool::new(stream_count)?,
+            progress: Progress::new(stream_count)?,
             exports: ExportCache::new(cache_entries),
         })
     }
@@ -113,6 +117,7 @@ impl NVLinkTransport {
             stats.active_streams,
             stats.retained_streams,
         ) = self.stream_pool.stats()?;
+        (stats.pending_groups, stats.progress_workers) = self.progress.stats();
         Ok(stats)
     }
 
@@ -125,7 +130,7 @@ impl NVLinkTransport {
         mut begin: impl FnMut(usize) -> bool,
     ) -> std::result::Result<usize, TransferFailure> {
         let requests = &submission.requests[first..];
-        let mut count = subbatch_len(requests, max_bytes);
+        let mut count = subbatch_len(requests, max_bytes, submission.deadline);
         loop {
             let mut retry_single = false;
             let requests = &requests[..count];
@@ -147,7 +152,7 @@ impl NVLinkTransport {
                 let (memory, _) = requests[0]
                     .local
                     .allocation_range(requests[0].local_offset, requests[0].length)?;
-                let context = memory.ipc_context()?;
+                let context = memory.ipc_context(deadline)?;
                 let cached = self.imports.limit != 0;
                 if cached {
                     let key = RelocationKey {
@@ -247,7 +252,7 @@ impl NVLinkTransport {
                     let needs_open = batch.is_none();
                     if needs_open {
                         let permit = self.budget.reserve(extent, false)?;
-                        batch = Some(OpenedMapping::new(&memory, permit)?);
+                        batch = Some(OpenedMapping::new(&memory, permit, deadline)?);
                     }
                     let mut batch = batch.ok_or(Error::Internal("missing NVLink mapping"))?;
                     if operation == TransferOp::Write {
@@ -258,11 +263,12 @@ impl NVLinkTransport {
                             batch.mapping.open(handle)?;
                         }
                         let subbatch = NVLinkSubBatch::new(requests, start, remote_offset)?;
-                        let mut stream = self.stream_pool.acquire(&memory, deadline)?;
+                        let stream = self.stream_pool.acquire(&memory, deadline)?;
                         let completion = batch.mapping.copy_group(
                             &subbatch.copies,
                             operation == TransferOp::Write,
-                            &mut stream,
+                            stream,
+                            deadline,
                             |index| {
                                 // The engine began task zero before acquiring the grant.
                                 if index != 0 && !begin(index) {
@@ -270,6 +276,7 @@ impl NVLinkTransport {
                                 }
                                 remaining(deadline).map(|_| ())
                             },
+                            |group| self.progress.wait(group, deadline),
                         );
                         copied = completion.completed;
                         attempted = completion.attempted;
@@ -334,6 +341,12 @@ impl NVLinkTransport {
                 error,
             });
         }
+    }
+
+    pub(crate) fn close_requester(&self, requester: SourceEpoch, deadline: Instant) -> Result<()> {
+        self.close_imports(requester, deadline)?;
+        self.progress.close(deadline)?;
+        self.stream_pool.close(deadline)
     }
 
     pub(crate) fn close_imports(&self, requester: SourceEpoch, deadline: Instant) -> Result<()> {

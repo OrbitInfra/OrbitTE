@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::budget::MappingPermit;
 use crate::Result;
 use crate::cuda::ipc::IpcMapping;
@@ -10,9 +12,13 @@ pub(super) struct OpenedMapping {
 }
 
 impl OpenedMapping {
-    pub(super) fn new(memory: &Allocation, permit: MappingPermit) -> Result<Self> {
+    pub(super) fn new(
+        memory: &Allocation,
+        permit: MappingPermit,
+        deadline: Instant,
+    ) -> Result<Self> {
         Ok(Self {
-            mapping: IpcMapping::new(memory)?,
+            mapping: IpcMapping::new(memory, deadline)?,
             permit: Some(permit),
         })
     }
