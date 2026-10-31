@@ -242,9 +242,11 @@ The default per-subbatch profile proceeds as follows:
    requester leases a context-matched stream/event, then locks each actual
    GPU/pinned host owner once in a common address order. All slices enqueue
    in request order on that stream, using `cuMemcpyAsync` for device/device or
-   the direction-specific host/device API above. One trailing event and one
-   context restoration establish group completion. Guards survive the wait and
-   recovery; the mapping retains touched owners until close. Both READ and WRITE
+   the direction-specific host/device API above. The requester records one
+   trailing event, restores context and hands the stream/whole-allocation loans
+   to shared progress. Guards end after enqueue; loans survive all queries. A
+   ready query plus context restoration establishes group completion, and the
+   mapping retains touched owners until close. Both READ and WRITE
    may modify destination bytes before their final report, including on failure.
 4. Only a successful native IPC close and context restoration permit a matching
    success/clean-abort receipt. The source releases its loan and quota, then
@@ -253,10 +255,11 @@ The default per-subbatch profile proceeds as follows:
 
 Only source-acknowledged requests enter the completed prefix. If enqueue fails
 or a later task is cancelled, successful stream recovery and the shared close/ACK
-confirm only the earlier submitted prefix. Failure of the shared record, wait or
+confirm only the earlier submitted prefix. Failure of the shared record, query or
 context restoration covers the entire attempted group, even if record recovery
 proved local drain. Native uncertainty retains actual touched owners. Memory
-guards are released before control I/O, while the mapping/lease owns cleanup.
+loans release after proven completion/restoration and before control I/O, while
+the mapping/lease owns cleanup.
 If native cleanup or the final ACK fails, every attempted request
 in that group belongs to `TransferFailure.affected_requests`, starting at
 `request_index`. Async tasks in that span share the failure; they are never
@@ -376,6 +379,6 @@ retention without final source payload readback. Source admission is no longer
 held by an idle handler; the export table remains charged instead. Native ledger
 checks distinguish IPC payload from owned-device setup/readback, require exact
 copy directions/ranges and event/context completion, and validate final cleanup.
-A payload copy cannot borrow an event, wait or restoring context pop from later
+A payload copy cannot borrow an event generation, query/wait or restoring context pop from later
 owned-device setup/readback. See [cache qualification](qualification.md#bounded-cross-submission-cuda-ipc-cache)
 for exact artifacts and the accepted profile.

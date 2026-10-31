@@ -79,6 +79,14 @@ class NativeEvidence(unittest.TestCase):
         for memory in ('device', 'host', 'mixed'):
             for mode in ('batch-healthy', 'cache-healthy', 'cache-graceful', 'cache-requester-exit'):
                 nvlink_run.validate_native(*self.queried_evidence(mode, memory), 17, mode, 101, 102, memory)
+            for completion in ('query', 'wait'):
+                make = self.queried_evidence if completion == 'query' else self.evidence
+                source, rows = make('cache-healthy', memory)
+                record = next(r for r in rows if r['kind'] == 'record')
+                rows.insert(rows.index(record)+1, dict(record, tid=3, stream=99))
+                for index, row in enumerate(rows): row['seq'] = index+1
+                with self.subTest(memory=memory, completion=completion, fault='event-rerecord'), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, rows, 17, 'cache-healthy', 101, 102, memory)
             for fault in ('missing-ready', 'wrong-event', 'missing-submit-pop', 'missing-query-pop', 'wrong-context', 'early-close', 'early-free', 'later-ready'):
                 source, rows = self.queried_evidence('cache-healthy', memory)
                 query = next(r for r in rows if r['kind'] == 'query')

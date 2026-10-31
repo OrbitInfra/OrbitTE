@@ -156,6 +156,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
                 assert restored and restored[0]['kind'] == 'pop' and restored[0]['seq'] < next_copy, 'group context not immediately restored'
                 drained = restored[0]
             assert not any(first['seq'] < r['seq'] < drained['seq'] and r['kind'] in ('pin','allocate','unpin','free') for r in cycle), 'allocation changed before payload drain'
+            assert not any(r['kind'] == 'record' and r['event'] == event['event'] and event['seq'] < r['seq'] < drained['seq'] for r in cycle), 'completion event generation changed before drain'
             completion_groups += 1
             if mode != 'requester-exit':
                 close = closes[index]
