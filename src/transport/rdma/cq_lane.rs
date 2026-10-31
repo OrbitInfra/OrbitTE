@@ -144,6 +144,17 @@ impl Record {
         self.connection.require_live()
     }
 
+    pub(super) fn try_lock(&self) -> Result<Option<MutexGuard<'_, Request>>> {
+        match self.state.try_lock() {
+            Ok(request) => Ok(Some(request)),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+            Err(_) => Err(Error::Unquiesced {
+                operation: "RDMA request lock poisoned",
+                code: libc::EIO,
+            }),
+        }
+    }
+
     pub(super) fn lock(&self) -> Result<MutexGuard<'_, Request>> {
         self.state.lock().map_err(|_| Error::Unquiesced {
             operation: "RDMA request lock poisoned",
@@ -368,115 +379,6 @@ impl CqLane {
         Ok(())
     }
 
-    pub(super) fn close_record(
-        &self,
-        record: &Arc<Record>,
-        claim: u64,
-        deadline: Instant,
-    ) -> Result<()> {
-        let mut request = record.lock()?;
-        if request.claim != claim {
-            return Ok(());
-        }
-        if request.phase == Phase::Init
-            && request
-                .resources
-                .as_ref()
-                .is_some_and(|r| r.grant.is_none())
-        {
-            let mut control = self.shared.control.lock().map_err(|_| Error::Unquiesced {
-                operation: "RDMA endpoint store poisoned",
-                code: libc::EIO,
-            })?;
-            if let Some(idle) = control.qps.discard(record) {
-                request.resources = None;
-                request.phase = Phase::Closed;
-                self.shared
-                    .usage
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .idle_endpoints += usize::from(idle);
-                return Ok(());
-            }
-        }
-        if !matches!(request.phase, Phase::Closed | Phase::Retained) {
-            let drained_record = request.phase == Phase::Ready
-                && request
-                    .resources
-                    .as_ref()
-                    .is_some_and(|r| r.grant.is_none());
-            request.close_requested = true;
-            drop(request);
-            let affiliated = {
-                let mut control = self.shared.control.lock().map_err(|_| Error::Unquiesced {
-                    operation: "RDMA endpoint store poisoned",
-                    code: libc::EIO,
-                })?;
-                let affiliated = control.qps.affiliates(record);
-                if affiliated.is_empty() && drained_record && control.fault.is_none() {
-                    return Ok(());
-                }
-                for owner in &affiliated {
-                    if control.qps.detach(owner) {
-                        #[cfg(test)]
-                        tests::before_idle_debit(&self.shared);
-                        self.shared
-                            .usage
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .idle_endpoints -= 1;
-                    }
-                }
-                affiliated
-            };
-            for owner in affiliated {
-                let mut state = owner.lock()?;
-                if !matches!(state.phase, Phase::Closed | Phase::Retained) {
-                    state.close_requested = true;
-                    if !Arc::ptr_eq(&owner, record)
-                        && state.resources.as_ref().is_some_and(|r| r.grant.is_some())
-                    {
-                        state
-                            .failure
-                            .get_or_insert(Fault::Unavailable("RDMA shared QP retired"));
-                    }
-                    owner.actions.fetch_or(CLOSE, Ordering::Release);
-                }
-            }
-            self.shared.signal();
-            request = record.lock()?;
-            while !matches!(request.phase, Phase::Closed | Phase::Retained) {
-                let duration = remaining(deadline).map_err(|_| Error::Unquiesced {
-                    operation: "RDMA close deadline before quiescence",
-                    code: libc::ETIMEDOUT,
-                })?;
-                request = record
-                    .changed
-                    .wait_timeout(request, duration)
-                    .map_err(|_| Error::Unquiesced {
-                        operation: "RDMA close wait poisoned",
-                        code: libc::EIO,
-                    })?
-                    .0;
-            }
-        }
-        if request.phase == Phase::Retained {
-            drop(request);
-            return match self.close(deadline) {
-                Err(error @ Error::Unquiesced { .. }) => Err(error),
-                Err(Error::Timeout) => Err(Error::Unquiesced {
-                    operation: "RDMA retention receipt deadline",
-                    code: libc::ETIMEDOUT,
-                }),
-                _ => Err(Error::Unquiesced {
-                    operation: "RDMA retained progress lane",
-                    code: libc::EIO,
-                }),
-            };
-        }
-        request.check()
-    }
-
     pub(super) fn recoverable(&self) -> Result<bool> {
         let control = match self.shared.control.try_lock() {
             Ok(control) => control,
@@ -584,6 +486,7 @@ impl ProgressState {
 
 mod completion;
 mod poll;
+mod retirement;
 mod reuse;
 mod submit;
 

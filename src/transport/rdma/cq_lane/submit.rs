@@ -337,7 +337,9 @@ impl CqLane {
         claim: u64,
     ) -> Result<bool> {
         record.require_live()?;
-        let request = record.lock()?;
+        let Some(request) = record.try_lock()? else {
+            return Ok(false);
+        };
         request.check_claim(claim)?;
         let work = request
             .work
@@ -355,7 +357,9 @@ impl CqLane {
         record: &Arc<Record>,
         claim: u64,
     ) -> Result<bool> {
-        let request = record.lock()?;
+        let Some(request) = record.try_lock()? else {
+            return Ok(false);
+        };
         request.check_claim(claim)?;
         Ok(request
             .work

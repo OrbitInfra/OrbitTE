@@ -1501,6 +1501,8 @@ pub(crate) fn on_requester_close(hook: impl FnOnce(&mut RdmaGrant, &Result<()>) 
 }
 
 pub(crate) fn before_requester_close(endpoint: &mut RdmaGrant, result: &Result<()>) {
+    #[cfg(feature = "cuda")]
+    retirement_progress::observe(endpoint, result);
     let hook = BEFORE_REQUESTER_CLOSE.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook(endpoint, result);
@@ -2314,3 +2316,6 @@ impl super::protocol::SliceRequest {
 pub(crate) use super::rdma_transport::connections::tests::{
     HeldConnection, hold_second_connection, two_rail_runtime,
 };
+
+#[cfg(feature = "cuda")]
+pub(crate) mod retirement_progress;

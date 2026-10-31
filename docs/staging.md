@@ -167,8 +167,8 @@ while other CROSS payloads remain queryable. Requester native setup also retains
 partial negotiation frames and yields to other submitted CROSS payload queries.
 Waiting for a cold requester QP builder also yields, preserving one grant lease
 and the canonical endpoint array until publication or rollback.
-Pin, native construction, nonreusable QP
-retirement, copyback, source handlers and ordinary local GPU snapshot/commit
+Nonreusable requester QP retirement also polls the existing native owner.
+Pin, native construction and cleanup calls, copyback, source handlers and ordinary local GPU snapshot/commit
 retain synchronous boundaries.
 Remaining control progress and broader location scheduling stay in the P5/P6 queue. CPU controls establish scheduling and owner
 lifetime; physical DMA overlap and throughput require hardware measurement.
@@ -388,7 +388,7 @@ workers use synchronous send/receive. Its separate `hp_tcp` provider has async
 header/body/response state. OrbitTE uses explicit socket progress in its existing
 TCP provider, and scoped control results corresponding to `delegateAsync` and
 `RemoteStageOperation::tryTakeResult`. This neither adds an hp_tcp provider nor
-claims wire compatibility. Native connection construction, nonreusable QP retirement, source handlers,
+claims wire compatibility. Native connection construction, provider-side cleanup, source handlers,
 readiness notification and full asynchronous RPC parity remain open.
 
 ### Connection and Pin lifetime
@@ -459,14 +459,54 @@ TENT's transport Workers own native CQ progress. OrbitTE keeps that resource
 split; its grant-specific completion SEND and bilateral release protocol are
 OrbitTE contracts, not TENT wire compatibility.
 
-This is requester finish progress for reusable host Direct grants. Nonreusable
-QP retirement/copyback, cache fallback retirement, failure drain, Pin and source
-handlers retain synchronous boundaries. Requester setup sockets are advanced by
+This boundary covers reusable host Direct grants. Nonreusable QPs use the
+[retirement progress](#nonreusable-qp-retirement-progress) below. Copyback, cache
+fallback retirement, failure drain, Pin and source handlers retain synchronous
+boundaries. Requester setup sockets are advanced by
 the [subsequent setup boundary](#native-rdma-setup-progress). Native provider calls
 and locks are not preemptible. One shard still executes one session at a time.
 No public active-cancel or engine-close ordering changes are introduced.
 [Source qualification](qualification.md#native-rdma-finish-progress) is separate
 from installed v21 execution, real DMA overlap and performance.
+
+### Nonreusable QP retirement progress
+
+After its completion SEND, a nonreusable requester slice enters
+`FinishProgress::Retire`. `RdmaGrant::poll_close` retains the same record, buffer,
+grant credit and native connection while `CqLane::poll_close_record` requests
+retirement. It does not send DONE, copy back READ bytes or consume the outer
+FinishCross receipt until the native owner has drained.
+
+Retirement tries the record, store and affiliated-record locks without waiting.
+A busy sibling yields before detachment; all affiliated close actions publish
+under the same store critical section. Stale claims cannot close a successor.
+An unattached shared claim can leave without fencing its live physical sibling.
+Repeated polls neither reserve another QP nor repeat native cleanup. Payload,
+SEND and reusable-grant queries also yield when cleanup holds their record lock.
+
+The existing CQ worker closes the QP, grant MR/MW and receive resources in their
+established order. Closed alone permits output ownership to move to the grant
+handle. A Retained record is not a complete receipt: the observer waits for the
+lane's finished state and worker detachment before returning its native failure.
+Cleanup deadline expiry reports `Unquiesced`, preserving unresolved owners.
+Synchronous callers drive the same state with bounded polling waits.
+
+A requester can now observe another CROSS error, worker stop or its original
+deadline while the provider is still closing a nonreusable QP. Aggregate failure
+cleanup still waits for native drain before returning a safe terminal. CPU
+controls explicitly hold `destroy_qp` while observing entry to failure cleanup;
+they do not assert early terminal, copyback, POST, Unpin or buffer release.
+The held context and other CROSS use verified distinct worker IDs. A provider
+call still blocks its own worker, including other lanes assigned to that worker.
+There is no per-QP thread, provider preemption or wire change (v21).
+
+Frozen TENT `e2d6e8e` provides the corresponding split: `EndpointStore` unpublishes
+an endpoint and queues it for reclamation; `Workers::reclaimEndpoints` visits
+context stores from its monitor loop; `RdmaEndPoint::deconstruct` owns synchronous
+native QP/resource destruction. OrbitTE preserves endpoint/QP, context/CQ and
+Workers ownership. Its explicit grant drainage/retention receipts and requester
+polling adapt that split to Rust lifetimes and OrbitTE's bilateral protocol.
+See [source qualification](qualification.md#nonreusable-qp-retirement-progress).
 
 ### Persistent MR publication progress
 
@@ -496,7 +536,8 @@ publication keeps its condition-variable predicate under the cache mutex.
 There is no per-request thread or new wire frame. Native registration runs on
 its actual creator, outside the cache lock; it is not moved onto CQ workers.
 Provider calls and their context locks, CQ/QP creation, eviction, connect/fill,
-failure drain, nonreusable retirement and source handlers remain synchronous.
+failure drain and source handlers remain synchronous. Nonreusable requester
+retirement uses the pollable state below.
 
 Frozen TENT's `LocalBufferManager` indexes registered buffers by range and
 `RdmaContext`; `RdmaContext::registerMemReg` performs native registration.
@@ -534,8 +575,9 @@ Frozen TENT's `Workers::getEndpoint` / `RdmaTransport::getEndpoint`, context-own
 boundaries. TENT performs a synchronous bootstrap outside its endpoint lock,
 then revalidates the peer and local QPs. This change makes OrbitTE's requester
 construction-slot wait pollable; it does not claim TENT bootstrap is asynchronous.
-Native context/CQ/QP/MR creation, connect/fill, eviction/failure drain and
-nonreusable retirement remain synchronous and are not preempted by this state.
+Native context/CQ/QP/MR creation, connect/fill and eviction/failure drain remain
+synchronous and are not preempted by this state. Requester retirement uses the
+[pollable close state](#nonreusable-qp-retirement-progress).
 See [source qualification](qualification.md#cold-rdma-connection-acquisition).
 
 ### Native RDMA setup progress
@@ -629,7 +671,7 @@ admission and cancels commands that have not started. Every accepted RDMA owner
 is closed before private registrations retire; one failed cleanup cannot skip
 healthy siblings or erase an earlier `Unquiesced`. Partial TCP payload and scoped
 control receipts retain the original deadline and yield to staging cancellation.
-Blocking Pin, native construction, nonreusable retirement and provider calls keep their existing
+Blocking Pin, native construction, aggregate failure drain and provider calls keep their existing
 completion/drain obligations.
 On source EOF/error, all native CROSS owners close before CUDA drain and private
 registration retirement. The caller drops its queue

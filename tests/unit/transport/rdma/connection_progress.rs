@@ -147,6 +147,31 @@ mod staging {
         unsafe { open_mode(h, n, c"copy_cross_hold_first_error_close0") }
     }
 
+    unsafe fn open_retirement(
+        h: *mut sys::DeviceHandles,
+        n: *const c_char,
+        failure: bool,
+        error: bool,
+    ) -> i32 {
+        let mode = match unsafe { CStr::from_ptr(n) }.to_bytes() {
+            b"rail0" if error => c"copy_cross_hold_first_error",
+            b"rail0" => c"copy_cross_hold",
+            b"rail2" if failure => c"copy_qp_pause_close0",
+            b"rail2" => c"copy_qp_pause",
+            _ => return libc::ENODEV,
+        };
+        unsafe { fixture::open_device(h, mode.as_ptr()) }
+    }
+    unsafe extern "C" fn open_retire(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        unsafe { open_retirement(h, n, false, false) }
+    }
+    unsafe extern "C" fn open_retire_error(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        unsafe { open_retirement(h, n, false, true) }
+    }
+    unsafe extern "C" fn open_retire_failure(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        unsafe { open_retirement(h, n, true, true) }
+    }
+
     pub(crate) fn two_rail_runtime(mode: &str) -> RdmaTransport {
         static COPY: sys::Verbs = sys::Verbs {
             discover,
@@ -168,11 +193,29 @@ mod staging {
             open_device: open_retain,
             ..fixture::VERBS
         };
+        static RETIRE: sys::Verbs = sys::Verbs {
+            discover,
+            open_device: open_retire,
+            ..fixture::VERBS
+        };
+        static RETIRE_ERROR: sys::Verbs = sys::Verbs {
+            discover,
+            open_device: open_retire_error,
+            ..fixture::VERBS
+        };
+        static RETIRE_FAILURE: sys::Verbs = sys::Verbs {
+            discover,
+            open_device: open_retire_failure,
+            ..fixture::VERBS
+        };
         let verbs = match mode {
             "copy" => &COPY,
             "hold" => &HOLD,
             "error" => &ERROR,
             "retain" => &RETAIN,
+            "retire" => &RETIRE,
+            "retire_error" => &RETIRE_ERROR,
+            "retire_failure" => &RETIRE_FAILURE,
             _ => panic!("unknown fixture mode"),
         };
         let mut runtime = fixture::runtime("direct:copy");
@@ -182,6 +225,11 @@ mod staging {
         runtime.config.max_cqes = 4;
         runtime.config.max_direct_bytes = 14;
         runtime.config.block_size = 64;
+        if mode.starts_with("retire") {
+            runtime.config.num_lanes = 2;
+            runtime.config.host_memory = crate::transport::rdma::RdmaHostMemory::Staged;
+            runtime.config.max_staging_bytes = 14;
+        }
         runtime.verbs = verbs;
         runtime.registrations =
             buffers::LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), verbs);

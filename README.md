@@ -125,8 +125,11 @@ cold QP builder now yields while retaining one grant lease and the canonical
 endpoint array. Waiting for a persistent MR creator also yields, with one
 `GrantConstruction` retaining the admitted buffer, credit and connection claim;
 other CROSS errors, worker stop and deadlines remain observable.
-Pin, native provider calls and resource creation, nonreusable QP retirement,
-copyback and source handlers retain synchronous boundaries. Current v21
+Nonreusable requester QP retirement also yields while the existing CQ worker
+closes its native resources; busy cleanup locks leave other CROSS owners queryable.
+Error observation does not release memory before native drain. Pin, provider calls,
+resource creation, copyback, aggregate failure drain and source handlers retain
+synchronous boundaries. Current v21
 hardware qualification is pending; earlier H20 results apply to their recorded
 artifacts. Opt-in [host staging location selection](docs/staging.md#host-staging-location)
 now supports GPU-near or explicit NUMA host buffers, with location-aware reuse

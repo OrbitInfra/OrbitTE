@@ -29,6 +29,29 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Nonreusable QP retirement progress
+
+Requester nonreusable QP retirement now yields through the existing CQ worker
+and retains the grant until native close or complete lane retention. See the
+[contract](staging.md#nonreusable-qp-retirement-progress). Wire v21 is unchanged;
+source and independent validation are in progress.
+
+The focused CPU controls hold actual provider destruction and verify busy
+record/store/sibling locks, stale and unattached shared claims, original cleanup
+deadlines and Retained-before-lane-detachment. Public READ/WRITE staging uses
+two CPU verbs contexts on verified independent worker IDs: one CROSS holds an
+accepted payload while another holds native QP destruction. Other-CROSS error,
+worker stop and original deadline must enter aggregate cleanup before provider
+release, while actual backing and admission stay owned. Healthy release checks
+nonuniform bytes, sentinels, a short tail and a second transfer; native cleanup
+failure retains the actual allocation and reports `Unquiesced`.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/qp-retirement-progress-20261031/`.
+The source gate does not qualify installed v21 DMA overlap, physical faults or
+performance. Native provider calls and aggregate error cleanup remain synchronous;
+no new hardware task is requested.
+
 ## Persistent MR publication progress
 
 Requester grant construction now yields while an existing persistent MR creator

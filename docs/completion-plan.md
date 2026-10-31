@@ -629,8 +629,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   preserving the original admission and connection claim with explicit cleanup.
   Independent source review accepts `e69c47a`; see
   [MR publication progress](qualification.md#persistent-mr-publication-progress).
-  Complete remaining synchronous resource/retirement/source
-  boundaries and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Nonreusable requester QP retirement is implemented through the existing CQ
+  worker, with busy cleanup locks yielding and retained output awaiting a complete
+  lane receipt. Source/independent validation is in progress; see
+  [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
+  Reconcile remaining resource/source control boundaries with frozen TENT and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -937,9 +940,12 @@ at `ab309f4`. Requester cold connection acquisition yields while retaining
 one grant lease and the canonical endpoint array. Independent source review
 accepts `06f685d`; see [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
 Persistent MR publication wait is implemented through an admitted grant owner;
-independent source review accepts `e69c47a`. The next implementation boundary is
-nonreusable requester QP retirement progress. Native provider calls, resource
-creation/connect/copy and source handlers retain explicit synchronous limits. Current v21 hardware qualification and full
+independent source review accepts `e69c47a`. Nonreusable requester QP retirement
+progress is implemented; independent source acceptance is in progress. Native
+provider calls, resource creation/connect/copy, aggregate failure drain and source
+handlers retain explicit synchronous limits. Reconcile those limits against the
+frozen reference before selecting the next missing P5 contract; asynchronous
+provider execution is not itself a TENT parity requirement. Current v21 hardware qualification and full
 ProxyManager parity remain open.
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified. OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
 [P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
