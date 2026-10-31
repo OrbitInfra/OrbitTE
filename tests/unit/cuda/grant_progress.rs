@@ -4,7 +4,9 @@ use super::*;
 use crate::RemoteEffect;
 use crate::engine::tests::{rdma_fixture_with_config, source_runtime};
 use crate::runtime::proxy_manager::ProxyManager;
-use crate::transport::rdma::tests::{hold_second_connection, pause, two_rail_runtime};
+use crate::transport::rdma::tests::{
+    HeldConnection, HeldPublication, hold_second_connection, pause, two_rail_runtime,
+};
 
 type PayloadHold = Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>;
 
@@ -47,7 +49,27 @@ enum Outcome {
     Deadline,
 }
 
-fn cold_cross(operation: TransferOp, outcome: Outcome) {
+enum Pending {
+    Connection(HeldConnection),
+    Registration(HeldPublication),
+}
+
+impl Pending {
+    fn polls(&self) -> usize {
+        match self {
+            Self::Connection(held) => held.polls(),
+            Self::Registration(held) => held.polls(),
+        }
+    }
+    fn assert_held(&self) {
+        match self {
+            Self::Connection(held) => held.assert_held(),
+            Self::Registration(held) => held.assert_held(),
+        }
+    }
+}
+
+fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
     let mode = match outcome {
         Outcome::Error => "error",
         Outcome::Retain => "retain",
@@ -78,7 +100,13 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
             Duration::from_secs(3),
         )
         .unwrap();
-    let mut cold = Some(hold_second_connection(&requester, &source, operation));
+    let mut cold = Some(if registration {
+        Pending::Registration(HeldPublication::arm(source_runtime(&requester), 2))
+    } else {
+        Pending::Connection(hold_second_connection(&requester, &source, operation))
+    });
+    let retained = matches!(outcome, Outcome::Retain)
+        || (registration && !matches!(outcome, Outcome::Complete));
     let requests = [TransferRequest {
         transport: Transport::Rdma,
         local_address: local.base_address() + 2,
@@ -107,7 +135,20 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
         (2, 2, 14),
         "one lease per CROSS across repeated polls: {stats:?}"
     );
-    assert_eq!((stats.opened_connections, stats.active_endpoints), (1, 1));
+    assert_eq!(
+        (stats.opened_connections, stats.active_endpoints),
+        (1, 1 + usize::from(registration))
+    );
+    if registration {
+        assert_eq!(
+            (
+                stats.opened_persistent_mrs,
+                stats.persistent_mrs,
+                stats.reused_persistent_mrs
+            ),
+            (2, 2, 0)
+        );
+    }
     assert_eq!(stats.posted_work_requests, 1);
     assert_eq!(stats.work_requests, 1);
     let source_stats = source.stats().unwrap().rdma.unwrap();
@@ -126,14 +167,24 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
     } else if matches!(outcome, Outcome::Stop) {
         wait_until(|| requester.stats().unwrap().rdma.unwrap().work_requests == 0);
         cold.as_ref().unwrap().assert_held();
-        source_runtime(&requester)
+        let stopped = source_runtime(&requester)
             .proxy
-            .close(Instant::now() + Duration::from_secs(2))
-            .expect("worker stop was hidden by cold acquisition");
+            .close(Instant::now() + Duration::from_secs(2));
+        if registration {
+            assert!(matches!(
+                stopped,
+                Err(Error::Unquiesced {
+                    operation: "staging chunk retention",
+                    ..
+                })
+            ));
+        } else {
+            stopped.expect("worker stop was hidden by cold acquisition");
+        }
     }
-    let report = batch
-        .wait(Duration::from_secs(2))
-        .expect("cold acquisition hid another CROSS failure/stop until its builder was released");
+    let report = batch.wait(Duration::from_secs(2)).expect(
+        "pending construction hid another CROSS failure/stop until its builder was released",
+    );
     if matches!(outcome, Outcome::Complete) {
         assert!(
             report.state == BatchState::Completed && report.locally_drained,
@@ -166,30 +217,41 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
         cold.as_ref().unwrap().assert_held();
         let failure = batch.submissions().unwrap().remove(0).failure.unwrap();
         assert!(
-            match outcome {
-                Outcome::Error =>
-                    matches!(failure.error, Error::Backend { .. } | Error::Unavailable(_)),
-                Outcome::Retain => matches!(failure.error, Error::Unquiesced { .. }),
-                Outcome::Stop => matches!(failure.error, Error::Cancelled),
-                Outcome::Deadline => matches!(failure.error, Error::Timeout),
-                Outcome::Complete => unreachable!(),
+            if retained {
+                matches!(failure.error, Error::Unquiesced { .. })
+            } else {
+                match outcome {
+                    Outcome::Error => {
+                        matches!(failure.error, Error::Backend { .. } | Error::Unavailable(_))
+                    }
+                    Outcome::Retain => matches!(failure.error, Error::Unquiesced { .. }),
+                    Outcome::Stop => matches!(failure.error, Error::Cancelled),
+                    Outcome::Deadline => matches!(failure.error, Error::Timeout),
+                    Outcome::Complete => unreachable!(),
+                }
             },
             "{operation:?}/{outcome:?}: {failure:?}"
         );
         assert_eq!(
             report.state,
-            if matches!(outcome, Outcome::Stop) {
+            if matches!(outcome, Outcome::Stop) && !retained {
                 BatchState::Cancelled
             } else {
                 BatchState::Failed
             }
         );
-        assert_eq!(report.locally_drained, !matches!(outcome, Outcome::Retain));
+        assert_eq!(report.locally_drained, !retained);
         assert_eq!(report.transferred_bytes, 0);
         assert_eq!(failure.remote_effect, RemoteEffect::None);
         assert_eq!(requester.stats().unwrap().staging.active_tasks, 0);
         let stats = requester.stats().unwrap().rdma.unwrap();
         assert_eq!(stats.opened_connections, 1);
+        if matches!(outcome, Outcome::Error | Outcome::Retain) {
+            assert!(
+                stats.completion_errors > 0,
+                "the other CROSS error must actually be consumed"
+            );
+        }
         assert_eq!(
             stats.active_grants,
             usize::from(matches!(outcome, Outcome::Retain)),
@@ -210,11 +272,19 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &source_bytes);
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &local_bytes);
         drop(cold.take());
-        if matches!(outcome, Outcome::Retain) {
-            assert_eq!(requester.stats().unwrap().staging.retained_chunks, 3);
+        if retained {
+            let retained_chunks = if registration && !matches!(outcome, Outcome::Retain) {
+                2
+            } else {
+                3
+            };
+            assert_eq!(
+                requester.stats().unwrap().staging.retained_chunks,
+                retained_chunks
+            );
             // CUDA copies drained; RDMA still owns pinned host backing.
             assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
-            assert_eq!(b.pins.lock().unwrap().len(), 3);
+            assert!((retained_chunks..=3).contains(&b.pins.lock().unwrap().len()));
             assert!(matches!(
                 requester.close_requester(Duration::from_millis(5)),
                 Err(Error::Timeout)
@@ -226,7 +296,7 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
         }
     }
     source.close(Duration::from_secs(3)).unwrap();
-    if !matches!(outcome, Outcome::Retain) {
+    if !retained {
         requester.close(Duration::from_secs(3)).unwrap();
         assert!(b.pins.lock().unwrap().is_empty());
     }
@@ -236,14 +306,14 @@ fn cold_cross(operation: TransferOp, outcome: Outcome) {
     drop(local_gpu);
     drop(requester);
     drop(b);
-    assert_eq!(weak.upgrade().is_some(), matches!(outcome, Outcome::Retain));
+    assert_eq!(weak.upgrade().is_some(), retained);
 }
 
 #[test]
 fn cold_acquisition_keeps_other_cross_errors_and_native_retention_observable() {
     for outcome in [Outcome::Error, Outcome::Retain] {
         for operation in [TransferOp::Read, TransferOp::Write] {
-            cold_cross(operation, outcome);
+            pending_cross(operation, outcome, false);
         }
     }
 }
@@ -252,7 +322,7 @@ fn cold_acquisition_keeps_other_cross_errors_and_native_retention_observable() {
 fn cold_acquisition_releases_only_its_lease_on_deadline_or_worker_stop() {
     for outcome in [Outcome::Deadline, Outcome::Stop] {
         for operation in [TransferOp::Read, TransferOp::Write] {
-            cold_cross(operation, outcome);
+            pending_cross(operation, outcome, false);
         }
     }
 }
@@ -260,6 +330,31 @@ fn cold_acquisition_releases_only_its_lease_on_deadline_or_worker_stop() {
 #[test]
 fn cold_acquisition_resumes_and_reuses_the_same_two_pairs_after_builder_rollback() {
     for operation in [TransferOp::Read, TransferOp::Write] {
-        cold_cross(operation, Outcome::Complete);
+        pending_cross(operation, Outcome::Complete, false);
+    }
+}
+
+#[test]
+fn mr_publication_keeps_other_cross_errors_and_native_retention_observable() {
+    for outcome in [Outcome::Error, Outcome::Retain] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            pending_cross(operation, outcome, true);
+        }
+    }
+}
+
+#[test]
+fn mr_publication_returns_waiter_lease_but_retains_creator_backing_on_stop_or_deadline() {
+    for outcome in [Outcome::Deadline, Outcome::Stop] {
+        for operation in [TransferOp::Read, TransferOp::Write] {
+            pending_cross(operation, outcome, true);
+        }
+    }
+}
+
+#[test]
+fn mr_publication_resumes_without_duplicate_mrs_or_connection_pairs() {
+    for operation in [TransferOp::Read, TransferOp::Write] {
+        pending_cross(operation, Outcome::Complete, true);
     }
 }

@@ -468,6 +468,44 @@ No public active-cancel or engine-close ordering changes are introduced.
 [Source qualification](qualification.md#native-rdma-finish-progress) is separate
 from installed v21 execution, real DMA overlap and performance.
 
+### Persistent MR publication progress
+
+After connection acquisition, `RequesterSetup::Construct` owns one
+`GrantConstruction`: the admitted range loan, grant/device and worker credits,
+the fresh array slot or reused connection claim, and any physical connection
+reservation. `LocalBufferManager::poll_acquire` returns pending when the same
+registration/context/capability entry is still being created. Repeated polls
+neither borrow its unpublished handle nor reserve another MR, QP or grant.
+The staging loop can query other accepted CROSS payloads and observe its
+original deadline or worker stop before publication. No HELLO or payload from
+the waiting grant is sent at this point.
+
+Publication produces one `MrLease`. Only then does construction attach the
+complete grant to its CQ record and open the QP. A fresh empty record closed by
+a lane fault cannot reopen; a provider call returning after the deadline cannot
+start new QP construction. Abort explicitly closes an owned reuse claim and
+releases an acquired MR borrow, with uncertain native cleanup taking precedence
+over cancellation or timeout. An unused fresh reservation returns without
+cancelling another MR creator. A shared unattached claim cannot close its live
+sibling's QP. Waiting for a private staging MR does not prove that private
+backing has drained: an external creator still owning it forces retention of
+the pinned chunks and parent admission, even after the waiter's credit returns.
+
+The synchronous source helper drives the same construction owner. Direct cache
+publication keeps its condition-variable predicate under the cache mutex.
+There is no per-request thread or new wire frame. Native registration runs on
+its actual creator, outside the cache lock; it is not moved onto CQ workers.
+Provider calls and their context locks, CQ/QP creation, eviction, connect/fill,
+failure drain, nonreusable retirement and source handlers remain synchronous.
+
+Frozen TENT's `LocalBufferManager` indexes registered buffers by range and
+`RdmaContext`; `RdmaContext::registerMemReg` performs native registration.
+OrbitTE preserves these owners with an additional exact registration identity
+and capability key. TENT's synchronous registration is the reference boundary;
+its optional parallel per-context registration still joins before publication.
+This requester wait does not claim asynchronous provider execution.
+See [source qualification](qualification.md#persistent-mr-publication-progress).
+
 ### Cold RDMA connection acquisition
 
 Before a requester can send HELLO, `RequesterSetup::Acquire` owns exactly one

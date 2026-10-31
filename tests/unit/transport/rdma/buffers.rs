@@ -1,3 +1,6 @@
+#[path = "buffers/publication.rs"]
+pub(crate) mod publication;
+
 use std::time::{Duration, Instant};
 
 use super::*;

@@ -259,4 +259,4 @@ mod staging {
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) use staging::{hold_second_connection, two_rail_runtime};
+pub(crate) use staging::{HeldConnection, hold_second_connection, two_rail_runtime};

@@ -98,6 +98,30 @@ impl LocalBufferManager {
         window_bind: bool,
         deadline: Instant,
     ) -> Result<MrLease> {
+        self.acquire_inner(device, memory, window_bind, deadline, true)?
+            .ok_or(Error::Internal("blocking MR acquisition returned pending"))
+    }
+
+    pub(super) fn poll_acquire(
+        self: &Arc<Self>,
+        device: Arc<RdmaContext>,
+        memory: &RegisteredMemory,
+        window_bind: bool,
+        deadline: Instant,
+    ) -> Result<Option<MrLease>> {
+        self.acquire_inner(device, memory, window_bind, deadline, false)
+    }
+
+    fn acquire_inner(
+        self: &Arc<Self>,
+        device: Arc<RdmaContext>,
+        memory: &RegisteredMemory,
+        window_bind: bool,
+        deadline: Instant,
+        blocking: bool,
+    ) -> Result<Option<MrLease>> {
+        #[cfg(test)]
+        tests::publication::before_acquire(self, &device, memory, window_bind);
         let context = Arc::downgrade(&device);
         loop {
             let mut cache = self
@@ -117,6 +141,11 @@ impl LocalBufferManager {
                     && entry.owner.window_bind == window_bind
             }) {
                 if cache.entries[index].creating {
+                    #[cfg(test)]
+                    tests::publication::observe_pending(self, &device, memory, window_bind);
+                    if !blocking {
+                        return Ok(None);
+                    }
                     drop(
                         self.changed
                             .wait_timeout(cache, remaining(deadline)?)
@@ -140,12 +169,12 @@ impl LocalBufferManager {
                 usage.reused_persistent_mrs += 1;
                 usage.reused_source_mrs += u64::from(window_bind);
                 drop(usage);
-                return Ok(MrLease {
+                return Ok(Some(MrLease {
                     cache: Arc::clone(self),
                     owner,
                     released: false,
                     created: false,
-                });
+                }));
             }
             let mut usage = self
                 .usage
@@ -205,6 +234,8 @@ impl LocalBufferManager {
             });
             drop(cache);
             let initialized = owner.open();
+            #[cfg(test)]
+            tests::publication::before_publish(self, &device, memory, window_bind);
             let mut cache = self
                 .state
                 .lock()
@@ -225,12 +256,12 @@ impl LocalBufferManager {
             cache.entries[index].creating = false;
             cache.entries[index].retiring |= cache.closed || !memory.is_active();
             self.changed.notify_all();
-            return Ok(MrLease {
+            return Ok(Some(MrLease {
                 cache: Arc::clone(self),
                 owner,
                 released: false,
                 created: true,
-            });
+            }));
         }
     }
 
@@ -523,4 +554,4 @@ impl Drop for MrLease {
 
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/rdma/buffers.rs"]
-mod tests;
+pub(super) mod tests;

@@ -29,6 +29,31 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Persistent MR publication progress
+
+Requester grant construction now yields while an existing persistent MR creator
+has not published its handle. The [contract](staging.md#persistent-mr-publication-progress)
+keeps the cache creator, grant admission and connection ownership distinct.
+The wire remains v21. Independent source acceptance is pending.
+
+CPU controls gate an actual cache entry after native registration returns and
+before publication, outside provider/context/cache locks. Public READ/WRITE
+staging submissions keep a first accepted WR pending while another CROSS waits
+for that entry. They verify another CROSS error is actually consumed and terminal
+before creator release, including native close failure, stop/deadline retention,
+healthy byte/sentinel results and connection reuse. These controls share the
+existing cold-connection fixture in `tests/unit/cuda/grant_progress.rs`.
+Private controls cover unchanged MR charges/borrowers, retirement/close,
+canonical and shared connection claims, a lane closing before grant attachment,
+MR cleanup failure and a provider returning after its original deadline.
+
+Evidence is selected outside Git at
+`/root/orbitte-artifacts/native-grant-progress-20261031/`.
+Failed development controls remain alongside final gate logs. No hardware task
+was requested. Current installed v21 execution, real DMA overlap and performance
+remain unqualified. Native provider calls and context-lock contention are not
+preempted; full ProxyManager parity remains open.
+
 ## Cold RDMA connection acquisition
 
 Requester acquisition now retains one admitted grant lease while polling the
