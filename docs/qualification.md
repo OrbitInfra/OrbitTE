@@ -40,15 +40,34 @@ remaining synchronous native boundaries.
 
 Evidence directory: `/root/orbitte-artifacts/cold-connection-progress-20261031/`.
 Frozen TENT reference: `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
-Independent source acceptance is pending. The CPU controls use two independent
-verbs ABI contexts, actual endpoint construction reservations and public GPU
-staging submissions. One accepted WR is withheld on the first context while the
-second CROSS repeatedly reaches the unpublished second array. READ/WRITE cases
+Independent source review accepts `06f685d` for this source/CPU boundary; see
+`independent-review/source-review-06f685d.json`. The CPU controls use two
+independent verbs ABI contexts, actual endpoint construction reservations and
+public GPU staging submissions. One accepted WR is withheld on the first context
+while the second CROSS repeatedly reaches the unpublished second array. READ/WRITE cases
 cover completion and pair reuse, another CROSS error, failed native cleanup,
 worker stop and deadline. Pending polls keep one charge; abort returns that lease
 without cancelling the other builder or releasing an uncertain sibling.
 The GPU copy loan can drain while RDMA uncertainty retains pinned host backing,
 the actual CUDA owner and requester admission. This is not hardware DMA evidence.
+
+`gates.json` records 11 primary gates on `173ae51`; independent fresh targets
+pass the same 11 gates. Stable and Rust 1.85 each pass 229 RDMA units or
+344 combined units, eight integration tests and one doctest; five hardware
+units and one integration subprocess fixture are ignored in the parent runner.
+The source manifests bind all 289 tracked files. `06f685d` changes only the
+stop control: consume the released payload CQE before stopping, while the cold
+reservation remains held. Primary and independent targeted reruns pass all
+three public controls (10 READ/WRITE scenarios) on both toolchains; production
+code remains byte-identical to `173ae51`. Source CI passes all eight profiles,
+the frozen TENT CPU comparison and documentation.
+
+`independent-review/blocking-acquisition-control-173ae51/manifest.json` binds
+a fresh-target negative control: only the Acquire pending branch becomes a
+blocking loop. The unchanged error-observation test fails its first READ case
+at the two-second assertion, before the ten-second request deadline; later
+branches do not execute after that failure. Failed development controls and
+their corrections remain in `development-history.json`.
 
 No hardware task was requested. Installed v21 execution, real DMA overlap and
 performance remain unqualified. Native construction/connect/fill, eviction and

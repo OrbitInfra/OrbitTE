@@ -534,10 +534,10 @@ This follows frozen TENT `e2d6e8e`'s ProxyManager/transport/Workers ownership sp
 and submitted-batch observation. TENT's Workers can themselves perform endpoint
 bootstrap outside the endpoint lock; this change does not imply that TENT has
 universally asynchronous connection setup. OrbitTE retains its own v21 framing
-and exact-grant completion protocol. Cold-builder waits in `connection()`, native
-resource creation/open/connect/fill, failure drain and source handlers remain
-synchronous; locks and provider calls are not preemptible. Each shard still runs
-one session. [Source qualification](qualification.md#native-rdma-setup-progress)
+and exact-grant completion protocol. Passive/source cold-builder waits in
+`connection()`, native resource creation/open/connect/fill, failure drain and
+source handlers remain synchronous; locks and provider calls are not preemptible.
+Each shard still runs one session. [Source qualification](qualification.md#native-rdma-setup-progress)
 does not qualify installed v21 execution, real DMA overlap or performance.
 
 ### Session progress and completion
