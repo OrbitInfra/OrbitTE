@@ -1779,3 +1779,39 @@ No new hardware task was requested. The current grouped native path, installed
 v21 DMA and matched performance remain unqualified. Historical per-slice H20
 results do not qualify the new group path. Fewer event calls are not a measured
 speedup or complete P5/TENT parity. OrbitKV integration remains deferred.
+
+
+## CUDA IPC stream pool
+
+Source `28c673f` moves NVLink stream/event ownership from the first local
+allocation to a transport-owned `CUDAStreamPool` with exclusive
+`CUDAStreamHandle` leases. Actual context identity controls reuse; a default
+eight-slot global budget includes cold construction and quarantined resources.
+Idle contexts can be replaced after native close; capacity waits use the request
+deadline without holding allocation access locks. The pool mutex never spans
+native work. Requester close drains and closes the pool after import cleanup.
+
+Focused source checks pass three pool tests and 27 IPC-related tests (including
+the two NVLink protocol tests), plus all-target Clippy with RDMA/CUDA. The existing changing-owner control
+now proves eight consecutive pinned allocations reuse one stream/event, release
+every completed host owner, and retain the pool until requester close. A later
+GPU operation on the same actual context uses the same pool. New controls cover
+concurrent cold capacity, deadline waits without memory locks, context replacement,
+close fencing and one-shot uncertain construction/destruction. Existing copy,
+record, wait and restoration controls check clean reuse versus quarantine.
+These are CPU ownership/API-count observations, not native CUDA performance.
+
+Evidence directory: `/root/orbitte-artifacts/nvlink-stream-pool-20261101/`.
+`source-manifest.json` binds file hashes; `gates.json` records commands and log
+hashes. Independent review and final CI are recorded there before PR readiness.
+Frozen TENT remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; its lazy
+per-device stream pool and move-only handles supply the naming and ownership
+pattern. OrbitTE adds actual-context matching, a cross-context slot bound,
+reusable completion events and explicit quarantine/close ownership.
+
+No hardware task was requested. Current installed v21 DMA, cross-context native
+cleanup and matched throughput remain unqualified. Group completion is still a
+synchronous wait; native CUDA batch-copy dispatch and event-query scheduling
+remain separate work. Earlier H20 evidence does not qualify this new pool, and
+reduced native construction counts do not establish a speedup. Full P5/TENT
+parity and OrbitKV integration remain open.

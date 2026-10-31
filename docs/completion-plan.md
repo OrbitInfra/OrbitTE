@@ -556,6 +556,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   mixed owners, aliases, reversed concurrent groups and failure spans. Current
   installed DMA and performance qualification remain open; see
   [group completion](qualification.md#cuda-ipc-group-completion).
+  **P5.4f — shared CUDA streams (source implemented at `28c673f`):**
+  `CUDAStreamPool` / `CUDAStreamHandle` reuse stream/event pairs across changing
+  local GPU/pinned allocations on the same native context. `nvlink_stream_count`
+  bounds lazy creation, exclusive leases and retained slots across contexts.
+  Idle context replacement and explicit requester close release native resources
+  outside the pool mutex. Uncertain creation/copy/restoration/cleanup stays
+  charged without reuse or native destroy retries. Group completion and receipts
+  are unchanged. Current installed DMA and performance remain unqualified; see
+  [stream ownership](qualification.md#cuda-ipc-stream-pool).
 - [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
   Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
   requester and contexts. TCP and staged RDMA consume the same owner; full-range
@@ -1001,16 +1010,22 @@ failures preserve the source-acknowledged prefix; shared completion failures
 cover the whole attempted group. See [group completion](qualification.md#cuda-ipc-group-completion)
 for source evidence and the open installed boundary.
 
-The next functional delivery is bounded shared CUDA stream/event ownership for
-NVLink. Follow frozen TENT's `platform_->getStreamFromPool` and
-`NVLinkSubBatch` stream handles: reuse native resources across changing local
-allocations within the same actual context, rather than creating a new stream
-for each new first owner. Keep leases bounded and exclusive through completion,
-context restoration and failure recovery; uncertain resources cannot return to
-the pool. Preserve the current ordered group/receipt contract and explicit
-producer handoff. Native batch-copy APIs and event-query scheduling remain
-separate P5 work. Focus verification on the changed pool/owner lifecycle; do
-not reopen completed stages or claim speedup from API operation counts.
+P5.4f shared stream/event ownership is implemented at `28c673f`. Frozen TENT's
+`platform_->getStreamFromPool` / `CUDAStreamHandle` pattern now supplies NVLink
+groups across changing local allocations. The transport bounds slots across
+actual retained contexts; leases survive completion/restoration and uncertain
+resources never return to reuse. Stream acquisition precedes memory locks and
+native work stays outside the pool mutex. Current installed DMA and performance
+remain open; see [stream pool evidence](qualification.md#cuda-ipc-stream-pool).
+
+The next functional delivery is nonblocking NVLink completion progress. Follow
+TENT's `NVLinkSubBatch` event-query ownership: retain group allocations, the
+exclusive stream handle and import through NOT_READY; let unrelated accepted
+work progress before final completion/close receipts. Preserve ordered prefix
+reports, cancellation and uncertain cleanup without returning a live stream to
+the pool. Producer readiness stays an explicit caller handoff. Native batch-copy
+API dispatch remains separate P5 work. Keep verification focused on changed
+progress/owner boundaries, and do not claim speedup from API operation counts.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

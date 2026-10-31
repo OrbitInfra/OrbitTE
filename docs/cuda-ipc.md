@@ -41,8 +41,8 @@ mapping quota. Configure enough space for the simultaneous mappings you allow.
 A local owned pinned allocation can READ from or WRITE to the remote GPU export.
 READ uses `cuMemcpyDtoHAsync_v2`; WRITE uses `cuMemcpyHtoDAsync_v2`. The actual
 host pointer is copied directly, with no temporary staging allocation. The
-allocation retains the primary context selected by `allocate_pinned_host` and
-an allocation-owned reusable copy stream/event. Ordinary/pageable and externally
+allocation retains the primary context selected by `allocate_pinned_host`; the
+NVLink group leases a matching stream/event from the shared pool. Ordinary/pageable and externally
 supplied `HostMemory` are rejected by this bounded profile; there is no implicit
 registration or staging fallback. This is an OrbitTE ownership restriction,
 not a claim that CUDA or native TENT always rejects pageable memory.
@@ -62,8 +62,9 @@ Consecutive requests in one submission reuse an import when they name the same
 remote region and the same local **native CUDA context**. Separate `CudaMemory`
 and pinned `HostMemory` allocations on the same primary context can share it,
 including a mixed host/GPU group. The transport preserves
-input order, including overlapping or out-of-order ranges; each copy drains its
-allocation-owned event before the next begins. It does not reorder addresses.
+input order, including overlapping or out-of-order ranges. Copies enqueue on
+one exclusively leased stream and drain one trailing completion event; addresses
+are not reordered.
 
 `OpenedMapping` holds one mapping and its physical-extent charge. The source
 grants the smallest enclosing remote range, bounded by `max_transfer_bytes`;
@@ -75,6 +76,38 @@ failure is retried.
 
 With the default `nvlink_cache_entries: 0`, the import closes at the group
 boundary. The optional cache below extends that lifetime explicitly.
+
+## Shared CUDA stream pool
+
+`NVLinkTransport` owns `cuda/stream_pool.rs::CUDAStreamPool`. Each group acquires
+an exclusive `CUDAStreamHandle` matched to its actual native CUDA context,
+independent of which local GPU or pinned host allocation starts the group.
+Completed groups return their stream/event for later allocations to reuse. Idle
+streams retain their context, not completed local buffers. This also works with
+`nvlink_cache_entries: 0`; stream reuse and import caching have separate lifetimes.
+
+`nvlink_stream_count` defaults to 8 (1–4096) and bounds slots across all requester
+contexts in one engine. Native resources are created lazily after reserving a
+slot. At capacity, an idle slot in another context is closed before replacement;
+active slots wait on a condition variable until the request deadline. Waiting
+holds no local memory access lock. The pool mutex protects slot transitions only;
+creation, copy, completion and destruction run outside it. Native driver calls
+remain synchronous and cannot be interrupted by the deadline.
+
+A lease returns only after completion/recovery and context restoration. Uncertain
+DMA or restoration quarantines the slot; its mapping retains and fences actual
+touched allocations. Failed native creation/cleanup also keeps a charged slot
+when release cannot be proven. Native destroy is never retried, and a fully
+quarantined pool returns `ResourceExhausted`. Clean enqueue recovery permits reuse.
+Successful completion followed by idle stream-destroy failure retains native
+handles/context and capacity, without retaining already completed local buffers.
+
+`close_requester` fences outgoing admission, drains submissions, closes imports,
+then closes the stream pool. A timed-out close can wait again; quarantined slots
+remain `Unquiesced`. `flush_nvlink_cache` leaves the stream pool usable.
+`EngineStats.nvlink` exposes `stream_slots` (including construction and retained
+slots), `active_streams` and `retained_streams`, separate from mapping bytes.
+See [source evidence and current limits](qualification.md#cuda-ipc-stream-pool).
 
 ## Cross-submission relocation cache
 
@@ -141,7 +174,7 @@ retries. With caching disabled it is a no-op. Native provider close cannot be
 preempted by the deadline. There is no background expiry thread.
 
 `close_requester` permanently fences new outgoing work, waits for accepted
-submissions, then closes cached imports. Native close and context restoration
+submissions, then closes cached imports and the stream pool. Native close and context restoration
 must succeed before an independent **mapping-close receipt** releases the source
 entry. The close endpoint remains available after source admission closes or the
 region is unregistered. A lost close ACK leaves a non-reusable close obligation;
@@ -167,8 +200,8 @@ The default per-subbatch profile proceeds as follows:
    requester epochs, and fresh grant token. It opens the handle in its local
    primary context with lazy peer access, then relocates the granted offset.
 3. `NVLinkSubBatch` resolves the local allocation owners and offsets. The
-   requester locks each actual GPU/pinned host owner once, in a common address
-   order, then reuses the first slice owner's stream/event. All slices enqueue
+   requester leases a context-matched stream/event, then locks each actual
+   GPU/pinned host owner once in a common address order. All slices enqueue
    in request order on that stream, using `cuMemcpyAsync` for device/device or
    the direction-specific host/device API above. One trailing event and one
    context restoration establish group completion. Guards survive the wait and
@@ -229,21 +262,27 @@ resolves consecutive same-region/context slices and their actual owners.
 `cuda/ipc.rs::IpcMapping` owns the native reference, retained context and current
 touched allocations; `cuda/ipc/copy.rs` owns grouped access and submission.
 Like TENT's `startTransfer` ordered-copy fallback, all group copies use one
-stream and one trailing event. OrbitTE reuses the first local allocation's
-stream/event and waits once before the source receipt. TENT can also use native
+stream and one trailing event. Its `platform_->getStreamFromPool` returns a
+move-only `CUDAStreamHandle`; destruction returns the stream to a per-device
+idle pool. OrbitTE uses the same names and exclusive handle lifetime in
+`cuda/stream_pool.rs`, retaining a reusable completion event with each stream.
+OrbitTE additionally bounds slots across contexts, keys by actual retained native
+context, and quarantines uncertain cleanup. The frozen TENT pool creates streams
+when a device's idle list is empty and has no corresponding global slot bound.
+OrbitTE waits once before the source receipt. TENT can also use native
 `cudaMemcpyBatchAsync` and query task completion asynchronously; these are not
 claimed by this synchronous group path. TENT's cache closes in `uninstall`;
 OrbitTE additionally requires explicit cooperating source close receipts. Its
 bounded LRU and continuing flush extend that ownership model; they are not
-features copied from the frozen TENT cache. Device-wide stream pooling and
-broader scheduling remain separate work. Grouped completion is source-validated;
-[its current installed DMA/performance qualification](qualification.md#cuda-ipc-group-completion)
-remains open. Producer readiness stays an explicit caller handoff.
+features copied from the frozen TENT cache. Nonblocking NVLink event-query
+scheduling and native batch-copy dispatch remain separate work. Grouped completion
+and shared stream ownership have source checks; their current installed DMA and
+performance qualification remain open. Producer readiness stays an explicit caller handoff.
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
 (`transports/nvlink/host_register`, default false), but its remote relocation
 accepts only CUDA buffers. OrbitTE follows that distinction: `cuda/pinned.rs`
-owns local pinned backing/stream, `HostMemory` owns CPU/RDMA exclusion, and
+owns local pinned backing, `HostMemory` owns CPU/RDMA exclusion, and
 `IpcMapping` retains the concrete host or device allocation. Remote grants
 remain GPU-only. Remote host exports, MNNVL/VMM and exporter-crash safety remain
 open in P5.4. Idle reclamation and continuing flush have source controls; their
@@ -275,7 +314,7 @@ requester exit before close, and stale source identity rejection. The
 `batch-healthy`, `batch-graceful` and `batch-requester-exit` modes use three
 out-of-order slices across two requester allocations on one native context.
 They require one native import per group, distinct nonoverlapping local
-allocations before use and a separate matching event drain for every slice. Checks include
+allocations before use and one matching trailing event drain for each group. Checks include
 full logical bytes/guards, native allocation initialization, exact imported
 handles/copy ranges, matched event drain and IPC close, process reaping, lock
 release and GPU allocation baselines. The observer forwards real Driver API

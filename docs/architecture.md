@@ -381,8 +381,10 @@ behavioral, ABI, wire or performance parity.
 
 ## CUDA copy stream ownership
 
-`cuda::CudaMemory` owns the allocation lock; `cuda::stream::CopyStream` owns its
+`cuda::CudaMemory` owns the allocation lock; `cuda::stream::CopyStream` owns a
 lazy nonblocking stream, reusable completion event and pending-work state.
+Public allocation copies and staging slots retain their own `CopyStream`;
+NVLink groups borrow one through `cuda::stream_pool::CUDAStreamHandle`.
 `cuda::driver` supplies fallibly loaded Driver API functions. Each copy holds
 pinned staging until its event completes. Engine TCP/RDMA paths consume the
 shared `runtime/proxy_manager.rs` chunk owner through `cuda/staging.rs`; public
@@ -402,8 +404,12 @@ This follows the frozen TENT
 pattern of lazy nonblocking streams and owning handles, and
 [NVLinkTransport](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
 records an event after async copy work. OrbitTE reuses one stream/event
-per serialized public allocation copy and one per physical pool slot for
-remote source and requester staging. `StagingCopy` owns an exclusive GPU range
+per serialized public allocation copy and one per physical staging slot for
+remote source and requester staging. NVLink has a transport-owned bounded
+`CUDAStreamPool` shared across actual local allocations and contexts; an exclusive
+handle spans group completion/recovery and restoration. Idle slots retain only
+native resources/context. Creation and destruction happen outside the pool mutex;
+uncertain slots remain charged and cannot be reused. `StagingCopy` owns an exclusive GPU range
 loan and actual allocation reference while the allocation mutex is released
 between metadata updates; disjoint sessions can progress together.
 `runtime/proxy_manager/stage_buffer_cache.rs::StageBufferCache` owns the requester ring's private registrations
@@ -467,7 +473,8 @@ blocks other lanes assigned to that worker. See [retirement progress](staging.md
 Pin, native construction/connect/copy, aggregate failure drain and source handlers
 retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
-completion owner; TENT's device-wide pool remains later work. External producers still synchronize before handing over
+completion owner; NVLink shares context-matched streams separately through
+`CUDAStreamPool`. External producers still synchronize before handing over
 memory. Public read/write completion remains synchronous; initial allocation
 zeroing still synchronizes its context. Transport-level scheduling and caller
 stream readiness remain P5 work.
@@ -475,14 +482,16 @@ stream readiness remain P5 work.
 ## CUDA IPC transport ownership
 
 `transport/nvlink.rs::NVLinkTransport` owns same-host identity checks, grant/close
-bindings and physical mapping quotas. It is a sibling of TCP and RDMA.
+bindings, physical mapping quotas and the shared stream pool. It is a sibling of TCP and RDMA.
 `cuda/ipc.rs::IpcExport` owns the allocation-wide source loan; `IpcMapping` owns
 one imported native reference, its context and every touched local allocation.
 `transport/nvlink/mapping.rs::OpenedMapping` owns the mapping charge and explicit
 native close. `subbatch.rs::NVLinkSubBatch` owns resolved consecutive
 same-region/context copies. `cuda/ipc/copy.rs` acquires actual GPU/pinned host
-owners in one deduplicated lock order, then submits the group on the first
-owner's reusable stream. It holds all memory guards through shared completion
+owners in one deduplicated lock order, then submits the group on its exclusive
+`CUDAStreamHandle`. `NVLinkTransport` acquires the handle before memory access
+locks and returns it before mapping-close/control I/O. The pool matches the
+retained actual context and survives changes of first allocation. It holds all memory guards through shared completion
 and context restoration, releasing them before control I/O.
 The optional `cache.rs::RelocationCache` owns bounded single-flight imports.
 At capacity it selects an idle LRU owner, reserves both old and replacement
@@ -494,7 +503,7 @@ whole-allocation loan and physical charge. Each cached submission revalidates
 source authorization, then releases drained local owners at operation completion.
 `cuda/stream.rs` owns actual copy completion. ControlService keeps cached close
 receipts available after source admission closes; Engine drains outgoing imports
-before incoming exports. Legacy uncertain handlers and current uncertain
+and the stream pool before incoming exports. Legacy uncertain handlers and current uncertain
 requester DMA still retain their admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
@@ -509,7 +518,7 @@ ready-offer handshake separates unexposed reservations from exposed exporter obl
 cannot expose a handle after its requester already closed the original socket.
 
 `cuda/pinned.rs::PinnedAllocation` owns real host allocation, primary context,
-and reusable copy stream/event. `HostMemory` holds its access lock through native
+and its staging copy resources. NVLink uses the separate shared stream pool. `HostMemory` holds its access lock through native
 copy/event/context completion and fences CPU/RDMA access on uncertainty.
 `IpcMapping` retains the existing `Allocation::Host` / `Allocation::Cuda` owners;
 mixed groups still share only their actual native context and remote GPU grant.
