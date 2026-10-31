@@ -58,7 +58,14 @@ impl Progress {
         })
     }
 
-    pub(super) fn wait(&self, group: IpcCopyGroup, deadline: Instant) -> IpcCopyCompletion {
+    pub(super) fn wait(&self, mut group: IpcCopyGroup, deadline: Instant) -> IpcCopyCompletion {
+        // Already-ready copies avoid a completion channel and cross-thread wakeup.
+        match group.query() {
+            Ok(true) => return group.complete(Ok(())),
+            Ok(false) if Instant::now() < deadline => (),
+            Ok(false) => return group.complete(Err(Error::Timeout)),
+            Err(error) => return group.complete(Err(error)),
+        }
         let attempted = group.attempted;
         let mut worker = self.worker.lock().unwrap_or_else(|p| p.into_inner());
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());

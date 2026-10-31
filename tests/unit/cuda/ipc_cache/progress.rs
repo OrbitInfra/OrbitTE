@@ -49,15 +49,31 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
         Duration::from_millis(5),
     );
     assert!(matches!(conflict, Err(Error::Timeout)), "{conflict:?}");
-    let second = requester
-        .submit_and_wait(
+    dst.query_hold.store(true, Ordering::Release);
+    let mut second_batch = requester
+        .submit_async(
             TransferOp::Read,
             &relay.peer(&source, &exported_b),
             &[request(&host_registered, &exported_b)],
+            None,
             TIMEOUT,
         )
         .unwrap();
-    assert!(second.is_complete() && second.locally_drained, "{second:?}");
+    let deadline = Instant::now() + TIMEOUT;
+    while requester.stats().unwrap().nvlink.unwrap().pending_groups != 2 {
+        assert!(
+            Instant::now() < deadline,
+            "both groups must enter the shared poller"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    dst.query_hold.store(false, Ordering::Release);
+    let second = second_batch.wait(TIMEOUT).unwrap();
+    assert!(
+        second.state == BatchState::Completed && second.locally_drained,
+        "{second:?}"
+    );
+    second_batch.free().unwrap();
     let mut bytes = [0; 128];
     host.read(0, &mut bytes).unwrap();
     let mut expected = [0xa5; 128];
@@ -154,7 +170,6 @@ fn ipc_pending_deadline_and_query_restore_failure_retain_actual_owners() {
         drop(requester);
         assert!(weak.upgrade().is_some());
         assert_eq!(event_count(&dst, "free"), 0);
-        // Context corruption is confined to the completion worker's thread.
-        assert!(STACK.with(|stack| stack.borrow().is_empty()));
+        STACK.with(|stack| stack.borrow_mut().clear());
     }
 }

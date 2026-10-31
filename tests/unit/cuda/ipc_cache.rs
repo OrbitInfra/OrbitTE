@@ -258,6 +258,7 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
             (1, 1, 0, 0)
         );
         assert_eq!(event_count(&dst, "stream-create"), 1);
+        assert_eq!(stats.progress_workers, 0, "ready groups need no worker hop");
         assert_eq!(event_count(&dst, "event-create"), 1);
         assert_eq!(event_count(&dst, "stream-destroy"), 0);
         assert_eq!(requester.stats().unwrap().inflight_bytes, 0);
