@@ -38,7 +38,8 @@ recovery policy and replica placement.
   share bounded admission. Each request selects ordinary transfer or remote GPU
   staging over TCP/RDMA; mixed batches preserve ordered completion and reuse
   bounded staging resources. Failed native cleanup
-  retains unresolved memory.
+  retains unresolved memory. Owner-backed [type and range locations](docs/rust-api.md#memory-type-and-location)
+  distinguish CPU/pinned DRAM and CUDA device/context without reprobing on queries.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
   lanes and a transport worker pool serve concurrent requests. A periodic
   monitor fences failed routes and resumes drained contexts.

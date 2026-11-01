@@ -546,3 +546,37 @@ fn native_preparation_precedes_lookup_and_duplicate_commit_and_keeps_failed_owne
         "failed batch did not add a duplicate reference"
     );
 }
+
+#[test]
+fn host_location_is_bounded_unknown_and_survives_registration_retirement() {
+    let owner = Arc::new(HostMemory::new(vec![0; 16].into_boxed_slice()).unwrap());
+    let registry = MemoryRegistry::new(SourceEpoch([8; 16]), 1, 16);
+    let registration = registry
+        .register_host(owner.clone(), 3, 5, Permission::LocalOnly)
+        .unwrap();
+    let access = owner.backing.lock().unwrap();
+    assert_eq!(registration.memory_type(), MemoryType::Cpu);
+    assert_eq!(
+        registration.location().unwrap(),
+        owner.location(3, 5).unwrap()
+    );
+    assert_eq!(registration.location().unwrap().location.to_string(), "*");
+    for (offset, length) in [(0, 0), (16, 1), (usize::MAX, 1)] {
+        assert!(matches!(
+            owner.location(offset, length),
+            Err(Error::InvalidRange)
+        ));
+    }
+    registry.unregister(&registration).unwrap();
+    let address = owner.base_address();
+    drop(access);
+    drop(owner);
+    assert_eq!(
+        registration.location().unwrap(),
+        RangeLocation {
+            address: address + 3,
+            length: 5,
+            location: MemoryLocation::Cpu(None)
+        }
+    );
+}

@@ -1979,3 +1979,28 @@ the common state machine. Consumption remains CPU-blocking and deadlines cannot
 interrupt it. No throughput/latency gain is claimed. Native producer ordering,
 current installed DMA and matched TENT performance remain unqualified; full
 P5/TENT parity and OrbitKV linkage remain open.
+
+
+## CUDA pointer and location
+
+Owner-backed range/type/device/context inspection and batched external CUDA
+validation are implemented. The native context caches successful GPU PCI/NUMA
+discovery for both staging entry paths while allowed nodes are refreshed. See
+[the API](rust-api.md#memory-type-and-location) and [staging selection](staging.md#host-staging-location).
+
+Source controls exercise interior-pointer adoption, clipped registrations,
+retired owner lifetime, metadata inspection without payload access, unknown,
+host/managed and driver-error rejection, and one attribute call per adoption.
+The existing staging control now checks one PCI query across repeated copies
+and a changed allowed-node set, with unchanged physical chunk accounting.
+Ordinary/pinned host classification and bound mapping metadata are covered.
+
+Evidence is outside Git at
+`/root/orbitte-artifacts/cuda-memory-location-20261101/`.
+The manifest and gate records bind source, commands and log hashes; initial
+fixture compilation failure is retained in `cuda-initial.log`. Independent
+review and final-head CI are recorded there before PR readiness.
+No new hardware job was requested. Reduced native query counts establish the
+code path, not an end-to-end latency, bandwidth or matched TENT result.
+Current installed GPU execution, physical NUMA residency and performance remain
+unqualified. Full F02/F03, P5 and TENT parity remain open.

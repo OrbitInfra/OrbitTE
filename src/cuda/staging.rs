@@ -329,7 +329,7 @@ impl Context {
     fn staging_node(
         self: &Arc<Self>,
         location: crate::StagingLocation,
-        numa: &crate::platform::numa::Numa,
+        numa: &'static crate::platform::numa::Numa,
     ) -> Result<Option<u32>> {
         use crate::StagingLocation;
         if location == StagingLocation::Any {
@@ -341,26 +341,11 @@ impl Context {
         let node = match location {
             StagingLocation::Any => return Ok(None),
             StagingLocation::Cpu(node) => node,
-            StagingLocation::Auto => {
-                let mut pci = [0 as std::ffi::c_char; 20];
-                self.current(|| {
-                    check("cuDeviceGetPCIBusId", unsafe {
-                        (self.driver.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, self.device)
-                    })
-                })?;
-                let end = pci
-                    .iter()
-                    .position(|c| *c == 0)
-                    .ok_or(Error::Protocol("CUDA PCI bus id"))?;
-                let pci: String = pci[..end]
-                    .iter()
-                    .map(|c| (*c as u8 as char).to_ascii_lowercase())
-                    .collect();
-                (numa.gpu_node)(&pci)
-                    .filter(|node| nodes.contains(node))
-                    .or_else(|| nodes.first().copied())
-                    .ok_or(Error::Unavailable("no allowed host staging node"))?
-            }
+            StagingLocation::Auto => self
+                .gpu_numa_node(numa)?
+                .filter(|node| nodes.contains(node))
+                .or_else(|| nodes.first().copied())
+                .ok_or(Error::Unavailable("no allowed host staging node"))?,
         };
         if !nodes.contains(&node) {
             return Err(Error::Unavailable(

@@ -10,11 +10,18 @@ use std::time::Instant;
 pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 static MAPPINGS: OnceLock<Mutex<BTreeMap<usize, (usize, u32)>>> = OnceLock::new();
 static NEAR: AtomicI32 = AtomicI32::new(-1);
+static ALLOW_NEAR: AtomicBool = AtomicBool::new(true);
 static FAIL_BIND: AtomicBool = AtomicBool::new(false);
 static FAIL_UNMAP: AtomicBool = AtomicBool::new(false);
 static UNMAPS: AtomicUsize = AtomicUsize::new(0);
 static NUMA: Numa = Numa {
-    nodes: || Ok(vec![130, 2]),
+    nodes: || {
+        Ok(if ALLOW_NEAR.load(Ordering::Acquire) {
+            vec![130, 2]
+        } else {
+            vec![2]
+        })
+    },
     gpu_node: |pci| {
         let node = NEAR.load(Ordering::Acquire);
         if node >= 0 {
@@ -53,6 +60,7 @@ static NUMA: Numa = Numa {
 };
 pub(super) fn reset() {
     NEAR.store(-1, Ordering::Release);
+    ALLOW_NEAR.store(true, Ordering::Release);
     FAIL_BIND.store(false, Ordering::Release);
     FAIL_UNMAP.store(false, Ordering::Release);
     UNMAPS.store(0, Ordering::Release);
@@ -76,7 +84,7 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
     let pool = pool(7, StagingLocation::Auto, 1);
     let physical = page_round(7).unwrap();
     for node in [130, 130, 2] {
-        NEAR.store(node, Ordering::Release);
+        ALLOW_NEAR.store(node == 130, Ordering::Release);
         let mut bytes = [0; 16];
         gpu.copy_staged(0, &mut bytes, None, &pool, deadline())
             .unwrap();
@@ -91,6 +99,16 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
     }
     assert_eq!(owner.pci_device.load(Ordering::Acquire), 130);
     assert_eq!(
+        owner
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| **e == "pci-bus-id")
+            .count(),
+        1
+    );
+    assert_eq!(
         (
             pool.stats().unwrap().allocations,
             pool.stats().unwrap().reuses
@@ -103,7 +121,7 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
     let active = pool
         .pin_stage_buffer(context.raw.as_ptr() as usize, Some(2), |_| unreachable!())
         .unwrap();
-    NEAR.store(130, Ordering::Release);
+    ALLOW_NEAR.store(true, Ordering::Release);
     assert!(matches!(
         gpu.copy_staged(0, &mut [0; 16], None, &pool, deadline()),
         Err(Error::ResourceExhausted)
@@ -363,6 +381,14 @@ fn unmap_failure_preserves_its_errno_and_mapping_after_successful_unregister() {
     let context = gpu.allocation.lock().unwrap().context.clone();
     let buffer = PinnedAllocation::new_at(&context, 7, Some(2), &NUMA).unwrap();
     let address = buffer.address;
+    let buffer = Arc::new(buffer);
+    let host = HostMemory::from_cuda_pinned(Arc::clone(&buffer));
+    assert_eq!(
+        host.location(1, 3).unwrap().location,
+        crate::MemoryLocation::Cpu(Some(2))
+    );
+    drop(host);
+    let buffer = Arc::try_unwrap(buffer).ok().unwrap();
     FAIL_UNMAP.store(true, Ordering::Release);
     assert!(matches!(
         buffer.close(),

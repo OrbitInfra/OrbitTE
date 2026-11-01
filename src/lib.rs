@@ -65,7 +65,9 @@ pub use engine::{
     TransferRequest, Transport,
 };
 pub use error::{Error, Result};
-pub use memory::{HostMemory, Permission, RegisteredMemory};
+pub use memory::{
+    HostMemory, MemoryLocation, MemoryType, Permission, RangeLocation, RegisteredMemory,
+};
 pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 

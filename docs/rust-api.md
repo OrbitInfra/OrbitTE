@@ -37,6 +37,40 @@ retains unpublished backing and its charges. This can fail at registration time
 when native resources or aggregate MR capacity are unavailable. See the
 [publication contract](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
 
+## Memory type and location
+
+`RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the
+retained backing without a lock or driver call. `RegisteredMemory::location()`
+returns `RangeLocation { address, length, location }` clipped to exactly that
+registration. `HostMemory::location(offset, length)` and
+`CudaMemory::location(offset, length)` check the requested owner subrange first.
+Queries read immutable metadata without taking the payload lock; they do not
+wait for producer readiness or grant
+permission to access payload bytes.
+
+`MemoryLocation::Cuda { device, context }` contains the process-visible CUDA
+ordinal and native context identity. Its display form is `cuda:N`. The context
+number is diagnostic metadata, not a retained or usable native handle. Retain
+the actual owner/registration and follow its transfer completion contract.
+`MemoryLocation::Cpu(Some(N))` displays `cpu:N`; `Cpu(None)` displays `*`.
+Ordinary/external host memory and portable CUDA-pinned allocations have unknown
+NUMA placement. Pinned DRAM remains CPU memory. A NUMA-bound staging mapping
+reports its selected node, not a new physical-residency measurement.
+
+External CUDA adoption performs one `cuPointerGetAttributes` call for type,
+managed status, actual context and device, then checks the whole range with
+`cuMemGetAddressRange` inside that retained context. Unknown/default attributes,
+managed/host pointers, invalid context/device and native errors fail adoption.
+They never choose a CPU dereference. The range check uses the mapped allocation,
+not a potentially larger virtual-address reservation. See the
+[CUDA attribute contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__UNIFIED.html).
+
+These APIs implement the owner-backed part of frozen TENT's `Platform`
+`getMemoryType` / `getPointerDeviceId` / `getLocation` and `RangeLocation`
+responsibilities. They do not provide a general arbitrary-pointer classifier,
+CPU page-residency scan, device-plugin ABI or GPU topology publication.
+Current hardware/performance limits are in [qualification](qualification.md#cuda-pointer-and-location).
+
 ## Peer authority
 
 ```rust

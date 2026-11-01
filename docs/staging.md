@@ -62,6 +62,13 @@ CPU requester scratch buffers and public `allocate_pinned_host` / standalone
 | `StagingLocation::Auto` | Query the actual context device's PCI BDF, read its sysfs NUMA node, prefer that eligible node, otherwise choose the lowest eligible node |
 | `StagingLocation::Cpu(N)` | Require host location `cpu:N`; unavailable nodes fail before allocation |
 
+Each retained CUDA context caches its successful PCI-to-NUMA discovery,
+including an unknown NUMA result. Reused staging avoids another CUDA PCI query,
+context push/pop and GPU sysfs lookup. Errors are not cached as unknown memory.
+The snapshot lasts for that context owner; recreate the owner after a topology
+change. Allowed-node discovery is deliberately refreshed for each selection,
+so a changed cpuset or online-node set cannot authorize an old cached choice.
+
 Eligible nodes have online memory and appear in the calling thread's allowed
 memory-node set. Missing or negative GPU locality stays unknown; it does not
 mean node zero. Auto then selects the first eligible host node, as TENT's
@@ -91,7 +98,8 @@ slot charge. Repeated close/Drop cannot repeat a native release. The original
 `cuMemHostAlloc` backing continues to pair with `cuMemFreeHost`.
 
 The platform boundary lives in `platform/numa.rs`, CUDA registration/backing in
-`cuda/pinned.rs`, selection beside the actual context in `cuda/staging.rs`, and
+`cuda/pinned.rs`, pointer/locality discovery in `cuda/probe.rs`, selection beside
+the actual context in `cuda/staging.rs`, and
 reuse/budgets in `runtime/proxy_manager.rs`. This matches TENT's
 `findStagingPolicy` → `Topology::findNearMem` → per-location `StageBuffers` →
 platform allocator responsibilities. OrbitTE limits this stage to host staging
