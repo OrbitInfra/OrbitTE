@@ -694,7 +694,9 @@ followed by successful context restoration clears that pending copy and advances
 completion counters. A query error or failed context restoration quarantines the
 actual slot and makes range failure sticky. Error cleanup still waits for every
 other accepted copy; success on a sibling cannot clear uncertainty. Ordinary
-healthy requester progress performs no event synchronization. The CUDA Driver
+healthy requester slot progress performs no event synchronization after initial
+[GPU producer readiness](rdma-cuda.md#producer-stream-readiness) has been consumed
+at loan acquisition. That explicit producer wait is a separate boundary. The CUDA Driver
 API [event contract](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__EVENT.html)
 defines the query result; event destruction is not completion evidence.
 

@@ -474,10 +474,17 @@ Pin, native construction/connect/copy, aggregate failure drain and source handle
 retain synchronous boundaries; full asynchronous control and location scheduling remain open. The slot retains both handles across sessions; close
 releases them before its pinned allocation. The separate NVLink transport shares the copy
 completion owner; NVLink shares context-matched streams separately through
-`CUDAStreamPool`. External producers still synchronize before handing over
-memory. Public read/write completion remains synchronous; initial allocation
-zeroing still synchronizes its context. Transport-level scheduling and caller
-stream readiness remain P5 work.
+`CUDAStreamPool`. `cuda/readiness.rs::CallerSyncEvent` separately owns a GPU
+producer event generation, actual context and retained producer inputs. An
+explicit caller-thread record publishes readiness to the allocation; shared
+`DeviceAllocation::prepare_access` consumes it before copy, staging, DMA or IPC
+access. Aliases consume each generation once and reuse its event. Final drop
+drains any pending generation. Unproven readiness fences the real allocation.
+This follows TENT's caller-sync event boundary, extended across transport and
+thread ownership; see [producer readiness](rdma-cuda.md#producer-stream-readiness).
+Public read/write and producer event waits remain synchronous; initial allocation
+zeroing still synchronizes its context. CUDA-pinned host producer handoff,
+consumer-stream chaining and broader scheduling remain open.
 
 ## CUDA IPC transport ownership
 

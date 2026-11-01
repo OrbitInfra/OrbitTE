@@ -1901,3 +1901,44 @@ No hardware task was requested. Current installed batch-copy DMA, native
 partial-error behavior and matched TENT latency/bandwidth remain unqualified.
 The functional call-count reduction is not a measured performance result.
 Producer-stream readiness, broader P5 profiles and full TENT parity remain open.
+
+
+## CUDA producer readiness
+
+Source `33ef0b1` implements explicit GPU producer-stream handoff on the actual
+allocation. `CallerSyncEvent` records on the caller thread, retains producer
+inputs and shares one event generation across registration aliases. Copies,
+staging, DMA loans and IPC source/requester access consume it once before
+payload access. Re-record and final allocation drop drain the previous marker.
+Failed record can recover only on the original producer stream; unproven
+readiness or context restoration fences and retains actual owners.
+
+Focused checks pass 124 CUDA tests, two NVLink transport tests, formatting and
+RDMA/CUDA all-target Clippy. The four new readiness controls exercise queued
+bytes/guards, cross-thread per-thread-stream capture, work after a marker, event
+reuse, owner lifetime, public TCP READ/WRITE and copy/staging/IPC/DMA boundaries.
+Failure controls cover record recovery, wait/context restoration, graph capture,
+foreign-context rejection and final drop. Independent review found that the
+initial test shim incorrectly resolved explicit streams through the current
+context. Test-only source `6909d69` records creation contexts and adds explicit
+stream calls with no current context or a different current context. Affected
+CUDA controls and Clippy are rerun against that correction.
+
+Evidence: `/root/orbitte-artifacts/cuda-producer-readiness-20261101/`.
+`source-manifest.json` and `gates.json` retain initial source inputs/results;
+`context-control/` records the corrected source and affected gates. The initial
+byte-buffer type assertion failure and independent context-model finding remain
+archived. Independent review, final CI and the accepted source/head identities
+are recorded in the same external directory before PR readiness.
+
+Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` uses
+`CallerSyncEventPool` / `syncWithCallerStream` to record `cudaStreamPerThread`
+and wait on the CPU. OrbitTE preserves that scoped wait, accepts the actual
+explicit stream, and attaches the generation to allocation ownership across
+transports. Consumption is CPU-blocking and cannot be interrupted by a request
+deadline. This avoids device-wide producer synchronization but is not a measured
+speedup or an asynchronous consumer-stream dependency.
+
+No hardware task was requested. Native producer ordering, installed DMA and
+matched TENT performance remain unqualified. CUDA-pinned host producer handoff,
+consumer-stream chaining, broader P5 profiles and full TENT parity remain open.

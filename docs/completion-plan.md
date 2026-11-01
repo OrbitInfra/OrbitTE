@@ -687,6 +687,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   Per-request remote Pin/Direct selection is implemented at `27b73b5`, with
   independent incoming Pin capability and existing host grant/registration policy;
   see [remote selection](qualification.md#per-request-remote-staging).
+  GPU producer-stream readiness is implemented at `33ef0b1`, with explicit
+  stream-context controls corrected at `6909d69`. Actual allocation owners share
+  one reusable event generation across copies, staging, DMA and IPC access.
+  CUDA-pinned host producer handoff and consumer-stream chaining remain open.
+  See [producer readiness](qualification.md#cuda-producer-readiness).
   Current installed qualification remains open.
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
@@ -1043,15 +1048,22 @@ groups keep ordered enqueue. Partial native errors never trigger replay. Source
 checks and native-observer controls pass; installed DMA and matched performance
 remain unqualified. See [batch dispatch](qualification.md#cuda-ipc-native-batch-copy).
 
-The next functional delivery is explicit CUDA producer-stream readiness, an
-open P5 contract. Follow frozen TENT's `syncWithCallerStream` while preserving
-OrbitTE's actual allocation/context owners. Add a stream/event handoff consumed
-before CUDA transfer reads or writes; preserve producer event generations and
-avoid whole-device synchronization when a scoped stream receipt is sufficient.
-Inspect current ownership and public handoff boundaries first; do not infer a
-producer stream from an unrelated submission worker. Keep validation scoped to
-readiness, owner lifetime and context/error boundaries. Automatic transport
-selection/QoS remains P6, and native performance claims require matched hardware.
+Explicit GPU producer readiness is implemented at `33ef0b1`, with source
+controls at `6909d69`. `CallerSyncEvent` follows frozen TENT's
+`syncWithCallerStream`: capture the producer's actual stream on the caller thread
+and consume a scoped event before allocation access. Aliases reuse one event;
+generation ownership and retained producer inputs survive cross-thread handoff.
+The wait remains CPU-blocking. See [readiness](qualification.md#cuda-producer-readiness).
+
+The next functional delivery extends that handoff to CUDA-pinned host owners.
+Consume a GPU producer's completion before CPU reads/writes, host RDMA loans or
+local pinned-host IPC copies can access those bytes. Keep readiness with the
+actual `HostMemory` / CUDA host owner and its existing access exclusion, without
+duplicating per-registration events. Ordinary host memory must not gain a CUDA
+dependency. Inspect these owners first and preserve the common event-generation
+and failure-retention contracts. Consumer-stream chaining remains a separate
+open P5 boundary. Automatic selection/QoS remains P6; native performance claims
+require matched hardware.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
