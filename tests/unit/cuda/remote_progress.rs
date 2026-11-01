@@ -54,6 +54,7 @@ fn pending_remote_copy_does_not_block_another_submitted_cross() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 2,
@@ -306,6 +307,7 @@ fn remote_query_failure_closes_active_cross_and_retains_uncertain_cuda_owners() 
                         operation,
                         &peer,
                         &[TransferRequest {
+                            priority: Default::default(),
                             remote_staging: true,
                             transport: Transport::Rdma,
                             local_address: local.base_address() + 2,

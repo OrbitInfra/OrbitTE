@@ -23,6 +23,7 @@ fn request(
     length: usize,
 ) -> TransferRequest {
     TransferRequest {
+        priority: Default::default(),
         remote_staging: false,
         transport: orbit_te::Transport::Tcp,
         local_address: local.base_address() + local_offset as u64,
@@ -174,6 +175,7 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
         ),
     ] {
         let invalid = TransferRequest {
+            priority: Default::default(),
             remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address,
@@ -454,6 +456,7 @@ fn two_process_restart_fences_old_authority() {
     assert_eq!(remote.base_address(), process.address);
     let requests = [
         TransferRequest {
+            priority: Default::default(),
             remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address(),
@@ -461,6 +464,7 @@ fn two_process_restart_fences_old_authority() {
             length: 512,
         },
         TransferRequest {
+            priority: Default::default(),
             remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address() + 512,
@@ -503,6 +507,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: orbit_te::Transport::Tcp,
                     local_address: local.base_address(),
@@ -563,6 +568,7 @@ fn two_process_restart_fences_old_authority() {
                 TransferOp::Read,
                 &refreshed,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: orbit_te::Transport::Tcp,
                     local_address: local.base_address(),

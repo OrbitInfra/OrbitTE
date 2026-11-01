@@ -89,6 +89,7 @@ fn exchange(
             op,
             &peer,
             &[TransferRequest {
+                priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + 4,
@@ -715,6 +716,7 @@ fn one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_repo
                 op,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 4,
@@ -1009,7 +1011,8 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
         let [a, b] = &mut endpoints;
         let b_record = Arc::clone(&b.record);
         let (a_result, b_result) = thread::scope(|scope| {
-            let a_task = scope.spawn(|| a.transfer(&a.descriptor(), operation, end));
+            let a_task =
+                scope.spawn(|| a.transfer(&a.descriptor(), operation, crate::Priority::High, end));
             let (state, timed) = first
                 .1
                 .wait_timeout_while(first.0.lock().unwrap(), Duration::from_secs(1), |state| {
@@ -1019,7 +1022,8 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
             assert!(!timed.timed_out() && state.0);
             drop(state);
             let waits = runtime.stats().unwrap().cq_event_waits;
-            let b_task = scope.spawn(|| b.transfer(&b.descriptor(), operation, end));
+            let b_task =
+                scope.spawn(|| b.transfer(&b.descriptor(), operation, crate::Priority::High, end));
             let wait_deadline = Instant::now() + Duration::from_secs(1);
             while b_record
                 .send_namespace
@@ -1102,6 +1106,7 @@ fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recove
                     .unwrap()
                 });
                 let request = TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 4,
@@ -1208,6 +1213,7 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            priority: Default::default(),
                             remote_staging: false,
                             transport: Transport::Rdma,
                             local_address: local.base_address() + 2,
@@ -1331,6 +1337,7 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
                     operation,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
@@ -1619,6 +1626,7 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
                     op,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 4,

@@ -390,8 +390,14 @@ fn event_wakes_the_existing_worker_and_both_cqs_close_before_the_channel() {
             .cq as usize;
         let entry = entries().lock().unwrap().get(&cq).cloned().unwrap();
         thread::scope(|scope| {
-            let work =
-                scope.spawn(|| endpoint.transfer(&endpoint.descriptor(), operation, deadline()));
+            let work = scope.spawn(|| {
+                endpoint.transfer(
+                    &endpoint.descriptor(),
+                    operation,
+                    crate::Priority::High,
+                    deadline(),
+                )
+            });
             wait_until(|| {
                 runtime.stats().unwrap().cq_event_waits != 0 && entry.armed.load(Ordering::Acquire)
             });
@@ -501,7 +507,12 @@ fn lost_event_consumer_retains_the_actual_lane_and_never_fabricates_an_ack() {
     let runtime = event_runtime("completion_get_error");
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     endpoint.connect(&endpoint.descriptor()).unwrap();
-    let _ = endpoint.transfer(&endpoint.descriptor(), TransferOp::Read, deadline());
+    let _ = endpoint.transfer(
+        &endpoint.descriptor(),
+        TransferOp::Read,
+        crate::Priority::High,
+        deadline(),
+    );
     wait_until(|| runtime.stats().unwrap().completion_event_sources == 0);
     assert!(matches!(
         runtime.close(deadline()),
@@ -569,6 +580,7 @@ fn event_wait_honors_transfer_deadline_and_physical_retirement() {
         endpoint.transfer(
             &endpoint.descriptor(),
             TransferOp::Read,
+            crate::Priority::High,
             Instant::now() + Duration::from_millis(20)
         ),
         Err(Error::Timeout)

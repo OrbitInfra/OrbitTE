@@ -64,7 +64,7 @@ const FINISH: u8 = 8;
 pub(super) struct Record {
     pub(super) occupied: AtomicBool,
     pub(super) connection: Arc<super::qp::RdmaQp>,
-    send_queue: Arc<super::qp::send_queue::SendQueue>,
+    pub(super) send_queue: Arc<super::qp::send_queue::SendQueue>,
     actions: AtomicU8,
     pub(super) tag: u64,
     pub(super) terminal: AtomicBool,
@@ -115,6 +115,8 @@ struct Work {
     operation: slice::Operation,
     remote: Descriptor,
     deadline: Instant,
+    priority: crate::Priority,
+    enqueued: Instant,
 }
 
 impl Request {
@@ -485,6 +487,7 @@ impl ProgressState {
 }
 
 mod completion;
+mod dispatch;
 mod poll;
 mod retirement;
 mod reuse;

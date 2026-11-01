@@ -105,6 +105,7 @@ fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
             .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
             .unwrap();
         let request = TransferRequest {
+            priority: Default::default(),
             remote_staging: false,
             transport: orbit_te::Transport::Tcp,
             local_address: local.base_address(),

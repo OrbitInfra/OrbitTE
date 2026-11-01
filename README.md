@@ -42,7 +42,10 @@ recovery policy and replica placement.
   distinguish CPU/pinned DRAM and CUDA device/context without reprobing on queries.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
   lanes and a transport worker pool serve concurrent requests. A periodic
-  monitor fences failed routes and resumes drained contexts.
+  monitor fences failed routes and resumes drained contexts. Requests carry
+  High/Medium/Low priority into shared workers; opt-in deadline/bandwidth
+  arbitration orders ready payloads within each NIC and priority tier.
+  Current scheduling has source controls; native fairness/performance remain unqualified.
 - **Topology-aware multirail transfers.** CPU NUMA and CUDA GPU/PCI proximity
   feed precomputed NIC priorities, device masks and in-flight byte accounting.
   TENT-format priority matrices and topology files can override eligible NICs

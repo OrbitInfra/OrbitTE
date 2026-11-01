@@ -387,7 +387,7 @@ profile:** source `cc6ab0f` passes four two-host configurations on stable and
 Rust 1.85. Both physical RNICs carry concurrent parent slices on shared QPs;
 native WR/CQE identities, full payload/guard checks, exact byte counters and
 final owner drain agree. See [the artifact and limits](qualification.md#installed-physical-rail-accounting).
-Line-rate saturation, bandwidth arbitration and fairness remain P6 work.
+Line-rate saturation and native arbitration/fairness qualification remain P6 work.
 
 **Installed automatic discovery is qualified for the declared RoCE inventory:**
 source `36890c8` passes four two-host automatic cases and two fixed-GID controls.
@@ -739,8 +739,15 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   owner/byte budgets, staging reserves and deadline-infeasible cancellation.
   Match eligibility rules, queue bypass, disabled defaults and absent-provider
   behavior. Do not advertise an unconsumed local-recompute callback.
-- [ ] Implement per-worker QoS, shared cross-process quotas and cleanup,
+- [ ] Complete per-worker QoS, shared cross-process quotas and cleanup,
   receiver credits/pacing, deadline bandwidth arbitration and telemetry.
+  Implemented: public High/Medium/Low request priority propagates through ordinary
+  grants, slices and staging CROSS work; each worker orders ready payloads across
+  contexts. Opt-in same-NIC/same-tier arbitration consumes posted bytes and the
+  transmit meter, using TENT's bounded greedy urgency ordering. Controls and
+  drain remain independent of payload priority. Aging/promotion, tenant contracts,
+  shared-process admission/cleanup and native fairness remain open. See
+  [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 - [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
   strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
   distribution, periodic eligible-rail exploration, separate selection EWMA and
@@ -1135,9 +1142,12 @@ availability; an optional runtime symbol supplies effective LAG bandwidth.
 Context/monitor owners retain the last effective value on query failure and
 feed the existing selector without replacing QPs. Unknown rates keep the
 explicit fallback. See [source scope](qualification.md#rdma-effective-link-rate).
-The next functional delivery is P6 request priority and shared quota/bandwidth
-arbitration. Matched throughput remains
-unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
+P6 request priority and worker bandwidth arbitration are implemented at source
+scope. [Public ordinary/sliced propagation and cross-context dispatch controls](qualification.md#rdma-request-priority)
+exercise the actual workers; they do not qualify native contention or performance.
+The next functional delivery is priority aging/promotion and shared-process
+quota ownership, admission and cleanup, following TENT's existing owners.
+Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining
 is an unimplemented extension, not an additional frozen-TENT parity gate.

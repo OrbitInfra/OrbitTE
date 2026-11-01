@@ -472,6 +472,8 @@ impl<'a> StagingTask<'a> {
 
     fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
         let cross = PreparedTransfer {
+            #[cfg(feature = "rdma")]
+            priority: self.request.priority,
             #[cfg(feature = "cuda")]
             remote_staging: false,
             transport: self.request.transport,

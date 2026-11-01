@@ -71,6 +71,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 )
                 .unwrap();
             let request = |index: usize| TransferRequest {
+                priority: Default::default(),
                 remote_staging: true,
                 transport,
                 local_address: local[index].base_address() + 2,

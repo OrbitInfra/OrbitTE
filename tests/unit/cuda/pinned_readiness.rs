@@ -252,6 +252,7 @@ fn pinned_producer_readiness_precedes_cpu_staging_ipc_dma_and_tcp_payloads() {
                         op,
                         &peer,
                         &[TransferRequest {
+                            priority: Default::default(),
                             transport: Transport::Tcp,
                             remote_staging: false,
                             local_address: local_view.base_address() + 8,

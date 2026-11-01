@@ -38,7 +38,7 @@ protocol compatible with TENT's native RPC or metadata.
 | `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, SEND message storage and grant charge | Rust authority extension over TENT's registered-region model |
 | `RdmaSlice`, `SendWork`, `ReceiveWork` | Per-grant geometry, WR windows and independent completion identities | `RdmaSlice` work and completion state; source receipts are a Rust extension |
 | `CqLane` | SQ/RQ CQ pair, registered grant records, submission, drain and recovery | Per-context CQs consumed by workers |
-| `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
+| `Workers`, `PostQueue` | Transport data threads, lane assignment, ready-payload priority/urgency ordering and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPostSend`, `orderByDeadline`, `asyncPollCq` |
 | `Monitor` | One transport thread consuming events and driving periodic context reclaim/recovery | `Workers::monitorThread`, `reclaimEndpoints`, `resumePausedContexts` |
 | `DeviceSelector`, `DeviceInfo`, `SchedulingParams` | Compiled NIC eligibility, physical grant byte charges, bandwidth-weighted selection and separate payload/busy-time estimates | TENT `DeviceSelector`, `DeviceInfo` and `SchedulingParams` |
 | `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; OrbitTE's receive-credit protocol is additional |
@@ -277,8 +277,8 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Wire data | `protocol.rs`, `path.rs` | OrbitTE grant receipts and static NIC/PD path metadata |
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
 | QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |
-| CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/reuse.rs`, `cq_lane/retirement.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, pollable retirement, CQE dispatch and native progress |
-| Scheduling and events | `workers.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, event consumer and actual CQ/channel owners |
+| CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/dispatch.rs`, `cq_lane/reuse.rs`, `cq_lane/retirement.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, pollable retirement, CQE dispatch and native progress |
+| Scheduling and events | `workers.rs`, `workers/post_queue.rs`, `bw_arbitration.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, ready-payload priority/urgency ordering, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
 | Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs`, `platform/numa.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
@@ -568,8 +568,19 @@ owners and returns unconsumed reservations on failure. It introduces no native
 resource, heap allocation or second scheduler. Source grants remain pinned to
 the agreed PD and uncertain writes are never replayed. Periodic probes rotate
 eligible NICs across parents, with one selector-owned counter shared by submitters.
-Bandwidth arbitration remains P6 work; native effective-rate behavior and
-matched throughput remain unqualified.
+`workers/post_queue.rs` collects ready payloads across the worker's context
+snapshots. `Priority` maps to TENT's HIGH/MEDIUM/LOW; FIFO enqueue timestamps
+break same-tier ties. `bw_arbitration.rs` implements the opt-in bounded greedy
+`OrderByUrgency` algorithm using `DeviceInfo`'s transmit estimate and actual
+posted debt. Reused scratch contains indices and scheduling metadata only;
+the CQ lane snapshots retain the records until dispatch completes.
+`cq_lane/dispatch.rs` rechecks the work namespace, terminal/failure state and
+deadline before native posting. It owns SQ/RQ submission while the lane retains
+completion, cleanup and resource ownership. Control work and CQ progress remain
+outside priority ordering. Partial-post and uncertain-DMA rules are unchanged.
+See [priority scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
+Priority promotion, cross-process quotas, native effective-rate behavior and
+matched throughput remain unqualified or open as listed in P6.
 See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## CUDA IPC transport ownership

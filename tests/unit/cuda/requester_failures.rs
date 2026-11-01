@@ -53,6 +53,7 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            priority: Default::default(),
                             remote_staging: true,
                             transport,
                             local_address: local.base_address() + 2,
@@ -217,6 +218,7 @@ fn requester_context_restore_failure_retains_all_accepted_slots() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Tcp,
                     local_address: local.base_address() + 2,
@@ -314,6 +316,7 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                             operation,
                             &peer,
                             &[TransferRequest {
+                                priority: Default::default(),
                                 remote_staging: true,
                                 transport,
                                 local_address: local.base_address() + 2,

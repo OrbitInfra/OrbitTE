@@ -272,6 +272,7 @@ fn requester(
         .iter()
         .enumerate()
         .map(|(index, &(offset, length))| TransferRequest {
+            priority: Default::default(),
             remote_staging: false,
             transport: Transport::Nvlink,
             local_address: registered[index % memories.len()].base_address()

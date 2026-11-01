@@ -166,6 +166,8 @@ impl RdmaSetup {
                         return Err(Error::Protocol("RDMA repeated slice cache miss"));
                     }
                     let child = PreparedTransfer {
+                        #[cfg(feature = "rdma")]
+                        priority: self.request.priority,
                         #[cfg(feature = "cuda")]
                         remote_staging: false,
                         transport: self.request.transport,
@@ -247,6 +249,7 @@ impl RdmaSetup {
                         slice.grant.claim,
                         slice.remote,
                         self.operation,
+                        self.request.priority,
                         channel.deadline,
                     )?;
                     Phase::Submit(index + 1)

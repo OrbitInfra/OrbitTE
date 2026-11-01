@@ -10,6 +10,10 @@ use super::cq_lane::{CqLane, ProgressState, Record, Schedule};
 use crate::engine::remaining;
 use crate::{Error, Result};
 
+mod post_queue;
+use post_queue::PostQueue;
+pub(super) use post_queue::QueuedWork;
+
 #[derive(Default)]
 pub(super) struct Workers {
     pool: Mutex<Pool>,
@@ -24,6 +28,8 @@ struct Pool {
 }
 
 struct WorkerContext {
+    max_grants: usize,
+    deadline_bw_arbitration: bool,
     inflight_slices: AtomicUsize,
     affinity: crate::platform::cpu_probe::CpuAffinity,
     pending: Mutex<Vec<Lane>>,
@@ -96,6 +102,8 @@ impl Workers {
             let affinities = crate::platform::cpu_probe::worker_affinities()?;
             for id in 0..count {
                 let context = Arc::new(WorkerContext {
+                    max_grants: progress.shared.config.max_grants,
+                    deadline_bw_arbitration: progress.shared.config.deadline_bw_arbitration,
                     inflight_slices: AtomicUsize::new(0),
                     affinity: affinities[id % affinities.len()].clone(),
                     pending: Mutex::default(),
@@ -362,6 +370,8 @@ impl WorkerContext {
             return;
         }
         let mut cursor = 0usize;
+        let mut posts = PostQueue::new(self.max_grants);
+        let mut finished = Vec::new();
         loop {
             exit.lanes
                 .append(&mut self.pending.lock().unwrap_or_else(|p| p.into_inner()));
@@ -371,7 +381,8 @@ impl WorkerContext {
             }
             let count = exit.lanes.len();
             let mut wait: Option<Instant> = None;
-            let mut finished = Vec::new();
+            finished.clear();
+            posts.clear();
             for offset in 0..count {
                 let index = (offset + cursor % count) % count;
                 let lane = &mut exit.lanes[index];
@@ -381,7 +392,10 @@ impl WorkerContext {
                 #[cfg(test)]
                 tests::before_tick(&lane.state);
                 match lane.state.tick(&mut lane.records, &mut lane.cursor) {
-                    Schedule::Finished => finished.push(index),
+                    Schedule::Finished => {
+                        lane.records.clear();
+                        finished.push(index);
+                    }
                     Schedule::Again => wait = Some(Instant::now()),
                     Schedule::Wait(Some(deadline)) => {
                         wait = Some(wait.map_or(deadline, |current| current.min(deadline)))
@@ -389,10 +403,19 @@ impl WorkerContext {
                     Schedule::Wait(None) => {}
                 }
             }
+            if !stopping {
+                posts.collect(&exit.lanes, cursor);
+                if posts.dispatch(&exit.lanes, self.deadline_bw_arbitration) {
+                    wait = Some(Instant::now());
+                }
+            }
+            for lane in &mut exit.lanes {
+                lane.records.clear();
+            }
             // Rotate the first context so aggregate debt does not privilege a NIC.
             cursor = cursor.wrapping_add(1);
             finished.sort_unstable();
-            for index in finished.into_iter().rev() {
+            for index in finished.drain(..).rev() {
                 exit.lanes.remove(index);
             }
             if stopping {

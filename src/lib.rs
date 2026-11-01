@@ -18,6 +18,7 @@
 //! let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(1))?;
 //! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbit_te::Error::RegionNotFound)?;
 //! let request = TransferRequest {
+//!     priority: Default::default(),
 //!     remote_staging: false,
 //!     transport: orbit_te::Transport::Tcp,
 //!     local_address: destination.base_address(),
@@ -61,7 +62,7 @@ pub use config::EngineConfig;
 #[cfg(feature = "cuda")]
 pub use config::StagingLocation;
 pub use engine::{
-    BatchReport, EngineStats, RemoteEffect, TransferEngine, TransferFailure, TransferOp,
+    BatchReport, EngineStats, Priority, RemoteEffect, TransferEngine, TransferFailure, TransferOp,
     TransferRequest, Transport,
 };
 pub use error::{Error, Result};

@@ -385,7 +385,9 @@ fn shared_cq_peer() {
             let mut pairs = endpoints.into_iter().zip(remote).collect::<Vec<_>>();
             let (mut first, descriptor) = pairs.remove(0);
             let first = thread::spawn(move || {
-                first.transfer(&descriptor, operation, end).unwrap();
+                first
+                    .transfer(&descriptor, operation, crate::Priority::High, end)
+                    .unwrap();
                 first
             });
             let (state, timed) = changed
@@ -400,7 +402,9 @@ fn shared_cq_peer() {
                 .into_iter()
                 .map(|(mut endpoint, descriptor)| {
                     thread::spawn(move || {
-                        endpoint.transfer(&descriptor, operation, end).unwrap();
+                        endpoint
+                            .transfer(&descriptor, operation, crate::Priority::High, end)
+                            .unwrap();
                         endpoint
                     })
                 })
@@ -752,7 +756,12 @@ fn source_window_peer() {
         }
         if probe == "remote" {
             endpoint
-                .transfer(&grant, TransferOp::Read, Instant::now() + TIMEOUT)
+                .transfer(
+                    &grant,
+                    TransferOp::Read,
+                    crate::Priority::High,
+                    Instant::now() + TIMEOUT,
+                )
                 .unwrap();
             expected[GUARD..GUARD + 4096].fill(0x5a);
             endpoint
@@ -774,6 +783,7 @@ fn source_window_peer() {
                 } else {
                     TransferOp::Write
                 },
+                crate::Priority::High,
                 Instant::now() + TIMEOUT,
             )
             .unwrap_err();
@@ -1152,7 +1162,12 @@ fn duplex_completion_peer() {
                 );
                 transfers.push(scope.spawn(move || {
                     endpoint
-                        .transfer(&remote, operation, Instant::now() + TIMEOUT)
+                        .transfer(
+                            &remote,
+                            operation,
+                            crate::Priority::High,
+                            Instant::now() + TIMEOUT,
+                        )
                         .unwrap();
                     endpoint
                         .send_completion(

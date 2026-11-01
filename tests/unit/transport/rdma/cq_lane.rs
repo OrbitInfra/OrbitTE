@@ -59,7 +59,9 @@ fn shared_cq_bounds_aggregate_debt_routes_multiple_qps_and_reuses_one_worker() {
             thread::scope(|scope| {
                 let run = |mut endpoint: RdmaGrant| {
                     let remote = endpoint.descriptor();
-                    endpoint.transfer(&remote, operation, deadline()).unwrap();
+                    endpoint
+                        .transfer(&remote, operation, crate::Priority::High, deadline())
+                        .unwrap();
                     endpoint.close().unwrap();
                 };
                 let first = scope.spawn(move || run(first));
@@ -308,7 +310,12 @@ fn close_deadline_returns_unquiesced_while_another_native_call_owns_the_worker()
     let pause = pause(&runtime);
     let worker = thread::spawn(move || {
         first
-            .transfer(&first.descriptor(), TransferOp::Read, deadline())
+            .transfer(
+                &first.descriptor(),
+                TransferOp::Read,
+                crate::Priority::High,
+                deadline(),
+            )
             .unwrap();
         first.close().unwrap();
     });
@@ -346,7 +353,12 @@ fn a_retained_record_always_returns_unquiesced_after_a_logical_transfer_failure(
     let runtime = configured("wc_close0", 3);
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     endpoint.connect(&endpoint.descriptor()).unwrap();
-    let result = endpoint.transfer(&endpoint.descriptor(), TransferOp::Read, deadline());
+    let result = endpoint.transfer(
+        &endpoint.descriptor(),
+        TransferOp::Read,
+        crate::Priority::High,
+        deadline(),
+    );
     assert!(result.is_err());
     wait_until(|| endpoint.record.lock().unwrap().phase == Phase::Retained);
     // Reproduce the requester window between returning transfer and closing.
@@ -372,7 +384,12 @@ fn completed_outputs_and_quota_move_to_endpoint_despite_live_progress_snapshots(
             endpoint.connect(&endpoint.descriptor()).unwrap();
             assert!(
                 endpoint
-                    .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                    .transfer(
+                        &endpoint.descriptor(),
+                        TransferOp::Read,
+                        crate::Priority::High,
+                        deadline()
+                    )
                     .is_err()
             );
         }
@@ -453,7 +470,12 @@ fn stale_or_wrong_qp_completions_poison_the_lane_without_inventing_success() {
         endpoint.connect(&endpoint.descriptor()).unwrap();
         assert!(
             endpoint
-                .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                .transfer(
+                    &endpoint.descriptor(),
+                    TransferOp::Read,
+                    crate::Priority::High,
+                    deadline()
+                )
                 .is_err()
         );
         let closed = endpoint.close();
@@ -495,7 +517,12 @@ fn unresolved_lane_debt_and_all_dma_loans_survive_until_the_shared_native_barrie
         let worker = thread::spawn(move || {
             assert!(
                 active
-                    .transfer(&active.descriptor(), TransferOp::Read, deadline())
+                    .transfer(
+                        &active.descriptor(),
+                        TransferOp::Read,
+                        crate::Priority::High,
+                        deadline()
+                    )
                     .is_err()
             );
             let result = active.close();
@@ -612,6 +639,7 @@ fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() 
             .transfer(
                 &remote,
                 TransferOp::Read,
+                crate::Priority::High,
                 Instant::now() + Duration::from_secs(3),
             )
             .unwrap();
@@ -861,7 +889,12 @@ fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output
     let mut namespaces = vec![bind_namespace, receive_namespace];
     for operation in [TransferOp::Read, TransferOp::Write] {
         requester
-            .transfer(&requester.descriptor(), operation, deadline())
+            .transfer(
+                &requester.descriptor(),
+                operation,
+                crate::Priority::High,
+                deadline(),
+            )
             .unwrap();
         namespaces.push(requester.record.send_namespace.load(Ordering::Acquire));
     }
@@ -873,7 +906,12 @@ fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output
     let calls = runtime.stats().unwrap().post_calls;
     assert!(
         requester
-            .transfer(&requester.descriptor(), TransferOp::Read, deadline())
+            .transfer(
+                &requester.descriptor(),
+                TransferOp::Read,
+                crate::Priority::High,
+                deadline()
+            )
             .is_err()
     );
     assert!(
@@ -933,7 +971,12 @@ fn wr_namespace_exhaustion_never_wraps_or_reaches_native_post() {
             .next_work_namespace
             .store(exhausted, Ordering::Release);
         assert!(matches!(
-            endpoint.transfer(&endpoint.descriptor(), TransferOp::Read, deadline()),
+            endpoint.transfer(
+                &endpoint.descriptor(),
+                TransferOp::Read,
+                crate::Priority::High,
+                deadline()
+            ),
             Err(Error::ResourceExhausted)
         ));
         assert_eq!(endpoint.record.send_namespace.load(Ordering::Acquire), 0);
@@ -1018,7 +1061,12 @@ fn receive_and_message_failures_retain_exact_native_owners_without_drop_retries(
         let binding = [0x42; COMPLETION_MESSAGE_SIZE];
         let posted = if sending {
             endpoint
-                .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                .transfer(
+                    &endpoint.descriptor(),
+                    TransferOp::Read,
+                    crate::Priority::High,
+                    deadline(),
+                )
                 .unwrap();
             endpoint.send_completion(&binding, endpoint.descriptor().rkey)
         } else {
@@ -1212,6 +1260,7 @@ fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
@@ -1319,6 +1368,7 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
@@ -1526,7 +1576,12 @@ fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
             assert_eq!(identity.domain, device.domain().unwrap());
             let progress = Arc::clone(&endpoint.progress);
             endpoint
-                .transfer(&endpoint.descriptor(), TransferOp::Read, deadline())
+                .transfer(
+                    &endpoint.descriptor(),
+                    TransferOp::Read,
+                    crate::Priority::High,
+                    deadline(),
+                )
                 .unwrap();
             progress
                 .shared
@@ -1557,7 +1612,12 @@ fn drained_progress_replacement_preserves_pd_and_rejects_old_owners() {
         let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
         endpoint.connect(&endpoint.descriptor()).unwrap();
         endpoint
-            .transfer(&endpoint.descriptor(), TransferOp::Write, deadline())
+            .transfer(
+                &endpoint.descriptor(),
+                TransferOp::Write,
+                crate::Priority::High,
+                deadline(),
+            )
             .unwrap();
         endpoint.close().unwrap();
         drop(endpoint);

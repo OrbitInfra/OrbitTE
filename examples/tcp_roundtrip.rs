@@ -24,6 +24,7 @@ fn main() -> orbit_te::Result<()> {
         .find(|region| region.id() == exported.id())
         .ok_or(orbit_te::Error::RegionNotFound)?;
     let request = TransferRequest {
+        priority: Default::default(),
         remote_staging: false,
         transport: orbit_te::Transport::Tcp,
         local_address: destination.base_address(),

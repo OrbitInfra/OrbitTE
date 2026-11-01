@@ -280,7 +280,9 @@ impl RdmaTransport {
                     if operation == TransferOp::Write {
                         effect = RemoteEffect::Unknown;
                     }
-                    slice.grant.transfer(&slice.remote, operation, deadline)?;
+                    slice
+                        .grant
+                        .transfer(&slice.remote, operation, request.priority, deadline)?;
                     self.finish_requester_slice(&mut channel, &mut slice, &request.local)
                 })();
                 return close_slices(std::slice::from_mut(&mut slice), transfer, true);

@@ -690,6 +690,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let requests: Vec<_> = entries
             .iter()
             .map(|(local, source, length)| TransferRequest {
+                priority: Default::default(),
                 remote_staging,
                 transport,
                 local_address: memory.base_address() + *local as u64,

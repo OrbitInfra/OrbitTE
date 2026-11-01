@@ -19,6 +19,7 @@ fn transfer(
             operation,
             &peer,
             &[TransferRequest {
+                priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
                 local_address: local.base_address() + offset as u64,
@@ -379,6 +380,7 @@ fn only_one_claimant_can_own_a_ready_pair_and_old_handle_cannot_close_its_next_g
         stale.transfer(
             &current_remote,
             TransferOp::Read,
+            crate::Priority::High,
             deadline(TIMEOUT).unwrap()
         ),
         Err(Error::Unavailable("stale RDMA grant handle"))
@@ -428,7 +430,12 @@ fn completion_requires_data_drain_exact_payload_key_and_exact_current_native_bin
     let binding = Binding::new(&request, identity(7, 8, 9), requester, 1, 1).unwrap();
     assert!(endpoint.finish_sent(&binding.0).is_err());
     endpoint
-        .transfer(&descriptor, TransferOp::Read, deadline(TIMEOUT).unwrap())
+        .transfer(
+            &descriptor,
+            TransferOp::Read,
+            crate::Priority::High,
+            deadline(TIMEOUT).unwrap(),
+        )
         .unwrap();
     assert!(endpoint.finish_sent(&binding.0).is_err());
     assert!(memory.read(0, &mut [0; 8]).is_err());
@@ -545,6 +552,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
@@ -656,7 +664,12 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
         let grant = Descriptor::decode(&descriptor).unwrap();
         if native_receive {
             endpoint
-                .transfer(&grant, TransferOp::Write, deadline(TIMEOUT).unwrap())
+                .transfer(
+                    &grant,
+                    TransferOp::Write,
+                    crate::Priority::High,
+                    deadline(TIMEOUT).unwrap(),
+                )
                 .unwrap();
             endpoint.send_completion(&binding.0, grant.rkey).unwrap();
             endpoint.finish_sent(&binding.0).unwrap();
@@ -887,6 +900,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                     TransferOp::Write,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: local.base_address(),
@@ -1075,6 +1089,7 @@ fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),
