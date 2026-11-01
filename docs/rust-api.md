@@ -68,7 +68,10 @@ not a potentially larger virtual-address reservation. See the
 These APIs implement the owner-backed part of frozen TENT's `Platform`
 `getMemoryType` / `getPointerDeviceId` / `getLocation` and `RangeLocation`
 responsibilities. They do not provide a general arbitrary-pointer classifier,
-CPU page-residency scan, device-plugin ABI or GPU topology publication.
+CPU page-residency scan or device-plugin ABI. Native RDMA discovery now publishes
+`MemType::Cuda` entries with validated `MemEntry::pci_bus_id`, optional NUMA
+placement and GPU-to-RNIC priority tiers. Transfer selection consumes the actual
+owner's location; see [topology selection](rdma-cuda.md#device-port-gid-and-memory-topology-discovery).
 Current hardware/performance limits are in [qualification](qualification.md#cuda-pointer-and-location).
 
 ## Peer authority

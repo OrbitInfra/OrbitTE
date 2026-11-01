@@ -116,7 +116,13 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
             GrantCredits::acquire(Arc::clone(&runtime.usage), runtime.config.max_grants, 1)
                 .unwrap();
         let lease = runtime
-            .reserve_grant(runtime.allocate(4, u64::MAX).unwrap(), &memory, &credits)
+            .reserve_grant(
+                runtime
+                    .allocate(4, crate::MemoryLocation::Cpu(None), u64::MAX)
+                    .unwrap(),
+                &memory,
+                &credits,
+            )
             .unwrap();
         drop(credits);
         let mut construction =
@@ -249,7 +255,13 @@ fn lane_close_before_grant_attachment_cannot_reopen_qp_or_hide_mr_release_failur
             GrantCredits::acquire(Arc::clone(&runtime.usage), runtime.config.max_grants, 1)
                 .unwrap();
         let lease = runtime
-            .reserve_grant(runtime.allocate(4, u64::MAX).unwrap(), &memory, &credits)
+            .reserve_grant(
+                runtime
+                    .allocate(4, crate::MemoryLocation::Cpu(None), u64::MAX)
+                    .unwrap(),
+                &memory,
+                &credits,
+            )
             .unwrap();
         drop(credits);
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -347,7 +359,9 @@ fn provider_return_after_deadline_does_not_start_native_qp_construction() {
         .unwrap();
         let lease = worker_runtime
             .reserve_grant(
-                worker_runtime.allocate(4, u64::MAX).unwrap(),
+                worker_runtime
+                    .allocate(4, crate::MemoryLocation::Cpu(None), u64::MAX)
+                    .unwrap(),
                 &worker_memory,
                 &credits,
             )

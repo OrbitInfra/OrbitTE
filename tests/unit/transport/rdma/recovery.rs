@@ -64,7 +64,11 @@ fn monitor_keeps_acking_during_native_drain_and_recovers_without_new_requests() 
     wait(&runtime, |s| s.monitor_ticks > ticks);
     assert!(owner.asynchronous.paused());
     assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
-    assert!(runtime.allocate(8, u64::MAX).is_err());
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), u64::MAX)
+            .is_err()
+    );
     emit_async(&runtime, ibverbs_sys::IBV_EVENT_COMM_EST as u8);
     wait(&runtime, |s| s.acknowledged_async_events == 2);
     drop(release);
@@ -101,7 +105,11 @@ fn periodic_queries_detect_down_ports_and_publish_changed_addresses_without_even
     });
     assert!(owner.asynchronous.paused());
     assert_eq!(owner.address().unwrap(), old);
-    assert!(runtime.allocate(8, u64::MAX).is_err());
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), u64::MAX)
+            .is_err()
+    );
     let mut new = old.clone();
     new.descriptor.lid += 1;
     new.descriptor.gid[15] ^= 1;
@@ -119,7 +127,11 @@ fn periodic_queries_detect_down_ports_and_publish_changed_addresses_without_even
         new.descriptor.lid.to_string()
     );
     assert_eq!(topology.nic_list[0].device_attrs["rdma.mtu_bytes"], "2048");
-    assert!(runtime.allocate(8, 1).is_ok());
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), 1)
+            .is_ok()
+    );
     let _ = grant.close();
     drop(grant);
     runtime
@@ -204,8 +216,12 @@ fn initially_down_context_registers_mrs_and_recovers_without_reopening_its_pd() 
     assert_eq!(runtime.stats().unwrap().async_event_sources, 1);
     assert_eq!(runtime.stats().unwrap().persistent_mrs, 2);
     assert_eq!(runtime.stats().unwrap().active_cqs, 0);
-    assert!(runtime.paths().is_err());
-    assert!(runtime.allocate(8, 1).is_err());
+    assert!(runtime.paths(crate::MemoryLocation::Cpu(None)).is_err());
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), 1)
+            .is_err()
+    );
     assert!(
         !runtime.topology().unwrap().unwrap().nic_list[0]
             .device_attrs
@@ -220,8 +236,18 @@ fn initially_down_context_registers_mrs_and_recovers_without_reopening_its_pd() 
     assert!(Arc::ptr_eq(&owner, &runtime.device().unwrap()));
     assert_eq!(identity(&owner), original);
     assert_eq!(owner.address().unwrap(), active);
-    assert_eq!(runtime.paths().unwrap().len(), 1);
-    assert!(runtime.allocate(8, 1).is_ok());
+    assert_eq!(
+        runtime
+            .paths(crate::MemoryLocation::Cpu(None))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), 1)
+            .is_ok()
+    );
     assert_eq!(runtime.stats().unwrap().opened_devices, 1);
     assert_eq!(runtime.stats().unwrap().opened_persistent_mrs, 2);
     assert_eq!(runtime.stats().unwrap().active_cqs, 0);

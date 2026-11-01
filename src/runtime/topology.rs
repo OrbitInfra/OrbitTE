@@ -11,6 +11,7 @@ pub enum NicType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemType {
     Host,
+    Cuda,
 }
 
 /// A provider-visible NIC. Unknown PCI or NUMA placement stays unknown.
@@ -28,6 +29,7 @@ pub struct NicEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemEntry {
     pub name: String,
+    pub pci_bus_id: Option<String>,
     pub kind: MemType,
     pub numa_node: Option<u32>,
     pub device_list: [Vec<usize>; DEVICE_PRIORITY_RANKS],
@@ -42,7 +44,11 @@ pub struct Topology {
 
 impl Topology {
     pub(crate) fn rank(&mut self) {
-        for memory in &mut self.mem_list {
+        for memory in self
+            .mem_list
+            .iter_mut()
+            .filter(|entry| entry.kind == MemType::Host)
+        {
             memory.device_list = Default::default();
             for (index, nic) in self.nic_list.iter().enumerate() {
                 let rank = if memory.numa_node.is_some() && memory.numa_node == nic.numa_node {

@@ -43,7 +43,7 @@ TCP and staged RDMA use the shared [local CUDA staging pool](staging.md) for
 GPU copies. The pool bounds reusable pinned chunks; existing payload buffers,
 MRs and RDMA quotas keep their own lifetimes.
 
-## Device, port, GID and host topology discovery
+## Device, port, GID and memory topology discovery
 
 Set `EngineConfig.rdma` to a configured `RdmaConfig`:
 
@@ -54,19 +54,37 @@ Set `EngineConfig.rdma` to a configured `RdmaConfig`:
 | `device`, `port`, `gid_index` | `Some(...)` is a strict pin; `None` enables selection for that field |
 | `rdma_whitelist`, `rdma_blacklist` | Filter devices before opening; a nonempty whitelist takes precedence |
 | `device_mask` | Restrict dispatch by stable topology NIC IDs, up to 64 devices |
-| `preferred_numa_node` | Caller-supplied memory locality hint |
+| `preferred_numa_node` | Explicit CPU NUMA hint overriding automatic owner location |
+| `strict_local_numa` | Reject known cross-NUMA NICs; default `false`; unknown locality stays eligible |
 
 Discovery prefers active routes and retains otherwise usable paused ports.
 Each selected context owns its actual device, protection domain (PD), key
 history and address. A failed slot never renumbers the other NIC IDs. A partial
 construction whose cleanup fails retains its owners and fences admission.
 
-The selector intersects the configured mask, active local contexts and
-compatible remote paths. It prefers the best topology tier, then fewer charged
-in-flight bytes, rotating ties. Compatible same-name NIC pairs take precedence;
-other compatible paths use stable NIC order. A matching name or address family
-does not prove physical reachability. Allocation page placement, PCIe distance
-and bandwidth estimates are not inferred from the NUMA hint.
+With both `rdma` and `cuda`, discovery enumerates CUDA-visible devices without
+creating contexts or allocating device memory. Each `cuda:N` entry publishes its
+validated PCI bus ID, optional NUMA node and three GPU-to-RNIC tiers: nearest
+known PCI bridge distance, other same-NUMA NICs, then the remaining NICs. Missing
+sysfs distance never wins the nearest tier. No CUDA driver/device leaves the
+host inventory usable; other native query errors fail discovery before any GPU
+entries are published. CUDA ordinals are process-local, including visibility remapping.
+
+The existing `DeviceSelector` compiles location priorities once. A registered
+owner supplies `cpu:N`, `cuda:N`, or unknown DRAM (`*`) for each request; aliases
+and contexts on the same GPU share its topology row. Selection intersects the
+device mask, healthy contexts, compatible paths and strict-NUMA eligibility,
+then chooses the best tier, fewer charged in-flight bytes and rotating ties.
+Missing location metadata keeps unknown locality; it does not establish CPU
+access to GPU bytes. Explicit `preferred_numa_node` takes precedence.
+
+Source advertisements use the source owner's eligibility and priority order.
+Compatible same-name NIC pairs still take precedence; otherwise the peer keeps
+the advertised locality order. A matching name or address family does not prove
+physical reachability. Strict locality excludes a known cross-NUMA NIC even if
+it is the nearest PCI path, but does not exclude unknown placement. Masks never
+override this rejection. Physical page placement and bandwidth estimates are
+not inferred from hints or PCI distance. See [qualification](qualification.md#cuda-topology-and-rdma-selection).
 
 The control protocol publishes bounded NIC/PD path metadata without memory
 authority. Actual connection descriptors must match the selected path. Explicit

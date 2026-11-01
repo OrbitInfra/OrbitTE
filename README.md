@@ -43,9 +43,11 @@ recovery policy and replica placement.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
   lanes and a transport worker pool serve concurrent requests. A periodic
   monitor fences failed routes and resumes drained contexts.
-- **Topology-aware multirail transfers.** Device masks, NUMA priorities and
-  in-flight byte accounting select paths for bounded request slices. Parent
-  completion requires every slice and its source receipt.
+- **Topology-aware multirail transfers.** CPU NUMA and CUDA GPU/PCI proximity
+  feed precomputed NIC priorities, device masks and in-flight byte accounting.
+  Each peer uses its memory owner's location; optional strict locality rejects
+  known cross-NUMA paths. Parent completion requires every slice and its source
+  receipt. GPU topology selection has source controls; hardware qualification is pending.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
   Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
   with allocation-range ownership and consumer visibility before completion.

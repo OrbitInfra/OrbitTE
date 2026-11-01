@@ -23,9 +23,12 @@ fn discovery_filters_memoryless_offline_disallowed_and_sparse_nodes() {
     std::fs::create_dir_all(&dir).unwrap();
     for (value, expected) in [("130", Some(130)), ("-1", None), ("bad", None)] {
         std::fs::write(dir.join("numa_node"), value).unwrap();
-        assert_eq!(pci_node(&root, "0000:82:00.0"), expected);
+        assert_eq!(
+            crate::platform::pci::numa_node(&root, "0000:82:00.0"),
+            expected
+        );
     }
-    assert_eq!(pci_node(&root, "../../node0"), None);
-    assert_eq!(pci_node(&root, "0000:00:00.0"), None);
+    assert_eq!(crate::platform::pci::numa_node(&root, "../../node0"), None);
+    assert_eq!(crate::platform::pci::numa_node(&root, "0000:00:00.0"), None);
     std::fs::remove_dir_all(root).unwrap();
 }

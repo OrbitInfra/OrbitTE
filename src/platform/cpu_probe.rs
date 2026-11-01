@@ -12,12 +12,7 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
             let device = sys.join("class/infiniband").join(name).join("device");
             let pci_bus_id = device.canonicalize().ok().and_then(|path| {
                 let value = path.file_name()?.to_str()?;
-                // Virtual providers have no PCI BDF; do not invent one.
-                (value.len() == 12
-                    && value.as_bytes()[4] == b':'
-                    && value.as_bytes()[7] == b':'
-                    && value.as_bytes()[10] == b'.')
-                    .then(|| value.to_owned())
+                super::pci::bus_id(value)
             });
             let numa_node = fs::read_to_string(device.join("numa_node"))
                 .ok()
@@ -50,6 +45,7 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
         .into_iter()
         .map(|node| MemEntry {
             name: format!("cpu:{node}"),
+            pci_bus_id: None,
             kind: MemType::Host,
             numa_node: Some(node),
             device_list: Default::default(),
@@ -57,6 +53,7 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
         .collect();
     mem_list.push(MemEntry {
         name: "*".into(),
+        pci_bus_id: None,
         kind: MemType::Host,
         numa_node: None,
         device_list: Default::default(),

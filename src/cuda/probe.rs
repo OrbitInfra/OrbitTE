@@ -92,21 +92,7 @@ impl Context {
         if let Some(cached) = locality.as_ref().filter(|v| std::ptr::eq(v.provider, numa)) {
             return Ok(cached.node);
         }
-        let mut pci = [0 as std::ffi::c_char; 20];
-        self.current(|| {
-            // SAFETY: initialized bounded output, live context and driver.
-            check("cuDeviceGetPCIBusId", unsafe {
-                (self.driver.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, self.device)
-            })
-        })?;
-        let end = pci
-            .iter()
-            .position(|c| *c == 0)
-            .ok_or(Error::Protocol("CUDA PCI bus id"))?;
-        let pci: String = pci[..end]
-            .iter()
-            .map(|c| (*c as u8 as char).to_ascii_lowercase())
-            .collect();
+        let pci = self.current(|| self.driver.pci_bus(self.device))?;
         let node = (numa.gpu_node)(&pci);
         *locality = Some(DeviceLocality {
             provider: numa,
@@ -115,3 +101,24 @@ impl Context {
         Ok(node)
     }
 }
+
+impl Driver {
+    pub(super) fn pci_bus(&self, device: i32) -> Result<String> {
+        let mut pci = [0 as std::ffi::c_char; 20];
+        // SAFETY: bounded initialized output and a driver-visible device handle.
+        check("cuDeviceGetPCIBusId", unsafe {
+            (self.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, device)
+        })?;
+        let end = pci
+            .iter()
+            .position(|c| *c == 0)
+            .ok_or(Error::Protocol("CUDA PCI bus id"))?;
+        let pci: String = pci[..end].iter().map(|c| *c as u8 as char).collect();
+        crate::platform::pci::bus_id(&pci).ok_or(Error::Protocol("CUDA PCI bus id"))
+    }
+}
+
+#[cfg(feature = "rdma")]
+mod topology;
+#[cfg(feature = "rdma")]
+pub(crate) use topology::discover;

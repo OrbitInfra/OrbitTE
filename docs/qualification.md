@@ -2004,3 +2004,38 @@ No new hardware job was requested. Reduced native query counts establish the
 code path, not an end-to-end latency, bandwidth or matched TENT result.
 Current installed GPU execution, physical NUMA residency and performance remain
 unqualified. Full F02/F03, P5 and TENT parity remain open.
+
+
+## CUDA topology and RDMA selection
+
+Native RDMA discovery with CUDA enabled now publishes visible `cuda:N` entries,
+validated PCI identities, optional NUMA placement and GPU-to-RNIC priority tiers.
+The existing selector consumes registered owner locations for ordinary and
+sliced transfers. Source path publication enforces its own locality, while
+compatible same-name pairing remains preferred. Strict NUMA rejection is
+independent of PCI rank and explicit masks; unknown locality remains eligible.
+
+The frozen TENT reference is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
+`platform/cuda/cuda_probe.cpp`, `runtime/topology.*` and
+`transport/rdma/quota.h`. OrbitTE follows its three-tier discovery and
+`strict_local_numa` eligibility contracts. Invalid/unknown PCI distance cannot
+win the nearest tier. Immutable rank arrays are compiled once, so per-slice
+selection performs no native discovery, string construction or tier scans.
+This establishes the implementation path, not a measured performance advantage.
+
+Focused source controls cover visible ordinal-to-device/PCI mapping, same-bridge
+and same-NUMA ranking, unknown PCI metadata, atomic publication on driver error,
+strict cross-NUMA rejection despite preferred rank, device masks and fixed slot
+holes. Public CUDA READ/WRITE controls move and check full bytes/guards through
+multi-slice RDMA, including different GPU nodes on the two peers and explicit
+NUMA overrides. Existing native-owner retention and byte-charge controls remain
+in the affected RDMA gate. These are CPU/native-shim controls, not GPU execution.
+
+Evidence: `/root/orbitte-artifacts/cuda-topology-selection-20261101/`.
+Source manifests, commands, gate logs and independent review bind the exact
+source. The initial fixture compilation diagnostic is retained separately;
+CUDA enum result values corrected those callbacks before execution. Final-head
+CI and documentation checks are recorded before PR readiness. No new hardware
+task was requested. Current installed GPU/RNIC topology, real placement/routing
+and matched TENT latency/bandwidth remain unqualified. Custom priority matrices,
+bandwidth/QoS policy and full F02/P5 parity remain open; OrbitKV linkage is deferred.

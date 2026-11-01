@@ -2189,7 +2189,7 @@ impl RdmaTransport {
         deadline: Instant,
         reuse: Option<RdmaGrant>,
     ) -> Result<RdmaGrant> {
-        let selection = self.allocate(length, u64::MAX)?;
+        let selection = self.allocate(length, memory.location()?.location, u64::MAX)?;
         let credits = super::grant::admission::GrantCredits::acquire(
             Arc::clone(&self.usage),
             self.config.max_grants,
@@ -2293,6 +2293,8 @@ pub(crate) fn gpu_runtime(mode: &str) -> RdmaTransport {
 
 #[cfg(feature = "cuda")]
 pub(crate) mod gpu_handshake;
+#[cfg(feature = "cuda")]
+pub(crate) mod gpu_topology;
 
 impl super::protocol::Hello {
     pub(in crate::transport::rdma) fn write(

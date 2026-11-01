@@ -29,6 +29,8 @@ pub(super) struct Driver {
     pub init: unsafe extern "C" fn(c_uint) -> Status,
     pub device_get: unsafe extern "C" fn(*mut c_int, c_int) -> Status,
     #[cfg(feature = "rdma")]
+    pub device_count: unsafe extern "C" fn(*mut c_int) -> Status,
+    #[cfg(feature = "rdma")]
     pub device_attribute:
         unsafe extern "C" fn(*mut c_int, sys::CUdevice_attribute, c_int) -> Status,
     #[cfg(feature = "rdma")]
@@ -97,6 +99,8 @@ impl Driver {
         let driver = Self {
             init: symbol!(cuInit),
             device_get: symbol!(cuDeviceGet),
+            #[cfg(feature = "rdma")]
+            device_count: symbol!(cuDeviceGetCount),
             #[cfg(feature = "rdma")]
             device_attribute: symbol!(cuDeviceGetAttribute),
             #[cfg(feature = "rdma")]

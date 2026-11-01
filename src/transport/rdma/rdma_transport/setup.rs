@@ -81,7 +81,7 @@ impl RdmaSetup {
             wire,
             epoch,
             concurrency,
-            local_paths: transport.paths()?,
+            local_paths: transport.paths(request.local.location()?.location)?,
             remote_paths: Vec::new(),
             remote_width: 0,
             phase: Phase::Request,
@@ -188,7 +188,11 @@ impl RdmaSetup {
                     };
                     let selection = match entry.selection.take() {
                         Some(selection) => selection,
-                        None => transport.allocate(entry.range.length, 1u64 << entry.local_id)?,
+                        None => transport.allocate(
+                            entry.range.length,
+                            child.local.location()?.location,
+                            1u64 << entry.local_id,
+                        )?,
                     };
                     let lease = transport.reserve_grant(
                         selection,
@@ -303,6 +307,7 @@ impl RdmaSetup {
             .try_reserve_exact(count)
             .map_err(|_| Error::ResourceExhausted)?;
         let mask = path::local_device_mask(&self.local_paths, &self.remote_paths);
+        let location = self.request.local.location()?.location;
         for index in 0..count {
             let offset = index * block;
             let length = if index + 1 == count {
@@ -310,7 +315,7 @@ impl RdmaSetup {
             } else {
                 block
             };
-            let selection = transport.allocate(length, mask)?;
+            let selection = transport.allocate(length, location, mask)?;
             let local = self
                 .local_paths
                 .iter()

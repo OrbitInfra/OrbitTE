@@ -174,7 +174,9 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
                 .unwrap()
                 .take()
                 .unwrap(),
-                _selection: runtime.allocate(8, u64::MAX).unwrap(),
+                _selection: runtime
+                    .allocate(8, crate::MemoryLocation::Cpu(None), u64::MAX)
+                    .unwrap(),
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),
                 length: 8,

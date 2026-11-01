@@ -10,7 +10,7 @@ pub enum MemoryType {
 }
 
 /// An owner's location, not permission to access its bytes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum MemoryLocation {
     /// Unknown placement is `None`, including ordinary and portable pinned DRAM.
     Cpu(Option<u32>),

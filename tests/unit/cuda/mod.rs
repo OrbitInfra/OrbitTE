@@ -44,6 +44,8 @@ mod staging_pipeline;
 mod staging_progress;
 mod staging_shards;
 mod stream_pool;
+#[cfg(feature = "rdma")]
+mod topology;
 use shim::*;
 
 #[test]

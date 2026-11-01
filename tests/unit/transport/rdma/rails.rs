@@ -24,6 +24,7 @@ fn discover(
             .collect(),
         mem_list: vec![MemEntry {
             name: "*".into(),
+            pci_bus_id: None,
             kind: MemType::Host,
             numa_node: None,
             device_list: Default::default(),
@@ -141,8 +142,12 @@ fn public_transfers_rotate_stable_contexts_reuse_only_the_selected_pair_and_reti
                 exchange(&requester, &source, &local, &remote, op);
             }
         }
-        let paths = source_runtime(&requester).paths().unwrap();
-        let remote_paths = source_runtime(&source).paths().unwrap();
+        let paths = source_runtime(&requester)
+            .paths(crate::MemoryLocation::Cpu(None))
+            .unwrap();
+        let remote_paths = source_runtime(&source)
+            .paths(crate::MemoryLocation::Cpu(None))
+            .unwrap();
         assert_eq!(paths.iter().map(|p| p.nic_id).collect::<Vec<_>>(), ids);
         for (round, peer) in observed.lock().unwrap().iter().enumerate() {
             let local_path = paths
@@ -261,7 +266,9 @@ fn one_context_fault_preserves_the_other_stores_idle_count_and_fences_new_grants
     }
     assert_eq!(runtime.stats().unwrap().idle_endpoints, 1);
     let before = runtime.stats().unwrap().opened_direct_endpoints;
-    let selection = runtime.allocate(8, 1 << 2).unwrap();
+    let selection = runtime
+        .allocate(8, crate::MemoryLocation::Cpu(None), 1 << 2)
+        .unwrap();
     assert!(matches!(
         (move || {
             let credits = super::super::super::grant::admission::GrantCredits::acquire(
@@ -965,7 +972,9 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
             .unwrap();
         let runtime = source_runtime(&engine);
         let mut endpoints = [0, 2].map(|id| {
-            let selection = runtime.allocate(4, 1 << id).unwrap();
+            let selection = runtime
+                .allocate(4, crate::MemoryLocation::Cpu(None), 1 << id)
+                .unwrap();
             let credits = super::super::super::grant::admission::GrantCredits::acquire(
                 Arc::clone(&runtime.usage),
                 runtime.config.max_grants,
@@ -1403,15 +1412,25 @@ fn initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling
     assert_eq!(runtime.stats().unwrap().persistent_mrs, 4);
     assert_eq!(
         runtime
-            .paths()
+            .paths(crate::MemoryLocation::Cpu(None))
             .unwrap()
             .iter()
             .map(|path| path.nic_id)
             .collect::<Vec<_>>(),
         [2]
     );
-    assert!(runtime.allocate(8, 1).is_err());
-    assert_eq!(runtime.allocate(8, 4).unwrap().device_id(), 2);
+    assert!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), 1)
+            .is_err()
+    );
+    assert_eq!(
+        runtime
+            .allocate(8, crate::MemoryLocation::Cpu(None), 4)
+            .unwrap()
+            .device_id(),
+        2
+    );
     crate::transport::rdma::context::tests::change_route(runtime, |route| route.active = true);
     let end = Instant::now() + Duration::from_secs(6);
     while runtime.stats().unwrap().route_recoveries == 0 {
@@ -1420,7 +1439,7 @@ fn initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling
     }
     assert_eq!(
         runtime
-            .paths()
+            .paths(crate::MemoryLocation::Cpu(None))
             .unwrap()
             .iter()
             .map(|path| path.nic_id)

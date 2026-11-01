@@ -18,6 +18,8 @@ pub(crate) mod ipc;
 mod pinned;
 mod probe;
 #[cfg(feature = "rdma")]
+pub(crate) use probe::discover as discover_topology;
+#[cfg(feature = "rdma")]
 mod rdma;
 mod readiness;
 mod staging;

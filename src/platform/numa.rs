@@ -17,31 +17,10 @@ pub(crate) struct Numa {
 
 pub(crate) const NATIVE: Numa = Numa {
     nodes: allowed_nodes,
-    gpu_node: |pci| pci_node(Path::new("/sys"), pci),
+    gpu_node: |pci| super::pci::numa_node(Path::new("/sys"), pci),
     bind,
     unmap,
 };
-
-fn pci_node(sys: &Path, pci: &str) -> Option<u32> {
-    // Only a canonical PCI BDF may enter a sysfs path.
-    let bytes = pci.as_bytes();
-    if bytes.len() != 12
-        || bytes[4] != b':'
-        || bytes[7] != b':'
-        || bytes[10] != b'.'
-        || bytes
-            .iter()
-            .enumerate()
-            .any(|(i, b)| ![4, 7, 10].contains(&i) && !b.is_ascii_hexdigit())
-    {
-        return None;
-    }
-    std::fs::read_to_string(sys.join("bus/pci/devices").join(pci).join("numa_node"))
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()
-}
 
 fn memory_nodes(sys: &Path, mask: &[libc::c_ulong]) -> Vec<u32> {
     let mut nodes: Vec<u32> = std::fs::read_dir(sys.join("devices/system/node"))

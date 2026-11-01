@@ -189,7 +189,7 @@ pub(super) fn remote_path<'a>(local: &NicPath, remote: &'a [NicPath]) -> Result<
     remote
         .iter()
         .filter(|r| compatible(local, r))
-        .min_by_key(|r| (r.name != local.name, r.nic_id))
+        .min_by_key(|r| r.name != local.name)
         .ok_or(Error::Unavailable("no compatible remote RDMA NIC path"))
 }
 
