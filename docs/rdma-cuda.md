@@ -316,8 +316,8 @@ from an unrelated transfer worker. See NVIDIA's
 [stream context and capture contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__STREAM.html).
 
 `cuda/readiness.rs::CallerSyncEvent` belongs to the actual allocation and is
-shared by its registration aliases. Recording returns without waiting for the
-producer. The first local copy, staging loan/copy, GPUDirect DMA loan or IPC
+shared by its registration aliases. A successful capture does not wait for the newly recorded
+work. The first local copy, staging loan/copy, GPUDirect DMA loan or IPC
 source/requester access consumes the recorded generation. A subsequent record
 consumes its predecessor before reuse; final allocation drop also drains a
 pending producer. The event is reused with timing disabled and blocking wait
