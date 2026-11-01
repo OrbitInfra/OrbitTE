@@ -521,8 +521,19 @@ grant through drain or retained native failure. Explicit CPU hints override the
 owner location. Source path publication and requester slice allocation use the
 same eligibility rule. GPU discovery creates no new CUDA context or owner and
 does not extend allocation lifetime. This preserves TENT's
-`CudaProbe → Topology → DeviceSelector` responsibility chain; native bandwidth
-weights and user-defined priority matrices remain separate work.
+`CudaProbe → Topology → DeviceSelector` responsibility chain.
+
+`runtime/topology/config.rs` implements TENT's `loadFromConfig`,
+`parsePriorityMatrix` and `parseCustomTopology` responsibilities. Inline matrices
+take precedence over files. The parser resolves NIC names and native-format
+indices against the discovered inventory before context creation, then publishes
+all rank changes together. It keeps physical PCI/NUMA metadata and stable context
+IDs. `DeviceSelector` compiles only listed candidates, intersecting physical
+locality and masks; its wildcard fallback also constrains missing CPU rows.
+JSON parsing, file access and name/index resolution run once during successful
+context initialization. Monitor recovery and slice dispatch reuse those tables.
+No second selector or registry is introduced. Native bandwidth weights and
+adaptive selection remain P6 work.
 
 ## CUDA IPC transport ownership
 

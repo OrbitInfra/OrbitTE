@@ -2040,3 +2040,33 @@ CI and documentation checks are recorded before PR readiness. No new hardware
 task was requested. Current installed GPU/RNIC topology, real placement/routing
 and matched TENT latency/bandwidth remain unqualified. Custom priority matrices,
 bandwidth/QoS policy and full F02/P5 parity remain open; OrbitKV linkage is deferred.
+
+
+## Custom topology input
+
+F02 custom topology configuration is implemented for the RDMA inventory. The
+reference is frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
+`runtime/topology.cpp` (`parsePriorityMatrix`, `parseCustomTopology`,
+`loadFromConfig`) and `transport/rdma/quota.cpp` candidate construction.
+OrbitTE accepts the two JSON forms and inline-over-file precedence, resolving
+them against physical discovery instead of replacing device identity. Invalid
+explicit configuration is rejected instead of silently falling back. These
+differences preserve stable context IDs and known physical NUMA restrictions.
+
+Focused source controls cover rank/index remapping, explicit and synthesized
+wildcards, duplicate/unknown entries, input size, file errors, atomic publication
+and initialization failure before contexts or MRs. Existing public READ/WRITE
+controls exercise configured host rails with a failed context hole and GPU
+slices with a deliberately preferred cross-NUMA NIC. Strict locality, device
+masks, byte integrity, guards and grant charges remain checked. The CUDA/native
+callbacks are CPU controls and do not establish hardware execution.
+
+Evidence is external at
+`/root/orbitte-artifacts/topology-priority-matrix-20261101/`: exact-source
+manifests, focused gate logs, independent review and CI status. Configuration
+parsing and name/index resolution occur only at context initialization; hot-path
+selection uses the existing compiled ranks and eligibility masks. This is a
+source property, not a measured latency or bandwidth improvement. No hardware
+job was requested. Installed custom routing, physical placement and matched
+TENT performance remain unqualified. F01 environment/config compatibility,
+bandwidth-aware selection, full P5 and OrbitKV integration remain open.

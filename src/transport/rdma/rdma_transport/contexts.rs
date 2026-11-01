@@ -31,6 +31,7 @@ impl RdmaTransport {
                 "RDMA device masks support at most 64 topology NICs",
             ));
         }
+        topology.load_from_config(&self.config)?;
         contexts
             .slots
             .resize_with(topology.nic_list.len(), ContextSlot::default);

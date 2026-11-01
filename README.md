@@ -45,7 +45,8 @@ recovery policy and replica placement.
   monitor fences failed routes and resumes drained contexts.
 - **Topology-aware multirail transfers.** CPU NUMA and CUDA GPU/PCI proximity
   feed precomputed NIC priorities, device masks and in-flight byte accounting.
-  Each peer uses its memory owner's location; optional strict locality rejects
+  TENT-format priority matrices and topology files can override eligible NICs
+  and ranks while preserving discovered device identities. Each peer uses its memory owner's location; optional strict locality rejects
   known cross-NUMA paths. Parent completion requires every slice and its source
   receipt. GPU topology selection has source controls; hardware qualification is pending.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA

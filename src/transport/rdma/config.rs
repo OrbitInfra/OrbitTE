@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::discovery;
 use crate::{Error, Result};
 
@@ -42,6 +44,12 @@ pub struct RdmaConfig {
     /// Applied before opening a device. A nonempty whitelist supersedes blacklist.
     pub rdma_whitelist: Vec<String>,
     pub rdma_blacklist: Vec<String>,
+    /// TENT location -> [preferred NIC names, available NIC names] JSON.
+    /// Takes precedence over custom_json_path. Resolved once against discovery.
+    pub priority_matrix: Option<String>,
+    /// TENT priority matrix or native nics/mems JSON file (at most 1 MiB).
+    /// Overrides ranks, preserving discovered NIC IDs and physical metadata.
+    pub custom_json_path: Option<PathBuf>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
     /// TENT strict_local_numa: exclude only known cross-NUMA NICs. Unknown
@@ -85,6 +93,8 @@ impl Default for RdmaConfig {
             gid_index: None,
             rdma_whitelist: Vec::new(),
             rdma_blacklist: Vec::new(),
+            priority_matrix: None,
+            custom_json_path: None,
             preferred_numa_node: None,
             strict_local_numa: false,
             device_mask: u64::MAX,

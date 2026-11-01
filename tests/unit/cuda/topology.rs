@@ -143,14 +143,16 @@ fn cuda_inventory_maps_ordinals_to_pci_tiers_and_publishes_only_complete_snapsho
 fn public_gpu_read_write_slices_use_owner_locations_at_both_peers() {
     use crate::engine::tests::rdma_fixture_with_runtime;
     use crate::transport::rdma::tests::gpu_topology;
-    for (strict, preferred, source_device, requester_id, source_id) in [
-        (false, None, 1, 1, 1),
-        (true, None, 0, 1, 0),
-        (true, Some(0), 1, 0, 0),
+    for (strict, preferred, source_device, requester_id, source_id, custom) in [
+        (false, None, 1, 1, 1, false),
+        (true, None, 0, 1, 0, false),
+        (true, Some(0), 1, 0, 0, false),
+        (false, None, 1, 0, 0, true),
+        (true, None, 0, 1, 0, true),
     ] {
-        let source = rdma_fixture_with_runtime(gpu_topology::runtime(strict, preferred, u64::MAX));
-        let requester =
-            rdma_fixture_with_runtime(gpu_topology::runtime(strict, preferred, u64::MAX));
+        let runtime = || gpu_topology::runtime(strict, preferred, u64::MAX, custom);
+        let source = rdma_fixture_with_runtime(runtime());
+        let requester = rdma_fixture_with_runtime(runtime());
         let a = allocation(&[0x31; 32]);
         a.ordinal.store(source_device, Ordering::Release);
         let b = allocation(&[0x62; 32]);
@@ -199,8 +201,8 @@ fn public_gpu_read_write_slices_use_owner_locations_at_both_peers() {
             expected[offset..offset + 13].fill(payload);
             assert_eq!(bytes, expected);
         }
-        gpu_topology::assert_used(&requester, requester_id);
-        gpu_topology::assert_used(&source, source_id);
+        gpu_topology::assert_used(&requester, requester_id, requester_id);
+        gpu_topology::assert_used(&source, source_id, requester_id);
         source.unregister_memory(&remote).unwrap();
         requester.unregister_memory(&local).unwrap();
         source.close(Duration::from_secs(2)).unwrap();

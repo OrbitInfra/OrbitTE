@@ -504,6 +504,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   [contracts](rdma-cuda.md#device-port-gid-and-memory-topology-discovery) and
   [source evidence](qualification.md#cuda-topology-and-rdma-selection).
   Installed topology/routing and matched performance remain unqualified.
+- [x] **Custom topology input (Implemented; source profile).** F02 inline
+  priority matrices and native `nics`/`mems` files resolve to discovered stable
+  NIC IDs before context creation. Only configured candidates are eligible;
+  wildcard fallback, strict physical NUMA rules, masks and grant charge lifetimes
+  use the existing selector. No JSON/file/name work enters slice dispatch.
+  Explicit configuration errors fail initialization; physical metadata is kept.
+  See [configuration](rdma-cuda.md#custom-topology-and-priority-matrices) and
+  [source evidence](qualification.md#custom-topology-input). Hardware and matched
+  performance remain unqualified; global F01 configuration remains separate.
 - [x] **P5.3 — Explicit GPU direct RDMA (Source and bounded installed profile accepted with limits).**
   Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
   persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
@@ -1093,12 +1102,19 @@ topology and selector owners, with precompiled priorities and strict locality.
 Source/CPU controls exercise actual READ/WRITE slices and both peers' selection;
 installed topology and performance remain unqualified.
 
-The next functional delivery is the remaining F02 custom topology/priority
-matrix input: validate configured location-to-NIC ranks against the discovered
-stable device inventory and feed the same selector, without rebuilding a second
-registry or scheduling layer. Preserve known-cross-NUMA rejection, masks and
-grant charge lifetimes. Full bandwidth/QoS selection remains P6; MNNVL/EGM remain
-open P5 transport work.
+The F02 custom topology/priority input is implemented: TENT inline matrices
+and native topology files resolve to the discovered stable device inventory,
+feeding the same precompiled selector. Known-cross-NUMA rejection, masks,
+failed context holes and actual grant charge lifetimes remain authoritative.
+Malformed explicit configuration is rejected before context/MR publication.
+
+The next functional delivery is P6/F16 bandwidth-aware RDMA selection: use
+negotiated link speeds and successful payload-attempt observations in the
+existing `DeviceSelector`, keeping selection EWMA separate from the posted-byte
+busy-time transmit estimate. Preserve configured candidates, strict locality,
+masks and physical grant charges. This advances the performance path without
+requiring a new hardware job; throughput claims still need matched measurements.
+Full QoS remains P6; MNNVL/EGM remain open P5 transport work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining
 is an unimplemented extension, not an additional frozen-TENT parity gate.

@@ -233,3 +233,57 @@ fn known_cpu_numa_never_becomes_unknown_when_its_inventory_row_is_missing() {
         assert!(selector.allocate(8, MemoryLocation::Cpu(None), 8).is_ok());
     }
 }
+
+#[test]
+fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks() {
+    let mut topology = topology();
+    topology.nic_list[0].numa_node = None;
+    topology
+        .load_from_config(&crate::transport::rdma::RdmaConfig {
+            priority_matrix: Some(
+                r#"{"*":[["nic3"],["nic0"]],"cpu:0":[["nic1"],["nic2"]]}"#.into(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    for strict in [false, true] {
+        let selector = DeviceSelector::new(&topology, 0b1101, strict).unwrap();
+        let a = selector
+            .allocate(7, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .unwrap();
+        assert_eq!(
+            a.device_id(),
+            2,
+            "unavailable preferred slot 1 falls back without renumbering"
+        );
+        assert!(
+            selector
+                .allocate(1, MemoryLocation::Cpu(Some(0)), 1)
+                .is_err(),
+            "an omitted NIC is excluded even by an explicit mask"
+        );
+        for node in [1, 99] {
+            let lease = selector
+                .allocate(9, MemoryLocation::Cpu(Some(node)), u64::MAX)
+                .unwrap();
+            assert_eq!(lease.device_id(), if strict && node == 99 { 0 } else { 3 });
+            assert_eq!(
+                selector
+                    .allocate(1, MemoryLocation::Cpu(Some(node)), 8)
+                    .is_err(),
+                strict && node == 99
+            );
+        }
+        selector.set_available(3, false);
+        assert_eq!(
+            selector
+                .allocate(9, MemoryLocation::Cpu(None), u64::MAX)
+                .unwrap()
+                .device_id(),
+            0
+        );
+        assert_eq!(selector.state.lock().unwrap().inflight, [0, 0, 7, 0]);
+        drop(a);
+        assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
+    }
+}
