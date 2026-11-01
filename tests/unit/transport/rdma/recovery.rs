@@ -362,3 +362,49 @@ fn paused_port_allows_registration_but_fatal_device_and_lost_consumers_do_not() 
         let _ = engine.close(Duration::from_secs(2));
     }
 }
+
+#[test]
+fn active_port_rate_refresh_reseeds_selection_without_replacing_connections() {
+    let runtime = runtime("ok");
+    let registry = crate::memory::MemoryRegistry::new(crate::SourceEpoch([1; 16]), 1, 8);
+    let memory = registry
+        .register(vec![0; 8].into_boxed_slice(), crate::Permission::LocalOnly)
+        .unwrap();
+    let mut grant = runtime
+        .endpoint(
+            &memory,
+            0,
+            8,
+            0,
+            Instant::now() + Duration::from_secs(30),
+            None,
+        )
+        .unwrap();
+    let owner = runtime.device().unwrap();
+    let original = grant.incarnation().unwrap();
+    for mbps in [Some(100_000), Some(200_000), None] {
+        change_route(&runtime, |address| address.link_speed_mbps = mbps);
+        let end = Instant::now() + Duration::from_secs(6);
+        loop {
+            let stats = runtime.nic_load_stats().unwrap();
+            if stats[0].link_speed_gbps == mbps.map(|v| v as f64 / 1000.0) {
+                assert_eq!(
+                    stats[0].ewma_bandwidth_bps,
+                    mbps.map_or(50e9, |v| v as f64 * 125_000.0)
+                );
+                break;
+            }
+            assert!(Instant::now() < end);
+            thread::sleep(Duration::from_millis(5));
+        }
+        owner.check_address().unwrap();
+        assert!(!owner.asynchronous.paused());
+        assert_eq!(grant.incarnation().unwrap(), original);
+        assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
+    }
+    grant.close().unwrap();
+    drop(grant);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}

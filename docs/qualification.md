@@ -2070,3 +2070,39 @@ source property, not a measured latency or bandwidth improvement. No hardware
 job was requested. Installed custom routing, physical placement and matched
 TENT performance remain unqualified. F01 environment/config compatibility,
 bandwidth-aware selection, full P5 and OrbitKV integration remain open.
+
+
+## RDMA bandwidth selection
+
+P6/F16 per-slice bandwidth-aware selection and F20 local NIC snapshots are
+implemented against frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
+`transport/rdma/quota.{h,cpp}`, `workers.cpp`, `context.cpp` and the common
+`ib_link_speed.h`. One selector retains configured topology and physical
+charges; per-NIC owners hold separate selection EWMA and posted-busy-time
+transmit estimates. Native port-rate refresh seeds both without replacing QPs.
+Current verbs bindings supply legacy speed/width, not the newer effective
+LAG speed query or extended XDR encoding. See [the contract](rdma-cuda.md#bandwidth-aware-rdma-selection).
+
+Focused source controls cover heterogeneous-rate selection, baseline round
+robin, mask/NUMA eligibility, retained charges, partial and uncertain posts,
+failed completions, complete same-timestamp CQ pass accounting, idle-time
+exclusion, old-generation sample rejection and
+rate-only monitor refresh. Public READ/WRITE controls exercise the actual
+engine/selector/SQ/CQ path through CPU verbs callbacks and inspect both peers'
+snapshots. They establish source behavior, not RNIC throughput. Existing RDMA
+and CUDA ownership checks cover the affected resources and combined-feature
+build. No hardware task was requested.
+
+Evidence is external at
+`/root/orbitte-artifacts/rdma-bandwidth-selection-20261101/`: source manifests,
+commands, focused logs, final CI and independent review. The initial monitor
+control's two-second grant expired while waiting through three monitor periods;
+that failed log is retained. The control now admits its grant with a sufficient
+explicit deadline; production drain deadlines are unchanged.
+
+Sampling reuses existing SQ/CQ owners, a per-NIC meter lock, an atomic selection
+estimate and one clock read per CQ polling pass. This establishes the hot-path
+design; measured sampling overhead, installed routing/DMA and matched TENT
+latency/bandwidth remain unqualified. Whole-parent weighted allocation,
+periodic exploration, shared QoS/bandwidth arbitration and full F16 parity
+remain open. OrbitKV integration is deferred.

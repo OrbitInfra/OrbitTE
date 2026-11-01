@@ -57,6 +57,8 @@ pub struct RdmaConfig {
     pub strict_local_numa: bool,
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
     pub device_mask: u64,
+    /// TENT bandwidth-aware selection and payload transmit meter.
+    pub scheduling: super::SchedulingParams,
     pub progress_mode: RdmaProgressMode,
     /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
     pub num_lanes: usize,
@@ -98,6 +100,7 @@ impl Default for RdmaConfig {
             preferred_numa_node: None,
             strict_local_numa: false,
             device_mask: u64::MAX,
+            scheduling: Default::default(),
             progress_mode: RdmaProgressMode::Polling,
             num_lanes: 1,
             traffic_class: 0,
@@ -130,6 +133,7 @@ impl RdmaConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        self.scheduling.validate()?;
         if self.cuda_memory == RdmaCudaMemory::Direct
             && std::env::var_os("MLX5_SCATTER_TO_CQE").as_deref() != Some(std::ffi::OsStr::new("0"))
         {

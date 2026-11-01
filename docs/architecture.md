@@ -40,7 +40,8 @@ protocol compatible with TENT's native RPC or metadata.
 | `CqLane` | SQ/RQ CQ pair, registered grant records, submission, drain and recovery | Per-context CQs consumed by workers |
 | `Workers` | Transport data threads, lane assignment and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPollCq` |
 | `Monitor` | One transport thread consuming events and driving periodic context reclaim/recovery | `Workers::monitorThread`, `reclaimEndpoints`, `resumePausedContexts` |
-| `DeviceSelector`, `CqQuota`, `GrantCredits`, `ReceiveCredits` | NIC byte load, aggregate SQ/RQ wakes and whole-parent grant/receive admission | Device selection and bounded slice admission; OrbitTE's receive-credit protocol is additional |
+| `DeviceSelector`, `DeviceInfo`, `SchedulingParams` | Compiled NIC eligibility, physical grant byte charges, bandwidth-weighted selection and separate payload/busy-time estimates | TENT `DeviceSelector`, `DeviceInfo` and `SchedulingParams` |
+| `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; OrbitTE's receive-credit protocol is additional |
 
 Each context slot owns its PD/context, CQ lanes and peer endpoint registry.
 `RdmaQp` serializes one physical connection; each CQ-lane `Record` owns one
@@ -179,7 +180,8 @@ construction reservations. See [qualification](qualification.md) for the tested 
 2. **Plan.** The transport partitions large parents with TENT's bounded,
    short-tail-folding geometry. Static `path` metadata checks compatible peers;
    `DeviceSelector` uses precompiled per-location ranks from the actual memory
-   owner, device masks, strict NUMA eligibility and byte charges. Each peer
+   owner, device masks, strict NUMA eligibility, bandwidth estimates and physical
+   byte charges. Each peer
    filters and orders its own NIC paths before rendezvous.
 3. **Authorize.** Both peers reserve the whole parent's `max_grants` budget;
    the source also reserves all RQ credits before exposing the first grant.
@@ -532,8 +534,28 @@ IDs. `DeviceSelector` compiles only listed candidates, intersecting physical
 locality and masks; its wildcard fallback also constrains missing CPU rows.
 JSON parsing, file access and name/index resolution run once during successful
 context initialization. Monitor recovery and slice dispatch reuse those tables.
-No second selector or registry is introduced. Native bandwidth weights and
-adaptive selection remain P6 work.
+No second selector or registry is introduced.
+
+`quota/scheduling.rs::SchedulingParams` holds the consumed bandwidth policy;
+`quota/bandwidth.rs::DeviceInfo` owns each NIC's separate selection EWMA and
+busy-time transmit meter. `DeviceSelector` reads the atomic EWMA under its
+existing allocation/charge lock and scores projected work with NUMA weights.
+`SendQueue` records posted payload bytes and resolves them only on validated
+CQEs or physical drain. `SendWork` observes a successful entire payload attempt
+from first accepted post to last payload CQE; failed or invalidated generations
+cannot teach selection. The connection retains the meter across reused grants,
+while `DeviceLease` still follows the actual grant through source receipts and
+native cleanup. Sampling does not acquire the selector's global lock.
+
+The periodic monitor publishes negotiated rates and reseeds only on a change.
+Route identity excludes speed, preserving QPs when only the rate changes.
+`TransferEngine::nic_load_stats` reads initialized available devices without
+starting discovery. This maps to TENT's `setDeviceBandwidth`, `release`,
+`notePosted`/`notePostEnded`/`noteCompleted`, `maybeSampleTransmit` and
+`getNicLoadStats` responsibilities, with
+physical Rust grant release deliberately separate from payload sampling.
+Whole-parent weighted distribution, periodic exploration, effective LAG queries
+and bandwidth arbitration remain P6 work. See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## CUDA IPC transport ownership
 

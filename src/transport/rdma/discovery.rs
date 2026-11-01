@@ -31,6 +31,8 @@ pub(super) struct RdmaAddress {
     pub device: String,
     pub port: u8,
     pub active: bool,
+    /// Negotiated encoded port rate; None means unknown, never a guessed rate.
+    pub link_speed_mbps: Option<u64>,
     pub gid_index: u8,
     pub gid_type: GidType,
     pub net_device: Option<String>,
@@ -39,6 +41,17 @@ pub(super) struct RdmaAddress {
 }
 
 impl RdmaAddress {
+    pub(super) fn same_route(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.port == other.port
+            && self.active == other.active
+            && self.gid_index == other.gid_index
+            && self.gid_type == other.gid_type
+            && self.net_device == other.net_device
+            && self.net_device_index == other.net_device_index
+            && self.descriptor == other.descriptor
+    }
+
     pub(super) fn publish(&self, topology: &mut Topology) -> Result<()> {
         let nic = topology
             .nic_list
@@ -48,6 +61,11 @@ impl RdmaAddress {
                 "selected RDMA device is missing from topology",
             ))?;
         let attrs = &mut nic.device_attrs;
+        if let Some(rate) = self.link_speed_mbps {
+            attrs.insert("rdma.link_speed_mbps".into(), rate.to_string());
+        } else {
+            attrs.remove("rdma.link_speed_mbps");
+        }
         for (key, value) in [
             ("rdma.selected", "true".into()),
             ("rdma.port", self.port.to_string()),
@@ -284,6 +302,7 @@ pub(super) fn port_addresses(
             device: device.into(),
             port,
             active,
+            link_speed_mbps: None,
             gid_index: index,
             gid_type,
             net_device,

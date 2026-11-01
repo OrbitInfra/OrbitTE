@@ -46,8 +46,14 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
         (32 << 20, 64 << 10, 64, vec![512 << 10; 64]),
         (32 << 20, 64 << 10, 32, vec![1 << 20; 32]),
     ] {
-        let queue =
-            SendWork::new(length, base, cap, SendQueue::new(64, usage()).unwrap(), 1).unwrap();
+        let queue = SendWork::new(
+            length,
+            base,
+            cap,
+            SendQueue::new(64, usage(), None).unwrap(),
+            1,
+        )
+        .unwrap();
         let (block, count) = plan_rdma_slices(length, base, cap).unwrap();
         println!("ORBITTE_RDMA_GEOMETRY {length} {base} {cap} {block} {count}");
         assert_eq!(
@@ -79,7 +85,7 @@ fn frozen_tent_slice_geometry_bounds_count_and_folds_only_short_tails() {
 fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
     for limit in [1, 3, 64] {
         let usage = usage();
-        let sq = SendQueue::new(limit, usage.clone()).unwrap();
+        let sq = SendQueue::new(limit, usage.clone(), None).unwrap();
         let mut queue = SendWork::new(1024, 16, 64, sq.clone(), 1).unwrap();
         while !queue.finished() {
             let requests = queue.reserve(64).unwrap().to_vec();
@@ -91,6 +97,7 @@ fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
                         accepted: requests.len(),
                         uncertain: false,
                     },
+                    Instant::now(),
                 )
                 .unwrap();
             if requests[0].id > 1 {
@@ -107,6 +114,7 @@ fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
                                     ..Default::default()
                                 },
                                 TransferOp::Read,
+                                Instant::now()
                             )
                             .is_err()
                     );
@@ -128,6 +136,7 @@ fn valid_out_of_order_cqes_resolve_each_slot_once_and_windows_stay_bounded() {
                             ..Default::default()
                         },
                         TransferOp::Read,
+                        Instant::now(),
                     )
                     .unwrap();
             }
@@ -156,7 +165,7 @@ fn partial_unknown_and_inconsistent_posts_keep_only_proven_or_possible_debt_unti
         (libc::EIO, 9, false, 4),
     ] {
         let usage = usage();
-        let sq = SendQueue::new(4, usage.clone()).unwrap();
+        let sq = SendQueue::new(4, usage.clone(), None).unwrap();
         let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
         queue.reserve(64).unwrap();
         assert!(
@@ -166,7 +175,8 @@ fn partial_unknown_and_inconsistent_posts_keep_only_proven_or_possible_debt_unti
                     sys::PostResult {
                         accepted,
                         uncertain
-                    }
+                    },
+                    Instant::now()
                 )
                 .is_err()
         );
@@ -190,7 +200,7 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         (1, 7, 0, 0, 3, 1),
     ] {
         let usage = usage();
-        let sq = SendQueue::new(4, usage.clone()).unwrap();
+        let sq = SendQueue::new(4, usage.clone(), None).unwrap();
         let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
         queue.reserve(64).unwrap();
         queue
@@ -200,6 +210,7 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
                     accepted: 4,
                     uncertain: false,
                 },
+                Instant::now(),
             )
             .unwrap();
         assert!(
@@ -214,7 +225,8 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
                         qpn: 0,
                         ..Default::default()
                     },
-                    TransferOp::Read
+                    TransferOp::Read,
+                    Instant::now()
                 )
                 .is_err()
         );
@@ -232,7 +244,7 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         queue.quiesce().unwrap();
     }
     let usage = usage();
-    let sq = SendQueue::new(4, usage.clone()).unwrap();
+    let sq = SendQueue::new(4, usage.clone(), None).unwrap();
     let mut queue = SendWork::new(64, 16, 64, sq.clone(), 1).unwrap();
     queue.reserve(64).unwrap();
     queue
@@ -242,6 +254,7 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
                 accepted: 4,
                 uncertain: false,
             },
+            Instant::now(),
         )
         .unwrap();
     let completion = || sys::Completion {
@@ -250,8 +263,14 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
         length: 16,
         ..Default::default()
     };
-    queue.complete(completion(), TransferOp::Read).unwrap();
-    assert!(queue.complete(completion(), TransferOp::Read).is_err());
+    queue
+        .complete(completion(), TransferOp::Read, Instant::now())
+        .unwrap();
+    assert!(
+        queue
+            .complete(completion(), TransferOp::Read, Instant::now())
+            .is_err()
+    );
     assert_eq!(usage.lock().unwrap().work_requests, 3);
     sq.quiesce();
     queue.quiesce().unwrap();
@@ -261,7 +280,7 @@ fn malformed_and_error_completions_never_invent_success_or_release_unidentified_
 fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
     for (operation, opcode) in [(Operation::Bind, 5), (Operation::Invalidate, 6)] {
         let usage = usage();
-        let sq = SendQueue::new(1, usage.clone()).unwrap();
+        let sq = SendQueue::new(1, usage.clone(), None).unwrap();
         let mut queue = SendWork::control(sq, 65).unwrap();
         assert_eq!(queue.reserve(1).unwrap().len(), 1);
         queue
@@ -271,6 +290,7 @@ fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
                     accepted: 1,
                     uncertain: false,
                 },
+                Instant::now(),
             )
             .unwrap();
         assert!(
@@ -281,7 +301,8 @@ fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
                         opcode: 2,
                         ..Default::default()
                     },
-                    operation
+                    operation,
+                    Instant::now()
                 )
                 .is_err()
         );
@@ -294,6 +315,7 @@ fn management_cqes_require_their_own_opcode_and_count_no_payload_bytes() {
                     ..Default::default()
                 },
                 operation,
+                Instant::now(),
             )
             .unwrap();
         let s = *usage.lock().unwrap();
@@ -320,8 +342,8 @@ fn concurrent_grants_share_physical_qp_depth_and_cq_capacity() {
 
     let usage = usage();
     let queues = [
-        SendQueue::new(5, usage.clone()).unwrap(),
-        SendQueue::new(5, usage.clone()).unwrap(),
+        SendQueue::new(5, usage.clone(), None).unwrap(),
+        SendQueue::new(5, usage.clone(), None).unwrap(),
     ];
     let barrier = Barrier::new(13);
     let admitted = Mutex::new([0usize; 2]);
@@ -345,6 +367,7 @@ fn concurrent_grants_share_physical_qp_depth_and_cq_capacity() {
                             accepted: requests.len(),
                             uncertain: false,
                         },
+                        Instant::now(),
                     )?;
                     admitted.lock().unwrap()[index % 2] += requests.len();
                     Ok(requests)
@@ -360,6 +383,7 @@ fn concurrent_grants_share_physical_qp_depth_and_cq_capacity() {
                             ..Default::default()
                         },
                         TransferOp::Read,
+                        Instant::now(),
                     )?;
                 }
                 Ok::<_, Error>(())
@@ -385,7 +409,7 @@ fn concurrent_grants_share_physical_qp_depth_and_cq_capacity() {
 #[test]
 fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
     let usage = usage();
-    let sq = SendQueue::new(3, usage.clone()).unwrap();
+    let sq = SendQueue::new(3, usage.clone(), None).unwrap();
     let mut payload = SendWork::new(32, 16, 2, sq.clone(), 129).unwrap();
     let mut bind = SendWork::control(sq.clone(), 257).unwrap();
     let mut notify = SendWork::control(sq, 385).unwrap();
@@ -400,7 +424,8 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                 opcode: 5,
                 ..Default::default()
             },
-            Operation::Bind
+            Operation::Bind,
+            Instant::now()
         )
         .is_err()
     );
@@ -412,6 +437,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                 accepted: 2,
                 uncertain: false,
             },
+            Instant::now(),
         )
         .unwrap();
     bind.posted(
@@ -420,6 +446,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
             accepted: 1,
             uncertain: false,
         },
+        Instant::now(),
     )
     .unwrap();
     assert!(
@@ -428,7 +455,8 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
             sys::PostResult {
                 accepted: 1,
                 uncertain: false
-            }
+            },
+            Instant::now()
         )
         .is_err()
     );
@@ -440,7 +468,8 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                     opcode: 5,
                     ..Default::default()
                 },
-                Operation::Bind
+                Operation::Bind,
+                Instant::now()
             )
             .is_err()
     );
@@ -452,6 +481,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
             ..Default::default()
         },
         Operation::Bind,
+        Instant::now(),
     )
     .unwrap();
     assert_eq!(notify.reserve(64).unwrap().len(), 1);
@@ -462,6 +492,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                 accepted: 1,
                 uncertain: false,
             },
+            Instant::now(),
         )
         .unwrap();
     for id in [130, 129] {
@@ -474,6 +505,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                     ..Default::default()
                 },
                 TransferOp::Read,
+                Instant::now(),
             )
             .unwrap();
     }
@@ -486,6 +518,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
                 ..Default::default()
             },
             Operation::Send,
+            Instant::now(),
         )
         .unwrap();
     assert!(bind.finished() && payload.finished() && notify.finished());
@@ -504,7 +537,7 @@ fn sibling_grants_refill_freed_sq_slots_without_sharing_completion_authority() {
 #[test]
 fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_debt() {
     let usage = usage();
-    let sq = SendQueue::new(6, usage.clone()).unwrap();
+    let sq = SendQueue::new(6, usage.clone(), None).unwrap();
     let mut first = SendWork::new(32, 16, 2, sq.clone(), 129).unwrap();
     let mut partial = SendWork::new(32, 16, 2, sq.clone(), 257).unwrap();
     let mut uncertain = SendWork::new(32, 16, 2, sq.clone(), 385).unwrap();
@@ -518,6 +551,7 @@ fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_d
                 accepted: 2,
                 uncertain: false,
             },
+            Instant::now(),
         )
         .unwrap();
     assert!(
@@ -527,7 +561,8 @@ fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_d
                 sys::PostResult {
                     accepted: 1,
                     uncertain: false
-                }
+                },
+                Instant::now()
             )
             .is_err()
     );
@@ -538,7 +573,8 @@ fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_d
                 sys::PostResult {
                     accepted: 0,
                     uncertain: true
-                }
+                },
+                Instant::now()
             )
             .is_err()
     );
@@ -554,6 +590,7 @@ fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_d
                 ..Default::default()
             },
             TransferOp::Read,
+            Instant::now(),
         )
         .unwrap();
     drop(first);
@@ -568,7 +605,8 @@ fn qp_drain_resolves_all_grants_but_drop_or_partial_post_cannot_return_sibling_d
                     length: 16,
                     ..Default::default()
                 },
-                TransferOp::Read
+                TransferOp::Read,
+                Instant::now()
             )
             .is_err()
     );

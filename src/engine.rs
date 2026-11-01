@@ -214,6 +214,15 @@ impl TransferEngine {
             .map(Option::flatten)
     }
 
+    /// Local payload bandwidth estimates for available NICs, without discovery.
+    #[cfg(feature = "rdma")]
+    pub fn nic_load_stats(&self) -> Result<Vec<crate::transport::rdma::NicLoadStats>> {
+        self.source
+            .rdma
+            .as_ref()
+            .map_or_else(|| Ok(Vec::new()), |runtime| runtime.nic_load_stats())
+    }
+
     pub fn stats(&self) -> Result<EngineStats> {
         let (retained_regions, retained_bytes) = self.source.registry.usage()?;
         let (queued_notifications, retained_notifications, retained_notification_bytes) =

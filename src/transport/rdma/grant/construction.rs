@@ -196,6 +196,7 @@ impl GrantConstruction {
                 let send_queue = crate::transport::rdma::qp::send_queue::SendQueue::new(
                     transport.config.max_send_wr,
                     Arc::clone(&transport.usage),
+                    Some(grant._lease._selection.device_info()),
                 )?;
                 let record =
                     self.progress.register(Box::new(Resources {

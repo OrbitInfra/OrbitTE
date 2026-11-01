@@ -60,6 +60,9 @@ impl ContextSet {
             };
             let mut available = owner.asynchronous.check().is_ok();
             if let (Some(address), Some(topology)) = (address, &mut self.topology) {
+                if let Some(selector) = &self.selector {
+                    selector.set_bandwidth(id, address.link_speed_mbps);
+                }
                 if address.publish(topology).is_err() {
                     owner.asynchronous.fence_route();
                     available = false;

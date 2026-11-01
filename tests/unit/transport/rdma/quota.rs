@@ -1,4 +1,5 @@
 use super::*;
+use crate::transport::rdma::RdmaConfig;
 use crate::{MemEntry, MemType, NicEntry, NicType};
 
 fn topology() -> Topology {
@@ -35,7 +36,7 @@ fn topology() -> Topology {
 
 fn selector() -> Arc<DeviceSelector> {
     // NIC 1 has no native context. Its index must remain an inert hole.
-    DeviceSelector::new(&topology(), 0b1101, false).unwrap()
+    DeviceSelector::new(&topology(), 0b1101, &RdmaConfig::default()).unwrap()
 }
 
 #[test]
@@ -164,7 +165,15 @@ fn gpu_priority_and_strict_numa_use_separate_tiers_and_eligibility() {
         device_list: [vec![3], vec![2], vec![0, 1]],
     });
     for strict in [false, true] {
-        let selector = DeviceSelector::new(&topology, 0b1101, strict).unwrap();
+        let selector = DeviceSelector::new(
+            &topology,
+            0b1101,
+            &RdmaConfig {
+                strict_local_numa: strict,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         for context in [1, 2] {
             let location = MemoryLocation::Cuda { device: 0, context };
             assert_eq!(
@@ -203,7 +212,15 @@ fn known_cpu_numa_never_becomes_unknown_when_its_inventory_row_is_missing() {
     topology.mem_list.clear();
     topology.nic_list[0].numa_node = None;
     for strict in [false, true] {
-        let selector = DeviceSelector::new(&topology, 0b1101, strict).unwrap();
+        let selector = DeviceSelector::new(
+            &topology,
+            0b1101,
+            &RdmaConfig {
+                strict_local_numa: strict,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         // Node 0 has known same-node NICs despite no memory inventory row.
         assert_eq!(
             selector
@@ -247,7 +264,15 @@ fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks()
         })
         .unwrap();
     for strict in [false, true] {
-        let selector = DeviceSelector::new(&topology, 0b1101, strict).unwrap();
+        let selector = DeviceSelector::new(
+            &topology,
+            0b1101,
+            &RdmaConfig {
+                strict_local_numa: strict,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let a = selector
             .allocate(7, MemoryLocation::Cpu(Some(0)), u64::MAX)
             .unwrap();
@@ -285,5 +310,73 @@ fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks()
         assert_eq!(selector.state.lock().unwrap().inflight, [0, 0, 7, 0]);
         drop(a);
         assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
+    }
+}
+
+#[test]
+fn adaptive_selection_uses_rate_and_backlog_while_baseline_rotates() {
+    for smart in [true, false] {
+        let selector = DeviceSelector::new(
+            &topology(),
+            0b0101,
+            &RdmaConfig {
+                scheduling: SchedulingParams {
+                    smart_selection: smart,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        selector.set_bandwidth(0, Some(100_000));
+        selector.set_bandwidth(2, Some(400_000));
+        let first = selector
+            .allocate(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .unwrap();
+        assert_eq!(first.device_id(), if smart { 2 } else { 0 });
+        let second = selector
+            .allocate(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .unwrap();
+        assert_eq!(second.device_id(), 2);
+        let third = selector
+            .allocate(1000, MemoryLocation::Cpu(Some(0)), 1)
+            .unwrap();
+        assert_eq!(third.device_id(), 0);
+        assert_eq!(
+            selector
+                .stats()
+                .iter()
+                .map(|s| s.inflight_bytes)
+                .sum::<usize>(),
+            1200
+        );
+        drop((first, second, third));
+        assert_eq!(
+            selector
+                .stats()
+                .iter()
+                .map(|s| s.inflight_bytes)
+                .sum::<usize>(),
+            0
+        );
+        selector.set_available(2, false);
+        assert_eq!(
+            selector
+                .stats()
+                .iter()
+                .map(|s| s.device_id)
+                .collect::<Vec<_>>(),
+            [0]
+        );
+    }
+    for invalid in [f64::NAN, f64::INFINITY, -1.0, 1.01] {
+        let config = RdmaConfig {
+            scheduling: SchedulingParams {
+                bandwidth_learning_rate: invalid,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
     }
 }

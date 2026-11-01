@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::{qp::send_queue::SendQueue, sys};
 use crate::{Error, Result, TransferOp};
@@ -56,6 +57,8 @@ pub(super) struct SendWork {
     window_start: usize,
     pending: u64,
     send_queue: Arc<SendQueue>,
+    started: Option<(Instant, u64)>,
+    sample_valid: bool,
 }
 
 impl SendWork {
@@ -92,6 +95,8 @@ impl SendWork {
             cursor: 0,
             window_start: 0,
             pending: 0,
+            started: None,
+            sample_valid: true,
             send_queue,
         })
     }
@@ -115,6 +120,8 @@ impl SendWork {
             cursor: 0,
             window_start: 0,
             pending: 0,
+            started: None,
+            sample_valid: true,
             send_queue,
         })
     }
@@ -136,13 +143,29 @@ impl SendWork {
         Ok(&self.requests[self.window_start..self.cursor])
     }
 
-    pub(super) fn posted(&mut self, code: i32, result: sys::PostResult) -> Result<()> {
+    pub(super) fn posted(
+        &mut self,
+        code: i32,
+        result: sys::PostResult,
+        now: Instant,
+    ) -> Result<()> {
         let count = self.cursor - self.window_start;
         let uncertain =
             result.uncertain || result.accepted > count || (code == 0 && result.accepted != count);
-        let owed =
-            self.send_queue
-                .posted(&self.requests[self.window_start..self.cursor], code, result)?;
+        let (owed, generation) = self.send_queue.posted(
+            &self.requests[self.window_start..self.cursor],
+            code,
+            result,
+            now,
+        )?;
+        self.sample_valid &= code == 0 && !uncertain;
+        if let Some(generation) = generation {
+            if let Some((_, initial)) = self.started {
+                self.sample_valid &= initial == generation;
+            } else {
+                self.started = Some((now, generation));
+            }
+        }
         self.pending = if owed == 64 {
             u64::MAX
         } else {
@@ -164,6 +187,7 @@ impl SendWork {
         &mut self,
         completion: sys::Completion,
         operation: impl Into<Operation>,
+        now: Instant,
     ) -> Result<()> {
         let operation = operation.into();
         let index = completion
@@ -192,7 +216,7 @@ impl SendWork {
             return Err(Error::Protocol("RDMA completion opcode/length"));
         }
         self.send_queue
-            .complete(completion.id, completion.status != 0)?;
+            .complete(completion.id, completion.status != 0, now)?;
         let mut usage = self
             .send_queue
             .usage
@@ -200,6 +224,7 @@ impl SendWork {
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
         self.pending &= !bit;
         if completion.status != 0 {
+            self.sample_valid = false;
             usage.completion_errors += 1;
             return Err(Error::Backend {
                 operation: "RDMA work completion",
@@ -218,6 +243,23 @@ impl SendWork {
             usage.completed_sends += 1;
         } else {
             usage.completed_window_invalidations += 1;
+        }
+        drop(usage);
+        if self.finished()
+            && self.sample_valid
+            && matches!(operation, Operation::Read | Operation::Write)
+        {
+            if let (Some(info), Some((start, generation))) =
+                (&self.send_queue.bandwidth, self.started)
+            {
+                let bytes = self
+                    .requests
+                    .iter()
+                    .map(|request| request.length as usize)
+                    .sum();
+                info.observe(bytes, now.saturating_duration_since(start), generation);
+            }
+            self.sample_valid = false;
         }
         Ok(())
     }

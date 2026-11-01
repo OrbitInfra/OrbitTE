@@ -119,7 +119,7 @@ remains the target; the current order does not reduce the required scope.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct and cooperative IPC/subbatch profiles accepted with explicit limits; full P5 open |
-| P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Planned |
+| P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: per-slice bandwidth selection and NIC snapshots implemented; full policy/QoS open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
 | P9 | Complete C/C++/Python and operational compatibility | P0/P2/P6; backend claims require their stages | Planned |
@@ -741,8 +741,11 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   behavior. Do not advertise an unconsumed local-recompute callback.
 - [ ] Implement per-worker QoS, shared cross-process quotas and cleanup,
   receiver credits/pacing, deadline bandwidth arbitration and telemetry.
-- [ ] Implement round-robin/adaptive spraying, topology penalties and strict
-  locality; maintain separate selection EWMA and transmit-bandwidth estimates.
+- [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
+  strict locality, negotiated port-rate seeds, per-slice bandwidth-aware choice,
+  separate selection EWMA and posted busy-time transmit estimates. Remaining:
+  whole-parent weighted distribution, periodic exploration and effective LAG
+  rate queries; installed throughput/fairness qualification remains open.
 - [ ] Implement submit/completion failover, physical-owner/alias mapping,
   per-owner retry budgets and rail cooldown/probe/half-open state. Never replay
   uncertain writes or recycle an old attempt without its declared proof.
@@ -1108,13 +1111,22 @@ feeding the same precompiled selector. Known-cross-NUMA rejection, masks,
 failed context holes and actual grant charge lifetimes remain authoritative.
 Malformed explicit configuration is rejected before context/MR publication.
 
-The next functional delivery is P6/F16 bandwidth-aware RDMA selection: use
-negotiated link speeds and successful payload-attempt observations in the
-existing `DeviceSelector`, keeping selection EWMA separate from the posted-byte
-busy-time transmit estimate. Preserve configured candidates, strict locality,
-masks and physical grant charges. This advances the performance path without
-requiring a new hardware job; throughput claims still need matched measurements.
-Full QoS remains P6; MNNVL/EGM remain open P5 transport work.
+P6/F16 bandwidth-aware per-slice RDMA selection is implemented in the existing
+`DeviceSelector`. Negotiated legacy port rates and successful payload-attempt
+observations drive the selection EWMA; posted-byte busy-time transmit estimates
+remain separate. Configured candidates, strict locality, masks and physical
+grant charges remain authoritative. Rate refresh preserves connection identity;
+available-NIC load snapshots are exposed without discovery. See
+[source evidence](qualification.md#rdma-bandwidth-selection).
+
+The next functional delivery is F16 whole-parent weighted slice distribution
+and periodic exploration, following TENT's `selectMultiPath`: compute one
+bounded allocation plan, preserve exact folded-tail charges and compatible
+remote paths, and periodically sample eligible rails so stale estimates cannot
+starve them. Reuse current selector/admission owners and keep uncertain writes
+outside retry. This advances the performance path without requesting new
+hardware; matched throughput, effective LAG queries, QoS and bandwidth
+arbitration remain open. MNNVL/EGM remain open P5 transport work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining
 is an unimplemented extension, not an additional frozen-TENT parity gate.

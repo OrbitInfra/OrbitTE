@@ -1299,6 +1299,7 @@ pub(super) fn discover(
 ) -> Result<(crate::Topology, Vec<discovery::RdmaAddress>)> {
     let name = config.device.as_deref().unwrap_or("ok");
     let address = discovery::RdmaAddress {
+        link_speed_mbps: None,
         device: name.into(),
         port: config.port.unwrap_or(1),
         active: !name.contains("initial_down"),
@@ -1445,6 +1446,10 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         None => (RdmaHostMemory::Staged, mode),
     };
     let config = RdmaConfig {
+        scheduling: SchedulingParams {
+            smart_selection: false,
+            ..Default::default()
+        },
         max_endpoints: 1,
         max_staging_bytes: 8,
         host_memory,

@@ -488,6 +488,7 @@ impl ProgressState {
         *phase = Phase::Posted;
         let owner = Arc::clone(&resources.connection);
         let mut connection = owner.retiring();
+        let posted_at = Instant::now();
         let code = unsafe {
             match work.operation {
                 slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
@@ -531,7 +532,7 @@ impl ProgressState {
             }
         };
         drop(connection);
-        if let Err(error) = work.queue.posted(code, posted) {
+        if let Err(error) = work.queue.posted(code, posted, posted_at) {
             let fault = Fault::from_error(error);
             let pending = work.queue.pending();
             request.failure = Some(fault);
@@ -742,6 +743,7 @@ impl ProgressState {
                 .fault
                 .is_none()
         {
+            let completed_at = Instant::now();
             for (receive_cq, cq) in [(false, cqs[0]), (true, cqs[1])] {
                 let mut handles = sys::ConnectionHandles {
                     cq: cq.unwrap_or(std::ptr::null_mut()),
@@ -754,7 +756,7 @@ impl ProgressState {
                         0 => break,
                         1 => {
                             progressed = true;
-                            self.complete(completion, receive_cq);
+                            self.complete(completion, receive_cq, completed_at);
                         }
                         code if code < 0 => {
                             self.fail(Fault::Backend("ibv_poll_cq", code));
@@ -774,6 +776,24 @@ impl ProgressState {
                     {
                         break;
                     }
+                }
+            }
+            let failed = self
+                .control
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .fault
+                .is_some();
+            // This lane's QPs share one NIC. Count the entire pass before
+            // sampling bytes against its common completion timestamp.
+            if let Some(info) = records
+                .first()
+                .and_then(|record| record.send_queue.bandwidth.as_ref())
+            {
+                if failed {
+                    info.invalidate();
+                } else if progressed {
+                    info.sample(completed_at);
                 }
             }
         }

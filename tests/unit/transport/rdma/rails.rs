@@ -37,6 +37,11 @@ fn discover(
         .map(|nic| {
             let mut route = candidates[0].clone();
             route.device = nic.name.clone();
+            route.link_speed_mbps = Some(if nic.name == "rail2" {
+                400_000
+            } else {
+                100_000
+            });
             route
         })
         .collect();
@@ -1522,4 +1527,62 @@ fn invalid_topology_fails_before_context_or_mr_publication() {
     assert!(contexts.topology.is_none());
     drop(contexts);
     assert_eq!(runtime.stats().unwrap().opened_devices, 0);
+}
+
+#[test]
+fn public_read_write_dispatches_to_the_faster_rail_and_publishes_payload_estimates() {
+    let configured = || {
+        let mut runtime = runtime(u64::MAX, 8);
+        runtime.config.scheduling.smart_selection = true;
+        runtime.config.scheduling.bandwidth_learning_rate = 1.0;
+        runtime
+    };
+    let source = rdma_fixture_with_runtime(configured());
+    let requester = rdma_fixture_with_runtime(configured());
+    assert!(requester.nic_load_stats().unwrap().is_empty());
+    let local = requester
+        .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(
+            vec![0x29; 16].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    for op in [TransferOp::Read, TransferOp::Write] {
+        local.write(0, &[0x63; 16]).unwrap();
+        remote.write(0, &[0x29; 16]).unwrap();
+        exchange(&requester, &source, &local, &remote, op);
+    }
+    let stats = requester.nic_load_stats().unwrap();
+    assert_eq!(
+        stats.iter().map(|s| s.device_id).collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert_eq!(stats[0].selection_samples, 0);
+    assert_eq!(
+        (
+            stats[1].link_speed_gbps,
+            stats[1].completed_bytes,
+            stats[1].selection_samples
+        ),
+        (Some(400.0), 16, 2)
+    );
+    assert_eq!((stats[1].posted_bytes, stats[1].inflight_bytes), (0, 0));
+    assert_eq!(stats[1].ewma_bandwidth_bps, 50e9);
+    assert_eq!(
+        source
+            .nic_load_stats()
+            .unwrap()
+            .iter()
+            .map(|s| s.selection_samples)
+            .sum::<u64>(),
+        0,
+        "source receipts never teach requester payload bandwidth"
+    );
+    requester.unregister_memory(&local).unwrap();
+    source.unregister_memory(&remote).unwrap();
+    requester.close(TIMEOUT).unwrap();
+    source.close(TIMEOUT).unwrap();
+    assert!(requester.nic_load_stats().unwrap().is_empty());
 }
