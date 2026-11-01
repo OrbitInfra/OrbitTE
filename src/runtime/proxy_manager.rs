@@ -190,7 +190,7 @@ impl ProxyManager {
                         .unwrap_or_else(|p| p.into_inner())
                         .allocations += 1;
                 }
-                if let Err(error) = lease.buffer()?.check_access() {
+                if let Err(error) = lease.buffer()?.prepare_access() {
                     lease.retain();
                     return Err(error);
                 }
@@ -373,7 +373,7 @@ impl StageBufferLease {
             .buffer
             .take()
             .ok_or(Error::Internal("missing staging lease"))?;
-        let result = buffer.check_access().and({
+        let result = buffer.prepare_access().and({
             if self.safe_to_release {
                 Ok(())
             } else {
@@ -407,7 +407,7 @@ impl Drop for StageBufferLease {
         let Some(buffer) = self.buffer.take() else {
             return;
         };
-        if !self.safe_to_release || buffer.check_access().is_err() {
+        if !self.safe_to_release || buffer.prepare_access().is_err() {
             self.manager.finish_slot(self.index, StageBuffer::Retained);
             buffer.retain();
             std::mem::forget(Arc::clone(&self.manager));

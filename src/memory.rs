@@ -94,7 +94,7 @@ impl CudaHostAccess<'_> {
 }
 
 impl HostAccess {
-    fn check_access(&self, range: &Range<usize>) -> Result<()> {
+    fn prepare_access(&self, range: &Range<usize>) -> Result<()> {
         #[cfg(feature = "cuda")]
         {
             if self.cuda_uncertain {
@@ -105,9 +105,6 @@ impl HostAccess {
             }
             if self.cuda_inflight {
                 return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
-            }
-            if let HostBacking::CudaPinned(allocation) = &self.bytes {
-                allocation.check_access()?;
             }
         }
         #[cfg(feature = "rdma")]
@@ -120,6 +117,10 @@ impl HostAccess {
         }
         #[cfg(not(feature = "rdma"))]
         let _ = range;
+        #[cfg(feature = "cuda")]
+        if let HostBacking::CudaPinned(allocation) = &self.bytes {
+            allocation.prepare_access()?;
+        }
         Ok(())
     }
 }
@@ -197,13 +198,50 @@ impl HostMemory {
         }
     }
 
+    /// Capture already-queued GPU producer work for CUDA-pinned host memory.
+    /// The first CPU, staging, RDMA or IPC access consumes its event generation;
+    /// final native allocation release also drains any pending producer.
+    /// Ordinary owned or externally wrapped host memory is unsupported.
+    ///
+    /// # Safety
+    /// `stream` must be live, noncapturing and belong to the CUDA context selected
+    /// by `cuda::allocate_pinned_host`. Special default handles use this calling
+    /// thread's current context. `owner` must retain the stream and every producer
+    /// input through completion, without an ownership cycle with this memory.
+    /// Coordinate exclusive external access before queuing work: no CPU/native
+    /// transfer may access this allocation until capture completes, and no further
+    /// external access is allowed until engine completion. Aliases must share one
+    /// `Arc<HostMemory>`. A pre-capture admission error leaves work caller-owned;
+    /// unproven capture/completion fences and retains the actual native owners.
+    #[cfg(feature = "cuda")]
+    #[allow(unsafe_code)]
+    pub unsafe fn record_producer_stream(
+        &self,
+        stream: *mut std::ffi::c_void,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<()> {
+        let backing = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        backing.prepare_access(&(0..self.length))?;
+        let HostBacking::CudaPinned(allocation) = &backing.bytes else {
+            return Err(Error::Unavailable(
+                "producer handoff requires allocate_pinned_host",
+            ));
+        };
+        // SAFETY: the caller supplies the producer lifetime; the shared host
+        // lock and whole-allocation admission exclude engine access during capture.
+        unsafe { allocation.record_producer_stream(stream, owner) }
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda_pinned(
         &self,
         deadline: Instant,
     ) -> Result<Arc<crate::cuda::PinnedAllocation>> {
         let backing = self.lock_ipc(deadline)?;
-        backing.check_access(&(0..self.length))?;
+        backing.prepare_access(&(0..self.length))?;
         match &backing.bytes {
             HostBacking::CudaPinned(allocation) => Ok(Arc::clone(allocation)),
             _ => Err(Error::Unavailable(
@@ -240,7 +278,7 @@ impl HostMemory {
     #[cfg(feature = "cuda")]
     pub(crate) fn lock_cuda_pinned(&self, deadline: Instant) -> Result<CudaHostAccess<'_>> {
         let backing = self.lock_ipc(deadline)?;
-        backing.check_access(&(0..self.length))?;
+        backing.prepare_access(&(0..self.length))?;
         let access = CudaHostAccess { backing };
         access.allocation()?;
         Ok(access)
@@ -258,7 +296,7 @@ impl HostMemory {
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
+        backing.prepare_access(&range)?;
         // SAFETY: the staging range is checked and exclusively locked;
         // neither a CPU writer nor a native DMA loan overlaps this slice.
         let bytes =
@@ -277,7 +315,7 @@ impl HostMemory {
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
+        backing.prepare_access(&range)?;
         let result = operation();
         if matches!(result, Err(Error::Unquiesced { .. })) {
             backing.cuda_uncertain = true;
@@ -379,7 +417,7 @@ impl HostMemory {
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
+        backing.prepare_access(&range)?;
         // SAFETY: the validated range has no conflicting DMA lease. The shared
         // lock serializes CPU copies and lease acquisition. External access is
         // coordinated by from_raw_parts' caller. No allocation-wide slice exists.
@@ -401,7 +439,7 @@ impl HostMemory {
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
-        backing.check_access(&range)?;
+        backing.prepare_access(&range)?;
         // SAFETY: as for read; only this checked range is accessed under the
         // shared lock. Disjoint native leases do not conflict with this copy.
         unsafe {
@@ -532,7 +570,7 @@ impl RegisteredMemory {
                     .backing
                     .lock()
                     .map_err(|_| Error::Internal("memory lock poisoned"))?;
-                backing.check_access(&range)?;
+                backing.prepare_access(&range)?;
                 backing
                     .dma
                     .try_reserve(1)
