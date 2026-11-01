@@ -237,11 +237,77 @@ The reference is TENT's `Workers::asyncPostSend`, `orderByDeadline`,
 OrbitTE groups by local NIC across peers because its current workers share an
 aggregate CQ budget; TENT's post groups additionally identify the remote segment
 and NIC. OrbitTE can use lower-tier capacity when a higher-tier QP is full.
-TENT's aging promotion, shared-process quotas, per-tenant contracts and admission
-policies remain open P6 work. Sustained High traffic can still starve lower tiers.
+Aging and shared priority slots are described below. Per-tenant contracts,
+global byte quotas, full admission policy and native fairness remain P6 work.
 The worker preallocates and reuses sorting buffers, performs no topology query
 or extra thread creation per dispatch, and reads remaining grant bytes in O(1).
 See [source validation and limits](qualification.md#rdma-request-priority).
+
+## Priority promotion and shared slots
+
+`priority_promotion_timeout` defaults to 10 ms, as in frozen TENT. Each worker
+checks ready lower-priority payloads at most once per millisecond. A zero timeout
+makes an entry eligible on the next check. Promotion
+changes the existing Work after checking its namespace, deadline and live state;
+it keeps the original enqueue age and appends to the destination tier using a
+persistent promotion timestamp and FIFO ordinal. A second collection or context
+rotation cannot reverse entries promoted in the same pass. Low advances one tier
+per pass; its original age is not reset.
+
+`priority_promotion_per_entry` defaults to `false`, preserving TENT's historical
+policy: an aged head promotes the whole tier, including fresh followers. Medium
+is checked first; if it promotes, Low waits for the next pass. Set the flag to
+`true` to promote only entries whose own age reached the threshold and examine
+both tiers in a pass. Posted DMA, setup/admission and ordered requests in a batch
+remain outside this ready-payload policy. Aging enables progress against newer
+High arrivals; it does not guarantee a deadline or isolate tenants.
+
+To coordinate cooperating processes, configure all of them with the same local
+POSIX shared-memory name and interval:
+
+```rust
+use std::time::Duration;
+use orbit_te::RdmaConfig;
+
+let config = RdmaConfig {
+    priority_promotion_per_entry: true,
+    shared_quota_shm_path: Some("/orbitte-rdma-slots".into()),
+    slot_rotation_interval: Duration::from_millis(2),
+    ..Default::default()
+};
+```
+
+`shared_quota_shm_path: None` disables coordination. The default 2 ms slots
+repeat High-only, High+Medium, then all priorities, matching TENT's
+`SharedSlotManager::canSend`. Promotion runs before slot admission; promoted
+requests use their effective tier. Completion/RQ/control/cleanup progress is
+never gated. Event-driven workers preserve existing native deadline scheduling
+and add promotion checks and relevant slot boundaries to their wakeups. This is a worker-pass priority gate;
+already admitted work may cross a boundary. It is not a bandwidth cap, exclusive
+process turn, global byte counter or hard real-time per-WR restriction.
+
+OrbitTE's shared object contains an immutable version, interval and clock-domain
+identity. A bounded startup file lock serializes initialization; a crashed
+initializer releases that lock, and a zero publication marker can be completed
+by the next opener. Wrong size/version/interval/domain fails explicitly without
+overwriting a live header. Cooperating processes must use the same effective
+UID, shared `/dev/shm` mount and Linux time namespace; see
+[Linux time namespaces](https://man7.org/linux/man-pages/man7/time_namespaces.7.html).
+OrbitTE uses its own object format, not TENT's shared-memory ABI.
+
+Runtime checks derive slots directly from the common monotonic clock, avoiding
+TENT's extra rotating thread, shared atomic writes and process-shared mutex.
+No extra clock read occurs for High-only queues. Clock failures fence affected
+worker lanes. File descriptors close with the last actual worker owner, including
+retained owners after native teardown failure; no counters or leadership can be
+stranded by process death. The name persists after exit, matching TENT's detach
+semantics. To change interval or remove a name, stop **all** participants first,
+then remove its `/dev/shm/<name-without-leading-slash>` object. Never unlink an
+active group: late joiners could otherwise attach to a different object.
+
+See [source/process validation](qualification.md#rdma-promotion-and-shared-slots).
+Hardware contention, installed cross-process behavior and performance remain
+unqualified.
 
 ## Custom topology and priority matrices
 

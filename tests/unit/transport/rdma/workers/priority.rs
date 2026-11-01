@@ -95,10 +95,13 @@ fn shared_worker_dispatches_priority_then_optional_deadline_across_contexts() {
             fixture::runtime("priority_copy")
         };
         runtime.config.block_size = 64 << 10;
+        runtime.config.block_size = 64 << 10;
+        runtime.config.max_cqes = 16;
         runtime.config.max_endpoints = 8;
         runtime.config.max_staging_bytes = 128;
         runtime.config.max_cqes = 1;
         runtime.config.deadline_bw_arbitration = arbitrate;
+        runtime.config.priority_promotion_timeout = Duration::from_secs(60);
         runtime.verbs = if events { &EVENT_VERBS } else { &VERBS };
         let mut grants: Vec<_> = (0..5)
             .map(|_| runtime.staging_endpoint(8, 0).unwrap())
@@ -189,6 +192,8 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
         let engine = |mode| {
             let mut runtime = fixture::runtime(mode);
             runtime.config.num_lanes = lanes;
+            runtime.config.block_size = 64 << 10;
+            runtime.config.max_cqes = 16;
             runtime.config.max_endpoints = 8;
             runtime.config.max_staging_bytes = 128;
             runtime.config.block_size = 2;
@@ -268,5 +273,272 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
         assert_eq!(bytes, [0x71; 8]);
         requester.close_source(timeout).unwrap();
         source.close_source(timeout).unwrap();
+    }
+}
+
+#[test]
+fn promotion_preserves_tier_fifo_across_context_rotation_and_recollection() {
+    use crate::transport::rdma::promotion_policy;
+    assert!(
+        RdmaConfig {
+            priority_promotion_timeout: Duration::ZERO,
+            ..Default::default()
+        }
+        .validate()
+        .is_ok()
+    );
+    let instant = Instant::now();
+    assert!(promotion_policy::timed_out(
+        instant,
+        instant,
+        Duration::ZERO
+    ));
+    let _serial = SERIAL.lock().unwrap();
+    static VERBS: sys::Verbs = sys::Verbs {
+        discover,
+        post,
+        ..fixture::VERBS
+    };
+    for per_entry in [false, true] {
+        let mut runtime = fixture::runtime("priority_copy");
+        runtime.config.block_size = 64 << 10;
+        runtime.config.max_cqes = 16;
+        runtime.config.max_endpoints = 8;
+        runtime.config.max_staging_bytes = 128;
+        runtime.config.priority_promotion_timeout = Duration::from_secs(60);
+        runtime.verbs = &VERBS;
+        let mut grants: Vec<_> = (0..4)
+            .map(|_| runtime.staging_endpoint(8, 0).unwrap())
+            .collect();
+        for grant in &mut grants {
+            grant.connect(&grant.descriptor()).unwrap();
+        }
+        let (lock, changed) = GATE.get_or_init(Default::default);
+        *lock.lock().unwrap() = Gate {
+            hold: true,
+            ..Default::default()
+        };
+        let release = Release;
+        grants[0].progress.shared.wake();
+        let (gate, timeout) = changed
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |g| !g.entered)
+            .unwrap();
+        assert!(!timeout.timed_out());
+        drop(gate);
+        let end = Instant::now() + Duration::from_secs(10);
+        for (i, grant) in grants.iter().enumerate() {
+            let priority = if i % 2 == 0 {
+                Priority::Medium
+            } else {
+                Priority::Low
+            };
+            grant
+                .progress
+                .submit(
+                    &grant.record,
+                    grant.claim,
+                    grant.descriptor(),
+                    TransferOp::Read,
+                    priority,
+                    end,
+                )
+                .unwrap();
+        }
+        let work: Vec<_> = grants
+            .iter()
+            .map(|g| g.record.queued_work().unwrap())
+            .collect();
+        let cutoff = work[1].enqueued + work[2].enqueued.duration_since(work[1].enqueued) / 2;
+        let mut queue = PostQueue::new(4);
+        let now = Instant::now();
+        let timeout = now.duration_since(cutoff);
+        assert!(promotion_policy::timed_out(work[1].enqueued, now, timeout));
+        assert!(!promotion_policy::timed_out(work[2].enqueued, now, timeout));
+        assert!(!promotion_policy::timed_out(now, work[0].enqueued, timeout));
+        assert!(promotion_policy::timed_out(now, now + timeout, timeout));
+        let lanes: Vec<_> = (0..2)
+            .map(|i| Lane {
+                state: Arc::clone(&grants[i].progress.shared),
+                records: vec![
+                    Arc::clone(&grants[i + 2].record),
+                    Arc::clone(&grants[i].record),
+                ],
+                cursor: 0,
+            })
+            .collect();
+        struct Snapshots(Vec<Lane>);
+        impl Drop for Snapshots {
+            fn drop(&mut self) {
+                // Borrowed snapshots never attached a lane: release fields
+                // without invoking the real worker's detach protocol.
+                for lane in self.0.drain(..) {
+                    let mut snapshot = std::mem::ManuallyDrop::new(lane);
+                    unsafe {
+                        std::ptr::drop_in_place(&mut snapshot.records);
+                        std::ptr::drop_in_place(&mut snapshot.state);
+                    }
+                }
+            }
+        }
+        let snapshots = Snapshots(lanes);
+        let lanes = &snapshots.0;
+        queue.collect(lanes, 1);
+        queue.promote(lanes, now, timeout, per_entry);
+        if per_entry {
+            assert_eq!(
+                grants
+                    .iter()
+                    .map(|g| g.record.queued_work().unwrap().priority)
+                    .collect::<Vec<_>>(),
+                [
+                    Priority::High,
+                    Priority::Medium,
+                    Priority::Medium,
+                    Priority::Low
+                ]
+            );
+            // The next check must append fresh MEDIUM before the previously promoted LOW.
+            queue.clear();
+            queue.collect(lanes, 0);
+            queue.promote(lanes, now + promotion_policy::CHECK_INTERVAL, timeout, true);
+        }
+        for cursor in [0, 1] {
+            queue.clear();
+            queue.collect(lanes, cursor);
+        }
+        let old = &work[0];
+        assert!(!grants[0].record.promote(
+            old.namespace + 1,
+            Priority::High,
+            Priority::High,
+            now,
+            0
+        ));
+        assert!(queue.has_blocked(Priority::High));
+        queue.dispatch(lanes, false, Priority::High);
+        let expected: Vec<_> = if per_entry { vec![0, 2, 1] } else { vec![0, 2] };
+        assert_eq!(
+            lock.lock().unwrap().posted,
+            expected
+                .iter()
+                .map(|&i| grants[i].descriptor().address)
+                .collect::<Vec<_>>()
+        );
+        drop(snapshots);
+        drop(release);
+        for grant in &grants {
+            grant
+                .progress
+                .wait(&grant.record, grant.claim, end)
+                .unwrap();
+        }
+        for grant in &mut grants {
+            grant.close().unwrap();
+        }
+        drop(grants);
+        runtime.close(end).unwrap();
+    }
+}
+
+#[test]
+fn event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe() {
+    use crate::transport::rdma::shared_quota::SharedSlotManager;
+    let _serial = SERIAL.lock().unwrap();
+    static VERBS: sys::Verbs = sys::Verbs {
+        discover,
+        post,
+        ..crate::transport::rdma::cq::tests::VERBS
+    };
+    for promotion in [true, false] {
+        let name = std::ffi::CString::new(format!(
+            "/orbitte-worker-slots-{}-{promotion}",
+            std::process::id()
+        ))
+        .unwrap();
+        struct Remove(std::ffi::CString);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::shm_unlink(self.0.as_ptr());
+                }
+            }
+        }
+        let cleanup = Remove(name);
+        let mut clock = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut clock) },
+            0
+        );
+        let nanos = clock.tv_sec as u64 * 1_000_000_000 + clock.tv_nsec as u64;
+        // A long HIGH slot isolates the promotion timer from slot rotation.
+        let interval = if promotion {
+            Duration::from_nanos(nanos / 3)
+        } else {
+            Duration::from_millis(5)
+        };
+        let name = cleanup.0.to_str().unwrap();
+        let slots = SharedSlotManager::attach(name, interval).unwrap();
+        let mut runtime = fixture::event_runtime("priority_copy");
+        runtime.config.block_size = 64 << 10;
+        runtime.config.shared_quota_shm_path = Some(name.into());
+        runtime.config.slot_rotation_interval = interval;
+        runtime.config.priority_promotion_timeout = if promotion {
+            Duration::from_millis(10)
+        } else {
+            Duration::from_secs(60)
+        };
+        runtime.config.priority_promotion_per_entry = true;
+        runtime.verbs = &VERBS;
+        let mut grant = runtime.staging_endpoint(8, 0).unwrap();
+        grant.connect(&grant.descriptor()).unwrap();
+        let (lock, changed) = GATE.get_or_init(Default::default);
+        *lock.lock().unwrap() = Gate {
+            hold: true,
+            events: true,
+            ..Default::default()
+        };
+        let release = Release;
+        grant.progress.shared.wake();
+        let (gate, timeout) = changed
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |g| !g.entered)
+            .unwrap();
+        assert!(!timeout.timed_out());
+        drop(gate);
+        while slots.current_slot().unwrap().0 != Priority::High {
+            thread::sleep(slots.current_slot().unwrap().1);
+        }
+        let end = Instant::now() + Duration::from_secs(3);
+        grant
+            .progress
+            .submit(
+                &grant.record,
+                grant.claim,
+                grant.descriptor(),
+                TransferOp::Read,
+                Priority::Low,
+                end,
+            )
+            .unwrap();
+        drop(release);
+        // The only possible initial progress is a timer; no payload CQE exists yet.
+        grant
+            .progress
+            .wait(
+                &grant.record,
+                grant.claim,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(lock.lock().unwrap().posted, [grant.descriptor().address]);
+        if promotion {
+            assert_eq!(slots.current_slot().unwrap().0, Priority::High);
+        }
+        grant.close().unwrap();
+        drop(grant);
+        runtime.close(end).unwrap();
+        assert_eq!(runtime.stats().unwrap().work_requests, 0);
     }
 }

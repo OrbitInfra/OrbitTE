@@ -745,8 +745,11 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   grants, slices and staging CROSS work; each worker orders ready payloads across
   contexts. Opt-in same-NIC/same-tier arbitration consumes posted bytes and the
   transmit meter, using TENT's bounded greedy urgency ordering. Controls and
-  drain remain independent of payload priority. Aging/promotion, tenant contracts,
-  shared-process admission/cleanup and native fairness remain open. See
+  drain remain independent of payload priority. TENT head-only/per-entry aging and
+  optional shared priority-slot admission are implemented, including process
+  attachment/exit and timer-driven progress. The frozen shared_quota is a slot
+  gate, not a global byte limit. Full QoS/tenant contracts, receiver pacing and
+  native fairness remain open. See
   [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 - [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
   strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
@@ -1145,8 +1148,14 @@ explicit fallback. See [source scope](qualification.md#rdma-effective-link-rate)
 P6 request priority and worker bandwidth arbitration are implemented at source
 scope. [Public ordinary/sliced propagation and cross-context dispatch controls](qualification.md#rdma-request-priority)
 exercise the actual workers; they do not qualify native contention or performance.
-The next functional delivery is priority aging/promotion and shared-process
-quota ownership, admission and cleanup, following TENT's existing owners.
+Priority aging/promotion and TENT-compatible shared priority-slot semantics are
+implemented with worker/process controls; see [scope](qualification.md#rdma-promotion-and-shared-slots).
+Shared slot attachment validates protocol, interval and clock namespace;
+worker-owned descriptors survive until the actual owner exits. No runtime
+rotation thread or shared byte counter is introduced.
+The next functional delivery is the frozen FIFO/EDF admission queue and dispatch
+window, followed by receiver credits/pacing and QoS contract consumption.
+Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining

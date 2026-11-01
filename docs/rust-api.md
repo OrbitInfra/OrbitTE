@@ -123,6 +123,10 @@ and length. Supply `priority: Priority::High` (or `Default::default()`) for the
 default. Medium/Low currently require RDMA and affect ready payloads competing
 on a worker; they do not reorder the batch. Optional
 `RdmaConfig::deadline_bw_arbitration` consumes the existing transmit meter.
+`priority_promotion_timeout` defaults to 10 ms and `priority_promotion_per_entry`
+selects individual aging instead of TENT's default head-only tier promotion.
+`shared_quota_shm_path` enables optional cross-process priority slots, with a
+matching `slot_rotation_interval` (default 2 ms).
 See [dispatch semantics](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 Both ranges must be contained in one applicable registration. `TransferOp`
 selects READ or WRITE. Submission resolves and retains each backing allocation

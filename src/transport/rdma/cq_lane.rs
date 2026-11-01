@@ -19,7 +19,7 @@ use crate::engine::remaining;
 use crate::{Error, Result, TransferOp};
 
 #[derive(Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     Backend(&'static str, i32),
     Unquiesced(&'static str, i32),
     Protocol(&'static str),
@@ -117,6 +117,7 @@ struct Work {
     deadline: Instant,
     priority: crate::Priority,
     enqueued: Instant,
+    promoted: Option<(Instant, usize)>,
 }
 
 impl Request {

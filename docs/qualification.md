@@ -2187,5 +2187,35 @@ consumer. Artifacts and independent review are stored outside the checkout in
 `/root/orbitte-artifacts/rdma-priority-arbitration-20261101/`.
 
 Current installed native contention, fairness, throughput and scheduler overhead
-remain unqualified. Priority aging, shared-process quotas and full P6 parity
-remain open. No new hardware allocation was requested for this stage.
+remain unqualified. At this delivery, priority aging and shared-process slots
+were open; the following delivery implements them. Full P6 parity remains open.
+No new hardware allocation was requested for this stage.
+
+
+## RDMA promotion and shared slots
+
+Source implements frozen TENT's 10 ms priority aging, 1 ms checks, default
+head-only tier promotion and opt-in per-entry promotion. A persistent destination
+FIFO ordinal protects ordering across context rotation and queue reconstruction.
+Optional `SharedSlotManager` admission reproduces the three priority slots with
+a shared interval/domain header and no background rotation thread.
+
+Focused worker controls exercise both promotion policies, original-age behavior,
+stale namespaces, opposite context collection order and repeated reconstruction,
+actual priority-gated native-post calls, and event-driven progress from a Low
+submission with no initial CQE. The long High-slot control isolates promotion;
+the short-slot run checks bounded completion, not a strict per-boundary timing
+negative control. Real local subprocess controls cover same-object attachment,
+conflicting intervals, a killed initializer and subsequent reopen. Clock-domain
+mismatch rejection uses an in-process header control. Native
+verbs remain CPU controls; these processes do not establish RDMA hardware or
+installed-package fairness. Default/RDMA/CUDA source gates, Clippy and strict
+documentation checks remain the regression gates. Logs and independent review
+belong outside the checkout at
+`/root/orbitte-artifacts/rdma-promotion-slots-20261102/`.
+
+This implements the reference's cooperative priority slots, not cross-process
+byte quotas, tenant isolation, rate caps or strict per-WR timing. The name persists
+after owner exit and requires all participants to stop before administrative
+removal. Installed qualification, native contention/fairness and measured
+scheduler overhead/throughput remain unqualified. No hardware job was requested.

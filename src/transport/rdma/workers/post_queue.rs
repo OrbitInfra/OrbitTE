@@ -1,7 +1,9 @@
 //! Ready payload dispatch across every context assigned to one data worker.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use super::super::promotion_policy;
 
 use super::Lane;
 use crate::Priority;
@@ -11,6 +13,8 @@ pub(in crate::transport::rdma) struct QueuedWork {
     pub(in crate::transport::rdma) namespace: u64,
     pub(in crate::transport::rdma) priority: Priority,
     pub(in crate::transport::rdma) enqueued: Instant,
+    pub(in crate::transport::rdma) ordered: Instant,
+    pub(in crate::transport::rdma) order: usize,
     pub(in crate::transport::rdma) deadline: Instant,
     pub(in crate::transport::rdma) length: usize,
 }
@@ -27,6 +31,7 @@ pub(super) struct PostQueue {
     entries: Vec<PendingPost>,
     flows: Vec<ArbFlow>,
     visited: Vec<usize>,
+    next_promotion: Instant,
 }
 
 impl PostQueue {
@@ -35,6 +40,7 @@ impl PostQueue {
             entries: Vec::with_capacity(capacity),
             flows: Vec::with_capacity(capacity),
             visited: Vec::with_capacity(64),
+            next_promotion: Instant::now(),
         }
     }
 
@@ -66,12 +72,82 @@ impl PostQueue {
                 }
             }
         }
+        self.sort();
+    }
+
+    fn sort(&mut self) {
         self.entries.sort_unstable_by_key(|entry| {
-            (entry.work.priority, entry.work.enqueued, entry.sequence)
+            (
+                entry.work.priority,
+                entry.work.ordered,
+                entry.work.order,
+                entry.sequence,
+            )
         });
     }
 
-    pub(super) fn dispatch(&mut self, lanes: &[Lane], arbitrate: bool) -> bool {
+    pub(super) fn has_blocked(&self, allowed: Priority) -> bool {
+        self.entries
+            .last()
+            .is_some_and(|entry| entry.work.priority > allowed)
+    }
+
+    pub(super) fn promote(
+        &mut self,
+        lanes: &[Lane],
+        now: Instant,
+        timeout: Duration,
+        per_entry: bool,
+    ) -> Option<Instant> {
+        if !self.has_blocked(Priority::High) {
+            return None;
+        }
+        if now >= self.next_promotion {
+            self.next_promotion = now + promotion_policy::CHECK_INTERVAL;
+            let mut changed = false;
+            for (from, to) in [
+                (Priority::Medium, Priority::High),
+                (Priority::Low, Priority::Medium),
+            ] {
+                let mut head = None;
+                let mut promoted = false;
+                for (order, entry) in self
+                    .entries
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(_, entry)| entry.work.priority == from)
+                {
+                    let expired = promotion_policy::timed_out(entry.work.enqueued, now, timeout);
+                    let head_expired = *head.get_or_insert(expired);
+                    if (if per_entry { expired } else { head_expired })
+                        && lanes[entry.lane].records[entry.record].promote(
+                            entry.work.namespace,
+                            from,
+                            to,
+                            now,
+                            order,
+                        )
+                    {
+                        entry.work.priority = to;
+                        entry.work.ordered = now;
+                        entry.work.order = order;
+                        promoted = true;
+                    }
+                }
+                changed |= promoted;
+                if promoted && !per_entry {
+                    break;
+                }
+            }
+            if changed {
+                self.sort();
+            }
+        }
+        self.has_blocked(Priority::High)
+            .then_some(self.next_promotion)
+    }
+
+    pub(super) fn dispatch(&mut self, lanes: &[Lane], arbitrate: bool, allowed: Priority) -> bool {
         let post = |entry: &PendingPost| {
             let lane = &lanes[entry.lane];
             lane.state
@@ -79,7 +155,11 @@ impl PostQueue {
         };
         let mut progressed = false;
         if !arbitrate {
-            for entry in &self.entries {
+            for entry in self
+                .entries
+                .iter()
+                .take_while(|entry| entry.work.priority <= allowed)
+            {
                 progressed |= post(entry);
             }
             return progressed;
@@ -87,7 +167,12 @@ impl PostQueue {
         self.visited.clear();
         let mut priority = Priority::High;
         let now = Instant::now();
-        for (index, entry) in self.entries.iter().enumerate() {
+        for (index, entry) in self
+            .entries
+            .iter()
+            .enumerate()
+            .take_while(|(_, entry)| entry.work.priority <= allowed)
+        {
             if priority != entry.work.priority {
                 priority = entry.work.priority;
                 self.visited.clear();
