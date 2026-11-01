@@ -29,7 +29,9 @@ pub(super) struct Device {
     pub(super) pci_device: AtomicI32,
     pub(super) streams: Mutex<BTreeMap<usize, Vec<PendingCopy>>>,
     pub(super) submitted_copies: Mutex<Vec<(usize, usize, usize)>>,
-    pub(super) completions: Mutex<BTreeMap<usize, Option<usize>>>,
+    pub(super) completions: Mutex<BTreeMap<usize, Option<(usize, usize)>>>,
+    next_command: AtomicUsize,
+    pub(super) capture_active: AtomicBool,
     next_handle: AtomicUsize,
     pub(super) imports: Mutex<BTreeMap<u64, usize>>,
     pub(super) ipc_copies: AtomicUsize,
@@ -79,6 +81,7 @@ pub(super) struct Device {
     pub(super) events: Mutex<Vec<&'static str>>,
 }
 pub(super) struct PendingCopy {
+    sequence: usize,
     pub(super) source: usize,
     pub(super) destination: usize,
     length: usize,
@@ -166,6 +169,25 @@ unsafe extern "C" fn free(_: u64) -> Status {
 unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> Status {
     unreachable!()
 }
+unsafe extern "C" fn stream_context(_: sys::CUstream, output: *mut driver::Context) -> Status {
+    unsafe {
+        *output = STACK.with(|s| s.borrow().last().copied().unwrap_or(0)) as driver::Context;
+    }
+    SUCCESS
+}
+unsafe extern "C" fn stream_capture(
+    _: sys::CUstream,
+    output: *mut sys::CUstreamCaptureStatus,
+) -> Status {
+    unsafe {
+        *output = if current().capture_active.load(Ordering::Acquire) {
+            sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE
+        } else {
+            sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
+        };
+    }
+    SUCCESS
+}
 unsafe extern "C" fn stream_create(output: *mut sys::CUstream, flags: c_uint) -> Status {
     event("stream-create");
     assert_eq!(flags, sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32);
@@ -234,25 +256,25 @@ unsafe extern "C" fn event_record(completion: sys::CUevent, stream: sys::CUstrea
             .lock()
             .unwrap()
             .get_mut(&(completion as usize))
-            .unwrap() = Some(stream as usize);
+            .unwrap() = Some((
+            resolve_stream(stream),
+            current().next_command.load(Ordering::Acquire) - 1,
+        ));
     }
     status(error)
 }
-fn drain(stream: usize) -> Status {
+fn drain(stream: usize, through: usize) -> Status {
     let error = current().sync_error.load(Ordering::Acquire);
     if error == 0 {
-        for copy in current()
-            .streams
-            .lock()
-            .unwrap()
-            .get_mut(&stream)
-            .unwrap()
-            .drain(..)
-        {
-            // Complete only here, never at enqueue: early staging release/read
-            // would leave these pointers dangling or expose unchanged bytes.
+        let mut streams = current().streams.lock().unwrap();
+        let pending = streams.entry(stream).or_default();
+        let count = pending
+            .iter()
+            .take_while(|copy| copy.sequence <= through)
+            .count();
+        for copy in pending.drain(..count) {
             unsafe {
-                std::ptr::copy_nonoverlapping(
+                std::ptr::copy(
                     copy.source as *const u8,
                     copy.destination as *mut u8,
                     copy.length,
@@ -264,26 +286,26 @@ fn drain(stream: usize) -> Status {
 }
 unsafe extern "C" fn stream_synchronize(stream: sys::CUstream) -> Status {
     event("stream-sync");
-    drain(stream as usize)
+    drain(resolve_stream(stream), usize::MAX)
 }
-fn copy_held(device: &Device, stream: usize) -> bool {
+fn copy_held(device: &Device, stream: usize, through: usize) -> bool {
     if device.query_hold.load(Ordering::Acquire) {
         return true;
     }
     let address = device.query_hold_address.load(Ordering::Acquire);
     address != 0
-        && device.streams.lock().unwrap()[&stream]
-            .iter()
-            .any(|copy| copy.source == address || copy.destination == address)
+        && device.streams.lock().unwrap()[&stream].iter().any(|copy| {
+            copy.sequence <= through && (copy.source == address || copy.destination == address)
+        })
 }
 
 unsafe extern "C" fn event_query(completion: sys::CUevent) -> Status {
     event("event-query");
     let device = current();
     device.event_queries.fetch_add(1, Ordering::AcqRel);
-    let stream = device.completions.lock().unwrap()[&(completion as usize)]
+    let (stream, through) = device.completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
-    if copy_held(device, stream) {
+    if copy_held(device, stream, through) {
         device.event_not_ready.fetch_add(1, Ordering::AcqRel);
         if device.pop_after_not_ready.load(Ordering::Acquire) {
             device.pop_error.store(201, Ordering::Release);
@@ -294,7 +316,7 @@ unsafe extern "C" fn event_query(completion: sys::CUevent) -> Status {
     let result = if ordinal == device.event_query_fail_at.load(Ordering::Acquire) {
         status(700)
     } else {
-        drain(stream)
+        drain(stream, through)
     };
     if result == SUCCESS {
         device.event_query_successes.fetch_add(1, Ordering::AcqRel);
@@ -322,10 +344,10 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
             return Status::CUDA_ERROR_INVALID_VALUE;
         }
     }
-    let stream = current().completions.lock().unwrap()[&(completion as usize)]
+    let (stream, through) = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
     let until = std::time::Instant::now() + Duration::from_secs(3);
-    while copy_held(device, stream) {
+    while copy_held(device, stream, through) {
         if std::time::Instant::now() >= until {
             return Status::CUDA_ERROR_INVALID_VALUE;
         }
@@ -335,13 +357,23 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
     let result = if ordinal == current().event_wait_fail_at.load(Ordering::Acquire) {
         status(700)
     } else {
-        drain(stream)
+        drain(stream, through)
     };
     if current().pop_after_completion.load(Ordering::Acquire) {
         current().pop_error.store(201, Ordering::Release);
     }
     result
 }
+fn resolve_stream(stream: sys::CUstream) -> usize {
+    static NEXT_DEFAULT: AtomicUsize = AtomicUsize::new(1 << 30);
+    thread_local! { static DEFAULT_STREAM: usize = NEXT_DEFAULT.fetch_add(1, Ordering::Relaxed); }
+    if stream as usize == 2 {
+        DEFAULT_STREAM.with(|s| *s)
+    } else {
+        stream as usize
+    }
+}
+
 fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usize) {
     current()
         .submitted_copies
@@ -352,9 +384,10 @@ fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usi
         .streams
         .lock()
         .unwrap()
-        .get_mut(&(stream as usize))
-        .unwrap()
+        .entry(resolve_stream(stream))
+        .or_default()
         .push(PendingCopy {
+            sequence: current().next_command.fetch_add(1, Ordering::AcqRel),
             source,
             destination,
             length,
@@ -516,6 +549,8 @@ pub(super) fn driver() -> Arc<Driver> {
         copy_device,
         to_host,
         to_device,
+        stream_context,
+        stream_capture,
         stream_create,
         stream_destroy,
         stream_synchronize,
@@ -545,7 +580,9 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         streams: Mutex::default(),
         submitted_copies: Mutex::default(),
         completions: Mutex::default(),
-        next_handle: AtomicUsize::new(1),
+        next_command: AtomicUsize::new(1),
+        capture_active: AtomicBool::new(false),
+        next_handle: AtomicUsize::new(16),
         imports: Mutex::default(),
         ipc_copies: AtomicUsize::new(0),
         ipc_copy_fail_at: AtomicUsize::new(0),

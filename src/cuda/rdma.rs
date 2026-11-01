@@ -69,7 +69,7 @@ impl CudaMemory {
             .allocation
             .lock()
             .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
-        allocation.check_dma(&range)?;
+        allocation.prepare_access(&range)?;
         allocation.prepare_rdma()?;
         allocation
             .dma

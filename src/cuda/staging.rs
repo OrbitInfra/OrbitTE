@@ -22,7 +22,7 @@ impl CudaMemory {
             .allocation
             .lock()
             .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
-        allocation.check_dma(&range)?;
+        allocation.prepare_access(&range)?;
         let context = Arc::clone(&allocation.context);
         let node = context.staging_node(manager.location, manager.numa)?;
         let mut stage = manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, |size| {
@@ -115,7 +115,7 @@ impl CudaMemory {
             std::sync::TryLockError::WouldBlock => Error::ResourceExhausted,
             std::sync::TryLockError::Poisoned(_) => Error::Internal("CUDA memory lock poisoned"),
         })?;
-        allocation.check_dma(&range)?;
+        allocation.prepare_access(&range)?;
         allocation
             .dma
             .try_reserve(1)

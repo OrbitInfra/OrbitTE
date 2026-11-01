@@ -25,7 +25,7 @@ impl IpcExport {
         let extent = allocation
             .ipc_extent
             .ok_or(Error::Unavailable("CUDA IPC export requires allocate_ipc"))?;
-        allocation.check_dma(&(0..memory.length))?;
+        allocation.prepare_access(&(0..memory.length))?;
         allocation
             .dma
             .try_reserve(1)
@@ -226,13 +226,13 @@ impl CudaMemory {
     }
 
     pub(crate) fn validate_ipc_requester(&self, deadline: Instant) -> Result<()> {
-        let allocation = self.lock_ipc(deadline)?;
+        let mut allocation = self.lock_ipc(deadline)?;
         if !allocation.owned {
             return Err(Error::Unavailable(
                 "CUDA IPC requester requires owned CudaMemory",
             ));
         }
-        allocation.check_dma(&(0..self.length))
+        allocation.prepare_access(&(0..self.length))
     }
 }
 
