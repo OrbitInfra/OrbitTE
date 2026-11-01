@@ -73,6 +73,10 @@ CPU page-residency scan or device-plugin ABI. Native RDMA discovery now publishe
 `MemType::Cuda` entries with validated `MemEntry::pci_bus_id`, optional NUMA
 placement and GPU-to-RNIC priority tiers. Transfer selection consumes the actual
 owner's location; see [topology selection](rdma-cuda.md#device-port-gid-and-memory-topology-discovery).
+`RdmaConfig::priority_matrix` and `custom_json_path` override rank lists using
+TENT JSON formats, resolved once against that inventory. They preserve physical
+metadata and apply to each peer's actual owner location; see
+[custom topology](rdma-cuda.md#custom-topology-and-priority-matrices).
 Current hardware/performance limits are in [qualification](qualification.md#cuda-pointer-and-location).
 
 ## Peer authority

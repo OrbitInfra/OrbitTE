@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+mod config;
+
 /// TENT's three NIC priority ranks, ordered from preferred to fallback.
 pub const DEVICE_PRIORITY_RANKS: usize = 3;
 
@@ -26,6 +28,7 @@ pub struct NicEntry {
 }
 
 /// A memory location and its ranked indices into Topology::nic_list.
+/// Only listed NICs are eligible; masks and physical locality further restrict them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemEntry {
     pub name: String,

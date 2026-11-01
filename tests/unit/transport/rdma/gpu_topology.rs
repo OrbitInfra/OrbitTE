@@ -41,7 +41,12 @@ unsafe extern "C" fn open(h: *mut sys::DeviceHandles, _: *const c_char) -> i32 {
     unsafe { super::open_device(h, c"copy".as_ptr()) }
 }
 
-pub(crate) fn runtime(strict: bool, preferred: Option<u32>, mask: u64) -> RdmaTransport {
+pub(crate) fn runtime(
+    strict: bool,
+    preferred: Option<u32>,
+    mask: u64,
+    custom: bool,
+) -> RdmaTransport {
     static VERBS: sys::Verbs = sys::Verbs {
         discover,
         open_device: open,
@@ -52,13 +57,16 @@ pub(crate) fn runtime(strict: bool, preferred: Option<u32>, mask: u64) -> RdmaTr
     runtime.config.preferred_numa_node = preferred;
     runtime.config.device_mask = mask;
     runtime.config.block_size = 4;
+    if custom {
+        runtime.config.priority_matrix = Some(r#"{"cuda:1":[["rail0"],["rail1"]]}"#.into());
+    }
     runtime.verbs = &VERBS;
     runtime.registrations =
         buffers::LocalBufferManager::new(&runtime.config, Arc::clone(&runtime.usage), &VERBS);
     runtime
 }
 
-pub(crate) fn assert_used(engine: &crate::TransferEngine, id: usize) {
+pub(crate) fn assert_used(engine: &crate::TransferEngine, id: usize, gpu_one_path: usize) {
     let runtime = crate::engine::tests::source_runtime(engine);
     let contexts = runtime.context_set.lock().unwrap();
     let used: Vec<_> = contexts
@@ -76,8 +84,5 @@ pub(crate) fn assert_used(engine: &crate::TransferEngine, id: usize) {
             context: 42,
         })
         .unwrap();
-    assert_eq!(
-        paths[0].nic_id,
-        runtime.config.preferred_numa_node.map_or(1, |n| n as usize)
-    );
+    assert_eq!(paths[0].nic_id, gpu_one_path);
 }

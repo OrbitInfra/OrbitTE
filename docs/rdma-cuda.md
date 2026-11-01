@@ -56,6 +56,8 @@ Set `EngineConfig.rdma` to a configured `RdmaConfig`:
 | `device_mask` | Restrict dispatch by stable topology NIC IDs, up to 64 devices |
 | `preferred_numa_node` | Explicit CPU NUMA hint overriding automatic owner location |
 | `strict_local_numa` | Reject known cross-NUMA NICs; default `false`; unknown locality stays eligible |
+| `priority_matrix` | Optional inline TENT matrix JSON; takes precedence over `custom_json_path` |
+| `custom_json_path` | Optional TENT matrix or native `nics`/`mems` JSON file, read at context initialization |
 
 Discovery prefers active routes and retains otherwise usable paused ports.
 Each selected context owns its actual device, protection domain (PD), key
@@ -91,6 +93,65 @@ authority. Actual connection descriptors must match the selected path. Explicit
 pins never silently fall back to another device, port or GID. See
 [initially paused contexts](#initially-paused-contexts-and-gid-reselection) for
 the recovery rules.
+
+## Custom topology and priority matrices
+
+The RDMA configuration accepts TENT's classic location matrix. Each row is
+`[preferred NIC names, available NIC names]`, corresponding to rank 0 and rank 1:
+
+```rust
+let rdma = orbit_te::transport::rdma::RdmaConfig {
+    priority_matrix: Some(r#"{
+        "cpu:0": [["mlx5_0"], ["mlx5_1"]],
+        "cuda:0": [["mlx5_1"], ["mlx5_0"]]
+    }"#.into()),
+    ..Default::default()
+};
+```
+
+Names must exist in this process's discovered inventory after device/port/GID
+filters. `cuda:N` uses the CUDA-visible ordinal, and requires CUDA discovery.
+Unsupported accelerator locations, absent memory rows and absent NICs are errors.
+Only listed NICs are eligible for that row. Empty ranks deliberately disable a
+location. Masks, context availability and strict physical NUMA eligibility
+further restrict the candidates; they never introduce an omitted NIC.
+
+An explicit `*` row supplies ranks for locations without their own configured
+row, while retaining each discovered location's physical metadata. If omitted,
+the classic matrix synthesizes `*` from the union of preferred and available
+NICs. A NIC preferred in any row appears only in the wildcard's preferred tier.
+Duplicate NICs within one row, or duplicate locations, are configuration errors.
+A known CPU node absent from discovery still applies strict NUMA filtering to
+the wildcard candidates; it cannot become unknown to bypass locality.
+
+Alternatively, set `custom_json_path: Some(path.into())`. The file accepts the
+same matrix or TENT's native format:
+
+```json
+{
+  "nics": [{"name": "mlx5_1", "type": 0}, {"name": "mlx5_0", "type": 0}],
+  "mems": [{"name": "cuda:0", "type": 1,
+            "device_list": {"rank0": [0], "rank1": [1], "rank2": []}}]
+}
+```
+
+Native-format indices refer to the file's `nics` order and are resolved to the
+existing stable NIC IDs. Memory type is optional; when present it must match
+discovery (`0` host, `1` CUDA; `4` is also accepted for `*`). This format does not
+synthesize a wildcard: omitted memory rows retain automatic ranks unless the
+file supplies `*`. JSON PCI/NUMA and NIC attributes never replace discovered
+physical metadata, addresses or provider capabilities. Rank overrides do not
+reduce persistent MR publication across otherwise usable contexts.
+
+Both inputs are limited to 1 MiB. Inline input wins even when invalid; malformed
+or unreadable explicit configuration fails initialization without opening RDMA
+contexts or publishing MRs. This deliberately differs from frozen TENT's
+warning-and-autodiscovery fallback and replacement of the inventory. Successful
+initialization freezes the resolved ranks: changing the file does not reload
+them. Transfers and monitor recovery perform no JSON or filesystem work.
+The names and two JSON forms follow frozen TENT `runtime/topology.cpp`; legacy
+environment mappings and the general TENT config object remain F01 work.
+See [source qualification](qualification.md#custom-topology-input).
 
 ## Eager publication and cross-rail slice completion
 

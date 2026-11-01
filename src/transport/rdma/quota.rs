@@ -38,6 +38,7 @@ pub(super) struct DeviceSelector {
 }
 
 /// Compiled once per location; selection performs no topology walks or allocation.
+#[derive(Clone)]
 pub(super) struct DevicePriority {
     pub(super) ranks: [u8; 64],
     pub(super) eligible: u64,
@@ -117,7 +118,7 @@ impl DeviceSelector {
             ))?;
             let mut priority = DevicePriority {
                 ranks: [2; 64],
-                eligible: all,
+                eligible: 0,
             };
             let mut seen = 0;
             for (rank, devices) in memory.device_list.iter().enumerate() {
@@ -128,6 +129,7 @@ impl DeviceSelector {
                         ));
                     }
                     seen |= 1u64 << id;
+                    priority.eligible |= 1u64 << id;
                     priority.ranks[id] = rank as u8;
                 }
             }
@@ -148,6 +150,11 @@ impl DeviceSelector {
                 ));
             }
         }
+        let wildcard = priorities.get(&MemoryLocation::Cpu(None)).cloned();
+        let fallback = wildcard.clone().unwrap_or(DevicePriority {
+            ranks: [2; 64],
+            eligible: all,
+        });
         // CPU owners and explicit hints already carry a NUMA node, even when
         // CPU sysfs omitted its row. Compile every possible known-NIC match;
         // any other known CPU node can only use unknown NICs in strict mode.
@@ -155,14 +162,12 @@ impl DeviceSelector {
             priorities
                 .entry(MemoryLocation::Cpu(Some(node)))
                 .or_insert_with(|| {
-                    let mut priority = DevicePriority {
-                        ranks: [2; 64],
-                        eligible: all,
-                    };
+                    let mut priority = fallback.clone();
                     for (id, nic) in topology.nic_list.iter().enumerate() {
-                        if nic.numa_node == Some(node) {
+                        if wildcard.is_none() && nic.numa_node == Some(node) {
                             priority.ranks[id] = 0;
-                        } else if strict_local_numa && nic.numa_node.is_some() {
+                        }
+                        if strict_local_numa && nic.numa_node.is_some_and(|other| other != node) {
                             priority.eligible &= !(1u64 << id);
                         }
                     }
@@ -178,13 +183,10 @@ impl DeviceSelector {
         Ok(Arc::new(Self {
             priorities,
             unlisted_cpu: DevicePriority {
-                ranks: [2; 64],
-                eligible: if strict_local_numa { unknown_nics } else { all },
+                ranks: fallback.ranks,
+                eligible: fallback.eligible & if strict_local_numa { unknown_nics } else { all },
             },
-            fallback: DevicePriority {
-                ranks: [2; 64],
-                eligible: all,
-            },
+            fallback,
             state: Mutex::new(State {
                 available: available & all,
                 inflight: vec![0; count],

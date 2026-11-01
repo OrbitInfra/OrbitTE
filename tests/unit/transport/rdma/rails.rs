@@ -1456,3 +1456,70 @@ fn initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling
     engine.close(TIMEOUT).unwrap();
     assert_eq!(runtime.stats().unwrap().persistent_mrs, 0);
 }
+
+#[test]
+fn configured_rails_drive_public_transfers_without_compacting_failed_contexts() {
+    let mut configured = runtime(u64::MAX, 8);
+    configured.config.priority_matrix = Some(r#"{"*":[["device_missing"],["rail2"]]}"#.into());
+    let source = rdma_fixture_with_runtime(configured);
+    let mut configured = runtime(u64::MAX, 8);
+    configured.config.priority_matrix = Some(r#"{"*":[["rail2"],[]]}"#.into());
+    let requester = rdma_fixture_with_runtime(configured);
+    let local = requester
+        .register_memory(vec![0x63; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(
+            vec![0x29; 16].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    for op in [TransferOp::Read, TransferOp::Write] {
+        local.write(0, &[0x63; 16]).unwrap();
+        remote.write(0, &[0x29; 16]).unwrap();
+        exchange(&requester, &source, &local, &remote, op);
+    }
+    for engine in [&source, &requester] {
+        let runtime = source_runtime(engine);
+        assert_eq!(
+            runtime
+                .paths(crate::MemoryLocation::Cpu(None))
+                .unwrap()
+                .iter()
+                .map(|p| p.nic_id)
+                .collect::<Vec<_>>(),
+            [2]
+        );
+        assert!(
+            runtime
+                .allocate(1, crate::MemoryLocation::Cpu(None), 1)
+                .is_err()
+        );
+        let contexts = runtime.context_set.lock().unwrap();
+        assert_eq!(contexts.slots.len(), 3);
+        assert!(contexts.slots[1].owner.is_none());
+        assert!(contexts.slots[0].cq_list.is_empty());
+        assert!(!contexts.slots[2].cq_list.is_empty());
+        drop(contexts);
+        assert_eq!(engine.stats().unwrap().rdma.unwrap().direct_bytes, 0);
+    }
+    source.unregister_memory(&remote).unwrap();
+    requester.unregister_memory(&local).unwrap();
+    source.close(TIMEOUT).unwrap();
+    requester.close(TIMEOUT).unwrap();
+}
+
+#[test]
+fn invalid_topology_fails_before_context_or_mr_publication() {
+    let mut runtime = runtime(u64::MAX, 8);
+    runtime.config.priority_matrix = Some(r#"{"*":[["unknown_nic"],[]]}"#.into());
+    assert!(matches!(
+        runtime.paths(crate::MemoryLocation::Cpu(None)),
+        Err(Error::InvalidConfig(_))
+    ));
+    let contexts = runtime.context_set.lock().unwrap();
+    assert!(contexts.slots.is_empty());
+    assert!(contexts.topology.is_none());
+    drop(contexts);
+    assert_eq!(runtime.stats().unwrap().opened_devices, 0);
+}

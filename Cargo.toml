@@ -16,7 +16,7 @@ publish = ["crates-io"]
 
 [features]
 default = []
-rdma = ["dep:ibverbs-sys", "dep:libc"]
+rdma = ["dep:ibverbs-sys", "dep:libc", "dep:serde", "dep:serde_json"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2", "dep:libc"]
 
 [dependencies]
@@ -26,6 +26,9 @@ libloading = { version = "0.8", optional = true }
 ibverbs-sys = { version = "=0.3.2", optional = true }
 libc = { version = "0.2", optional = true }
 socket2 = { version = "=0.6.2", optional = true }
+
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
 
 [lib]
 name = "orbit_te"
