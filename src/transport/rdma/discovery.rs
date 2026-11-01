@@ -149,7 +149,14 @@ fn accessible(dev: &Path, name: &str) -> bool {
 
 pub(super) fn discover(config: &RdmaConfig) -> Result<(Topology, Vec<RdmaAddress>)> {
     let devices = sys::devices()?;
-    discover_at(config, Path::new("/sys"), Path::new("/dev"), &devices)
+    let (topology, routes) = discover_at(config, Path::new("/sys"), Path::new("/dev"), &devices)?;
+    #[cfg(feature = "cuda")]
+    let topology = {
+        let mut topology = topology;
+        crate::cuda::discover_topology(&mut topology, Path::new("/sys"))?;
+        topology
+    };
+    Ok((topology, routes))
 }
 
 fn discover_at(

@@ -209,7 +209,8 @@ impl RdmaTransport {
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
-            let local_paths = self.paths()?;
+            let location = request.local.location()?.location;
+            let local_paths = self.paths(location)?;
             if (local_paths.len() > 1 || self.config.num_lanes > 1)
                 && plan_rdma_slices(request.length, self.config.block_size, 64)?.1 > 1
             {
@@ -241,6 +242,7 @@ impl RdmaTransport {
                 }
                 let selection = self.allocate(
                     request.length,
+                    location,
                     path::local_device_mask(&paths, &remote_paths),
                 )?;
                 let local = paths
@@ -355,7 +357,7 @@ impl RdmaTransport {
         let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
         let length = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
         crate::memory::checked_range(offset, length, memory.len())?;
-        let paths = self.paths()?;
+        let paths = self.paths(memory.location()?.location)?;
         let multi = matches!(
             request.operation,
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices

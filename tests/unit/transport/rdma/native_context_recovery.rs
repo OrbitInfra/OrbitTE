@@ -110,7 +110,7 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
         let owner = runtime.device().unwrap();
         let original = identity(&owner);
         assert!(!owner.address().unwrap().active);
-        assert!(runtime.paths().is_err());
+        assert!(runtime.paths(crate::MemoryLocation::Cpu(None)).is_err());
         assert_eq!(runtime.stats().unwrap().persistent_mrs, 2);
         assert_eq!(runtime.stats().unwrap().opened_connections, 0);
         PAUSED.store(false, Ordering::Release);
@@ -124,7 +124,13 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
             ),
         }
         assert_eq!(identity(&owner), original);
-        assert_eq!(runtime.paths().unwrap().len(), 1);
+        assert_eq!(
+            runtime
+                .paths(crate::MemoryLocation::Cpu(None))
+                .unwrap()
+                .len(),
+            1
+        );
         let mut grant = runtime
             .endpoint(
                 &memory,

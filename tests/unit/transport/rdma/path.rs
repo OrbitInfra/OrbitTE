@@ -34,6 +34,14 @@ fn rail_mask_keeps_family_type_and_name_affinity_without_compacting_ids() {
     assert!(!compatible(&local[1], &v1));
     assert_eq!(local_device_mask(&local, &[v1]), 0);
     assert_eq!(local_device_mask(&local, &remote[1..]), 1 << 2);
+    let preferred = vec![
+        path(7, "remote-near", GidType::RoceV2, "::ffff:10.0.0.2"),
+        path(1, "remote-far", GidType::RoceV2, "::ffff:10.0.0.3"),
+    ];
+    assert_eq!(remote_path(&local[1], &preferred).unwrap().nic_id, 7);
+    let mut matched = preferred;
+    matched[1].name = local[1].name.clone();
+    assert_eq!(remote_path(&local[1], &matched).unwrap().nic_id, 1);
 }
 
 #[test]

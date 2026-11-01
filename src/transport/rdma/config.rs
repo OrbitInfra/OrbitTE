@@ -44,6 +44,9 @@ pub struct RdmaConfig {
     pub rdma_blacklist: Vec<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
+    /// TENT strict_local_numa: exclude only known cross-NUMA NICs. Unknown
+    /// locality remains eligible; device masks still apply independently.
+    pub strict_local_numa: bool,
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
     pub device_mask: u64,
     pub progress_mode: RdmaProgressMode,
@@ -83,6 +86,7 @@ impl Default for RdmaConfig {
             rdma_whitelist: Vec::new(),
             rdma_blacklist: Vec::new(),
             preferred_numa_node: None,
+            strict_local_numa: false,
             device_mask: u64::MAX,
             progress_mode: RdmaProgressMode::Polling,
             num_lanes: 1,

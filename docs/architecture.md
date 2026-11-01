@@ -178,7 +178,9 @@ construction reservations. See [qualification](qualification.md) for the tested 
    paused contexts cannot supply a transfer path.
 2. **Plan.** The transport partitions large parents with TENT's bounded,
    short-tail-folding geometry. Static `path` metadata checks compatible peers;
-   `DeviceSelector` applies device masks, topology ranks and byte charges.
+   `DeviceSelector` uses precompiled per-location ranks from the actual memory
+   owner, device masks, strict NUMA eligibility and byte charges. Each peer
+   filters and orders its own NIC paths before rendezvous.
 3. **Authorize.** Both peers reserve the whole parent's `max_grants` budget;
    the source also reserves all RQ credits before exposing the first grant.
    Each grant owns a reservation slot; the parent's reservation survives until
@@ -507,6 +509,20 @@ context's cached PCI/NUMA discovery consumed by local and remote staging.
 This follows frozen TENT `Platform` / `MemoryProber` responsibilities inside
 the Rust resource owners, without adding a process-global raw-pointer registry.
 See [the public contract](rust-api.md#memory-type-and-location).
+
+`cuda/probe/topology.rs` supplies frozen TENT `CudaProbe` inventory during native
+RDMA discovery. Shared `platform/pci.rs` resolves PCI/NUMA and bridge distance;
+`runtime/topology.rs::MemEntry` stores host and CUDA locations with three NIC
+tiers. `transport/rdma/quota.rs::DeviceSelector` compiles these into typed rank
+arrays and eligibility masks before any transfer. Hot-path allocation reads
+the row and charges a `DeviceLease`; it performs no driver/sysfs query, string
+construction or tier-vector search. The existing lease still follows the actual
+grant through drain or retained native failure. Explicit CPU hints override the
+owner location. Source path publication and requester slice allocation use the
+same eligibility rule. GPU discovery creates no new CUDA context or owner and
+does not extend allocation lifetime. This preserves TENT's
+`CudaProbe → Topology → DeviceSelector` responsibility chain; native bandwidth
+weights and user-defined priority matrices remain separate work.
 
 ## CUDA IPC transport ownership
 

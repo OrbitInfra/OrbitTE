@@ -25,7 +25,7 @@ impl Context {
         let mut memory_type = 0i32;
         let mut managed = 0u32;
         let mut raw: driver::Context = std::ptr::null_mut();
-        let mut device = -1i32;
+        let mut device_ordinal = -1i32;
         let mut attributes = [
             PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
             PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED,
@@ -36,7 +36,7 @@ impl Context {
             (&mut memory_type as *mut i32).cast(),
             (&mut managed as *mut u32).cast(),
             (&mut raw as *mut driver::Context).cast(),
-            (&mut device as *mut i32).cast(),
+            (&mut device_ordinal as *mut i32).cast(),
         ];
         // SAFETY: typed outputs match these four attributes. The caller retains
         // the actual stable allocation/context throughout metadata validation.
@@ -52,17 +52,24 @@ impl Context {
         // null/default attributes. Neither that nor a driver error proves DRAM.
         if memory_type != sys::CUmemorytype::CU_MEMORYTYPE_DEVICE as i32
             || managed != 0
-            || device < 0
+            || device_ordinal < 0
             || raw.is_null()
         {
             return Err(Error::Unavailable(
                 "CUDA registration requires known non-managed device memory and its context",
             ));
         }
+        let mut device = 0;
+        // SAFETY: the pointer query supplied this process-visible ordinal;
+        // native device operations use cuDeviceGet's handle, not the location key.
+        check("cuDeviceGet", unsafe {
+            (driver.device_get)(&mut device, device_ordinal)
+        })?;
         let context = Arc::new(Self {
             driver,
             raw: NonNull::new(raw).ok_or(Error::InvalidRange)?,
             device,
+            device_ordinal,
             primary: false,
             owner: Some(Arc::clone(owner)),
             poisoned: AtomicBool::new(false),
@@ -92,21 +99,7 @@ impl Context {
         if let Some(cached) = locality.as_ref().filter(|v| std::ptr::eq(v.provider, numa)) {
             return Ok(cached.node);
         }
-        let mut pci = [0 as std::ffi::c_char; 20];
-        self.current(|| {
-            // SAFETY: initialized bounded output, live context and driver.
-            check("cuDeviceGetPCIBusId", unsafe {
-                (self.driver.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, self.device)
-            })
-        })?;
-        let end = pci
-            .iter()
-            .position(|c| *c == 0)
-            .ok_or(Error::Protocol("CUDA PCI bus id"))?;
-        let pci: String = pci[..end]
-            .iter()
-            .map(|c| (*c as u8 as char).to_ascii_lowercase())
-            .collect();
+        let pci = self.current(|| self.driver.pci_bus(self.device))?;
         let node = (numa.gpu_node)(&pci);
         *locality = Some(DeviceLocality {
             provider: numa,
@@ -115,3 +108,24 @@ impl Context {
         Ok(node)
     }
 }
+
+impl Driver {
+    pub(super) fn pci_bus(&self, device: i32) -> Result<String> {
+        let mut pci = [0 as std::ffi::c_char; 20];
+        // SAFETY: bounded initialized output and a driver-visible device handle.
+        check("cuDeviceGetPCIBusId", unsafe {
+            (self.pci_bus_id)(pci.as_mut_ptr(), pci.len() as i32, device)
+        })?;
+        let end = pci
+            .iter()
+            .position(|c| *c == 0)
+            .ok_or(Error::Protocol("CUDA PCI bus id"))?;
+        let pci: String = pci[..end].iter().map(|c| *c as u8 as char).collect();
+        crate::platform::pci::bus_id(&pci).ok_or(Error::Protocol("CUDA PCI bus id"))
+    }
+}
+
+#[cfg(feature = "rdma")]
+mod topology;
+#[cfg(feature = "rdma")]
+pub(crate) use topology::discover;

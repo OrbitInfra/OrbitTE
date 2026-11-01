@@ -273,7 +273,7 @@ impl Drop for PinnedAllocation {
 
 /// Allocate real CUDA-pinned host memory; no CUDA SDK or runtime linker dependency.
 pub fn allocate_pinned_host(device: i32, length: usize) -> Result<Arc<HostMemory>> {
-    let context = Context::primary(device)?;
+    let context = Context::primary(Driver::load()?, device)?;
     let allocation = Arc::new(PinnedAllocation::new(&context, length)?);
     Ok(Arc::new(HostMemory::from_cuda_pinned(allocation)))
 }

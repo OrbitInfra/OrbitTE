@@ -286,6 +286,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                     driver: context.driver.clone(),
                     raw: context.raw,
                     device: context.device,
+                    device_ordinal: context.device_ordinal,
                     primary: false,
                     owner: Some(context.clone()),
                     poisoned: AtomicBool::new(false),

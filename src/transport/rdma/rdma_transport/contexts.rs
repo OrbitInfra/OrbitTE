@@ -9,7 +9,7 @@ use crate::transport::rdma::context_set::{ContextSet, ContextSlot};
 use crate::transport::rdma::path::NicPath;
 use crate::transport::rdma::quota::{DeviceLease, DeviceSelector};
 use crate::transport::rdma::{RdmaContext, cq_lane};
-use crate::{Error, Result};
+use crate::{Error, MemoryLocation, Result};
 
 impl RdmaTransport {
     pub(in crate::transport::rdma) fn initialize_contexts(
@@ -34,7 +34,7 @@ impl RdmaTransport {
         contexts
             .slots
             .resize_with(topology.nic_list.len(), ContextSlot::default);
-        let mut available = 0;
+        let selector = DeviceSelector::new(&topology, 0, self.config.strict_local_numa)?;
         for (id, slot) in contexts.slots.iter_mut().enumerate() {
             let name = topology.nic_list[id].name.clone();
             for address in candidates.iter().filter(|address| address.device == name) {
@@ -49,7 +49,7 @@ impl RdmaTransport {
                     Ok(owner) => {
                         if owner.asynchronous.check().is_ok() {
                             owner.address()?.publish(&mut topology)?;
-                            available |= 1u64 << id;
+                            selector.set_available(id, true);
                         }
                         slot.owner = Some(owner);
                         break;
@@ -62,7 +62,7 @@ impl RdmaTransport {
                 }
             }
         }
-        contexts.selector = Some(DeviceSelector::new(topology.clone(), available));
+        contexts.selector = Some(selector);
         contexts.topology = Some(topology);
         self.workers
             .monitor
@@ -70,7 +70,10 @@ impl RdmaTransport {
         Ok(())
     }
 
-    pub(in crate::transport::rdma) fn paths(&self) -> Result<Vec<NicPath>> {
+    pub(in crate::transport::rdma) fn paths(
+        &self,
+        location: MemoryLocation,
+    ) -> Result<Vec<NicPath>> {
         self.recover_progress()?;
         let mut contexts = self
             .context_set
@@ -81,9 +84,18 @@ impl RdmaTransport {
             .topology
             .as_ref()
             .ok_or(Error::Internal("missing RDMA topology"))?;
+        let location = self
+            .config
+            .preferred_numa_node
+            .map_or(location, |node| MemoryLocation::Cpu(Some(node)));
+        let priority = contexts
+            .selector
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA device selector"))?
+            .priority(location);
         let mut paths = Vec::new();
         for (id, slot) in contexts.slots.iter().enumerate() {
-            if self.config.device_mask & (1u64 << id) == 0 {
+            if self.config.device_mask & priority.eligible & (1u64 << id) == 0 {
                 continue;
             }
             if let Some(owner) = &slot.owner {
@@ -102,15 +114,17 @@ impl RdmaTransport {
         }
         if paths.is_empty() {
             return Err(Error::Unavailable(
-                "no enabled RDMA context matches device mask",
+                "no enabled RDMA context matches location and device mask",
             ));
         }
+        paths.sort_unstable_by_key(|path| (priority.ranks[path.nic_id], path.nic_id));
         Ok(paths)
     }
 
     pub(in crate::transport::rdma) fn allocate(
         &self,
         length: usize,
+        location: MemoryLocation,
         mask: u64,
     ) -> Result<DeviceLease> {
         let mut contexts = self
@@ -139,7 +153,9 @@ impl RdmaTransport {
             .ok_or(Error::Internal("missing RDMA device selector"))?
             .allocate(
                 length,
-                self.config.preferred_numa_node,
+                self.config
+                    .preferred_numa_node
+                    .map_or(location, |node| MemoryLocation::Cpu(Some(node))),
                 mask & self.config.device_mask & healthy,
             )
     }

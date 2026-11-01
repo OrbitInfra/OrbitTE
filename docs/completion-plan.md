@@ -492,8 +492,18 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   dereference. Context-owned PCI/NUMA discovery is reused by staging; allowed
   nodes are checked on each selection. See [the contract](rust-api.md#memory-type-and-location)
   and [qualification](qualification.md#cuda-pointer-and-location). General CPU
-  page probing, GPU topology publication and the P8 plugin ABI remain separate.
+  page probing and the P8 plugin ABI remain separate.
   Existing context/stream/event/export/import owners keep their scoped gates.
+- [x] **CUDA topology and owner-based RDMA selection (Implemented; source profile).**
+  F02 CUDA-visible device/PCI/NUMA entries and GPU-to-RNIC bridge-distance tiers
+  feed the existing `DeviceSelector`. Precompiled typed rank arrays remove
+  per-slice topology scans. Requester allocation and source path publication use
+  actual owner locations, preserving explicit masks/hints, known-cross-NUMA
+  rejection, stable context IDs and actual grant byte charges. Discovery creates
+  no CUDA contexts; missing PCI distance stays unknown. See
+  [contracts](rdma-cuda.md#device-port-gid-and-memory-topology-discovery) and
+  [source evidence](qualification.md#cuda-topology-and-rdma-selection).
+  Installed topology/routing and matched performance remain unqualified.
 - [x] **P5.3 — Explicit GPU direct RDMA (Source and bounded installed profile accepted with limits).**
   Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
   persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
@@ -507,8 +517,8 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   close. Independent review accepts the bounded evidence; B host-wide context
   non-growth remains unqualified because six additional entries have no assigned
   owner. See [qualification](qualification.md#gpudirect-rdma). GPU source QP/MR
-  reuse, automatic GPU topology policy, broader providers and native GPU faults
-  remain open; this is not full P5 acceptance.
+  reuse, installed GPU topology qualification, custom scheduling policy, broader
+  providers and native GPU faults remain open; this is not full P5 acceptance.
 - [ ] **P5.4 — CUDA IPC/NVLink ownership and completion.** Follow frozen TENT
   `NVLinkTransport`: same-host handle export/import, retained exporter/importer
   allocations, peer copy streams/events, process-generation validation and
@@ -1077,12 +1087,18 @@ query, mapped-range validation and reused staging locality. See
 [qualification](qualification.md#cuda-pointer-and-location). This does not close
 full platform parity or any missing installed hardware gate.
 
-The next functional delivery is the existing F02 CUDA topology inventory:
-publish validated `cuda:N` device/PCI/NUMA entries and GPU-to-RNIC proximity into
-the current topology/selection owners. The current inventory is host-only;
-reuse the actual CUDA probe and existing NIC discovery instead of another
-registry or selector. Preserve explicit masks and strict-local rejection.
-Full policy/QoS selection remains P6; MNNVL/EGM remain open P5 transport work.
+The F02 CUDA topology inventory and owner-based RDMA selection are implemented:
+validated `cuda:N` device/PCI/NUMA entries and GPU-to-RNIC tiers feed the current
+topology and selector owners, with precompiled priorities and strict locality.
+Source/CPU controls exercise actual READ/WRITE slices and both peers' selection;
+installed topology and performance remain unqualified.
+
+The next functional delivery is the remaining F02 custom topology/priority
+matrix input: validate configured location-to-NIC ranks against the discovered
+stable device inventory and feed the same selector, without rebuilding a second
+registry or scheduling layer. Preserve known-cross-NUMA rejection, masks and
+grant charge lifetimes. Full bandwidth/QoS selection remains P6; MNNVL/EGM remain
+open P5 transport work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining
 is an unimplemented extension, not an additional frozen-TENT parity gate.

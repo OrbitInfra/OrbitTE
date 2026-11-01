@@ -183,7 +183,7 @@ impl RdmaTransport {
                 "RDMA rendezvous protection domain mismatch",
             ));
         }
-        let selection = self.allocate(length, mask)?;
+        let selection = self.allocate(length, memory.location()?.location, mask)?;
         let source_nic_id = selection.device_id();
         let grant_lease = self.reserve_grant(selection, memory, &admission.grants)?;
         let device = self.device_at(source_nic_id)?;

@@ -269,7 +269,9 @@ mod staging {
         operation: TransferOp,
     ) -> HeldConnection {
         let runtime = source_runtime(requester);
-        let paths = source_runtime(source).paths().unwrap();
+        let paths = source_runtime(source)
+            .paths(crate::MemoryLocation::Cpu(None))
+            .unwrap();
         let remote = paths.iter().find(|p| p.nic_id == 2).unwrap();
         let device = runtime.device_at(2).unwrap();
         let connecting = runtime

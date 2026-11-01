@@ -129,6 +129,13 @@ fn status(code: c_int) -> Status {
 unsafe extern "C" fn init(_: c_uint) -> Status {
     SUCCESS
 }
+#[cfg(feature = "rdma")]
+unsafe extern "C" fn count(output: *mut c_int) -> Status {
+    unsafe {
+        *output = 0;
+    }
+    SUCCESS
+}
 unsafe extern "C" fn get(output: *mut c_int, ordinal: c_int) -> Status {
     unsafe {
         *output = ordinal;
@@ -573,6 +580,8 @@ pub(super) fn driver() -> Arc<Driver> {
         _library: None,
         init,
         device_get: get,
+        #[cfg(feature = "rdma")]
+        device_count: count,
         #[cfg(feature = "rdma")]
         device_attribute,
         #[cfg(feature = "rdma")]
