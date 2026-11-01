@@ -17,6 +17,13 @@ or `allocate_ipc`, or `cuda::allocate_pinned_host` registered through
 registered addresses and retain the
 existing READ/WRITE bounds and permissions.
 
+GPU producers may use
+[`CudaMemory::record_producer_stream`](rdma-cuda.md#producer-stream-readiness)
+before handoff. Source export and requester GPU access consume the same
+allocation-owned event generation; this can block before transfer submission.
+The later group completion still uses shared event-query progress. CUDA-pinned
+host producer writes and consumer-stream handoff remain caller-coordinated.
+
 An exported legacy CUDA IPC handle grants access to its **whole underlying
 allocation**. Driver hardware does not enforce a registered subrange or a
 READ-only grant, and a receipt cannot revoke a copied handle. This interface
@@ -356,13 +363,16 @@ when a device's idle list is empty and has no corresponding global slot bound.
 TENT's `getTransferStatus` uses `cudaEventQuery` on the task completion event.
 OrbitTE now follows that event-query lifetime, with a shared completion worker
 adapting it to the existing batch API; the worker is an OrbitTE runtime choice.
-The source receipt still follows physical completion. Native
-`cudaMemcpyBatchAsync` dispatch remains separate work. TENT's cache closes in `uninstall`;
+The source receipt still follows physical completion. Eligible groups also use
+the [native CUDA batch-copy counterpart](#native-cuda-batch-copies).
+TENT's cache closes in `uninstall`;
 OrbitTE additionally requires explicit cooperating source close receipts. Its
 bounded LRU and continuing flush extend that ownership model; they are not
 features copied from the frozen TENT cache. Grouped completion, shared stream
 ownership and event-query progress have source checks; their current installed DMA and
-performance qualification remain open. Producer readiness stays an explicit caller handoff.
+performance qualification remain open. TENT's caller-sync event is implemented
+as an explicit allocation-owned GPU handoff; see
+[producer readiness](rdma-cuda.md#producer-stream-readiness).
 
 TENT advertises DRAM/GPU directions and optionally registers local host buffers
 (`transports/nvlink/host_register`, default false), but its remote relocation

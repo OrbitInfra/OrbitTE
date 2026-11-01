@@ -53,6 +53,9 @@ pub(super) struct Driver {
     pub copy_device: unsafe extern "C" fn(u64, u64, usize, sys::CUstream) -> Status,
     pub to_host: unsafe extern "C" fn(*mut c_void, u64, usize, sys::CUstream) -> Status,
     pub to_device: unsafe extern "C" fn(u64, *const c_void, usize, sys::CUstream) -> Status,
+    pub stream_context: unsafe extern "C" fn(sys::CUstream, *mut Context) -> Status,
+    pub stream_capture:
+        unsafe extern "C" fn(sys::CUstream, *mut sys::CUstreamCaptureStatus) -> Status,
     pub stream_create: unsafe extern "C" fn(*mut sys::CUstream, c_uint) -> Status,
     pub stream_destroy: unsafe extern "C" fn(sys::CUstream) -> Status,
     pub stream_synchronize: unsafe extern "C" fn(sys::CUstream) -> Status,
@@ -114,6 +117,8 @@ impl Driver {
             copy_device: symbol!(cuMemcpyAsync),
             to_host: symbol!(cuMemcpyDtoHAsync_v2),
             to_device: symbol!(cuMemcpyHtoDAsync_v2),
+            stream_context: symbol!(cuStreamGetCtx),
+            stream_capture: symbol!(cuStreamIsCapturing),
             stream_create: symbol!(cuStreamCreate),
             stream_destroy: symbol!(cuStreamDestroy_v2),
             stream_synchronize: symbol!(cuStreamSynchronize),

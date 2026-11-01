@@ -290,11 +290,57 @@ memory through CUDA. The feature uses generated Driver API signatures and
 selective fallible loading from `libcuda.so.1`; it does not require nvcc,
 libcudart, cuBLAS or NVRTC to build.
 
-Callers finish external producers and exclude conflicting external access before
-handoff, then coordinate consumers through their own stream/lifecycle contract.
-These APIs do not infer framework readiness. Failed copy synchronization,
-context restore or unpin retains the actual owner and is observable through
-`cuda::retained_resources`.
+Callers exclude conflicting external access before handoff and coordinate
+consumers through their own stream/lifecycle contract. GPU producers can use
+the explicit readiness handoff below or finish their work before handoff.
+CUDA-pinned host producers still require caller synchronization. Failed copy
+synchronization, context restore or unpin retains the actual owner and is
+observable through `cuda::retained_resources`.
+
+### Producer-stream readiness
+
+Unsafe `CudaMemory::record_producer_stream(stream, owner)` captures work already
+queued on the actual producer stream. Call it on the producer thread, before
+making the allocation available to a transfer. The supplied `Arc<dyn Send + Sync>`
+must retain the live stream and all producer inputs through completion, without
+forming an ownership cycle with this allocation. Coordinate exclusive external
+access before queuing producer work; no transfer loan may exist, and subsequent
+external access must wait for engine completion. Registration alone is neither
+a readiness handoff nor a payload access.
+
+An explicit stream must belong to the allocation's actual native context;
+the caller can have a different current context or none. Special default-stream
+handles resolve on the calling thread before OrbitTE pushes any context.
+Graph-capturing streams are rejected. OrbitTE does not infer a framework stream
+from an unrelated transfer worker. See NVIDIA's
+[stream context and capture contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__STREAM.html).
+
+`cuda/readiness.rs::CallerSyncEvent` belongs to the actual allocation and is
+shared by its registration aliases. A successful capture does not wait for the newly recorded
+work. The first local copy, staging loan/copy, GPUDirect DMA loan or IPC
+source/requester access consumes the recorded generation. A subsequent record
+consumes its predecessor before reuse; final allocation drop also drains a
+pending producer. The event is reused with timing disabled and blocking wait
+enabled. Each generation is consumed once, rather than once per transfer slice.
+Later work on the producer stream is not part of that event's receipt.
+
+Readiness consumption uses `cuEventSynchronize` and can block the accessing
+thread. It is not a device-side stream dependency, and a request deadline cannot
+interrupt the native wait. If record fails, only the original producer stream
+on the calling thread can supply a recovery drain; an older or unrecorded event
+cannot. Unproven record, wait or context restoration fences the allocation and
+retains its actual producer inputs/context. An admission error before capture
+leaves producer work with the caller. Native event destruction is attempted
+once after completion; uncertain cleanup retains the native handle/context.
+
+Frozen TENT's
+[`CallerSyncEventPool` / `syncWithCallerStream`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
+records a reusable event on `cudaStreamPerThread` and waits for it before
+submission. OrbitTE retains that scoped CPU event-wait boundary while accepting
+the caller's explicit stream and attaching its generation to the allocation
+across threads and transports. Producer readiness and transfer completion use
+separate events. CUDA-pinned host producer handoff and consumer-stream chaining
+remain open. See [source qualification](qualification.md#cuda-producer-readiness).
 
 ### Copy completion and reuse
 
@@ -359,9 +405,10 @@ visibility. Requester completion likewise establishes visibility before
 releasing its DMA range. Hardware owner ordering is used when advertised;
 otherwise `cuFlushGPUDirectRDMAWrites` targets the current owning context.
 Any uncertain native cleanup, flush or context restoration retains the real
-allocation, range loan and associated admission. External producer/consumer
-stream handoff remains the caller's responsibility; SYNC_MEMOPS does not wait
-for arbitrary kernels ([CUDA ordering contract](https://docs.nvidia.com/cuda/gpudirect-rdma/#synchronization-and-memory-ordering)).
+allocation, range loan and associated admission. GPU producer readiness must be
+handed off through `record_producer_stream` or completed by the caller before
+DMA admission. Consumers still coordinate through their own lifecycle;
+SYNC_MEMOPS does not wait for arbitrary kernels ([CUDA ordering contract](https://docs.nvidia.com/cuda/gpudirect-rdma/#synchronization-and-memory-ordering)).
 
 This follows frozen TENT's `LocalBufferManager` → `RdmaContext::registerMemReg`
 registration and `Workers`/slice progress boundaries. TENT publishes native MR

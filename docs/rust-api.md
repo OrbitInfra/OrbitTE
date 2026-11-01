@@ -91,8 +91,15 @@ memory, progress mode and bounded native resource budgets.
 events while preserving the same data worker and completion validation.
 
 The `cuda` module owns NVIDIA device/pinned-host allocations and synchronized
-copies. Device pointers use declared host staging for network movement.
-See [RDMA and CUDA](rdma-cuda.md) for exact range, grant and drain requirements.
+copies. Device transfers select declared host staging or explicit GPUDirect RDMA.
+Unsafe `CudaMemory::record_producer_stream(stream, owner)` records already-queued
+GPU producer work on the caller's actual stream. Retain the live stream and all
+producer inputs in the supplied `Arc<dyn Send + Sync>`; aliases share one reusable
+event generation. Transfer access consumes readiness before reading or writing
+the allocation. This does not establish a consumer-stream dependency or hand off
+CUDA-pinned host producers. See the
+[producer ownership contract](rdma-cuda.md#producer-stream-readiness) before using
+the unsafe API, and [RDMA and CUDA](rdma-cuda.md) for range, grant and drain rules.
 
 ## Close and drain
 

@@ -20,6 +20,7 @@ mod ipc_host;
 mod mixed_batches;
 #[cfg(feature = "rdma")]
 mod rdma;
+mod readiness;
 mod remote_progress;
 mod remote_staging;
 mod requester_failures;

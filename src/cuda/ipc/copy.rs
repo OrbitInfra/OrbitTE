@@ -182,13 +182,13 @@ impl IpcMapping {
             for memory in &owners {
                 let access = match memory {
                     Allocation::Cuda(memory) => {
-                        let allocation = memory.lock_ipc(deadline)?;
+                        let mut allocation = memory.lock_ipc(deadline)?;
                         if !allocation.owned {
                             return Err(Error::Unavailable(
                                 "CUDA IPC requester requires owned CudaMemory",
                             ));
                         }
-                        allocation.check_dma(&(0..memory.length))?;
+                        allocation.prepare_access(&(0..memory.length))?;
                         CopyAccess::Device(allocation)
                     }
                     Allocation::Host(memory) => {

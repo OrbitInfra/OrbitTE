@@ -18,12 +18,14 @@ pub(crate) mod ipc;
 mod pinned;
 #[cfg(feature = "rdma")]
 mod rdma;
+mod readiness;
 mod staging;
 mod stream;
 mod stream_pool;
 use driver::{Driver, PointerAttribute, SUCCESS, check};
 pub(crate) use pinned::PinnedAllocation;
 pub use pinned::allocate_pinned_host;
+use readiness::CallerSyncEvent;
 pub(crate) use staging::StagingCopy;
 use stream::CopyStream;
 pub(crate) use stream_pool::{CUDAStreamHandle, CUDAStreamPool};
@@ -148,6 +150,7 @@ struct DeviceAllocation {
     uncertain: bool,
     ipc_inflight: bool,
     copy_stream: Option<CopyStream>,
+    producer: Option<CallerSyncEvent>,
     dma: Vec<std::ops::Range<usize>>,
     ipc_extent: Option<usize>,
     #[cfg(feature = "rdma")]
@@ -155,7 +158,7 @@ struct DeviceAllocation {
 }
 
 impl DeviceAllocation {
-    pub(super) fn check_dma(&self, range: &Range<usize>) -> Result<()> {
+    pub(super) fn prepare_access(&mut self, range: &Range<usize>) -> Result<()> {
         if self.uncertain
             || self
                 .context
@@ -174,7 +177,7 @@ impl DeviceAllocation {
         {
             return Err(Error::Unavailable("CUDA range has an active transfer loan"));
         }
-        Ok(())
+        self.wait_producer()
     }
 }
 
@@ -184,6 +187,7 @@ impl Drop for DeviceAllocation {
             return;
         }
         let released = !self.uncertain
+            && self.wait_producer().is_ok()
             && !self.context.poisoned.load(Ordering::Acquire)
             && (!self.owned
                 || self
@@ -205,8 +209,9 @@ impl Drop for DeviceAllocation {
     }
 }
 
-/// Stable device allocation owner. Handoffs must synchronize external producers
-/// before engine access and consumers after completion. No CPU dereference occurs.
+/// Stable device allocation owner. External producers must synchronize or use
+/// record_producer_stream before engine access; consumers wait for completion.
+/// No CPU dereference occurs.
 pub struct CudaMemory {
     address: u64,
     length: usize,
@@ -259,6 +264,7 @@ impl CudaMemory {
             uncertain: false,
             ipc_inflight: false,
             copy_stream: None,
+            producer: None,
             dma: Vec::new(),
             ipc_extent: ipc.then_some(physical_length),
             #[cfg(feature = "rdma")]
@@ -383,6 +389,7 @@ impl CudaMemory {
                 uncertain: false,
                 ipc_inflight: false,
                 copy_stream: None,
+                producer: None,
                 dma: Vec::new(),
                 ipc_extent: None,
                 #[cfg(feature = "rdma")]
@@ -425,7 +432,7 @@ impl CudaMemory {
                 code: -1,
             });
         }
-        allocation.check_dma(&(offset..offset + length))?;
+        allocation.prepare_access(&(offset..offset + length))?;
         let context = Arc::clone(&allocation.context);
         let mut staging = PinnedAllocation::new(&context, length)?;
         if let Some(bytes) = source {
