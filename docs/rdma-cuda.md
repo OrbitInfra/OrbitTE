@@ -161,8 +161,9 @@ The default accepted range is 10–800 Gbit/s. An unknown actual rate remains
 `None` in load snapshots. A speed change reseeds the estimates and discards old
 sampling generations, while repeated unchanged queries preserve learning.
 Speed alone is not connection identity and does not recreate QPs. Symbol lookup
-is cached once; port/rate queries stay on context initialization and periodic
-monitor refresh, outside slice submission and CQ polling. See
+is cached once; effective-rate queries stay on context initialization and periodic
+monitor refresh, outside slice submission and CQ polling. Existing route health
+checks still query port attributes. See
 [effective-rate source qualification](qualification.md#rdma-effective-link-rate).
 
 Two independent estimates share one per-NIC owner:
