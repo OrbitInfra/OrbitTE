@@ -19,6 +19,7 @@ mod ipc_host;
 #[cfg(feature = "rdma")]
 mod mixed_batches;
 mod pinned_readiness;
+mod probe;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod readiness;

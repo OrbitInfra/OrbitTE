@@ -12,6 +12,9 @@ use std::time::Instant;
 
 use crate::{Error, RemoteRegion, Result, SourceEpoch};
 
+mod location;
+pub use location::{MemoryLocation, MemoryType, RangeLocation};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Permission {
@@ -53,6 +56,7 @@ pub(crate) fn checked_range(offset: usize, length: usize, capacity: usize) -> Re
 pub struct HostMemory {
     address: u64,
     length: usize,
+    location: MemoryLocation,
     backing: Mutex<HostAccess>,
     #[cfg(feature = "cuda")]
     ipc_idle: std::sync::Condvar,
@@ -180,11 +184,24 @@ impl fmt::Debug for HostMemory {
 }
 
 impl HostMemory {
+    /// Inspect a bounded range without touching payload bytes or waiting for
+    /// producers. Ordinary/external DRAM placement remains unknown; CUDA-pinned
+    /// memory is still CPU memory and only a bound mapping claims a NUMA node.
+    pub fn location(&self, offset: usize, length: usize) -> Result<RangeLocation> {
+        checked_range(offset, length, self.length)?;
+        Ok(RangeLocation {
+            address: self.address + offset as u64,
+            length,
+            location: self.location,
+        })
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn from_cuda_pinned(allocation: Arc<crate::cuda::PinnedAllocation>) -> Self {
         Self {
             address: allocation.address.as_ptr() as usize as u64,
             length: allocation.length,
+            location: MemoryLocation::Cpu(allocation.numa_node),
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
@@ -341,6 +358,7 @@ impl HostMemory {
         Ok(Self {
             address: address.as_ptr() as usize as u64,
             length,
+            location: MemoryLocation::Cpu(None),
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
@@ -382,6 +400,7 @@ impl HostMemory {
         Ok(Self {
             address: address.as_ptr() as usize as u64,
             length,
+            location: MemoryLocation::Cpu(None),
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
@@ -513,6 +532,25 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
+    /// Classification from the retained backing, without driver calls or locks.
+    pub fn memory_type(&self) -> MemoryType {
+        match &self.0.allocation {
+            Allocation::Host(_) => MemoryType::Cpu,
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(_) => MemoryType::Cuda,
+        }
+    }
+
+    /// Location of exactly this registration, never the larger backing range.
+    /// The registration retains its owner; the returned metadata is a snapshot.
+    pub fn location(&self) -> Result<RangeLocation> {
+        match &self.0.allocation {
+            Allocation::Host(memory) => memory.location(self.0.allocation_offset, self.len()),
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(memory) => memory.location(self.0.allocation_offset, self.len()),
+        }
+    }
+
     pub fn id(&self) -> u64 {
         self.0.descriptor.id
     }
@@ -545,11 +583,7 @@ impl RegisteredMemory {
 
     #[cfg(feature = "rdma")]
     pub(crate) fn is_cuda(&self) -> bool {
-        match &self.0.allocation {
-            Allocation::Host(_) => false,
-            #[cfg(feature = "cuda")]
-            Allocation::Cuda(_) => true,
-        }
+        self.memory_type() == MemoryType::Cuda
     }
 
     #[cfg(feature = "rdma")]

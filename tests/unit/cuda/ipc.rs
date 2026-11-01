@@ -289,6 +289,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                     primary: false,
                     owner: Some(context.clone()),
                     poisoned: AtomicBool::new(false),
+                    locality: Mutex::new(None),
                 });
             }
             match case {

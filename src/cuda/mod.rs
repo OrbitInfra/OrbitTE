@@ -16,6 +16,7 @@ use crate::{Error, HostMemory, Result};
 mod driver;
 pub(crate) mod ipc;
 mod pinned;
+mod probe;
 #[cfg(feature = "rdma")]
 mod rdma;
 mod readiness;
@@ -69,6 +70,7 @@ struct Context {
     primary: bool,
     owner: Option<Arc<dyn Send + Sync>>,
     poisoned: AtomicBool,
+    locality: Mutex<Option<probe::DeviceLocality>>,
 }
 // SAFETY: Driver API contexts can be pushed on engine threads. Each operation
 // restores that thread's stack and allocations serialize their accesses.
@@ -95,6 +97,7 @@ impl Context {
             primary: true,
             owner: None,
             poisoned: AtomicBool::new(false),
+            locality: Mutex::new(None),
         }))
     }
 
@@ -215,6 +218,7 @@ impl Drop for DeviceAllocation {
 pub struct CudaMemory {
     address: u64,
     length: usize,
+    location: crate::MemoryLocation,
     allocation: Mutex<DeviceAllocation>,
     ipc_idle: std::sync::Condvar,
 }
@@ -229,6 +233,17 @@ impl fmt::Debug for CudaMemory {
 }
 
 impl CudaMemory {
+    /// Inspect a checked range using registration-time attributes. This does not
+    /// probe the driver again, wait for producers, or authorize payload access.
+    pub fn location(&self, offset: usize, length: usize) -> Result<crate::RangeLocation> {
+        checked_range(offset, length, self.length)?;
+        Ok(crate::RangeLocation {
+            address: self.address + offset as u64,
+            length,
+            location: self.location,
+        })
+    }
+
     pub fn allocate(device: i32, length: usize) -> Result<Self> {
         Self::allocate_owned(device, length, false)
     }
@@ -290,6 +305,10 @@ impl CudaMemory {
         Ok(Self {
             address: allocation.address,
             length,
+            location: crate::MemoryLocation::Cuda {
+                device: context.device,
+                context: context.raw.as_ptr() as usize,
+            },
             ipc_idle: std::sync::Condvar::new(),
             allocation: Mutex::new(allocation),
         })
@@ -304,7 +323,8 @@ impl CudaMemory {
         length: usize,
         owner: Arc<dyn Send + Sync>,
     ) -> Result<Self> {
-        if length == 0
+        if address == 0
+            || length == 0
             || length > isize::MAX as usize
             || address.checked_add(length as u64).is_none()
         {
@@ -319,67 +339,14 @@ impl CudaMemory {
         owner: Arc<dyn Send + Sync>,
         driver: Arc<Driver>,
     ) -> Result<Self> {
-        let mut memory_type = 0i32;
-        let mut raw = std::ptr::null_mut();
-        let mut device = 0i32;
-        // SAFETY: typed initialized outputs match CUDA's pointer attributes.
-        check("cuPointerGetAttribute memory type", unsafe {
-            (driver.pointer_attribute)(
-                (&mut memory_type as *mut i32).cast(),
-                PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
-                address,
-            )
-        })?;
-        let mut managed = 0u32;
-        check("cuPointerGetAttribute managed", unsafe {
-            (driver.pointer_attribute)(
-                (&mut managed as *mut u32).cast(),
-                PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED,
-                address,
-            )
-        })?;
-        if memory_type != sys::CUmemorytype::CU_MEMORYTYPE_DEVICE as i32 || managed != 0 {
-            return Err(Error::Unavailable(
-                "CUDA registration requires device memory (managed/host memory is not this profile)",
-            ));
-        }
-        check("cuPointerGetAttribute context", unsafe {
-            (driver.pointer_attribute)(
-                (&mut raw as *mut driver::Context).cast(),
-                PointerAttribute::CU_POINTER_ATTRIBUTE_CONTEXT,
-                address,
-            )
-        })?;
-        check("cuPointerGetAttribute device", unsafe {
-            (driver.pointer_attribute)(
-                (&mut device as *mut i32).cast(),
-                PointerAttribute::CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
-                address,
-            )
-        })?;
-        let context = Arc::new(Context {
-            driver,
-            raw: NonNull::new(raw).ok_or(Error::InvalidRange)?,
-            device,
-            primary: false,
-            owner: Some(Arc::clone(&owner)),
-            poisoned: AtomicBool::new(false),
-        });
-        context.current(|| {
-            let mut base = 0;
-            let mut size = 0;
-            // SAFETY: this only probes driver-owned range metadata in its context.
-            check("cuMemGetAddressRange", unsafe {
-                (context.driver.address_range)(&mut base, &mut size, address)
-            })?;
-            let offset = usize::try_from(address.checked_sub(base).ok_or(Error::InvalidRange)?)
-                .map_err(|_| Error::InvalidRange)?;
-            checked_range(offset, length, size)?;
-            Ok(())
-        })?;
+        let context = Context::probe(address, length, &owner, driver)?;
         Ok(Self {
             address,
             length,
+            location: crate::MemoryLocation::Cuda {
+                device: context.device,
+                context: context.raw.as_ptr() as usize,
+            },
             ipc_idle: std::sync::Condvar::new(),
             allocation: Mutex::new(DeviceAllocation {
                 context,

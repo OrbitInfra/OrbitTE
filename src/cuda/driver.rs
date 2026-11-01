@@ -69,7 +69,8 @@ pub(super) struct Driver {
     pub host_register: unsafe extern "C" fn(*mut c_void, usize, c_uint) -> Status,
     pub host_unregister: unsafe extern "C" fn(*mut c_void) -> Status,
     pub pci_bus_id: unsafe extern "C" fn(*mut std::ffi::c_char, c_int, c_int) -> Status,
-    pub pointer_attribute: unsafe extern "C" fn(*mut c_void, PointerAttribute, u64) -> Status,
+    pub pointer_attributes:
+        unsafe extern "C" fn(c_uint, *mut PointerAttribute, *mut *mut c_void, u64) -> Status,
     pub address_range: unsafe extern "C" fn(*mut u64, *mut usize, u64) -> Status,
 }
 
@@ -132,7 +133,7 @@ impl Driver {
             host_register: symbol!(cuMemHostRegister_v2),
             host_unregister: symbol!(cuMemHostUnregister),
             pci_bus_id: symbol!(cuDeviceGetPCIBusId),
-            pointer_attribute: symbol!(cuPointerGetAttribute),
+            pointer_attributes: symbol!(cuPointerGetAttributes),
             address_range: symbol!(cuMemGetAddressRange_v2),
             _library: Some(library),
         };

@@ -484,9 +484,16 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   on two H20 hosts, with full-byte/guard checks and final owner release. See
   [exact artifacts and limits](qualification.md#cuda-copy-streams-and-completion-events);
   native error injection remains a separate qualification requirement.
-- [ ] Implement CUDA location/pointer classification, allocation, exact context
-  restoration and retained streams/events/export/import mappings. Unexpected
-  driver errors cannot select an ordinary CPU copy path.
+- [x] **Owner-backed CUDA pointer/location contract (Implemented; source profile).**
+  CPU/pinned host and CUDA device/context metadata comes from actual owners;
+  registration locations are bounded to their range. External CUDA adoption
+  batches four attributes in one driver call and still checks the mapped extent.
+  Unexpected/default/managed attributes and driver errors cannot choose a CPU
+  dereference. Context-owned PCI/NUMA discovery is reused by staging; allowed
+  nodes are checked on each selection. See [the contract](rust-api.md#memory-type-and-location)
+  and [qualification](qualification.md#cuda-pointer-and-location). General CPU
+  page probing, GPU topology publication and the P8 plugin ABI remain separate.
+  Existing context/stream/event/export/import owners keep their scoped gates.
 - [x] **P5.3 — Explicit GPU direct RDMA (Source and bounded installed profile accepted with limits).**
   Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
   persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
@@ -1064,13 +1071,18 @@ CPU/DMA/IPC exclusion. Readiness precedes payload access and final native pin
 release. Ordinary host memory remains independent of CUDA, and staging without
 a producer creates no new event. See [pinned readiness](qualification.md#pinned-host-producer-readiness).
 
-The next functional delivery is the existing P5 CUDA pointer/location contract
-(F02/F03). Follow frozen TENT's `MemoryProber` / `Platform` responsibilities,
-extending the current `CudaMemory::register` attribute checks and CPU location
-owners rather than duplicating them. Expose bounded owner-backed memory type,
-device/context and location information for registration and staging consumers;
-preserve actual owners and reject unsupported/unknown CUDA pointers without
-falling through to a CPU dereference. Full automatic selection/QoS stays P6.
+The owner-backed P5 CUDA pointer/location contract (F02/F03) is implemented:
+bounded type/device/context locations, one batched external-pointer attribute
+query, mapped-range validation and reused staging locality. See
+[qualification](qualification.md#cuda-pointer-and-location). This does not close
+full platform parity or any missing installed hardware gate.
+
+The next functional delivery is the existing F02 CUDA topology inventory:
+publish validated `cuda:N` device/PCI/NUMA entries and GPU-to-RNIC proximity into
+the current topology/selection owners. The current inventory is host-only;
+reuse the actual CUDA probe and existing NIC discovery instead of another
+registry or selector. Preserve explicit masks and strict-local rejection.
+Full policy/QoS selection remains P6; MNNVL/EGM remain open P5 transport work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining
 is an unimplemented extension, not an additional frozen-TENT parity gate.

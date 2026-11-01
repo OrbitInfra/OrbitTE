@@ -492,6 +492,22 @@ Public read/write and producer event waits remain synchronous; initial allocatio
 zeroing still synchronizes its context. Consumer-stream chaining is not exposed;
 consumer access follows engine completion. Broader scheduling remains open.
 
+## Platform pointer and location ownership
+
+`memory/location.rs` defines TENT-style memory types and bounded `RangeLocation`
+metadata. Actual host/CUDA owners supply the location; registrations preserve
+the retained backing and clip inspection to their own range. CUDA-pinned host
+memory remains CPU memory. A numeric context identity in a location snapshot
+does not extend native lifetime or grant access.
+
+`cuda/probe.rs` validates external CUDA pointers with one batched attribute
+query and a mapped-range check in the real retained context. It also owns the
+context's cached PCI/NUMA discovery consumed by local and remote staging.
+`cuda/staging.rs` still checks the current allowed host nodes before allocation.
+This follows frozen TENT `Platform` / `MemoryProber` responsibilities inside
+the Rust resource owners, without adding a process-global raw-pointer registry.
+See [the public contract](rust-api.md#memory-type-and-location).
+
 ## CUDA IPC transport ownership
 
 `transport/nvlink.rs::NVLinkTransport` owns same-host identity checks, grant/close

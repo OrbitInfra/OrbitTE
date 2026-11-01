@@ -76,6 +76,7 @@ pub(super) struct Device {
     pub(super) pin_error: AtomicI32,
     pub(super) pop_after_pin: AtomicBool,
     pub(super) pop_after_unpin: AtomicBool,
+    pub(super) probe_error: AtomicI32,
     pub(super) memory_type: AtomicI32,
     pub(super) managed: AtomicI32,
     pub(super) events: Mutex<Vec<&'static str>>,
@@ -517,11 +518,27 @@ unsafe extern "C" fn host_free(pointer: *mut c_void) -> Status {
     }
     status(error)
 }
-unsafe extern "C" fn attribute(
-    output: *mut c_void,
-    attribute: PointerAttribute,
+unsafe extern "C" fn attributes(
+    count: c_uint,
+    attrs: *mut PointerAttribute,
+    outputs: *mut *mut c_void,
     address: u64,
 ) -> Status {
+    let device = device_at(address);
+    device.events.lock().unwrap().push("pointer-attributes");
+    let error = device.probe_error.load(Ordering::Acquire);
+    if error != 0 {
+        return status(error);
+    }
+    for i in 0..count as usize {
+        let result = unsafe { attribute(*outputs.add(i), *attrs.add(i), address) };
+        if result != SUCCESS {
+            return result;
+        }
+    }
+    SUCCESS
+}
+unsafe fn attribute(output: *mut c_void, attribute: PointerAttribute, address: u64) -> Status {
     let device = device_at(address);
     unsafe {
         match attribute {
@@ -592,7 +609,7 @@ pub(super) fn driver() -> Arc<Driver> {
         host_register,
         host_unregister,
         pci_bus_id,
-        pointer_attribute: attribute,
+        pointer_attributes: attributes,
         address_range: range,
     })
 }
@@ -654,6 +671,7 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         pin_error: AtomicI32::new(0),
         pop_after_pin: AtomicBool::new(false),
         pop_after_unpin: AtomicBool::new(false),
+        probe_error: AtomicI32::new(0),
         memory_type: AtomicI32::new(2),
         managed: AtomicI32::new(0),
         events: Mutex::default(),
@@ -964,6 +982,7 @@ unsafe extern "C" fn pci_bus_id(
     length: c_int,
     device: c_int,
 ) -> Status {
+    event("pci-bus-id");
     current().pci_device.store(device, Ordering::Release);
     let id = format!("0000:{device:02x}:00.0\0");
     assert!(id.len() <= length as usize);
