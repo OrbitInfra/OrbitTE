@@ -93,9 +93,9 @@ not yet initialized or closed. The call performs no device discovery. Rate
 estimates are **bytes per second**; `link_speed_gbps` is the optional queried
 port rate in Gbit/s. `inflight_bytes` is physical grant admission;
 `posted_bytes` is outstanding native payload debt. `completed_bytes` and
-`busy_time` are cumulative local observations, and sample counts distinguish
-learned rates from initialized values. The selection and transmit estimates are
-independent. See [parameters and sampling](rdma-cuda.md#bandwidth-aware-rdma-selection).
+`busy_time` and sample counts are cumulative local observations. Rate changes
+reseed the estimates without resetting these lifetime counters. The selection
+and transmit estimates are independent. See [parameters and sampling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## Peer authority
 
