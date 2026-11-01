@@ -58,7 +58,8 @@ NUMA placement. Pinned DRAM remains CPU memory. A NUMA-bound staging mapping
 reports its selected node, not a new physical-residency measurement.
 
 External CUDA adoption performs one `cuPointerGetAttributes` call for type,
-managed status, actual context and device, then checks the whole range with
+managed status, actual context and visible device ordinal, resolves its native
+device handle with `cuDeviceGet`, then checks the whole range with
 `cuMemGetAddressRange` inside that retained context. Unknown/default attributes,
 managed/host pointers, invalid context/device and native errors fail adoption.
 They never choose a CPU dereference. The range check uses the mapped allocation,

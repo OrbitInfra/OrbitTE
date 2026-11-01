@@ -25,7 +25,7 @@ impl Context {
         let mut memory_type = 0i32;
         let mut managed = 0u32;
         let mut raw: driver::Context = std::ptr::null_mut();
-        let mut device = -1i32;
+        let mut device_ordinal = -1i32;
         let mut attributes = [
             PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
             PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED,
@@ -36,7 +36,7 @@ impl Context {
             (&mut memory_type as *mut i32).cast(),
             (&mut managed as *mut u32).cast(),
             (&mut raw as *mut driver::Context).cast(),
-            (&mut device as *mut i32).cast(),
+            (&mut device_ordinal as *mut i32).cast(),
         ];
         // SAFETY: typed outputs match these four attributes. The caller retains
         // the actual stable allocation/context throughout metadata validation.
@@ -52,17 +52,24 @@ impl Context {
         // null/default attributes. Neither that nor a driver error proves DRAM.
         if memory_type != sys::CUmemorytype::CU_MEMORYTYPE_DEVICE as i32
             || managed != 0
-            || device < 0
+            || device_ordinal < 0
             || raw.is_null()
         {
             return Err(Error::Unavailable(
                 "CUDA registration requires known non-managed device memory and its context",
             ));
         }
+        let mut device = 0;
+        // SAFETY: the pointer query supplied this process-visible ordinal;
+        // native device operations use cuDeviceGet's handle, not the location key.
+        check("cuDeviceGet", unsafe {
+            (driver.device_get)(&mut device, device_ordinal)
+        })?;
         let context = Arc::new(Self {
             driver,
             raw: NonNull::new(raw).ok_or(Error::InvalidRange)?,
             device,
+            device_ordinal,
             primary: false,
             owner: Some(Arc::clone(owner)),
             poisoned: AtomicBool::new(false),

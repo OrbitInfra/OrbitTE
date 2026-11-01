@@ -2025,8 +2025,9 @@ This establishes the implementation path, not a measured performance advantage.
 
 Focused source controls cover visible ordinal-to-device/PCI mapping, same-bridge
 and same-NUMA ranking, unknown PCI metadata, atomic publication on driver error,
-strict cross-NUMA rejection despite preferred rank, device masks and fixed slot
-holes. Public CUDA READ/WRITE controls move and check full bytes/guards through
+strict cross-NUMA rejection despite preferred rank or a missing CPU inventory
+row, device masks and fixed slot holes. Context owners keep CUDA-visible ordinals
+separate from native device handles for external adoption and primary release. Public CUDA READ/WRITE controls move and check full bytes/guards through
 multi-slice RDMA, including different GPU nodes on the two peers and explicit
 NUMA overrides. Existing native-owner retention and byte-charge controls remain
 in the affected RDMA gate. These are CPU/native-shim controls, not GPU execution.

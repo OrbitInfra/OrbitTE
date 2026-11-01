@@ -69,6 +69,7 @@ struct Context {
     driver: Arc<Driver>,
     raw: NonNull<sys::CUctx_st>,
     device: i32,
+    device_ordinal: i32,
     primary: bool,
     owner: Option<Arc<dyn Send + Sync>>,
     poisoned: AtomicBool,
@@ -80,8 +81,7 @@ unsafe impl Send for Context {}
 unsafe impl Sync for Context {}
 
 impl Context {
-    fn primary(device_ordinal: i32) -> Result<Arc<Self>> {
-        let driver = Driver::load()?;
+    fn primary(driver: Arc<Driver>, device_ordinal: i32) -> Result<Arc<Self>> {
         let mut device = 0;
         // SAFETY: initialized output and a live driver library.
         check("cuDeviceGet", unsafe {
@@ -96,6 +96,7 @@ impl Context {
             driver,
             raw: NonNull::new(raw).ok_or(Error::Internal("CUDA returned a null context"))?,
             device,
+            device_ordinal,
             primary: true,
             owner: None,
             poisoned: AtomicBool::new(false),
@@ -272,7 +273,7 @@ impl CudaMemory {
         if physical_length > isize::MAX as usize {
             return Err(Error::InvalidRange);
         }
-        let context = Context::primary(device)?;
+        let context = Context::primary(Driver::load()?, device)?;
         let mut allocation = DeviceAllocation {
             context: Arc::clone(&context),
             address: 0,
@@ -308,7 +309,7 @@ impl CudaMemory {
             address: allocation.address,
             length,
             location: crate::MemoryLocation::Cuda {
-                device: context.device,
+                device: context.device_ordinal,
                 context: context.raw.as_ptr() as usize,
             },
             ipc_idle: std::sync::Condvar::new(),
@@ -346,7 +347,7 @@ impl CudaMemory {
             address,
             length,
             location: crate::MemoryLocation::Cuda {
-                device: context.device,
+                device: context.device_ordinal,
                 context: context.raw.as_ptr() as usize,
             },
             ipc_idle: std::sync::Condvar::new(),

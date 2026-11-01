@@ -196,3 +196,40 @@ fn gpu_priority_and_strict_numa_use_separate_tiers_and_eligibility() {
         assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
     }
 }
+
+#[test]
+fn known_cpu_numa_never_becomes_unknown_when_its_inventory_row_is_missing() {
+    let mut topology = topology();
+    topology.mem_list.clear();
+    topology.nic_list[0].numa_node = None;
+    for strict in [false, true] {
+        let selector = DeviceSelector::new(&topology, 0b1101, strict).unwrap();
+        // Node 0 has known same-node NICs despite no memory inventory row.
+        assert_eq!(
+            selector
+                .allocate(8, MemoryLocation::Cpu(Some(0)), 4)
+                .unwrap()
+                .device_id(),
+            2
+        );
+        assert_eq!(
+            selector
+                .allocate(8, MemoryLocation::Cpu(Some(0)), 8)
+                .is_err(),
+            strict
+        );
+        // Node 99 has no matching NIC. Only truly unknown NIC placement may pass strict.
+        assert_eq!(
+            selector
+                .allocate(8, MemoryLocation::Cpu(Some(99)), 8)
+                .is_err(),
+            strict
+        );
+        assert!(
+            selector
+                .allocate(8, MemoryLocation::Cpu(Some(99)), 1)
+                .is_ok()
+        );
+        assert!(selector.allocate(8, MemoryLocation::Cpu(None), 8).is_ok());
+    }
+}

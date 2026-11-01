@@ -100,6 +100,28 @@ fn cuda_inventory_maps_ordinals_to_pci_tiers_and_publishes_only_complete_snapsho
         topology.mem_list[0].device_list,
         [vec![0], vec![1], vec![2, 3]]
     );
+    // The external allocation reports an ordinal; native PCI queries use the
+    // distinct cuDeviceGet handle. Both must identify the same topology row.
+    let owner = allocation(&[0x51; 8]);
+    let address = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
+    let memory = CudaMemory::register(address, 8, owner, driver.clone()).unwrap();
+    assert!(matches!(
+        memory.location(0, 8).unwrap().location,
+        crate::MemoryLocation::Cuda { device: 0, .. }
+    ));
+    let native = memory.allocation.lock().unwrap();
+    assert_eq!(native.context.device, 10);
+    assert_eq!(native.context.device_ordinal, 0);
+    assert_eq!(
+        native
+            .context
+            .driver
+            .pci_bus(native.context.device)
+            .unwrap(),
+        topology.mem_list[0].pci_bus_id.as_deref().unwrap()
+    );
+    drop(native);
+    drop(memory);
     let before = topology.clone();
     Arc::get_mut(&mut driver).unwrap().device_get = get_failure;
     assert!(matches!(
@@ -184,4 +206,34 @@ fn public_gpu_read_write_slices_use_owner_locations_at_both_peers() {
         source.close(Duration::from_secs(2)).unwrap();
         requester.close(Duration::from_secs(2)).unwrap();
     }
+}
+
+#[test]
+fn primary_context_keeps_visible_ordinal_separate_from_native_device_ownership() {
+    thread_local! { static RELEASED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+    unsafe extern "C" fn retain(out: *mut driver::Context, device: c_int) -> driver::Status {
+        if device != 10 {
+            return driver::Status::CUDA_ERROR_INVALID_DEVICE;
+        }
+        unsafe {
+            *out = NonNull::dangling().as_ptr();
+        }
+        SUCCESS
+    }
+    unsafe extern "C" fn release(device: c_int) -> driver::Status {
+        if device != 10 {
+            return driver::Status::CUDA_ERROR_INVALID_DEVICE;
+        }
+        RELEASED.with(|released| released.set(true));
+        SUCCESS
+    }
+    let mut driver = driver();
+    let native = Arc::get_mut(&mut driver).unwrap();
+    native.device_get = get;
+    native.primary_retain = retain;
+    native.primary_release = release;
+    let context = Context::primary(driver, 0).unwrap();
+    assert_eq!((context.device_ordinal, context.device), (0, 10));
+    drop(context);
+    assert!(RELEASED.with(|released| released.get()));
 }

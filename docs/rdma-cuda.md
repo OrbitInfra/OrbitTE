@@ -82,8 +82,8 @@ Source advertisements use the source owner's eligibility and priority order.
 Compatible same-name NIC pairs still take precedence; otherwise the peer keeps
 the advertised locality order. A matching name or address family does not prove
 physical reachability. Strict locality excludes a known cross-NUMA NIC even if
-it is the nearest PCI path, but does not exclude unknown placement. Masks never
-override this rejection. Physical page placement and bandwidth estimates are
+it is the nearest PCI path, but does not exclude unknown placement. A known CPU node remains known when its sysfs
+memory row is missing. Masks never override this rejection. Physical page placement and bandwidth estimates are
 not inferred from hints or PCI distance. See [qualification](qualification.md#cuda-topology-and-rdma-selection).
 
 The control protocol publishes bounded NIC/PD path metadata without memory

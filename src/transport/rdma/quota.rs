@@ -33,6 +33,7 @@ impl CqQuota {
 pub(super) struct DeviceSelector {
     priorities: BTreeMap<MemoryLocation, DevicePriority>,
     fallback: DevicePriority,
+    unlisted_cpu: DevicePriority,
     state: Mutex<State>,
 }
 
@@ -130,13 +131,13 @@ impl DeviceSelector {
                     priority.ranks[id] = rank as u8;
                 }
             }
+            let node = match location {
+                MemoryLocation::Cpu(node) => node,
+                MemoryLocation::Cuda { .. } => memory.numa_node,
+            };
             if strict_local_numa {
                 for (id, nic) in topology.nic_list.iter().enumerate() {
-                    if memory
-                        .numa_node
-                        .zip(nic.numa_node)
-                        .is_some_and(|(a, b)| a != b)
-                    {
+                    if node.zip(nic.numa_node).is_some_and(|(a, b)| a != b) {
                         priority.eligible &= !(1u64 << id);
                     }
                 }
@@ -147,8 +148,39 @@ impl DeviceSelector {
                 ));
             }
         }
+        // CPU owners and explicit hints already carry a NUMA node, even when
+        // CPU sysfs omitted its row. Compile every possible known-NIC match;
+        // any other known CPU node can only use unknown NICs in strict mode.
+        for node in topology.nic_list.iter().filter_map(|nic| nic.numa_node) {
+            priorities
+                .entry(MemoryLocation::Cpu(Some(node)))
+                .or_insert_with(|| {
+                    let mut priority = DevicePriority {
+                        ranks: [2; 64],
+                        eligible: all,
+                    };
+                    for (id, nic) in topology.nic_list.iter().enumerate() {
+                        if nic.numa_node == Some(node) {
+                            priority.ranks[id] = 0;
+                        } else if strict_local_numa && nic.numa_node.is_some() {
+                            priority.eligible &= !(1u64 << id);
+                        }
+                    }
+                    priority
+                });
+        }
+        let unknown_nics = topology
+            .nic_list
+            .iter()
+            .enumerate()
+            .filter(|(_, nic)| nic.numa_node.is_none())
+            .fold(0, |mask, (id, _)| mask | (1u64 << id));
         Ok(Arc::new(Self {
             priorities,
+            unlisted_cpu: DevicePriority {
+                ranks: [2; 64],
+                eligible: if strict_local_numa { unknown_nics } else { all },
+            },
             fallback: DevicePriority {
                 ranks: [2; 64],
                 eligible: all,
@@ -164,7 +196,10 @@ impl DeviceSelector {
     pub(super) fn priority(&self, location: MemoryLocation) -> &DevicePriority {
         self.priorities
             .get(&location_key(location))
-            .unwrap_or(&self.fallback)
+            .unwrap_or(match location {
+                MemoryLocation::Cpu(Some(_)) => &self.unlisted_cpu,
+                _ => &self.fallback,
+            })
     }
 
     pub(super) fn set_available(&self, id: usize, available: bool) {
