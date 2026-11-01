@@ -50,7 +50,12 @@ cargo build --locked --features rdma,cuda
 ```
 
 The CUDA feature uses generated `cudarc` Driver API types and selective dynamic
-loading. Runtime calls need a working NVIDIA driver. Device and pinned-host
+loading. The generated binding baseline is CUDA 13.0; it does not require a
+CUDA toolkit or eagerly load every CUDA 13 symbol. Runtime calls need a working
+NVIDIA driver. Native NVLink batch dispatch requires reported Driver API version
+13000 or later and the exact `cuMemcpyBatchAsync_v2` symbol. Without that optional
+capability, groups keep the existing ordered-copy path; required driver symbols
+still return an explicit error if unavailable. Device and pinned-host
 owners, synchronized copies and host staging are implemented. GPUDirect RDMA,
 CUDA IPC and NVLink transfer paths remain separate qualification work.
 

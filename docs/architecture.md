@@ -490,7 +490,10 @@ one imported native reference, its context and every touched local allocation.
 native close. `subbatch.rs::NVLinkSubBatch` owns resolved consecutive
 same-region/context copies. `cuda/ipc/copy.rs` acquires actual GPU/pinned host
 owners in one deduplicated lock order, then submits the group on its exclusive
-`CUDAStreamHandle`. `NVLinkTransport` acquires the handle before memory access
+`CUDAStreamHandle`. `cuda/ipc/batch.rs::CopyBatch` owns native descriptor arrays
+and checks unordered-member eligibility. `cuda/driver.rs` probes the optional
+CUDA 13 versioned entry; independent groups use one native call, while dependent
+groups or unavailable capability retain ordered enqueue. `NVLinkTransport` acquires the handle before memory access
 locks and returns it before mapping-close/control I/O. The pool matches the
 retained actual context and survives changes of first allocation. Memory guards
 protect publication of whole-allocation loans and enqueue. `IpcCopyGroup` owns
@@ -517,8 +520,9 @@ requester DMA still retain their admissions.
 
 This corresponds to TENT's NVLink allocation export, address relocation and
 stream/event completion. One grant covers a bounded ordered group, with one
-trailing event and a final import close/source receipt. A clean enqueue failure
-can confirm a recovered prefix; shared record/query/restore failure covers the
+trailing event and a final import close/source receipt. A clean ordered enqueue
+failure can confirm a recovered prefix; a failed native batch never identifies
+such a prefix and is never replayed; shared record/query/restore failure covers the
 whole attempted group. Native uncertainty retains and fences actual owners. Native TENT keeps a transport-wide relocation cache;
 OrbitTE closes imports at each subbatch boundary by default. With
 `nvlink_cache_entries` enabled, imports survive until idle reclamation, explicit

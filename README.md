@@ -50,8 +50,10 @@ recovery policy and replica placement.
   with allocation-range ownership and consumer visibility before completion.
   Cooperative same-host GPU IPC adds explicit export ownership and close receipts;
   local owned pinned host READ/WRITE, bounded cross-submission import reuse,
-  idle LRU reclamation and explicit cache flush are also available. TCP and staged RDMA share bounded, reusable local CUDA
-  staging chunks.
+  idle LRU reclamation and explicit cache flush are also available. Eligible
+  NVLink groups use CUDA 13 native batch copies, shared streams and event-query
+  completion; this current path has source controls, with hardware/performance
+  qualification pending. TCP and staged RDMA share reusable local CUDA staging chunks.
 
 ## Quick Start
 

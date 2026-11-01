@@ -577,6 +577,15 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   receipts remain synchronous, and each Batch retains FIFO execution. Current
   installed DMA/performance remain unqualified; see
   [event progress](qualification.md#cuda-ipc-event-progress).
+  **P5.4h — native CUDA batch dispatch (source implemented at `d6b564f`):**
+  optional version-checked `cuMemcpyBatchAsync_v2` consumes same-context GPU/host
+  descriptor arrays. An O(n log n) dependency check permits shared reads and
+  preserves ordered enqueue for overlapping writes or missing capability.
+  Cancellation submits only the admitted prefix; native errors cannot replay
+  members or claim an unproven completed prefix. Actual owners, stream/event
+  progress and receipts remain shared. Focused source and observer controls pass;
+  current installed DMA/performance remain unqualified. See
+  [native batch evidence](qualification.md#cuda-ipc-native-batch-copy).
 - [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
   Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
   requester and contexts. TCP and staged RDMA consume the same owner; full-range
@@ -1027,14 +1036,22 @@ synchronous and each Batch still executes its submissions FIFO. Producer
 readiness stays an explicit caller handoff. See [event progress evidence](qualification.md#cuda-ipc-event-progress).
 Current installed DMA and matched native performance remain unqualified.
 
-The next functional delivery is native CUDA batch-copy dispatch for eligible
-NVLink groups, following TENT's `startTransfer` path. Probe the supported driver
-entry points/version and enforce native batch ordering/alias constraints before
-choosing it; preserve ordered enqueue where those constraints are not met.
-Partial native errors must not trigger replay of already submitted copies.
-Retain actual owners, the trailing event and source completion receipts through
-either path. Keep verification focused on changed dispatch/error boundaries,
-and do not claim speedup from API operation counts.
+P5.4h implements native CUDA batch-copy dispatch at `d6b564f`, following TENT's
+`startTransfer` arrays and trailing event. Driver version and exact v2 ABI
+selection precede submission. Independent groups use one native call; dependent
+groups keep ordered enqueue. Partial native errors never trigger replay. Source
+checks and native-observer controls pass; installed DMA and matched performance
+remain unqualified. See [batch dispatch](qualification.md#cuda-ipc-native-batch-copy).
+
+The next functional delivery is explicit CUDA producer-stream readiness, an
+open P5 contract. Follow frozen TENT's `syncWithCallerStream` while preserving
+OrbitTE's actual allocation/context owners. Add a stream/event handoff consumed
+before CUDA transfer reads or writes; preserve producer event generations and
+avoid whole-device synchronization when a scoped stream receipt is sufficient.
+Inspect current ownership and public handoff boundaries first; do not infer a
+producer stream from an unrelated submission worker. Keep validation scoped to
+readiness, owner lifetime and context/error boundaries. Automatic transport
+selection/QoS remains P6, and native performance claims require matched hardware.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

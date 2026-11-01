@@ -39,7 +39,9 @@ mapping quota. Configure enough space for the simultaneous mappings you allow.
 ## Local pinned host directions
 
 A local owned pinned allocation can READ from or WRITE to the remote GPU export.
-READ uses `cuMemcpyDtoHAsync_v2`; WRITE uses `cuMemcpyHtoDAsync_v2`. The actual
+Ordered READ uses `cuMemcpyDtoHAsync_v2`; ordered WRITE uses
+`cuMemcpyHtoDAsync_v2`. Eligible CUDA 13 groups use the pointer-array batch
+entry described below for either direction. The actual
 host pointer is copied directly, with no temporary staging allocation. The
 allocation retains the primary context selected by `allocate_pinned_host`; the
 NVLink group leases a matching stream/event from the shared pool. Ordinary/pageable and externally
@@ -65,9 +67,9 @@ Consecutive requests in one submission reuse an import when they name the same
 remote region and the same local **native CUDA context**. Separate `CudaMemory`
 and pinned `HostMemory` allocations on the same primary context can share it,
 including a mixed host/GPU group. The transport preserves
-input order, including overlapping or out-of-order ranges. Copies enqueue on
-one exclusively leased stream and drain one trailing completion event; addresses
-are not reordered.
+the result of input order, including overlapping or out-of-order ranges. Dependent
+copies enqueue in order; independent copies may run in a native CUDA batch.
+Both use one exclusively leased stream and one trailing completion event.
 
 `OpenedMapping` holds one mapping and its physical-extent charge. The source
 grants the smallest enclosing remote range, bounded by `max_transfer_bytes`;
@@ -79,6 +81,43 @@ failure is retried.
 
 With the default `nvlink_cache_entries: 0`, the import closes at the group
 boundary. The optional cache below extends that lifetime explicitly.
+
+## Native CUDA batch copies
+
+For groups with at least two independent copies, `cuda/ipc/batch.rs::CopyBatch`
+builds parallel destination, source and length arrays. The optional Driver API
+capability requires version 13000 or later and the exact
+`cuMemcpyBatchAsync_v2` symbol. CUDA 12.8's unversioned entry has a different
+signature and is never called through the CUDA 13 binding. Missing capability
+selects ordered enqueue before any copy is submitted.
+
+CUDA orders the whole batch against its stream, but does not order members
+inside the batch. OrbitTE sorts address intervals in O(n log n) and rejects
+overlapping destinations and any source/destination dependency from the native
+batch path. Overlapping reads remain eligible. Dependent groups keep their
+original ordered calls. The check uses resolved actual allocation addresses,
+including registration alias offsets; it never sorts the submitted descriptor
+arrays. One attribute with source access order `STREAM`, zero flags and no
+location hints covers the entire group. Local pinned-host and GPU owners can
+share that native call.
+
+Admission and cancellation are checked for each member before submission. A
+cancelled suffix leaves only the admitted prefix eligible to submit. On successful
+native submission followed by clean recovery, that prefix can be reported as
+completed through the existing receipt protocol. A native batch error provides
+no completed-prefix evidence: all passed descriptors are treated as attempted,
+the same stream is drained, and no copy is replayed. Failed drain or context
+restoration retains every touched owner and the stream/mapping charge. Successful
+batch submission records the same single trailing event and uses shared event
+progress, with unchanged source completion and import-close receipts.
+
+Frozen TENT's `NVLinkTransport::startTransfer` builds these arrays and calls
+`cudaMemcpyBatchAsync` with stream-ordered source access; its fallback enqueues
+individual copies. OrbitTE uses the corresponding CUDA 13 Driver API and checks
+dependencies to preserve its ordered overlapping-request contract. See
+[NVIDIA's CUDA 13.1 batch contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html)
+and [source qualification](qualification.md#cuda-ipc-native-batch-copy).
+Native call-count reduction does not establish a latency or bandwidth advantage.
 
 ## Shared CUDA stream pool
 
@@ -116,7 +155,7 @@ See [source evidence and current limits](qualification.md#cuda-ipc-stream-pool).
 
 ## Event completion progress
 
-After ordered copy enqueue and the trailing event record, the caller restores
+After ordered or native batch enqueue and the trailing event record, the caller restores
 its CUDA context and queries the event once. Already-ready groups complete on
 the caller without a completion channel or worker wakeup. A NOT_READY result
 hands the `IpcCopyGroup` to shared progress. The group owns its exclusive stream
@@ -136,8 +175,9 @@ while that whole-allocation loan exists.
 Deadline expiry with an event still pending, query failure or failed context
 restoration returns `Unquiesced` and retains/fences touched owners, mapping and
 stream capacity. It does not synchronize the event, claim cancellation drained
-DMA, or allow reuse. Clean partial enqueue failure still uses the existing
-stream recovery before reporting its completed prefix. Queued/per-slice
+DMA, or allow reuse. Clean partial ordered enqueue failure still uses the existing
+stream recovery before reporting its completed prefix. A failed native batch
+does not identify a completed prefix, even when recovery proves drain. Queued/per-slice
 cancellation is checked before enqueue; an already submitted group must reach
 physical completion or retention before reporting an outcome.
 
