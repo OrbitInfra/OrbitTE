@@ -13,6 +13,17 @@ pub(super) type Status = sys::CUresult;
 pub(super) use sys::CUpointer_attribute as PointerAttribute;
 pub(super) const SUCCESS: Status = Status::CUDA_SUCCESS;
 
+pub(super) type CopyBatch = unsafe extern "C" fn(
+    *mut u64,
+    *mut u64,
+    *mut usize,
+    usize,
+    *mut sys::CUmemcpyAttributes,
+    *mut usize,
+    usize,
+    sys::CUstream,
+) -> Status;
+
 pub(super) struct Driver {
     pub(super) _library: Option<Library>,
     pub init: unsafe extern "C" fn(c_uint) -> Status,
@@ -38,6 +49,7 @@ pub(super) struct Driver {
     pub ipc_export: unsafe extern "C" fn(*mut sys::CUipcMemHandle, u64) -> Status,
     pub ipc_open: unsafe extern "C" fn(*mut u64, sys::CUipcMemHandle, c_uint) -> Status,
     pub ipc_close: unsafe extern "C" fn(u64) -> Status,
+    pub copy_batch: Option<CopyBatch>,
     pub copy_device: unsafe extern "C" fn(u64, u64, usize, sys::CUstream) -> Status,
     pub to_host: unsafe extern "C" fn(*mut c_void, u64, usize, sys::CUstream) -> Status,
     pub to_device: unsafe extern "C" fn(u64, *const c_void, usize, sys::CUstream) -> Status,
@@ -98,6 +110,7 @@ impl Driver {
             ipc_export: symbol!(cuIpcGetMemHandle),
             ipc_open: symbol!(cuIpcOpenMemHandle_v2),
             ipc_close: symbol!(cuIpcCloseMemHandle),
+            copy_batch: batch_copy(&library),
             copy_device: symbol!(cuMemcpyAsync),
             to_host: symbol!(cuMemcpyDtoHAsync_v2),
             to_device: symbol!(cuMemcpyHtoDAsync_v2),
@@ -137,6 +150,30 @@ fn symbol<F: Copy>(
     unsafe { library.get::<F>(name) }
         .map(|symbol| *symbol)
         .map_err(|_| Error::Unavailable(operation))
+}
+
+// CUDA 12.8's unversioned batch entry has an extra failIdx argument. Only
+// select the exact CUDA 13 ABI, and make this an optional capability.
+fn batch_copy(library: &Library) -> Option<CopyBatch> {
+    let version = symbol(
+        library,
+        b"cuDriverGetVersion\0",
+        "cuDriverGetVersion",
+        |api| api.cuDriverGetVersion,
+    )
+    .ok()?;
+    let mut supported = 0;
+    // SAFETY: the generated entry writes one live version output.
+    if unsafe { version(&mut supported) } != SUCCESS || supported < 13000 {
+        return None;
+    }
+    symbol(
+        library,
+        b"cuMemcpyBatchAsync_v2\0",
+        "cuMemcpyBatchAsync_v2",
+        |api| api.cuMemcpyBatchAsync_v2,
+    )
+    .ok()
 }
 
 pub(super) fn check(operation: &'static str, code: Status) -> Result<()> {

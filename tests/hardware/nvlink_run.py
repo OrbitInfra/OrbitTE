@@ -51,6 +51,31 @@ def validate_pins(rows, retain):
     return imported or []
 
 
+def normalize_batches(rows):
+    """Bind native array members to one real call; retain sequence and call identity."""
+    batches, pins, output = {}, {}, []
+    for row in rows:
+        kind = row['kind']
+        if kind == 'pin': pins[row['address']] = row['length']
+        elif kind == 'unpin': pins.pop(row['address'], None)
+        elif kind == 'copy_batch':
+            assert row['batch'] not in batches and row['count'] > 0 and row['stream'], 'invalid native batch'
+            assert (row['num_attrs'], row['first'], row['source_order'], row['flags']) == (1, 0, 1, 0), 'native batch attributes'
+            batches[row['batch']] = (row, [])
+        elif kind == 'batch_copy':
+            assert row['batch'] in batches, 'batch member without call'
+            call, members = batches[row['batch']]
+            assert row['index'] == len(members) < call['count'], 'native batch member order/count'
+            assert all(row[key] == call[key] for key in ('pid', 'tid', 'stream', 'code')), 'native batch call mismatch'
+            members.append(row)
+            host = lambda key: any(a <= row[key] < row[key]+row['length'] <= a+n for a,n in pins.items())
+            assert not (host('source') and host('destination')), 'IPC batch cannot copy host to host'
+            row = dict(row, kind='htod' if host('source') else 'dtoh' if host('destination') else 'copy')
+        output.append(row)
+    assert all(len(members) == call['count'] for call,members in batches.values()), 'incomplete native batch'
+    return output
+
+
 def validate_native(source, requester, payload, mode, source_pid, requester_pid, memory="device"):
     cached = mode.startswith("cache-")
     batched = cached or mode.startswith("batch-")
@@ -58,6 +83,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
     for rows, pid in [(source, source_pid), (requester, requester_pid)]:
         assert [row['seq'] for row in rows] == list(range(1, len(rows)+1)), 'native sequence gap'
         assert all(row['pid'] == pid and (row['code'] == 0 or row['kind'] == 'query' and row['code'] == 600) for row in rows), 'native PID/driver result'
+    source, requester = normalize_batches(source), normalize_batches(requester)
     select = lambda rows, kind: [row for row in rows if row['kind'] == kind]
     expected = 1 if cached else 2 if mode == 'healthy' else 0 if mode == 'stale' else 1
     exports, imports = select(source, 'export'), select(requester, 'open')
@@ -125,6 +151,13 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         for start in range(0, len(cycle_copies), group_size):
             group = cycle_copies[start:start+group_size]
             first, last = group[0], group[-1]
+            batch_ids = {r.get('batch') for r in group}
+            assert len(batch_ids) == 1, 'group mixes native batch and ordered copies'
+            if first.get('batch') is not None:
+                calls = [r for r in cycle if r['kind']=='copy_batch' and r['batch']==first['batch']]
+                assert len(calls) == 1 and calls[0]['count'] == len(group), 'native call split across groups'
+                assert opened['seq'] < calls[0]['seq'] < first['seq'], 'batch outside import cycle'
+
             next_copy = next((r['seq'] for r in cycle if r['seq'] > last['seq'] and r['kind'] in ('copy','htod','dtoh') and (r['tid'] == first['tid'] or r['stream'] == first['stream'])), boundary)
             assert all((r['stream'], r['tid']) == (first['stream'], first['tid']) for r in group), 'group stream/thread mismatch'
             interleaved = [r for r in cycle if first['seq'] <= r['seq'] <= last['seq'] and r['kind'] in ('copy','htod','dtoh')]
@@ -186,7 +219,8 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             assert all(row['seq'] < frees[0]['seq'] for row in rows if row['kind'] in ('allocate', 'memset', 'sync', 'export', 'open', 'copy', 'htod', 'dtoh', 'record', 'wait', 'query', 'close')), 'allocation freed before its last native use'
             if rows is requester and closes:
                 assert any(closes[-1]['seq'] < pop['seq'] < frees[0]['seq'] for pop in select(rows, 'pop')), 'requester allocation freed before close context restoration'
-    return {'completion_groups': completion_groups, 'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes), 'host_copies': sum(r['kind']!='copy' for r in copies), 'pinned_requesters': len(pins)}
+    assert len(select(requester, 'copy_batch')) == len({r['batch'] for r in copies if 'batch' in r}), 'batch outside IPC cycle'
+    return {'native_batch_calls': len(select(requester, 'copy_batch')), 'completion_groups': completion_groups, 'native_records': len(source)+len(requester), 'exports': len(exports), 'imports': len(imports), 'copies': len(copies), 'closes': len(closes), 'host_copies': sum(r['kind']!='copy' for r in copies), 'pinned_requesters': len(pins)}
 
 
 def run(args):

@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::*;
 use crate::memory::Allocation;
 
+mod batch;
 mod copy;
 pub(crate) use copy::{IpcCopy, IpcCopyCompletion, IpcCopyGroup};
 

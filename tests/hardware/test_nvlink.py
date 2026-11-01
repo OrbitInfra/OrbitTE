@@ -308,6 +308,40 @@ class NativeEvidence(unittest.TestCase):
                 with self.subTest(mode=mode, fault=fault), self.assertRaises(AssertionError):
                     nvlink_run.validate_native(source, requester, 17, mode, 101, 102)
 
+    def test_native_batch_descriptors_require_one_exact_call_per_group(self):
+        for memory in ('device', 'host', 'mixed'):
+            source, ordered = self.queried_evidence('cache-healthy', memory)
+            rows, count = [], 0
+            for row in ordered:
+                if row['kind'] in ('copy', 'dtoh', 'htod'):
+                    batch, index = count//3+1, count%3
+                    if index == 0:
+                        rows.append(dict(row, kind='copy_batch', batch=batch, count=3,
+                                         num_attrs=1, first=0, source_order=1, flags=0))
+                    row = dict(row, kind='batch_copy', batch=batch, index=index)
+                    count += 1
+                rows.append(row)
+            for i, row in enumerate(rows): row['seq'] = i+1
+            result = nvlink_run.validate_native(source, rows, 17, 'cache-healthy', 101, 102, memory)
+            self.assertEqual((result['native_batch_calls'], result['copies']), (5, 15))
+            for fault in ('count', 'member', 'stream', 'error', 'order', 'split', 'missing', 'event'):
+                bad = copy.deepcopy(rows)
+                call = next(r for r in bad if r['kind']=='copy_batch')
+                member = next(r for r in bad if r['kind']=='batch_copy')
+                if fault == 'count': call['count'] = 2
+                elif fault == 'member': member['index'] = 1
+                elif fault == 'stream': member['stream'] = 99
+                elif fault == 'error': call['code'] = 700
+                elif fault == 'order': call['source_order'] = 3
+                elif fault == 'split': member['batch'] = 2
+                elif fault == 'missing': bad.remove(member)
+                else:
+                    event = next(r for r in bad if r['kind']=='record')
+                    bad.remove(event); bad.insert(bad.index(member), event)
+                for i, row in enumerate(bad): row['seq'] = i+1
+                with self.subTest(memory=memory, fault=fault), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, bad, 17, 'cache-healthy', 101, 102, memory)
+
     def test_observer_forwards_arguments_outputs_and_native_failures(self):
         root = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory() as directory:
@@ -319,6 +353,10 @@ class NativeEvidence(unittest.TestCase):
             result = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library), 'ORBITTE_IPC_LOG': str(log)}, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [json.loads(line) for line in log.read_text().splitlines()]
+            batch_rows, rows = rows[-3:], rows[:-3]
+            self.assertEqual([(r['kind'], r['code']) for r in batch_rows], [('copy_batch',700),('batch_copy',700),('batch_copy',700)])
+            self.assertEqual((batch_rows[0]['count'], batch_rows[0]['source_order'], batch_rows[0]['first']), (2,1,0))
+            self.assertEqual([(r['source'],r['destination'],r['length'],r['stream'],r['batch'],r['index']) for r in batch_rows[1:]], [(123,456,17,2,1,0),(223,556,23,2,1,1)])
             lifecycle, rows = rows[17:], rows[:17]
             self.assertEqual([(r['kind'], r['code']) for r in lifecycle], [
                 ('push',201), ('stream_create',0), ('event_create',0),
@@ -342,7 +380,7 @@ class NativeEvidence(unittest.TestCase):
             self.assertEqual(staged.returncode, 0, staged.stderr)
             staged_rows = [json.loads(line) for line in staged_log.read_text().splitlines()]
             returns = [r for r in staged_rows if not r['kind'].endswith('_begin')]
-            self.assertEqual([(r['kind'],r['code']) for r in returns], [(r['kind'],r['code']) for r in rows+lifecycle if not r['kind'].endswith('_begin')])
+            self.assertEqual([(r['kind'],r['code']) for r in returns], [(r['kind'],r['code']) for r in rows+lifecycle+batch_rows if not r['kind'].endswith('_begin')])
             begins = [r for r in staged_rows if r['kind'].endswith('_begin')]
             self.assertEqual(len(begins), 10)
             for begin in begins:

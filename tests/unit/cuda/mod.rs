@@ -13,6 +13,7 @@ mod finish_progress;
 #[cfg(feature = "rdma")]
 mod grant_progress;
 mod ipc;
+mod ipc_batch;
 mod ipc_cache;
 mod ipc_host;
 #[cfg(feature = "rdma")]

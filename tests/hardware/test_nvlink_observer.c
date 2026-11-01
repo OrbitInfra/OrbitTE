@@ -28,6 +28,17 @@ int cuStreamCreate(void **out, unsigned flags) { assert(flags == 1); *out = (voi
 int cuEventCreate(void **out, unsigned flags) { assert(flags == 3); *out = (void *)3; return 0; }
 int cuStreamDestroy_v2(void *stream) { assert(stream == (void *)2); return 1; }
 int cuEventDestroy_v2(void *event) { assert(event == (void *)3); return 700; }
+typedef struct { int type, id; } memory_location;
+typedef struct { unsigned source_order; memory_location source, destination; unsigned flags; } copy_attributes;
+int cuMemcpyBatchAsync_v2(uint64_t *dsts, uint64_t *srcs, size_t *sizes, size_t count,
+                         copy_attributes *attrs, size_t *indices, size_t num_attrs, void *stream) {
+    assert(count == 2 && num_attrs == 1 && indices[0] == 0 && stream == (void *)2);
+    assert(attrs[0].source_order == 1 && attrs[0].flags == 0);
+    assert(attrs[0].source.type == 0 && attrs[0].destination.type == 0);
+    assert(dsts[0] == 456 && dsts[1] == 556 && srcs[0] == 123 && srcs[1] == 223);
+    assert(sizes[0] == 17 && sizes[1] == 23);
+    return 700;
+}
 #define LOAD(name) __typeof__(&name) name##_fn = (__typeof__(&name))dlsym(library, #name); assert(name##_fn)
 int main(void) {
     void *library = dlopen(NULL, RTLD_NOW); assert(library);
@@ -64,6 +75,10 @@ int main(void) {
     assert(unsetenv("ORBITTE_STAGING_OBSERVE")==0);
     queries=0;
     assert(cuEventQuery_fn(event)==600);
+    LOAD(cuMemcpyBatchAsync_v2);
+    uint64_t dsts[] = {456, 556}, srcs[] = {123, 223}; size_t sizes[] = {17, 23}, first = 0;
+    copy_attributes attrs = {.source_order = 1};
+    assert(cuMemcpyBatchAsync_v2_fn(dsts, srcs, sizes, 2, &attrs, &first, 1, (void *)2) == 700);
     assert(dlclose(library)==0);
     return 0;
 }

@@ -18,6 +18,10 @@
 typedef struct { char reserved[64]; } ipc_handle;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t sequence;
+typedef struct { int type, id; } memory_location;
+typedef struct { unsigned source_order; memory_location source, destination; unsigned flags; } copy_attributes;
+static _Atomic(int (*)(uint64_t *, uint64_t *, size_t *, size_t, copy_attributes *, size_t *, size_t, void *)) batch_native;
+static _Atomic(uint64_t) next_batch;
 static int log_fd = -1, held;
 static void *(*lookup)(void *, const char *);
 static _Atomic(int (*)(uint64_t *, size_t)) allocate_native;
@@ -120,6 +124,17 @@ static int copy_wrap(uint64_t destination, uint64_t source, size_t length, void 
     int code = copy_native(destination, source, length, stream);
     emit("copy", "\"source\":%" PRIu64 ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", source, destination, length, (uintptr_t)stream, code); return code;
 }
+static int batch_wrap(uint64_t *dsts, uint64_t *srcs, size_t *sizes, size_t count,
+                      copy_attributes *attrs, size_t *indices, size_t num_attrs, void *stream) {
+    uint64_t batch = atomic_fetch_add(&next_batch, 1) + 1;
+    int code = batch_native(dsts, srcs, sizes, count, attrs, indices, num_attrs, stream);
+    emit("copy_batch", "\"batch\":%" PRIu64 ",\"count\":%zu,\"stream\":%" PRIuPTR ",\"num_attrs\":%zu,\"first\":%zu,\"source_order\":%u,\"flags\":%u,\"code\":%d",
+         batch, count, (uintptr_t)stream, num_attrs, num_attrs ? indices[0] : 0, num_attrs ? attrs[0].source_order : 0, num_attrs ? attrs[0].flags : 0, code);
+    for (size_t i = 0; i < count; ++i)
+        emit("batch_copy", "\"batch\":%" PRIu64 ",\"index\":%zu,\"source\":%" PRIu64 ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d",
+             batch, i, srcs[i], dsts[i], sizes[i], (uintptr_t)stream, code);
+    return code;
+}
 static int record_wrap(void *event, void *stream) {
     int code = record_native(event, stream);
     emit("record", "\"event\":%" PRIuPTR ",\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, (uintptr_t)stream, code); return code;
@@ -185,6 +200,7 @@ void *dlsym(void *library, const char *name) {
     WRAP("cuIpcGetMemHandle", export_native, export_wrap)
     WRAP("cuIpcOpenMemHandle_v2", open_native, open_wrap)
     WRAP("cuIpcCloseMemHandle", close_native, close_wrap)
+    WRAP("cuMemcpyBatchAsync_v2", batch_native, batch_wrap)
     WRAP("cuMemcpyAsync", copy_native, copy_wrap)
     WRAP("cuEventRecord", record_native, record_wrap)
     WRAP("cuEventSynchronize", wait_native, wait_wrap)
