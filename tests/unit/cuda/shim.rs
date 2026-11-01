@@ -93,6 +93,7 @@ unsafe impl Send for Device {}
 unsafe impl Sync for Device {}
 thread_local! { pub(super) static STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
 static DEVICES: OnceLock<Mutex<BTreeMap<u64, Weak<Device>>>> = OnceLock::new();
+static STREAM_CONTEXTS: OnceLock<Mutex<BTreeMap<usize, usize>>> = OnceLock::new();
 fn device_at(address: u64) -> Arc<Device> {
     DEVICES
         .get()
@@ -169,9 +170,21 @@ unsafe extern "C" fn free(_: u64) -> Status {
 unsafe extern "C" fn memset(_: u64, _: u8, _: usize) -> Status {
     unreachable!()
 }
-unsafe extern "C" fn stream_context(_: sys::CUstream, output: *mut driver::Context) -> Status {
+unsafe extern "C" fn stream_context(stream: sys::CUstream, output: *mut driver::Context) -> Status {
+    let context = match stream as usize {
+        0..=2 => STACK.with(|s| s.borrow().last().copied()),
+        handle => STREAM_CONTEXTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .get(&handle)
+            .copied(),
+    };
+    let Some(context) = context else {
+        return Status::CUDA_ERROR_INVALID_CONTEXT;
+    };
     unsafe {
-        *output = STACK.with(|s| s.borrow().last().copied().unwrap_or(0)) as driver::Context;
+        *output = context as driver::Context;
     }
     SUCCESS
 }
@@ -193,8 +206,14 @@ unsafe extern "C" fn stream_create(output: *mut sys::CUstream, flags: c_uint) ->
     assert_eq!(flags, sys::CUstream_flags::CU_STREAM_NON_BLOCKING as u32);
     let error = current().stream_create_error.load(Ordering::Acquire);
     if error == 0 || current().stream_partial_create.load(Ordering::Acquire) {
-        let handle = current().next_handle.fetch_add(1, Ordering::Relaxed);
+        static NEXT_STREAM: AtomicUsize = AtomicUsize::new(1 << 16);
+        let handle = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
         current().streams.lock().unwrap().insert(handle, Vec::new());
+        STREAM_CONTEXTS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(handle, STACK.with(|s| *s.borrow().last().unwrap()));
         unsafe {
             *output = handle as sys::CUstream;
         }
@@ -229,6 +248,15 @@ unsafe extern "C" fn stream_destroy(stream: sys::CUstream) -> Status {
             .remove(&(stream as usize))
             .unwrap();
         assert!(pending.is_empty(), "destroy is not a DMA drain receipt");
+        assert!(
+            STREAM_CONTEXTS
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .remove(&(stream as usize))
+                .is_some()
+        );
     }
     status(error)
 }

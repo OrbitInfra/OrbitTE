@@ -63,7 +63,13 @@ fn cuda_producer_readiness_captures_calling_thread_generation_and_reuses_event()
         let producer = Producer::new(&gpu, 0x57, per_thread);
         let weak = Arc::downgrade(&producer);
         producer.enqueue(gpu.base_address() + 8, 16);
-        producer.record(&gpu).unwrap();
+        if per_thread {
+            producer.record(&gpu).unwrap();
+        } else {
+            assert!(STACK.with(|s| s.borrow().is_empty()));
+            unsafe { gpu.record_producer_stream(producer.stream as *mut _, producer.clone()) }
+                .unwrap();
+        }
         let mut later = Box::new([0xccu8; 16]);
         producer.enqueue(later.as_mut_ptr() as u64, 16);
         let clone = gpu.clone();
@@ -85,7 +91,25 @@ fn cuda_producer_readiness_captures_calling_thread_generation_and_reuses_event()
             *later, [0xcc; 16],
             "work after the recorded marker must not be drained"
         );
-        producer.record(&gpu).unwrap();
+        if per_thread {
+            producer.record(&gpu).unwrap();
+        } else {
+            let foreign = allocation(&[0; 8]);
+            let foreign_gpu = memory(&foreign);
+            let context = foreign_gpu.allocation.lock().unwrap().context.clone();
+            context
+                .current(|| {
+                    unsafe {
+                        gpu.record_producer_stream(producer.stream as *mut _, producer.clone())
+                    }?;
+                    assert_eq!(
+                        STACK.with(|s| s.borrow().last().copied()),
+                        Some(context.raw.as_ptr() as usize)
+                    );
+                    Ok(())
+                })
+                .unwrap();
+        }
         let event_count = device.completions.lock().unwrap().len();
         assert_eq!(event_count, 2, "one producer event and one copy event");
         drop(producer);
@@ -273,7 +297,12 @@ fn cuda_producer_failures_recover_only_original_stream_or_retain_real_owners() {
             device.sync_error.store(700, Ordering::Release);
         }
         let recorded = if fault == "context" {
-            unsafe { gpu.record_producer_stream(producer.stream as *mut _, producer.clone()) }
+            let foreign = allocation(&[0; 32]);
+            let foreign_gpu = memory(&foreign);
+            let foreign_producer = Producer::new(&foreign_gpu, 0x77, false);
+            unsafe {
+                gpu.record_producer_stream(foreign_producer.stream as *mut _, producer.clone())
+            }
         } else {
             producer.record(&gpu)
         };
