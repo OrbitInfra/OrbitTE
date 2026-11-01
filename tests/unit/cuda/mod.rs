@@ -132,6 +132,7 @@ fn cuda_registered_ranges_use_actual_owners_and_tcp_read_write_paths() {
         )
         .unwrap();
     let request = TransferRequest {
+        priority: Default::default(),
         remote_staging: false,
         transport: Transport::Tcp,
         local_address: local.base_address() + 5,
@@ -212,6 +213,7 @@ fn unproven_cuda_copy_keeps_batch_backing_capacity_and_requester_admission() {
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Tcp,
                 local_address: memory.base_address(),
@@ -284,6 +286,7 @@ fn source_cuda_sync_failure_retains_source_owner_and_prevents_false_drain() {
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Tcp,
                 local_address: local.base_address(),

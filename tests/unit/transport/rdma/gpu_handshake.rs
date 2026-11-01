@@ -192,6 +192,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: memory.base_address(),

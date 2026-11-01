@@ -52,6 +52,7 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
                         TransferOp::Read,
                         &peer,
                         &[TransferRequest {
+                            priority: Default::default(),
                             remote_staging: false,
                             transport: Transport::Rdma,
                             local_address: local.base_address(),

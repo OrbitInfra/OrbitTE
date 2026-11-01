@@ -67,6 +67,7 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
         .enumerate()
         .map(
             |(i, &(local_offset, remote_offset, length))| TransferRequest {
+                priority: Default::default(),
                 remote_staging: false,
                 transport: if i == 1 {
                     Transport::Tcp
@@ -314,6 +315,7 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                 .enumerate()
                 .map(
                     |(i, &(local_offset, remote_offset, length))| TransferRequest {
+                        priority: Default::default(),
                         remote_staging: i == 1,
                         transport: if i == 1 { transport } else { Transport::Rdma },
                         local_address: local.base_address() + local_offset,

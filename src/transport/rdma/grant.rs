@@ -479,10 +479,17 @@ impl RdmaGrant {
         &mut self,
         remote: &Descriptor,
         operation: TransferOp,
+        priority: crate::Priority,
         deadline: Instant,
     ) -> Result<()> {
-        self.progress
-            .submit(&self.record, self.claim, *remote, operation, deadline)?;
+        self.progress.submit(
+            &self.record,
+            self.claim,
+            *remote,
+            operation,
+            priority,
+            deadline,
+        )?;
         self.progress.wait(&self.record, self.claim, deadline)
     }
 

@@ -81,6 +81,7 @@ fn second_cross_finishes_on_shared_qp_while_first_payload_completion_is_held() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Rdma,
                     local_address: local.base_address() + 2,
@@ -201,6 +202,7 @@ fn failed_second_cross_drains_first_or_retains_every_uncertain_owner() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,
@@ -312,6 +314,7 @@ fn deadline_after_reordered_success_preserves_effects_and_all_native_owners() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Rdma,
                         local_address: local.base_address() + 2,

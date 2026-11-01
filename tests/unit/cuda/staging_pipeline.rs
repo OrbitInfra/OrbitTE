@@ -102,6 +102,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                             op,
                             &peer,
                             &[TransferRequest {
+                                priority: Default::default(),
                                 remote_staging: true,
                                 transport,
                                 local_address: local.base_address() + 1,
@@ -337,6 +338,7 @@ fn pipeline_failed_query_is_sticky_but_every_other_slot_is_drained() {
                 op,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Tcp,
                     local_address: local.base_address(),
@@ -591,6 +593,7 @@ fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
                 op,
                 &peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Rdma,
                     local_address: local.base_address(),

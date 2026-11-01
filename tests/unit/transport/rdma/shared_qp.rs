@@ -344,7 +344,14 @@ pub(super) fn run() {
         for (grant, descriptor) in grants.iter().zip(&descriptors) {
             grant
                 .progress
-                .submit(&grant.record, grant.claim, *descriptor, operation, end)
+                .submit(
+                    &grant.record,
+                    grant.claim,
+                    *descriptor,
+                    operation,
+                    crate::Priority::High,
+                    end,
+                )
                 .unwrap();
         }
         let (lock, changed) = GATE.get().unwrap();

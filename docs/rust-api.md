@@ -118,7 +118,12 @@ to use the new process's allocations.
 
 ## Requests and reports
 
-`TransferRequest` names the transport, local address, remote address and length.
+`TransferRequest` names the transport, priority, local address, remote address
+and length. Supply `priority: Priority::High` (or `Default::default()`) for the
+default. Medium/Low currently require RDMA and affect ready payloads competing
+on a worker; they do not reorder the batch. Optional
+`RdmaConfig::deadline_bw_arbitration` consumes the existing transmit meter.
+See [dispatch semantics](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 Both ranges must be contained in one applicable registration. `TransferOp`
 selects READ or WRITE. Submission resolves and retains each backing allocation
 before transfer effects.

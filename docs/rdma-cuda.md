@@ -12,7 +12,8 @@ The default crate supports CPU/TCP without a native SDK. The independent
 `rdma` and `cuda` Cargo features enable libibverbs and CUDA Driver API bindings.
 Runtime use also requires the actual driver, provider and accessible devices.
 OrbitTE's engine, connection protocol, progress and resource owners are Rust;
-there is no Mooncake runtime dependency or C bridge in the production crate.
+there is no Mooncake runtime dependency. A small C port-query shim consumes
+the installed libibverbs headers; the data and lifetime owners remain Rust.
 
 Each `TransferRequest` explicitly selects `Transport::Tcp` or `Transport::Rdma`.
 An unavailable RDMA path fails preflight. Host policy selects the backing used
@@ -202,6 +203,45 @@ additional heap allocation; each eligible NIC estimate is read once. Actual
 grant acquisition still rechecks native health. Hardware throughput and
 comparison with TENT remain unqualified; see [bandwidth evidence](qualification.md#rdma-bandwidth-selection)
 and [multipath evidence](qualification.md#rdma-weighted-multipath).
+
+## Request priority and bandwidth arbitration
+
+Set `TransferRequest::priority` to `Priority::High`, `Medium` or `Low`.
+`High` is TENT's default; existing Rust request literals must now supply this
+field (`priority: Default::default()` preserves the default). Non-High priorities
+require `Transport::Rdma`; TCP and NVLink reject them during preflight.
+The priority propagates through ordinary grants, multirail slices and remote
+CUDA staging CROSS work. It is local dispatch metadata and changes no wire format.
+
+Each transport worker collects ready payloads from all its contexts and posts
+High, Medium, then Low, with FIFO enqueue order inside a tier. Requests within
+a batch retain their ordered execution contract. A full QP does not prevent
+trying another ready QP; existing SQ/CQ reservations remain authoritative.
+Already posted DMA is never preempted. Completion polling, receive posting,
+MW/completion SEND work and cleanup continue outside the payload priority queue.
+Native provider calls and cleanup still execute synchronously on their owner.
+
+`RdmaConfig::deadline_bw_arbitration` defaults to `false`. When enabled, the
+worker orders candidates sharing a local NIC and priority by
+`(posted_bytes + unposted_grant_bytes) / transmit_bandwidth / remaining_deadline`.
+Only actual posted payload debt starts the backlog; queued grants are contenders,
+not already posted bytes. Each selected candidate adds its bytes before scoring
+the next slot. As in frozen TENT, the first 64 choices use greedy recomputation;
+the remaining tail uses a fixed-backlog ordering with FIFO ties. Missing or
+unusable bandwidth preserves FIFO. This is an ordering policy, not a rate cap or
+a deadline admission guarantee. Resource reservations can admit only part of a
+grant's unposted WRs, and later passes order its remaining bytes again.
+
+The reference is TENT's `Workers::asyncPostSend`, `orderByDeadline`,
+`OrderByUrgency` and `DeadlineMlu` at the [frozen revision](tent-parity.md).
+OrbitTE groups by local NIC across peers because its current workers share an
+aggregate CQ budget; TENT's post groups additionally identify the remote segment
+and NIC. OrbitTE can use lower-tier capacity when a higher-tier QP is full.
+TENT's aging promotion, shared-process quotas, per-tenant contracts and admission
+policies remain open P6 work. Sustained High traffic can still starve lower tiers.
+The worker preallocates and reuses sorting buffers, performs no topology query
+or extra thread creation per dispatch, and reads remaining grant bytes in O(1).
+See [source validation and limits](qualification.md#rdma-request-priority).
 
 ## Custom topology and priority matrices
 

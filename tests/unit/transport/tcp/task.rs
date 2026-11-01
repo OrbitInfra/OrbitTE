@@ -23,6 +23,8 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             regions: vec![],
         };
         let request = PreparedTransfer {
+            #[cfg(feature = "rdma")]
+            priority: Default::default(),
             #[cfg(feature = "cuda")]
             remote_staging: false,
             transport: Transport::Tcp,
@@ -127,6 +129,8 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         regions: vec![],
     };
     let request = PreparedTransfer {
+        #[cfg(feature = "rdma")]
+        priority: Default::default(),
         #[cfg(feature = "cuda")]
         remote_staging: false,
         transport: Transport::Tcp,

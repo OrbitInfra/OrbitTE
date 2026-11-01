@@ -294,6 +294,7 @@ fn round(
                 operation,
                 peer.unwrap(),
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: memory.base_address()
@@ -668,6 +669,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     operation,
                     old,
                     &[TransferRequest {
+                        priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
                         local_address: memory.base_address() + GUARD as u64,

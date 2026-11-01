@@ -2105,8 +2105,8 @@ Sampling reuses existing SQ/CQ owners, a per-NIC meter lock, an atomic selection
 estimate and one clock read per CQ polling pass. This establishes the hot-path
 design; measured sampling overhead, installed routing/DMA and matched TENT
 latency/bandwidth remain unqualified. This delivery covered per-slice selection;
-the subsequent whole-parent implementation is recorded below. Shared
-QoS/bandwidth arbitration and full F16 parity remain open. OrbitKV integration
+the subsequent whole-parent implementation is recorded below. Basic worker arbitration is recorded in [the later priority delivery](#rdma-request-priority); shared
+QoS and full F16 parity remain open. OrbitKV integration
 is deferred.
 
 
@@ -2136,8 +2136,8 @@ Evidence is external at
 revisions, commands, logs, CI and independent review. Installed routing,
 throughput, fairness and a matched TENT performance comparison remain
 unqualified. No Forge task was requested. Effective LAG/extended speed queries
-are implemented in the subsequent delivery below; QoS/bandwidth arbitration and
-complete F16/P6 parity remain open.
+and basic worker arbitration are implemented in the subsequent deliveries below;
+shared QoS and complete F16/P6 parity remain open.
 
 
 ## RDMA effective link rate
@@ -2163,5 +2163,29 @@ Evidence is external at
 `/root/orbitte-artifacts/rdma-effective-link-rate-20261101/`, preserving the
 initial compilation diagnostics, source checks, package build and review.
 Native LAG/XDR behavior, installed DMA, throughput and matched TENT performance
-remain unqualified. No hardware task was requested. Request priority, shared
-quota/bandwidth arbitration and complete F16/P6 parity remain open.
+remain unqualified. No hardware task was requested. Request priority and basic
+worker arbitration are recorded below; shared quotas and complete F16/P6 parity
+remain open.
+
+
+## RDMA request priority
+
+Source implementation adds `TransferRequest::priority` and opt-in
+`RdmaConfig::deadline_bw_arbitration`. TENT's frozen priority constants,
+worker post ordering and bounded greedy deadline/bandwidth formula are the
+reference. [The dispatch contract](rdma-cuda.md#request-priority-and-bandwidth-arbitration)
+records scope and deliberate differences.
+
+Focused controls cover ordinary/sliced public requests retaining Medium/Low,
+TCP/NVLink preflight rejection, actual worker dispatch across two contexts under
+one shared CQ credit in polling and event-driven modes, FIFO versus enabled
+urgency ordering, posted backlog,
+incremental candidate backlog and the bounded tail. These use CPU verbs controls
+and real Rust owners; they are not native DMA or performance evidence.
+Existing RDMA completion, event, failure and drain gates remain the regression
+consumer. Artifacts and independent review are stored outside the checkout in
+`/root/orbitte-artifacts/rdma-priority-arbitration-20261101/`.
+
+Current installed native contention, fairness, throughput and scheduler overhead
+remain unqualified. Priority aging, shared-process quotas and full P6 parity
+remain open. No new hardware allocation was requested for this stage.

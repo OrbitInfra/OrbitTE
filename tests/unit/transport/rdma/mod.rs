@@ -1701,6 +1701,7 @@ fn endpoint_budget_and_error_paths_close_dependencies_before_returning_capacity(
                 endpoint.transfer(
                     &descriptor,
                     TransferOp::Read,
+                    crate::Priority::High,
                     Instant::now() + Duration::from_millis(250),
                 )
             });
@@ -2045,6 +2046,7 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         let result = endpoint.transfer(
             &remote,
             TransferOp::Read,
+            crate::Priority::High,
             Instant::now() + Duration::from_millis(250),
         );
         assert_eq!(result.is_ok(), mode == "reverse", "{mode}: {result:?}");

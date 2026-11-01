@@ -7,7 +7,7 @@ impl ProgressState {
         }
     }
 
-    fn wait_quota(&self, receive: bool) {
+    pub(super) fn wait_quota(&self, receive: bool) {
         self.quota_waiting.store(true, Ordering::Release);
         // Enrollment precedes the budget recheck: a concurrent release either
         // sees the waiter or leaves available capacity and a retained unpark token.
@@ -421,204 +421,6 @@ impl ProgressState {
         self.changed.notify_all();
     }
 
-    fn post(&self, record: &Arc<Record>) -> bool {
-        if record.actions.load(Ordering::Acquire) & WORK == 0 {
-            return false;
-        }
-        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-        if record.terminal.load(Ordering::Acquire)
-            || request.failure.is_some()
-            || request.close_requested
-        {
-            return false;
-        }
-        let Request {
-            resources,
-            work,
-            phase,
-            ..
-        } = &mut *request;
-        let Some(work) = work else {
-            return false;
-        };
-        if Instant::now() >= work.deadline {
-            if work.queue.pending() {
-                drop(request);
-                self.fail(Fault::Timeout);
-            } else {
-                request.failure = Some(Fault::Timeout);
-                record.changed.notify_all();
-            }
-            return false;
-        }
-        if work.queue.pending() || work.queue.finished() {
-            return false;
-        }
-        let Some(resources) = resources else {
-            return false;
-        };
-        let Some(grant) = &mut resources.grant else {
-            return false;
-        };
-        if work.operation == slice::Operation::Send && grant.message.is_none() {
-            request.failure = Some(Fault::Internal("missing RDMA SEND message"));
-            record.changed.notify_all();
-            return false;
-        }
-        let requests = match work.queue.reserve(self.config.max_cqes) {
-            Ok(requests) => requests,
-            Err(Error::ResourceExhausted) => {
-                if record.send_queue.outstanding() < self.config.max_send_wr {
-                    self.wait_quota(false);
-                }
-                return false;
-            }
-            Err(error) => {
-                request.failure = Some(Fault::from_error(error));
-                record.changed.notify_all();
-                return false;
-            }
-        };
-        let mut posted = sys::PostResult::default();
-        if let Err(error) = self.asynchronous.check() {
-            drop(request);
-            self.fail(Fault::from_error(error));
-            return false;
-        }
-        *phase = Phase::Posted;
-        let owner = Arc::clone(&resources.connection);
-        let mut connection = owner.retiring();
-        let posted_at = Instant::now();
-        let code = unsafe {
-            match work.operation {
-                slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
-                    &mut connection.handles,
-                    &grant.handles,
-                    requests.as_ptr(),
-                    requests.len(),
-                    grant.buffer.address().as_ptr() as u64,
-                    grant.buffer.len(),
-                    work.remote.address,
-                    work.remote.rkey,
-                    i32::from(work.operation == slice::Operation::Write),
-                    &mut posted,
-                ),
-                slice::Operation::Send => {
-                    let Some(message) = &grant.message else {
-                        return false;
-                    };
-                    (self.verbs.send_completion)(
-                        &mut connection.handles,
-                        &message.handles,
-                        requests[0].id,
-                        message.memory.address.as_ptr() as u64,
-                        message.memory.length,
-                        work.remote.rkey,
-                        message.memory.bytes()[COMPLETION_MESSAGE_SIZE - 1]
-                            != super::super::protocol::MR_AUTHORITY,
-                        &mut posted,
-                    )
-                }
-                _ => (self.verbs.window)(
-                    &mut connection.handles,
-                    &mut grant.handles,
-                    requests[0].id,
-                    grant.buffer.address().as_ptr() as u64,
-                    grant.buffer.len(),
-                    grant.permission,
-                    work.operation == slice::Operation::Bind,
-                    &mut posted,
-                ),
-            }
-        };
-        drop(connection);
-        if let Err(error) = work.queue.posted(code, posted, posted_at) {
-            let fault = Fault::from_error(error);
-            let pending = work.queue.pending();
-            request.failure = Some(fault);
-            drop(request);
-            self.quota.released();
-            if pending {
-                self.fail(fault);
-            } else {
-                record.actions.fetch_and(!WORK, Ordering::Release);
-            }
-            record.changed.notify_all();
-        }
-        true
-    }
-
-    fn post_receive(&self, record: &Arc<Record>) -> bool {
-        if record.actions.load(Ordering::Acquire) & RECEIVE == 0 {
-            return false;
-        }
-        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-        if record.terminal.load(Ordering::Acquire)
-            || request.failure.is_some()
-            || request.close_requested
-        {
-            return false;
-        }
-        let Request {
-            resources, receive, ..
-        } = &mut *request;
-        let (Some(resources), Some(receive)) = (resources, receive) else {
-            return false;
-        };
-        if receive.completed() {
-            return false;
-        }
-        if Instant::now() >= receive.deadline {
-            let pending = resources.connection.retiring().receive_queue.outstanding() != 0;
-            request.failure = Some(Fault::Timeout);
-            drop(request);
-            if pending {
-                self.fail(Fault::Timeout);
-            }
-            record.changed.notify_all();
-            return false;
-        }
-        if receive.posted() {
-            return false;
-        }
-        if let Err(error) = self.asynchronous.check() {
-            drop(request);
-            self.fail(Fault::from_error(error));
-            return false;
-        }
-        let owner = Arc::clone(&resources.connection);
-        let mut state = owner.retiring();
-        let connection = &mut *state;
-        let result = connection.receive_queue.post(
-            receive.id,
-            self.config.max_cqes,
-            &mut connection.handles,
-            self.verbs,
-        );
-        let pending = connection.receive_queue.outstanding() != 0;
-        drop(state);
-        match result {
-            Err(Error::ResourceExhausted) => {
-                self.wait_quota(true);
-                return false;
-            }
-            Err(error) => {
-                let fault = Fault::from_error(error);
-                request.failure = Some(fault);
-                drop(request);
-                self.quota.released();
-                if pending {
-                    self.fail(fault);
-                }
-            }
-            Ok(()) => {
-                drop(request);
-            }
-        }
-        record.changed.notify_all();
-        true
-    }
-
     pub(in crate::transport::rdma) fn tick(
         &self,
         records: &mut Vec<Arc<Record>>,
@@ -716,7 +518,7 @@ impl ProgressState {
                 break;
             }
             let record = &records[(index + *cursor) % records.len()];
-            self.post(record);
+            self.post(record, None);
             self.post_receive(record);
         }
         *cursor = cursor.wrapping_add(1);
@@ -824,7 +626,6 @@ impl ProgressState {
         } else {
             Some(Instant::now() + Duration::from_micros(50))
         };
-        records.clear();
         let control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.dirty || control.fault.is_some() || control.stopping {
             return Schedule::Again;

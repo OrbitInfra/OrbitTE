@@ -108,6 +108,7 @@ fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
     let retained = matches!(outcome, Outcome::Retain)
         || (registration && !matches!(outcome, Outcome::Complete));
     let requests = [TransferRequest {
+        priority: Default::default(),
         remote_staging: true,
         transport: Transport::Rdma,
         local_address: local.base_address() + 2,

@@ -9,6 +9,7 @@ impl CqLane {
         claim: u64,
         remote: Descriptor,
         operation: TransferOp,
+        priority: crate::Priority,
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
@@ -55,6 +56,8 @@ impl CqLane {
                 queue,
                 operation: operation.into(),
                 remote,
+                priority,
+                enqueued: Instant::now(),
                 deadline,
             });
             request.phase = Phase::Queued;
@@ -112,6 +115,8 @@ impl CqLane {
                 )?,
                 operation,
                 remote,
+                priority: crate::Priority::High,
+                enqueued: Instant::now(),
                 deadline,
             });
             request.phase = Phase::Queued;
@@ -316,6 +321,8 @@ impl CqLane {
                     namespace * crate::transport::rdma::WR_ID_STRIDE + 1,
                 )?,
                 operation: slice::Operation::Send,
+                priority: crate::Priority::High,
+                enqueued: Instant::now(),
                 remote: Descriptor {
                     rkey,
                     ..Descriptor::default()

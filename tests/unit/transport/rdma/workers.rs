@@ -132,6 +132,7 @@ fn invalid_worker_counts_fail_before_provider_discovery() {
 static PANIC_GATE: OnceLock<(Mutex<(bool, bool)>, Condvar)> = OnceLock::new();
 
 pub(super) fn before_tick(state: &ProgressState) {
+    priority::before_tick(state);
     if state.config.device.as_deref() != Some("panic_worker") {
         return;
     }
@@ -299,6 +300,7 @@ fn concurrent_dispatch_balances_admitted_slices_and_counts_completed_grant_owner
             .transfer(
                 &endpoint.descriptor(),
                 crate::TransferOp::Read,
+                crate::Priority::High,
                 Instant::now() + Duration::from_secs(3),
             )
             .unwrap();
@@ -332,3 +334,6 @@ pub(super) fn observe_affinity(affinity: &crate::platform::cpu_probe::CpuAffinit
         );
     }
 }
+
+#[path = "workers/priority.rs"]
+mod priority;

@@ -206,6 +206,11 @@ impl DeviceInfo {
         state.selection_samples = state.selection_samples.saturating_add(1);
     }
 
+    pub(in crate::transport::rdma) fn arbitration(&self) -> (f64, u64) {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        (state.transmit_bps, state.posted)
+    }
+
     pub(in crate::transport::rdma) fn snapshot(
         &self,
         id: usize,

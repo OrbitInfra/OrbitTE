@@ -26,10 +26,23 @@ pub enum Transport {
     Nvlink,
 }
 
+/// TENT request priority; smaller discriminants are served first by RDMA workers.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum Priority {
+    #[default]
+    High = 0,
+    Medium = 1,
+    Low = 2,
+}
+
 /// Absolute host/device addresses within active local and epoch-fenced peer ranges.
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 pub struct TransferRequest {
+    /// Local RDMA payload dispatch priority. TCP/NVLink require High.
+    /// This does not reorder requests within a batch or preempt posted DMA.
+    pub priority: Priority,
     /// Use Pin/Delegate/Unpin for the remote CUDA range over TCP or RDMA.
     /// The source must enable EngineConfig::remote_staging. False uses the
     /// selected transport's ordinary memory policy, including local staging.
@@ -42,6 +55,8 @@ pub struct TransferRequest {
 
 #[derive(Clone)]
 pub(crate) struct PreparedTransfer {
+    #[cfg(feature = "rdma")]
+    pub(crate) priority: Priority,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
     pub(crate) transport: Transport,
@@ -449,6 +464,9 @@ impl TransferEngine {
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
         for request in requests {
+            if request.priority != Priority::High && request.transport != Transport::Rdma {
+                return Err(Error::Unavailable("request priority requires RDMA"));
+            }
             if request.remote_staging && request.transport == Transport::Nvlink {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }
@@ -504,6 +522,8 @@ impl TransferEngine {
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
             prepared.push(PreparedTransfer {
+                #[cfg(feature = "rdma")]
+                priority: request.priority,
                 #[cfg(feature = "cuda")]
                 remote_staging: request.remote_staging,
                 transport: request.transport,

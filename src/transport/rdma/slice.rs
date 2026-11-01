@@ -264,6 +264,15 @@ impl SendWork {
         Ok(())
     }
 
+    pub(super) fn unposted_bytes(&self) -> usize {
+        self.requests
+            .get(self.cursor)
+            .zip(self.requests.last())
+            .map_or(0, |(first, last)| {
+                last.offset as usize + last.length as usize - first.offset as usize
+            })
+    }
+
     pub(super) fn namespace(&self) -> u64 {
         self.first_id / super::WR_ID_STRIDE
     }

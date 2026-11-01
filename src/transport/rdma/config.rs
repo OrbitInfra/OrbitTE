@@ -59,6 +59,9 @@ pub struct RdmaConfig {
     pub device_mask: u64,
     /// TENT bandwidth-aware selection and payload transmit meter.
     pub scheduling: super::SchedulingParams,
+    /// TENT deadline_bw_arbitration: reorder ready payloads within a priority
+    /// tier and NIC by predicted completion time / remaining deadline. Off by default.
+    pub deadline_bw_arbitration: bool,
     pub progress_mode: RdmaProgressMode,
     /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
     pub num_lanes: usize,
@@ -101,6 +104,7 @@ impl Default for RdmaConfig {
             strict_local_numa: false,
             device_mask: u64::MAX,
             scheduling: Default::default(),
+            deadline_bw_arbitration: false,
             progress_mode: RdmaProgressMode::Polling,
             num_lanes: 1,
             traffic_class: 0,

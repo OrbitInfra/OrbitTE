@@ -96,6 +96,7 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         )
         .unwrap();
     let requests = [TransferRequest {
+        priority: Default::default(),
         remote_staging: true,
         transport: Transport::Rdma,
         local_address: local.base_address() + 2,

@@ -45,6 +45,7 @@ pub(super) fn pending(
                 },
                 peer,
                 &[TransferRequest {
+                    priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
                     local_address: memory.base_address()

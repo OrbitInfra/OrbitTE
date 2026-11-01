@@ -5,6 +5,7 @@
 use crate::{Error, Result};
 
 mod buffers;
+mod bw_arbitration;
 mod config;
 mod context;
 mod context_set;

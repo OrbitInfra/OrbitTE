@@ -69,6 +69,7 @@ fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
                     )
                     .unwrap();
                 let request = TransferRequest {
+                    priority: Default::default(),
                     remote_staging: true,
                     transport,
                     local_address: local.base_address() + 2,

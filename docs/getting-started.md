@@ -27,6 +27,7 @@ The central transfer uses registered allocation addresses:
 
 ```rust
 let request = TransferRequest {
+    priority: Default::default(),
     remote_staging: false,
     transport: orbit_te::Transport::Tcp,
     local_address: destination.base_address(),
