@@ -107,7 +107,29 @@ score = (charged_inflight_bytes + slice_bytes) / selection_bandwidth_bytes_per_s
         * numa_tier_weight
 ```
 
-The lowest score wins; equal scores rotate. Tier weights default to `[1, 5, 10]`.
+For one slice the lowest score wins; equal scores rotate. For a multi-slice
+parent, candidates are scored once using its planned block size. TENT's
+`selectMultiPath` assigns `floor(weight / total_weight * slice_count)` slices per
+NIC with `weight = 1 / (score + score_epsilon)`, then gives leftover slices to
+the best NIC. `score_epsilon` defaults to `1e-12`; weights are normalized to the
+best candidate before summing to keep finite configuration values bounded.
+Tier weights default to `[1, 5, 10]`.
+
+Every 100th successful smart multi-slice allocation probes eligible NICs in
+round-robin order. The counter belongs to the transport's selector, rather than
+TENT's thread-local counter, so work split across submission threads still
+reaches the interval. Probe starts rotate across parents even when a parent has
+fewer slices than NICs. A probe can use only currently available, compatible
+paths; it cannot recover or test a failed rail. Baseline mode does not probe.
+
+All parent byte charges commit under one selector lock, including an exact final
+slice that can be larger than the block when a short tail is folded. Overflow
+rejects the entire reservation. A bounded `DeviceAllocation` owns unconsumed
+charges and transfers each to the existing grant's `DeviceLease`; abandonment
+returns only unconsumed charges. No new protocol frame or payload retry is added.
+Single-grant/source paths use the same allocation owner; the source still binds
+each grant to the requester's selected advertised protection domain.
+
 Strict NUMA rules, configured candidates, masks and compatible paths remain hard
 eligibility limits. Weights can therefore favor an idle lower-ranked NIC, but
 cannot admit an excluded NIC. Set `scheduling.smart_selection = false` for
@@ -155,10 +177,12 @@ not wire-level throughput or source-side remote DMA measurements.
 Selection reuses precompiled topology and an atomic per-NIC estimate; it adds no
 driver queries or allocation. Sampling uses the existing SQ/CQ owners, a per-NIC
 meter lock and one timestamp per CQ polling pass. No additional global completion
-lock is introduced. This stage selects each slice using current charges; TENT's
-whole-parent weighted slice distribution and periodic exploration remain the
-next F16 work. Hardware throughput and comparison with TENT remain unqualified;
-see [source evidence](qualification.md#rdma-bandwidth-selection).
+lock is introduced. Whole-parent selection scans context health and locks the
+selector once, using fixed arrays of at most 64 candidates/slices without an
+additional heap allocation; each eligible NIC estimate is read once. Actual
+grant acquisition still rechecks native health. Hardware throughput and
+comparison with TENT remain unqualified; see [bandwidth evidence](qualification.md#rdma-bandwidth-selection)
+and [multipath evidence](qualification.md#rdma-weighted-multipath).
 
 ## Custom topology and priority matrices
 

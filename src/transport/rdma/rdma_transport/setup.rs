@@ -308,14 +308,11 @@ impl RdmaSetup {
             .map_err(|_| Error::ResourceExhausted)?;
         let mask = path::local_device_mask(&self.local_paths, &self.remote_paths);
         let location = self.request.local.location()?.location;
-        for index in 0..count {
+        let allocation =
+            transport.allocate_slices(self.request.length, block, count, location, mask)?;
+        for (index, selection) in allocation.enumerate() {
             let offset = index * block;
-            let length = if index + 1 == count {
-                self.request.length - offset
-            } else {
-                block
-            };
-            let selection = transport.allocate(length, location, mask)?;
+            let length = selection.length();
             let local = self
                 .local_paths
                 .iter()

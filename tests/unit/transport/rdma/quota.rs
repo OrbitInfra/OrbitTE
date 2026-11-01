@@ -2,7 +2,7 @@ use super::*;
 use crate::transport::rdma::RdmaConfig;
 use crate::{MemEntry, MemType, NicEntry, NicType};
 
-fn topology() -> Topology {
+pub(super) fn topology() -> Topology {
     let mut topology = Topology {
         nic_list: (0..4)
             .map(|id| NicEntry {
@@ -44,19 +44,23 @@ fn masks_holes_topology_and_exact_byte_charges_share_one_allocation_path() {
     let selector = selector();
     assert!(
         selector
-            .allocate(8, MemoryLocation::Cpu(None), 0b0010)
+            .allocate_one(8, MemoryLocation::Cpu(None), 0b0010)
             .is_err()
     );
-    assert!(selector.allocate(8, MemoryLocation::Cpu(None), 0).is_err());
+    assert!(
+        selector
+            .allocate_one(8, MemoryLocation::Cpu(None), 0)
+            .is_err()
+    );
     let a = selector
-        .allocate(32, MemoryLocation::Cpu(Some(0)), u64::MAX)
+        .allocate_one(32, MemoryLocation::Cpu(Some(0)), u64::MAX)
         .unwrap();
     let b = selector
-        .allocate(8, MemoryLocation::Cpu(Some(0)), u64::MAX)
+        .allocate_one(8, MemoryLocation::Cpu(Some(0)), u64::MAX)
         .unwrap();
     assert_eq!((a.device_id(), b.device_id()), (0, 2));
     let c = selector
-        .allocate(5, MemoryLocation::Cpu(Some(0)), u64::MAX)
+        .allocate_one(5, MemoryLocation::Cpu(Some(0)), u64::MAX)
         .unwrap();
     assert_eq!(
         c.device_id(),
@@ -64,7 +68,7 @@ fn masks_holes_topology_and_exact_byte_charges_share_one_allocation_path() {
         "least in-flight bytes within the preferred tier"
     );
     let d = selector
-        .allocate(7, MemoryLocation::Cpu(Some(0)), 0b1000)
+        .allocate_one(7, MemoryLocation::Cpu(Some(0)), 0b1000)
         .unwrap();
     assert_eq!(
         d.device_id(),
@@ -77,7 +81,7 @@ fn masks_holes_topology_and_exact_byte_charges_share_one_allocation_path() {
     let ids: Vec<_> = (0..6)
         .map(|_| {
             selector
-                .allocate(1, MemoryLocation::Cpu(None), u64::MAX)
+                .allocate_one(1, MemoryLocation::Cpu(None), u64::MAX)
                 .unwrap()
                 .device_id()
         })
@@ -99,7 +103,7 @@ fn concurrent_allocations_and_overflow_never_lose_or_wrap_a_charge() {
             let barrier = Arc::clone(&barrier);
             scope.spawn(move || {
                 let lease = selector
-                    .allocate(8, MemoryLocation::Cpu(None), 0b0101)
+                    .allocate_one(8, MemoryLocation::Cpu(None), 0b0101)
                     .unwrap();
                 barrier.wait();
                 barrier.wait();
@@ -111,10 +115,10 @@ fn concurrent_allocations_and_overflow_never_lose_or_wrap_a_charge() {
         barrier.wait();
     });
     let full = selector
-        .allocate(usize::MAX, MemoryLocation::Cpu(None), 1)
+        .allocate_one(usize::MAX, MemoryLocation::Cpu(None), 1)
         .unwrap();
     assert!(matches!(
-        selector.allocate(1, MemoryLocation::Cpu(None), 1),
+        selector.allocate_one(1, MemoryLocation::Cpu(None), 1),
         Err(Error::ResourceExhausted)
     ));
     assert_eq!(selector.state.lock().unwrap().inflight[0], usize::MAX);
@@ -178,19 +182,22 @@ fn gpu_priority_and_strict_numa_use_separate_tiers_and_eligibility() {
             let location = MemoryLocation::Cuda { device: 0, context };
             assert_eq!(
                 selector
-                    .allocate(8, location, u64::MAX)
+                    .allocate_one(8, location, u64::MAX)
                     .unwrap()
                     .device_id(),
                 if strict { 2 } else { 3 }
             );
-            assert_eq!(selector.allocate(8, location, 0b1000).is_err(), strict);
+            assert_eq!(selector.allocate_one(8, location, 0b1000).is_err(), strict);
             // Unknown NUMA is eligible; an unavailable context remains a hole.
-            assert_eq!(selector.allocate(8, location, 1).unwrap().device_id(), 0);
-            assert!(selector.allocate(8, location, 2).is_err());
+            assert_eq!(
+                selector.allocate_one(8, location, 1).unwrap().device_id(),
+                0
+            );
+            assert!(selector.allocate_one(8, location, 2).is_err());
         }
         assert_eq!(
             selector
-                .allocate(
+                .allocate_one(
                     8,
                     MemoryLocation::Cuda {
                         device: 9,
@@ -224,30 +231,34 @@ fn known_cpu_numa_never_becomes_unknown_when_its_inventory_row_is_missing() {
         // Node 0 has known same-node NICs despite no memory inventory row.
         assert_eq!(
             selector
-                .allocate(8, MemoryLocation::Cpu(Some(0)), 4)
+                .allocate_one(8, MemoryLocation::Cpu(Some(0)), 4)
                 .unwrap()
                 .device_id(),
             2
         );
         assert_eq!(
             selector
-                .allocate(8, MemoryLocation::Cpu(Some(0)), 8)
+                .allocate_one(8, MemoryLocation::Cpu(Some(0)), 8)
                 .is_err(),
             strict
         );
         // Node 99 has no matching NIC. Only truly unknown NIC placement may pass strict.
         assert_eq!(
             selector
-                .allocate(8, MemoryLocation::Cpu(Some(99)), 8)
+                .allocate_one(8, MemoryLocation::Cpu(Some(99)), 8)
                 .is_err(),
             strict
         );
         assert!(
             selector
-                .allocate(8, MemoryLocation::Cpu(Some(99)), 1)
+                .allocate_one(8, MemoryLocation::Cpu(Some(99)), 1)
                 .is_ok()
         );
-        assert!(selector.allocate(8, MemoryLocation::Cpu(None), 8).is_ok());
+        assert!(
+            selector
+                .allocate_one(8, MemoryLocation::Cpu(None), 8)
+                .is_ok()
+        );
     }
 }
 
@@ -274,7 +285,7 @@ fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks()
         )
         .unwrap();
         let a = selector
-            .allocate(7, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .allocate_one(7, MemoryLocation::Cpu(Some(0)), u64::MAX)
             .unwrap();
         assert_eq!(
             a.device_id(),
@@ -283,18 +294,18 @@ fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks()
         );
         assert!(
             selector
-                .allocate(1, MemoryLocation::Cpu(Some(0)), 1)
+                .allocate_one(1, MemoryLocation::Cpu(Some(0)), 1)
                 .is_err(),
             "an omitted NIC is excluded even by an explicit mask"
         );
         for node in [1, 99] {
             let lease = selector
-                .allocate(9, MemoryLocation::Cpu(Some(node)), u64::MAX)
+                .allocate_one(9, MemoryLocation::Cpu(Some(node)), u64::MAX)
                 .unwrap();
             assert_eq!(lease.device_id(), if strict && node == 99 { 0 } else { 3 });
             assert_eq!(
                 selector
-                    .allocate(1, MemoryLocation::Cpu(Some(node)), 8)
+                    .allocate_one(1, MemoryLocation::Cpu(Some(node)), 8)
                     .is_err(),
                 strict && node == 99
             );
@@ -302,7 +313,7 @@ fn configured_candidates_survive_masks_holes_wildcard_and_known_numa_fallbacks()
         selector.set_available(3, false);
         assert_eq!(
             selector
-                .allocate(9, MemoryLocation::Cpu(None), u64::MAX)
+                .allocate_one(9, MemoryLocation::Cpu(None), u64::MAX)
                 .unwrap()
                 .device_id(),
             0
@@ -331,15 +342,15 @@ fn adaptive_selection_uses_rate_and_backlog_while_baseline_rotates() {
         selector.set_bandwidth(0, Some(100_000));
         selector.set_bandwidth(2, Some(400_000));
         let first = selector
-            .allocate(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .allocate_one(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
             .unwrap();
         assert_eq!(first.device_id(), if smart { 2 } else { 0 });
         let second = selector
-            .allocate(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
+            .allocate_one(100, MemoryLocation::Cpu(Some(0)), u64::MAX)
             .unwrap();
         assert_eq!(second.device_id(), 2);
         let third = selector
-            .allocate(1000, MemoryLocation::Cpu(Some(0)), 1)
+            .allocate_one(1000, MemoryLocation::Cpu(Some(0)), 1)
             .unwrap();
         assert_eq!(third.device_id(), 0);
         assert_eq!(
@@ -379,4 +390,65 @@ fn adaptive_selection_uses_rate_and_backlog_while_baseline_rotates() {
         };
         assert!(config.validate().is_err());
     }
+}
+
+impl DeviceSelector {
+    fn allocate_one(
+        self: &Arc<Self>,
+        length: usize,
+        location: MemoryLocation,
+        mask: u64,
+    ) -> Result<DeviceLease> {
+        self.allocate(length, length, 1, location, mask)?
+            .next()
+            .ok_or(Error::Internal("empty RDMA device allocation"))
+    }
+}
+
+#[test]
+fn weighted_scores_reject_invalid_epsilon_and_keep_extreme_finite_weights_bounded() {
+    for epsilon in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(
+            SchedulingParams {
+                score_epsilon: epsilon,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+    let selector = DeviceSelector::new(
+        &topology(),
+        0b1101,
+        &RdmaConfig {
+            scheduling: SchedulingParams {
+                numa_tier_weights: [1e288; 3],
+                score_epsilon: f64::MAX,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let plan = selector
+        .allocate(
+            usize::MAX,
+            usize::MAX / 2,
+            2,
+            MemoryLocation::Cpu(None),
+            u64::MAX,
+        )
+        .unwrap();
+    assert_eq!(
+        selector
+            .state
+            .lock()
+            .unwrap()
+            .inflight
+            .iter()
+            .sum::<usize>(),
+        usize::MAX
+    );
+    drop(plan);
+    assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
 }

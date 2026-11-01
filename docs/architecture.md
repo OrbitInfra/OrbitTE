@@ -554,8 +554,16 @@ starting discovery. This maps to TENT's `setDeviceBandwidth`, `release`,
 `notePosted`/`notePostEnded`/`noteCompleted`, `maybeSampleTransmit` and
 `getNicLoadStats` responsibilities, with
 physical Rust grant release deliberately separate from payload sampling.
-Whole-parent weighted distribution, periodic exploration, effective LAG queries
-and bandwidth arbitration remain P6 work. See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
+`quota/allocation.rs` owns TENT's `buildCandidates`, `selectSinglePath` and
+`selectMultiPath` responsibilities. `RdmaSetup` requests one bounded allocation
+after parent grant admission and compatible-path filtering. All exact slice
+charges commit together; `DeviceAllocation` hands them to existing `DeviceLease`
+owners and returns unconsumed reservations on failure. It introduces no native
+resource, heap allocation or second scheduler. Source grants remain pinned to
+the agreed PD and uncertain writes are never replayed. Periodic probes rotate
+eligible NICs across parents, with one selector-owned counter shared by submitters.
+Effective LAG/extended rate queries and bandwidth arbitration remain P6 work.
+See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## CUDA IPC transport ownership
 

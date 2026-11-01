@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::{Error, MemType, MemoryLocation, Result, Topology};
 
+mod allocation;
 mod bandwidth;
+pub(super) use allocation::DeviceAllocation;
 mod scheduling;
 pub(super) use bandwidth::DeviceInfo;
 pub use bandwidth::NicLoadStats;
@@ -64,6 +66,8 @@ struct State {
     available: u64,
     inflight: Vec<usize>,
     cursor: usize,
+    multipath_calls: u8,
+    probe_cursor: usize,
 }
 
 /// Lives with the actual grant, including retained native resources after failure.
@@ -214,6 +218,8 @@ impl DeviceSelector {
                 available: available & all,
                 inflight: vec![0; count],
                 cursor: 0,
+                multipath_calls: 0,
+                probe_cursor: 0,
             }),
         }))
     }
@@ -251,50 +257,6 @@ impl DeviceSelector {
             .filter(|(id, _)| state.available & (1u64 << id) != 0)
             .map(|(id, info)| info.snapshot(id, &self.names[id], state.inflight[id]))
             .collect()
-    }
-
-    pub(super) fn allocate(
-        self: &Arc<Self>,
-        length: usize,
-        location: MemoryLocation,
-        mask: u64,
-    ) -> Result<DeviceLease> {
-        if length == 0 {
-            return Err(Error::InvalidRange);
-        }
-        let priority = self.priority(location);
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::Internal("RDMA selector lock poisoned"))?;
-        let count = state.inflight.len();
-        let chosen = (0..count)
-            .filter(|id| mask & state.available & priority.eligible & (1u64 << id) != 0)
-            .min_by(|a, b| {
-                let score = |id: usize| {
-                    if self.scheduling.smart_selection {
-                        (state.inflight[id] as f64 + length as f64) / self.devices[id].bandwidth()
-                            * self.scheduling.numa_tier_weights[priority.ranks[id] as usize]
-                    } else {
-                        f64::from(priority.ranks[id])
-                    }
-                };
-                score(*a).total_cmp(&score(*b)).then_with(|| {
-                    ((a + count - state.cursor) % count).cmp(&((b + count - state.cursor) % count))
-                })
-            })
-            .ok_or(Error::Unavailable(
-                "no enabled RDMA device matches location and rail mask",
-            ))?;
-        state.inflight[chosen] = state.inflight[chosen]
-            .checked_add(length)
-            .ok_or(Error::ResourceExhausted)?;
-        state.cursor = (chosen + 1) % count;
-        Ok(DeviceLease {
-            selector: Arc::clone(self),
-            device_id: chosen,
-            length,
-        })
     }
 }
 
