@@ -1940,8 +1940,10 @@ deadline. This avoids device-wide producer synchronization but is not a measured
 speedup or an asynchronous consumer-stream dependency.
 
 No hardware task was requested. Native producer ordering, installed DMA and
-matched TENT performance remain unqualified. CUDA-pinned host producer handoff,
-consumer-stream chaining, broader P5 profiles and full TENT parity remain open.
+matched TENT performance remain unqualified. At `6909d69`, pinned host handoff
+remained open; the following [pinned substage](#pinned-host-producer-readiness)
+implements it. Consumer-stream chaining is not exposed; broader P5 profiles and
+full TENT parity remain open.
 
 
 ## Pinned host producer readiness
@@ -1951,7 +1953,7 @@ memory. `HostMemory::record_producer_stream` checks shared CPU/DMA/IPC exclusion
 the actual `PinnedAllocation` lazily owns the same `CallerSyncEvent` used by GPU
 allocations. CPU reads/writes, staging access, host DMA and local IPC consume the
 marker before bytes are touched. Final free/unregister drains pending readiness
-first; uncertainty retains native backing and producer inputs. Ordinary/external
+first; unproven producer completion retains native backing and producer inputs. Ordinary/external
 host wrappers are rejected. This profile uses the allocation's native context.
 
 Focused gates pass 128 CUDA tests, 15 memory-owner tests, formatting and
