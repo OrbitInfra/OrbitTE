@@ -3,6 +3,37 @@
 use super::*;
 
 impl Record {
+    pub(in crate::transport::rdma) fn promote(
+        &self,
+        namespace: u64,
+        from: crate::Priority,
+        to: crate::Priority,
+        now: Instant,
+        order: usize,
+    ) -> bool {
+        let mut request = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if self.terminal.load(Ordering::Acquire)
+            || request.failure.is_some()
+            || request.close_requested
+        {
+            return false;
+        }
+        let Some(work) = &mut request.work else {
+            return false;
+        };
+        if work.queue.namespace() != namespace
+            || work.priority != from
+            || work.queue.pending()
+            || work.queue.finished()
+            || now >= work.deadline
+        {
+            return false;
+        }
+        work.priority = to;
+        work.promoted = Some((now, order));
+        true
+    }
+
     pub(in crate::transport::rdma) fn queued_work(
         &self,
     ) -> Option<super::super::workers::QueuedWork> {
@@ -29,6 +60,8 @@ impl Record {
             namespace: work.queue.namespace(),
             priority: work.priority,
             enqueued: work.enqueued,
+            ordered: work.promoted.map_or(work.enqueued, |(at, _)| at),
+            order: work.promoted.map_or(0, |(_, order)| order),
             deadline: work.deadline,
             length: work.queue.unposted_bytes(),
         })

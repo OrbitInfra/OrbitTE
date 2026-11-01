@@ -38,7 +38,8 @@ protocol compatible with TENT's native RPC or metadata.
 | `RdmaGrant`, `GrantResources` | One exact-range DMA loan, source MW, SEND message storage and grant charge | Rust authority extension over TENT's registered-region model |
 | `RdmaSlice`, `SendWork`, `ReceiveWork` | Per-grant geometry, WR windows and independent completion identities | `RdmaSlice` work and completion state; source receipts are a Rust extension |
 | `CqLane` | SQ/RQ CQ pair, registered grant records, submission, drain and recovery | Per-context CQs consumed by workers |
-| `Workers`, `PostQueue` | Transport data threads, lane assignment, ready-payload priority/urgency ordering and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPostSend`, `orderByDeadline`, `asyncPollCq` |
+| `Workers`, `PostQueue` | Transport data threads, lane assignment, priority promotion/urgency ordering and unfinished-grant load | `Workers::submit`, `workerThread`, `asyncPostSend`, `promoteTimedOutRequests`, `orderByDeadline`, `asyncPollCq` |
+| `SharedSlotManager` | Optional process group identity and priority-slot admission on the existing workers | `shared_quota.h` / `SharedSlotManager::canSend` |
 | `Monitor` | One transport thread consuming events and driving periodic context reclaim/recovery | `Workers::monitorThread`, `reclaimEndpoints`, `resumePausedContexts` |
 | `DeviceSelector`, `DeviceInfo`, `SchedulingParams` | Compiled NIC eligibility, physical grant byte charges, bandwidth-weighted selection and separate payload/busy-time estimates | TENT `DeviceSelector`, `DeviceInfo` and `SchedulingParams` |
 | `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; OrbitTE's receive-credit protocol is additional |
@@ -278,7 +279,7 @@ their resource owner; submission and cleanup stay beside the resources they prot
 | Persistent owners | `buffers.rs`, `endpoint.rs`, `endpoint_store.rs`, `qp.rs`, `qp_store.rs`, `grant.rs` | MR, peer, QP and exclusive grant lifetime |
 | QP work ownership | `qp/send_queue.rs`, `qp/receive_queue.rs`, `slice.rs`, `receive.rs` | Physical SQ/RQ ownership, independent grant work and binding/key receive dispatch |
 | CQ execution | `cq_lane.rs`, `cq_lane/submit.rs`, `cq_lane/dispatch.rs`, `cq_lane/reuse.rs`, `cq_lane/retirement.rs`, `cq_lane/completion.rs`, `cq_lane/poll.rs` | Lane lifecycle, admission/waits, drained reuse, pollable retirement, CQE dispatch and native progress |
-| Scheduling and events | `workers.rs`, `workers/post_queue.rs`, `bw_arbitration.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, ready-payload priority/urgency ordering, event consumer and actual CQ/channel owners |
+| Scheduling and events | `workers.rs`, `workers/post_queue.rs`, `promotion_policy.rs`, `shared_quota.rs`, `bw_arbitration.rs`, `monitor.rs`, `events.rs`, `cq.rs` | Data threads, ready-payload priority/urgency ordering, event consumer and actual CQ/channel owners |
 | Verbs boundary | `sys.rs`, `sys/device.rs`, `sys/qp.rs`, `sys/memory.rs`, `sys/cq.rs` | Fallible function table and native calls grouped by resource |
 | Staging | `runtime/proxy_manager.rs`, `runtime/proxy_manager/`, `cuda/staging.rs`, `platform/numa.rs` | Shared pinned chunks, scoped remote operations, independent requester/source rings, GPU range loans and CUDA copy/drain |
 | Host and GPU | `platform/cpu_probe.rs`, `platform/cpu_probe/affinity.rs`, `cuda/` | Host discovery/worker binding, NVIDIA copy and GPU DMA owners |
@@ -579,8 +580,18 @@ deadline before native posting. It owns SQ/RQ submission while the lane retains
 completion, cleanup and resource ownership. Control work and CQ progress remain
 outside priority ordering. Partial-post and uncertain-DMA rules are unchanged.
 See [priority scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
-Priority promotion, cross-process quotas, native effective-rate behavior and
-matched throughput remain unqualified or open as listed in P6.
+Promotion changes the namespace-matched Work in place and retains its original
+age plus promotion-time FIFO ordinal. `promotion_policy.rs` supplies the aging
+decision; the existing worker checks every millisecond while lower tiers wait.
+`shared_quota.rs::SharedSlotManager` pins a named coordination object and its
+clock namespace for the worker pool. It checks a fixed protocol/interval header
+at attachment, then derives HIGH / HIGH+MEDIUM / all slots from the common
+monotonic clock. Unlike TENT's background writer, it needs no rotation thread or
+hot-path shared lock. High-only queues skip the additional clock read. Worker
+parking includes the next promotion/slot boundary, so CQ events are not required
+to resume eligible work. The manager closes its descriptors on final owner drop;
+the name stays persistent for joining processes. Global byte/tenant quotas,
+native effective-rate behavior and matched throughput remain open or unqualified.
 See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## CUDA IPC transport ownership

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use super::discovery;
 use crate::{Error, Result};
@@ -62,6 +63,14 @@ pub struct RdmaConfig {
     /// TENT deadline_bw_arbitration: reorder ready payloads within a priority
     /// tier and NIC by predicted completion time / remaining deadline. Off by default.
     pub deadline_bw_arbitration: bool,
+    /// TENT aging threshold, measured from the original enqueue (default 10 ms).
+    pub priority_promotion_timeout: Duration,
+    /// False preserves TENT's head-only tier promotion; true checks each entry.
+    pub priority_promotion_per_entry: bool,
+    /// Optional POSIX shared-memory name, e.g. /orbitte-rdma-slots. Disabled by default.
+    pub shared_quota_shm_path: Option<String>,
+    /// Shared High / High+Medium / all rotation; matching participants must agree.
+    pub slot_rotation_interval: Duration,
     pub progress_mode: RdmaProgressMode,
     /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
     pub num_lanes: usize,
@@ -105,6 +114,10 @@ impl Default for RdmaConfig {
             device_mask: u64::MAX,
             scheduling: Default::default(),
             deadline_bw_arbitration: false,
+            priority_promotion_timeout: Duration::from_millis(10),
+            priority_promotion_per_entry: false,
+            shared_quota_shm_path: None,
+            slot_rotation_interval: Duration::from_millis(2),
             progress_mode: RdmaProgressMode::Polling,
             num_lanes: 1,
             traffic_class: 0,
@@ -138,6 +151,16 @@ impl RdmaConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         self.scheduling.validate()?;
+        if self.priority_promotion_timeout.is_zero()
+            || self.priority_promotion_timeout.as_nanos() > u64::MAX as u128
+            || self.slot_rotation_interval.is_zero()
+            || self.slot_rotation_interval.as_nanos() > u64::MAX as u128
+        {
+            return Err(Error::InvalidConfig("invalid RDMA priority timing"));
+        }
+        if let Some(name) = &self.shared_quota_shm_path {
+            super::shared_quota::SharedSlotManager::validate(name, self.slot_rotation_interval)?;
+        }
         if self.cuda_memory == RdmaCudaMemory::Direct
             && std::env::var_os("MLX5_SCATTER_TO_CQE").as_deref() != Some(std::ffi::OsStr::new("0"))
         {

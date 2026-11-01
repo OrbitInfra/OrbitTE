@@ -58,6 +58,7 @@ impl CqLane {
                 remote,
                 priority,
                 enqueued: Instant::now(),
+                promoted: None,
                 deadline,
             });
             request.phase = Phase::Queued;
@@ -117,6 +118,7 @@ impl CqLane {
                 remote,
                 priority: crate::Priority::High,
                 enqueued: Instant::now(),
+                promoted: None,
                 deadline,
             });
             request.phase = Phase::Queued;
@@ -323,6 +325,7 @@ impl CqLane {
                 operation: slice::Operation::Send,
                 priority: crate::Priority::High,
                 enqueued: Instant::now(),
+                promoted: None,
                 remote: Descriptor {
                     rkey,
                     ..Descriptor::default()

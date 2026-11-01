@@ -30,6 +30,9 @@ struct Pool {
 struct WorkerContext {
     max_grants: usize,
     deadline_bw_arbitration: bool,
+    promotion_timeout: Duration,
+    promotion_per_entry: bool,
+    shared_slots: Option<Arc<super::shared_quota::SharedSlotManager>>,
     inflight_slices: AtomicUsize,
     affinity: crate::platform::cpu_probe::CpuAffinity,
     pending: Mutex<Vec<Lane>>,
@@ -99,11 +102,27 @@ impl Workers {
         }
         let count = progress.shared.config.num_lanes;
         if pool.workers.is_empty() {
+            let shared_slots = progress
+                .shared
+                .config
+                .shared_quota_shm_path
+                .as_deref()
+                .map(|name| {
+                    super::shared_quota::SharedSlotManager::attach(
+                        name,
+                        progress.shared.config.slot_rotation_interval,
+                    )
+                    .map(Arc::new)
+                })
+                .transpose()?;
             let affinities = crate::platform::cpu_probe::worker_affinities()?;
             for id in 0..count {
                 let context = Arc::new(WorkerContext {
                     max_grants: progress.shared.config.max_grants,
                     deadline_bw_arbitration: progress.shared.config.deadline_bw_arbitration,
+                    promotion_timeout: progress.shared.config.priority_promotion_timeout,
+                    promotion_per_entry: progress.shared.config.priority_promotion_per_entry,
+                    shared_slots: shared_slots.clone(),
                     inflight_slices: AtomicUsize::new(0),
                     affinity: affinities[id % affinities.len()].clone(),
                     pending: Mutex::default(),
@@ -405,8 +424,46 @@ impl WorkerContext {
             }
             if !stopping {
                 posts.collect(&exit.lanes, cursor);
-                if posts.dispatch(&exit.lanes, self.deadline_bw_arbitration) {
-                    wait = Some(Instant::now());
+                let now = Instant::now();
+                let promotion = posts.promote(
+                    &exit.lanes,
+                    now,
+                    self.promotion_timeout,
+                    self.promotion_per_entry,
+                );
+                let mut allowed = Some(crate::Priority::Low);
+                if posts.has_blocked(crate::Priority::High) {
+                    if let Some(slots) = &self.shared_slots {
+                        match slots.current_slot() {
+                            Ok((priority, delay)) => {
+                                allowed = Some(priority);
+                                if posts.has_blocked(priority) {
+                                    let deadline = now + delay;
+                                    wait = Some(
+                                        wait.map_or(deadline, |current| current.min(deadline)),
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                allowed = None;
+                                for lane in &exit.lanes {
+                                    lane.state.fail(super::cq_lane::Fault::Backend(
+                                        "RDMA shared slot clock",
+                                        libc::EIO,
+                                    ));
+                                }
+                                wait = Some(now);
+                            }
+                        }
+                    }
+                }
+                if let Some(deadline) = promotion {
+                    wait = Some(wait.map_or(deadline, |current| current.min(deadline)));
+                }
+                if let Some(priority) = allowed {
+                    if posts.dispatch(&exit.lanes, self.deadline_bw_arbitration, priority) {
+                        wait = Some(now);
+                    }
                 }
             }
             for lane in &mut exit.lanes {

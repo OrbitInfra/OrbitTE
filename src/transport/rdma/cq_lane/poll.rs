@@ -34,7 +34,7 @@ impl ProgressState {
         self.wake();
     }
 
-    pub(super) fn fail(&self, fault: Fault) {
+    pub(in crate::transport::rdma) fn fail(&self, fault: Fault) {
         let mut control = self.control.lock().unwrap_or_else(|p| p.into_inner());
         if control.fault.is_none() {
             control.accepting = false;

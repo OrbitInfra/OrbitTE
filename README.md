@@ -45,6 +45,8 @@ recovery policy and replica placement.
   monitor fences failed routes and resumes drained contexts. Requests carry
   High/Medium/Low priority into shared workers; opt-in deadline/bandwidth
   arbitration orders ready payloads within each NIC and priority tier.
+  TENT-style aging promotes waiting payloads; optional shared priority slots
+  coordinate cooperating local processes without a rotation thread.
   Current scheduling has source controls; native fairness/performance remain unqualified.
 - **Topology-aware multirail transfers.** CPU NUMA and CUDA GPU/PCI proximity
   feed precomputed NIC priorities, device masks and in-flight byte accounting.
