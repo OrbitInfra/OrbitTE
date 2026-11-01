@@ -2202,9 +2202,12 @@ a shared interval/domain header and no background rotation thread.
 
 Focused worker controls exercise both promotion policies, original-age behavior,
 stale namespaces, opposite context collection order and repeated reconstruction,
-actual priority-gated native-post calls, and event-driven progress with no initial
-CQE. Real local subprocess controls cover same-object attachment, conflicting
-interval/domain rejection, a killed initializer and subsequent reopen. Native
+actual priority-gated native-post calls, and event-driven progress from a Low
+submission with no initial CQE. The long High-slot control isolates promotion;
+the short-slot run checks bounded completion, not a strict per-boundary timing
+negative control. Real local subprocess controls cover same-object attachment,
+conflicting intervals, a killed initializer and subsequent reopen. Clock-domain
+mismatch rejection uses an in-process header control. Native
 verbs remain CPU controls; these processes do not establish RDMA hardware or
 installed-package fairness. Default/RDMA/CUDA source gates, Clippy and strict
 documentation checks remain the regression gates. Logs and independent review

@@ -246,7 +246,8 @@ See [source validation and limits](qualification.md#rdma-request-priority).
 ## Priority promotion and shared slots
 
 `priority_promotion_timeout` defaults to 10 ms, as in frozen TENT. Each worker
-checks ready lower-priority payloads at most once per millisecond. Promotion
+checks ready lower-priority payloads at most once per millisecond. A zero timeout
+makes an entry eligible on the next check. Promotion
 changes the existing Work after checking its namespace, deadline and live state;
 it keeps the original enqueue age and appends to the destination tier using a
 persistent promotion timestamp and FIFO ordinal. A second collection or context
@@ -280,8 +281,8 @@ let config = RdmaConfig {
 repeat High-only, High+Medium, then all priorities, matching TENT's
 `SharedSlotManager::canSend`. Promotion runs before slot admission; promoted
 requests use their effective tier. Completion/RQ/control/cleanup progress is
-never gated. Event-driven workers park until the earliest native deadline,
-promotion check or relevant slot boundary. This is a worker-pass priority gate;
+never gated. Event-driven workers preserve existing native deadline scheduling
+and add promotion checks and relevant slot boundaries to their wakeups. This is a worker-pass priority gate;
 already admitted work may cross a boundary. It is not a bandwidth cap, exclusive
 process turn, global byte counter or hard real-time per-WR restriction.
 

@@ -279,6 +279,20 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
 #[test]
 fn promotion_preserves_tier_fifo_across_context_rotation_and_recollection() {
     use crate::transport::rdma::promotion_policy;
+    assert!(
+        RdmaConfig {
+            priority_promotion_timeout: Duration::ZERO,
+            ..Default::default()
+        }
+        .validate()
+        .is_ok()
+    );
+    let instant = Instant::now();
+    assert!(promotion_policy::timed_out(
+        instant,
+        instant,
+        Duration::ZERO
+    ));
     let _serial = SERIAL.lock().unwrap();
     static VERBS: sys::Verbs = sys::Verbs {
         discover,

@@ -151,8 +151,7 @@ impl RdmaConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         self.scheduling.validate()?;
-        if self.priority_promotion_timeout.is_zero()
-            || self.priority_promotion_timeout.as_nanos() > u64::MAX as u128
+        if self.priority_promotion_timeout.as_nanos() > u64::MAX as u128
             || self.slot_rotation_interval.is_zero()
             || self.slot_rotation_interval.as_nanos() > u64::MAX as u128
         {
