@@ -7,7 +7,7 @@ use super::RdmaTransport;
 use crate::engine::remaining;
 use crate::transport::rdma::context_set::{ContextSet, ContextSlot};
 use crate::transport::rdma::path::NicPath;
-use crate::transport::rdma::quota::{DeviceLease, DeviceSelector};
+use crate::transport::rdma::quota::{DeviceAllocation, DeviceLease, DeviceSelector};
 use crate::transport::rdma::{RdmaContext, cq_lane};
 use crate::{Error, MemoryLocation, Result};
 
@@ -130,6 +130,19 @@ impl RdmaTransport {
         location: MemoryLocation,
         mask: u64,
     ) -> Result<DeviceLease> {
+        self.allocate_slices(length, length, 1, location, mask)?
+            .next()
+            .ok_or(Error::Internal("empty RDMA device allocation"))
+    }
+
+    pub(in crate::transport::rdma) fn allocate_slices(
+        &self,
+        length: usize,
+        block: usize,
+        count: usize,
+        location: MemoryLocation,
+        mask: u64,
+    ) -> Result<DeviceAllocation> {
         let mut contexts = self
             .context_set
             .lock()
@@ -156,6 +169,8 @@ impl RdmaTransport {
             .ok_or(Error::Internal("missing RDMA device selector"))?
             .allocate(
                 length,
+                block,
+                count,
                 self.config
                     .preferred_numa_node
                     .map_or(location, |node| MemoryLocation::Cpu(Some(node))),

@@ -2103,6 +2103,36 @@ explicit deadline; production drain deadlines are unchanged.
 Sampling reuses existing SQ/CQ owners, a per-NIC meter lock, an atomic selection
 estimate and one clock read per CQ polling pass. This establishes the hot-path
 design; measured sampling overhead, installed routing/DMA and matched TENT
-latency/bandwidth remain unqualified. Whole-parent weighted allocation,
-periodic exploration, shared QoS/bandwidth arbitration and full F16 parity
-remain open. OrbitKV integration is deferred.
+latency/bandwidth remain unqualified. This delivery covered per-slice selection;
+the subsequent whole-parent implementation is recorded below. Shared
+QoS/bandwidth arbitration and full F16 parity remain open. OrbitKV integration
+is deferred.
+
+
+## RDMA weighted multipath
+
+P6/F16 whole-parent weighted distribution follows frozen TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` `quota.cpp`:
+`buildCandidates`, `selectSinglePath`, `selectMultiPath` and its exact folded-tail
+charge loop. `quota/allocation.rs` computes one inverse-score assignment,
+commits all physical byte reservations together and transfers each reservation
+to its actual grant. Fixed 64-entry arrays bound planning without a new heap
+allocation. The every-100th-parent probe uses a shared selector counter and
+rotating starts, so short parents can sample beyond the first eligible NICs.
+Only available compatible candidates pass; physical fault recovery stays with
+the existing monitor. See [the contract](rdma-cuda.md#bandwidth-aware-rdma-selection).
+
+Focused CPU controls cover unequal rates, backlog, exact folded tails, partial
+consumption, atomic overflow rejection, concurrent reservations, masks, failed
+context holes, strict NUMA and probe rotation. Public READ/WRITE controls use
+the existing engine and CPU verbs fixtures to verify 41-byte parent transfers,
+guard bytes, selected peer paths and exact per-NIC payload totals, including
+remote single-rail restrictions. Existing cleanup/retention and staging controls
+remain the lifetime gate. Source checks do not establish native DMA throughput.
+
+Evidence is external at
+`/root/orbitte-artifacts/rdma-weighted-multipath-20261101/`, including source
+revisions, commands, logs, CI and independent review. Installed routing,
+throughput, fairness and a matched TENT performance comparison remain
+unqualified. No Forge task was requested. Effective LAG/extended speed queries,
+QoS/bandwidth arbitration and complete F16/P6 parity remain open.

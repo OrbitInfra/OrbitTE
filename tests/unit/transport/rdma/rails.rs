@@ -1586,3 +1586,91 @@ fn public_read_write_dispatches_to_the_faster_rail_and_publishes_payload_estimat
     source.close(TIMEOUT).unwrap();
     assert!(requester.nic_load_stats().unwrap().is_empty());
 }
+
+#[test]
+fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails() {
+    for source_mask in [u64::MAX, 1, 4] {
+        let configured = |mask| {
+            let mut runtime = sliced_runtime(mask, 8, 16, RdmaHostMemory::Direct, false);
+            runtime.config.block_size = 8;
+            runtime.config.scheduling.smart_selection = true;
+            runtime.config.scheduling.bandwidth_learning_rate = 1.0;
+            runtime
+        };
+        let source = single_handler(configured(source_mask));
+        let requester = single_handler(configured(u64::MAX));
+        let local = requester
+            .register_memory(vec![0x63; 49].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let remote = source
+            .register_memory(
+                vec![0x29; 49].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+            .unwrap();
+        for op in [TransferOp::Read, TransferOp::Write] {
+            local.write(0, &[0x63; 49]).unwrap();
+            remote.write(0, &[0x29; 49]).unwrap();
+            let report = requester
+                .submit_and_wait(
+                    op,
+                    &peer,
+                    &[TransferRequest {
+                        remote_staging: false,
+                        transport: Transport::Rdma,
+                        local_address: local.base_address() + 4,
+                        remote_address: remote.base_address() + 4,
+                        length: 41,
+                    }],
+                    TIMEOUT,
+                )
+                .unwrap();
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            let mut bytes = [0; 49];
+            let (target, payload, guard) = if op == TransferOp::Read {
+                (&local, 0x29, 0x63)
+            } else {
+                (&remote, 0x63, 0x29)
+            };
+            target.read(0, &mut bytes).unwrap();
+            assert_eq!(&bytes[4..45], &[payload; 41]);
+            assert_eq!(&bytes[..4], &[guard; 4]);
+            assert_eq!(&bytes[45..], &[guard; 4]);
+        }
+        let stats = requester.nic_load_stats().unwrap();
+        let expected = match source_mask {
+            1 => [82, 0],
+            4 => [0, 82],
+            _ => [16, 66],
+        };
+        assert_eq!(
+            stats.iter().map(|s| s.completed_bytes).collect::<Vec<_>>(),
+            expected
+        );
+        for engine in [&requester, &source] {
+            assert!(
+                engine
+                    .nic_load_stats()
+                    .unwrap()
+                    .iter()
+                    .all(|s| s.inflight_bytes == 0 && s.posted_bytes == 0)
+            );
+            let stats = engine.stats().unwrap().rdma.unwrap();
+            assert_eq!(
+                (
+                    stats.grant_credits,
+                    stats.receive_credits,
+                    stats.active_grants
+                ),
+                (0, 0, 0)
+            );
+        }
+        requester.unregister_memory(&local).unwrap();
+        source.unregister_memory(&remote).unwrap();
+        requester.close(TIMEOUT).unwrap();
+        source.close(TIMEOUT).unwrap();
+    }
+}

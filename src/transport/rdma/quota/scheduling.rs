@@ -8,6 +8,7 @@ use crate::{Error, Result};
 pub struct SchedulingParams {
     pub smart_selection: bool,
     pub numa_tier_weights: [f64; 3],
+    pub score_epsilon: f64,
     pub bandwidth_learning_rate: f64,
     pub transmit_bandwidth_learning_rate: f64,
     pub default_bandwidth_gbps: f64,
@@ -24,6 +25,7 @@ impl Default for SchedulingParams {
         Self {
             smart_selection: true,
             numa_tier_weights: [1.0, 5.0, 10.0],
+            score_epsilon: 1e-12,
             bandwidth_learning_rate: 0.01,
             transmit_bandwidth_learning_rate: 0.9,
             default_bandwidth_gbps: 400.0,
@@ -40,6 +42,7 @@ impl Default for SchedulingParams {
 impl SchedulingParams {
     pub(crate) fn validate(&self) -> Result<()> {
         let positive = [
+            self.score_epsilon,
             self.default_bandwidth_gbps,
             self.min_bandwidth_gbps,
             self.max_bandwidth_gbps,

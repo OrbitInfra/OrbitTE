@@ -85,7 +85,11 @@ With the `rdma` feature, `RdmaConfig::scheduling` configures bandwidth-aware
 `DeviceSelector` policy through `transport::rdma::SchedulingParams`. Smart
 selection defaults to enabled; setting `smart_selection` to `false` selects
 the first eligible topology tier with round-robin ties. Both modes preserve
-device masks, strict locality and actual grant charges.
+device masks, strict locality and actual grant charges. Multi-slice parents use
+one inverse-score weighted allocation, with `score_epsilon = 1e-12` by default;
+every 100th successful smart multi-slice allocation rotates eligible rails for
+sampling. Baseline mode rotates only the first eligible tier. No public request
+or wire format changes are needed; see [selection](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 `TransferEngine::nic_load_stats() -> Result<Vec<transport::rdma::NicLoadStats>>`
 returns initialized available NICs, or an empty vector when RDMA is disabled,
