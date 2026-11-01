@@ -258,6 +258,7 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
             (1, 1, 0, 0)
         );
         assert_eq!(event_count(&dst, "stream-create"), 1);
+        assert_eq!(stats.progress_workers, 0, "ready groups need no worker hop");
         assert_eq!(event_count(&dst, "event-create"), 1);
         assert_eq!(event_count(&dst, "stream-destroy"), 0);
         assert_eq!(requester.stats().unwrap().inflight_bytes, 0);
@@ -363,9 +364,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
     let relay = Relay::new(source.endpoint());
     let peer = relay.peer(&source, &exported);
     let req = request(&registered, &exported);
-    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    *dst.event_gate.lock().unwrap() = Some((entered_tx, release_rx));
+    dst.query_hold.store(true, Ordering::Release);
     let context = local.allocation.lock().unwrap().context.clone();
     let waiting_host = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
         PinnedAllocation::new(&context, 128).unwrap(),
@@ -383,7 +382,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
                 .unwrap()
         })
     };
-    entered_rx.recv_timeout(TIMEOUT).unwrap();
+    super::ipc::wait_query(&dst);
     let timed_out = requester
         .submit_and_wait(
             TransferOp::Read,
@@ -432,7 +431,7 @@ fn cached_ipc_cold_open_is_single_flight_and_waiter_deadline_does_not_evict() {
             })
         })
         .collect();
-    release_tx.send(()).unwrap();
+    dst.query_hold.store(false, Ordering::Release);
     assert!(first.join().unwrap().is_complete());
     for task in tasks {
         assert!(task.join().unwrap().is_complete());
@@ -869,3 +868,6 @@ fn cached_export_keeps_actual_registration_and_allocation_until_close_receipt() 
 
 #[path = "ipc_cache/reclaim.rs"]
 mod reclaim;
+
+#[path = "ipc_cache/progress.rs"]
+mod progress;

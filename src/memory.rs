@@ -7,6 +7,9 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+#[cfg(feature = "cuda")]
+use std::time::Instant;
+
 use crate::{Error, RemoteRegion, Result, SourceEpoch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,12 +54,16 @@ pub struct HostMemory {
     address: u64,
     length: usize,
     backing: Mutex<HostAccess>,
+    #[cfg(feature = "cuda")]
+    ipc_idle: std::sync::Condvar,
 }
 
 struct HostAccess {
     bytes: HostBacking,
     #[cfg(feature = "cuda")]
     cuda_uncertain: bool,
+    #[cfg(feature = "cuda")]
+    cuda_inflight: bool,
     #[cfg(feature = "rdma")]
     dma: Vec<Range<usize>>,
 }
@@ -77,6 +84,10 @@ impl CudaHostAccess<'_> {
         }
     }
 
+    pub(crate) fn begin_ipc(&mut self) {
+        self.backing.cuda_inflight = true;
+    }
+
     pub(crate) fn fence(&mut self) {
         self.backing.cuda_uncertain = true;
     }
@@ -91,6 +102,9 @@ impl HostAccess {
                     operation: "CUDA host memory",
                     code: -1,
                 });
+            }
+            if self.cuda_inflight {
+                return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
             }
             if let HostBacking::CudaPinned(allocation) = &self.bytes {
                 allocation.check_access()?;
@@ -170,9 +184,13 @@ impl HostMemory {
         Self {
             address: allocation.address.as_ptr() as usize as u64,
             length: allocation.length,
+            #[cfg(feature = "cuda")]
+            ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::CudaPinned(allocation),
                 cuda_uncertain: false,
+                #[cfg(feature = "cuda")]
+                cuda_inflight: false,
                 #[cfg(feature = "rdma")]
                 dma: Vec::new(),
             }),
@@ -180,11 +198,11 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn cuda_pinned(&self) -> Result<Arc<crate::cuda::PinnedAllocation>> {
-        let backing = self
-            .backing
-            .lock()
-            .map_err(|_| Error::Internal("memory lock poisoned"))?;
+    pub(crate) fn cuda_pinned(
+        &self,
+        deadline: Instant,
+    ) -> Result<Arc<crate::cuda::PinnedAllocation>> {
+        let backing = self.lock_ipc(deadline)?;
         backing.check_access(&(0..self.length))?;
         match &backing.bytes {
             HostBacking::CudaPinned(allocation) => Ok(Arc::clone(allocation)),
@@ -195,11 +213,33 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn lock_cuda_pinned(&self) -> Result<CudaHostAccess<'_>> {
-        let backing = self
+    pub(crate) fn release_ipc(&self) {
+        self.backing
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .cuda_inflight = false;
+        self.ipc_idle.notify_all();
+    }
+
+    #[cfg(feature = "cuda")]
+    fn lock_ipc(&self, deadline: Instant) -> Result<std::sync::MutexGuard<'_, HostAccess>> {
+        let mut backing = self
             .backing
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
+        while backing.cuda_inflight && !backing.cuda_uncertain {
+            backing = self
+                .ipc_idle
+                .wait_timeout(backing, crate::engine::remaining(deadline)?)
+                .map_err(|_| Error::Internal("memory lock poisoned"))?
+                .0;
+        }
+        Ok(backing)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn lock_cuda_pinned(&self, deadline: Instant) -> Result<CudaHostAccess<'_>> {
+        let backing = self.lock_ipc(deadline)?;
         backing.check_access(&(0..self.length))?;
         let access = CudaHostAccess { backing };
         access.allocation()?;
@@ -251,6 +291,7 @@ impl HostMemory {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .cuda_uncertain = true;
+        self.ipc_idle.notify_all();
     }
 
     pub fn new(bytes: Box<[u8]>) -> Result<Self> {
@@ -262,10 +303,14 @@ impl HostMemory {
         Ok(Self {
             address: address.as_ptr() as usize as u64,
             length,
+            #[cfg(feature = "cuda")]
+            ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::Owned { address, length },
                 #[cfg(feature = "cuda")]
                 cuda_uncertain: false,
+                #[cfg(feature = "cuda")]
+                cuda_inflight: false,
                 #[cfg(feature = "rdma")]
                 dma: Vec::new(),
             }),
@@ -299,6 +344,8 @@ impl HostMemory {
         Ok(Self {
             address: address.as_ptr() as usize as u64,
             length,
+            #[cfg(feature = "cuda")]
+            ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::External {
                     address,
@@ -306,6 +353,8 @@ impl HostMemory {
                 },
                 #[cfg(feature = "cuda")]
                 cuda_uncertain: false,
+                #[cfg(feature = "cuda")]
+                cuda_inflight: false,
                 #[cfg(feature = "rdma")]
                 dma: Vec::new(),
             }),

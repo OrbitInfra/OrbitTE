@@ -82,7 +82,9 @@ fn stream_pool_matches_actual_context_reclaims_idle_and_fences_close() {
         let mut handle = pool.acquire(&memories[index], deadline()).unwrap();
         assert_eq!(
             handle.stream().unwrap().context_key(),
-            memories[index].ipc_context().unwrap()
+            memories[index]
+                .ipc_context(std::time::Instant::now() + Duration::from_secs(2))
+                .unwrap()
         );
     }
     assert_eq!(count(&devices[0], "stream-create"), 2);

@@ -1,17 +1,23 @@
+use std::time::Instant;
+
 use crate::cuda::ipc::IpcCopy;
 use crate::engine::PreparedTransfer;
 use crate::{Error, Result, Transport};
 
 /// Preserve request order. Never enlarge source authority beyond one region or
 /// its normal transfer limit, and never reuse a mapping on another CUDA context.
-pub(super) fn subbatch_len(requests: &[PreparedTransfer], max_bytes: usize) -> usize {
+pub(super) fn subbatch_len(
+    requests: &[PreparedTransfer],
+    max_bytes: usize,
+    deadline: Instant,
+) -> usize {
     let first = &requests[0];
     let context = |request: &PreparedTransfer| {
         request
             .local
             .allocation_range(request.local_offset, request.length)?
             .0
-            .ipc_context()
+            .ipc_context(deadline)
     };
     let Ok(first_context) = context(first) else {
         return 1;

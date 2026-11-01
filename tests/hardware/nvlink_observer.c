@@ -131,7 +131,7 @@ static int wait_wrap(void *event) {
 static int query_wrap(void *event) {
     if (staging()) emit("query_begin", "\"event\":%" PRIuPTR ",\"code\":0", (uintptr_t)event);
     int code = query_native(event);
-    if (staging()) emit("query", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, code);
+    emit("query", "\"event\":%" PRIuPTR ",\"code\":%d", (uintptr_t)event, code);
     return code;
 }
 static int pop_wrap(void **context) {

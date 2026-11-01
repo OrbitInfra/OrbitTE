@@ -52,7 +52,7 @@ fn ipc_explicit_export_blocks_whole_allocation_and_reuses_copy_stream() {
     assert_eq!(events.iter().filter(|&&e| e == "ipc-close").count(), 3);
     for (index, event) in events.iter().enumerate() {
         if *event == "ipc-close" {
-            assert_eq!(&events[index - 3..index], &["event-sync", "pop", "push"]);
+            assert_eq!(&events[index - 3..index], &["event-query", "pop", "push"]);
         }
     }
     drop(events);
@@ -127,7 +127,7 @@ fn ipc_failure_controls_distinguish_clean_abort_from_retained_mapping() {
             "{case}"
         );
         if uncertain {
-            assert!(local.validate_ipc_requester().is_err());
+            assert!(local.validate_ipc_requester(deadline()).is_err());
             drop(export);
             assert!(remote.read(100, &mut [0; 1]).is_err());
             if !matches!(case, "close" | "restore-close") {
@@ -215,8 +215,7 @@ impl IpcMapping {
         length: usize,
         to_remote: bool,
     ) -> Result<()> {
-        let mut stream =
-            pool.acquire(memory, std::time::Instant::now() + Duration::from_secs(2))?;
+        let stream = pool.acquire(memory, std::time::Instant::now() + Duration::from_secs(2))?;
         self.copy_group(
             &[crate::cuda::ipc::IpcCopy {
                 memory: memory.clone(),
@@ -225,8 +224,10 @@ impl IpcMapping {
                 length,
             }],
             to_remote,
-            &mut stream,
+            stream,
+            deadline(),
             |_| Ok(()),
+            complete_group,
         )
         .result
     }
@@ -239,7 +240,7 @@ fn copy_ipc(
     to_remote: bool,
 ) -> Result<()> {
     let local = Allocation::Cuda(local.clone());
-    let mut mapping = IpcMapping::new(&local)?;
+    let mut mapping = IpcMapping::new(&local, super::ipc::deadline())?;
     let result = mapping
         .open(handle)
         .and_then(|()| mapping.copy_one(&local, pool, 11, 7, 17, to_remote));
@@ -320,7 +321,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             );
             if matches!(case, "success" | "overlap" | "ack-hold") {
                 assert_eq!(events.iter().filter(|&&e| e == "record").count(), 1);
-                assert_eq!(events.iter().filter(|&&e| e == "event-sync").count(), 1);
+                assert_eq!(events.iter().filter(|&&e| e == "event-query").count(), 1);
                 assert_eq!(events.iter().filter(|&&e| e == "stream-create").count(), 1);
                 let record = events.iter().position(|&e| e == "record").unwrap();
                 assert_eq!(events[..record].iter().filter(|&&e| e == "DtoD").count(), 3);
@@ -352,7 +353,8 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
         let weak = Arc::downgrade(&local);
         let mut export = IpcExport::new(remote).unwrap();
         export.expose();
-        let mut mapping = IpcMapping::new(&Allocation::Cuda(local.clone())).unwrap();
+        let mut mapping =
+            IpcMapping::new(&Allocation::Cuda(local.clone()), super::ipc::deadline()).unwrap();
         mapping.open(export.handle).unwrap();
         mapping
             .copy_one(&Allocation::Cuda(local.clone()), &pool, 11, 7, 17, false)
@@ -369,4 +371,32 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
             export.finish();
         }
     }
+}
+
+pub(super) fn complete_group(
+    mut group: crate::cuda::ipc::IpcCopyGroup,
+) -> crate::cuda::ipc::IpcCopyCompletion {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match group.query() {
+            Ok(false) if std::time::Instant::now() < deadline => std::thread::yield_now(),
+            Ok(false) => return group.complete(Err(Error::Timeout)),
+            result => return group.complete(result.map(|_| ())),
+        }
+    }
+}
+
+pub(super) fn wait_query(device: &Device) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while device.event_not_ready.load(Ordering::Acquire) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "missing pending event query"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+pub(super) fn deadline() -> std::time::Instant {
+    std::time::Instant::now() + Duration::from_secs(2)
 }

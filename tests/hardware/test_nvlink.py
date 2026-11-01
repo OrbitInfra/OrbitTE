@@ -60,6 +60,53 @@ class NativeEvidence(unittest.TestCase):
                 elif host and row['kind']=='copy': row['kind']='dtoh' if 3000 <= row['source'] < 3200 else 'htod'
         return source, requester
 
+    def queried_evidence(self, mode, memory):
+        source, requester = self.evidence(mode, memory)
+        rows = []
+        for row in requester:
+            if row['kind'] == 'wait':
+                rows.extend([dict(row, kind='pop', context=4),
+                             dict(row, kind='query', code=600, tid=2),
+                             dict(row, kind='pop', context=4, tid=2),
+                             dict(row, kind='query', tid=2),
+                             dict(row, kind='pop', context=4, tid=2)])
+            elif row['kind'] != 'pop' or not rows or rows[-1]['tid'] != 2:
+                rows.append(row)
+        for index, row in enumerate(rows): row['seq'] = index+1
+        return source, rows
+
+    def test_event_queries_require_ready_generation_and_both_context_restorations(self):
+        for memory in ('device', 'host', 'mixed'):
+            for mode in ('batch-healthy', 'cache-healthy', 'cache-graceful', 'cache-requester-exit'):
+                nvlink_run.validate_native(*self.queried_evidence(mode, memory), 17, mode, 101, 102, memory)
+            for completion in ('query', 'wait'):
+                make = self.queried_evidence if completion == 'query' else self.evidence
+                source, rows = make('cache-healthy', memory)
+                record = next(r for r in rows if r['kind'] == 'record')
+                rows.insert(rows.index(record)+1, dict(record, tid=3, stream=99))
+                for index, row in enumerate(rows): row['seq'] = index+1
+                with self.subTest(memory=memory, completion=completion, fault='event-rerecord'), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, rows, 17, 'cache-healthy', 101, 102, memory)
+            for fault in ('missing-ready', 'wrong-event', 'missing-submit-pop', 'missing-query-pop', 'wrong-context', 'early-close', 'early-free', 'later-ready'):
+                source, rows = self.queried_evidence('cache-healthy', memory)
+                query = next(r for r in rows if r['kind'] == 'query')
+                ready = next(r for r in rows if r['kind'] == 'query' and r['code'] == 0)
+                if fault == 'missing-ready': rows.remove(ready)
+                elif fault == 'wrong-event': ready['event'] = 99
+                elif fault == 'missing-submit-pop': rows.pop(rows.index(query)-1)
+                elif fault == 'missing-query-pop': rows.pop(rows.index(ready)+1)
+                elif fault == 'wrong-context': rows[rows.index(query)+1]['context'] = 99
+                elif fault == 'later-ready':
+                    rows.remove(ready)
+                    next(r for r in rows if r['kind'] == 'query' and r['code'] == 600 and r['seq'] > ready['seq'])['code'] = 0
+                else:
+                    row = next(r for r in rows if r['kind'] == ('close' if fault == 'early-close' else 'unpin' if memory != 'device' else 'free'))
+                    rows.remove(row)
+                    rows.insert(rows.index(ready)+1, row)
+                for index, row in enumerate(rows): row['seq'] = index+1
+                with self.subTest(memory=memory, fault=fault), self.assertRaises(AssertionError):
+                    nvlink_run.validate_native(source, rows, 17, 'cache-healthy', 101, 102, memory)
+
     def test_cached_native_has_one_import_for_concurrent_reads_and_later_write(self):
         for memory in ('device','host','mixed'):
             for mode in ('cache-healthy','cache-graceful','cache-requester-exit'):
@@ -276,7 +323,7 @@ class NativeEvidence(unittest.TestCase):
             self.assertEqual([(r['kind'], r['code']) for r in lifecycle], [
                 ('push',201), ('stream_create',0), ('event_create',0),
                 ('event_destroy_begin',0), ('event_destroy',700), ('stream_destroy_begin',0), ('stream_destroy',1),
-                ('query_begin',0), ('query',600), ('query_begin',0), ('query',0), ('query_begin',0), ('query',700)])
+                ('query_begin',0), ('query',600), ('query_begin',0), ('query',0), ('query_begin',0), ('query',700), ('query',600)])
             self.assertEqual(lifecycle[0]['context'], 4)
             self.assertEqual(lifecycle[1]['stream'], lifecycle[6]['stream'])
             self.assertEqual(lifecycle[2]['event'], lifecycle[4]['event'])

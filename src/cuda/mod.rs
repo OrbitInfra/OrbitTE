@@ -146,6 +146,7 @@ struct DeviceAllocation {
     owned: bool,
     owner: Option<Arc<dyn Send + Sync>>,
     uncertain: bool,
+    ipc_inflight: bool,
     copy_stream: Option<CopyStream>,
     dma: Vec<std::ops::Range<usize>>,
     ipc_extent: Option<usize>,
@@ -210,6 +211,7 @@ pub struct CudaMemory {
     address: u64,
     length: usize,
     allocation: Mutex<DeviceAllocation>,
+    ipc_idle: std::sync::Condvar,
 }
 
 impl fmt::Debug for CudaMemory {
@@ -255,6 +257,7 @@ impl CudaMemory {
             owned: true,
             owner: None,
             uncertain: false,
+            ipc_inflight: false,
             copy_stream: None,
             dma: Vec::new(),
             ipc_extent: ipc.then_some(physical_length),
@@ -281,6 +284,7 @@ impl CudaMemory {
         Ok(Self {
             address: allocation.address,
             length,
+            ipc_idle: std::sync::Condvar::new(),
             allocation: Mutex::new(allocation),
         })
     }
@@ -370,12 +374,14 @@ impl CudaMemory {
         Ok(Self {
             address,
             length,
+            ipc_idle: std::sync::Condvar::new(),
             allocation: Mutex::new(DeviceAllocation {
                 context,
                 address,
                 owned: false,
                 owner: Some(owner),
                 uncertain: false,
+                ipc_inflight: false,
                 copy_stream: None,
                 dma: Vec::new(),
                 ipc_extent: None,

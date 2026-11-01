@@ -54,7 +54,7 @@ impl CUDAStreamPool {
         deadline: Instant,
     ) -> Result<CUDAStreamHandle> {
         // No allocation access lock is held while waiting for a pool slot.
-        let context = memory.ipc_owner_context()?;
+        let context = memory.ipc_owner_context(deadline)?;
         let key = context.raw.as_ptr() as usize;
         let mut state = self
             .state
