@@ -87,7 +87,7 @@ fn batch_admission_bounds_concurrent_operations_and_restores_capacity() {
 
 #[test]
 fn invalid_configuration_fails_before_binding_or_spawning_threads() {
-    let mut configs = vec![EngineConfig::default(); 12];
+    let mut configs = vec![EngineConfig::default(); 14];
     configs[0].handler_threads = 0;
     configs[1].max_registered_regions = 4097;
     configs[2].max_transfer_bytes = (64 << 20) + 1;
@@ -100,6 +100,14 @@ fn invalid_configuration_fails_before_binding_or_spawning_threads() {
     configs[9].max_pending_notification_bytes = 1024;
     configs[10].max_allocated_batches = 0;
     configs[11].max_allocated_requests = 0;
+    configs[12].runtime_queue = Some(crate::RuntimeQueueConfig {
+        max_dispatch_owners: 0,
+        ..Default::default()
+    });
+    configs[13].runtime_queue = Some(crate::RuntimeQueueConfig {
+        max_dispatch_bytes: 0,
+        ..Default::default()
+    });
     for config in configs {
         assert!(matches!(
             TransferEngine::new(config),
@@ -156,6 +164,7 @@ pub(crate) fn rdma_fixture_with_config(
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
+        runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,
         control,
@@ -318,7 +327,14 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
 #[test]
 fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners() {
     let source = rdma_fixture("ok");
-    let requester = rdma_fixture("post_close0");
+    let mut requester = rdma_fixture("post_close0");
+    requester.runtime_queue = Some(LocalTransferAdmissionQueue::new(
+        crate::RuntimeQueueConfig {
+            max_dispatch_owners: 1,
+            max_dispatch_bytes: 8,
+            deadline_aware: true,
+        },
+    ));
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = Arc::clone(&captured);
     crate::transport::rdma::tests::on_requester_close(move |endpoint, transfer| {
@@ -373,6 +389,15 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
     let rdma = stats.rdma.unwrap();
     assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 2));
     assert_eq!(stats.inflight_batches, 1);
+    assert_eq!(
+        stats.runtime_queue.unwrap(),
+        RuntimeQueueStats {
+            queued_owners: 0,
+            queued_bytes: 0,
+            dispatching_owners: 1,
+            dispatching_bytes: 8,
+        }
+    );
     assert!(requester.close(Duration::from_millis(10)).is_err());
     source.close(Duration::from_secs(2)).unwrap();
 }
@@ -960,6 +985,7 @@ pub(crate) fn staging_fixture(
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
+        runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,
         control,

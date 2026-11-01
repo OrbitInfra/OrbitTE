@@ -167,7 +167,14 @@ impl Batch {
             }
         }
         let engine = Arc::clone(self.engine.as_ref().ok_or(Error::BatchClosed)?);
-        let prepared = engine.prepare(operation, peer, requests, notification, timeout)?;
+        let prepared = engine.prepare(
+            operation,
+            peer,
+            requests,
+            notification,
+            timeout,
+            Some(self.id()?),
+        )?;
         if self.worker.is_none() {
             let receiver = self.receiver.take().ok_or(Error::BatchClosed)?;
             let engine = Arc::clone(&engine);
@@ -305,6 +312,10 @@ impl Batch {
             return Ok(false);
         }
         task.cancel_requested = true;
+        drop(state);
+        if let Some(engine) = &self.engine {
+            engine.wake_runtime_queue();
+        }
         Ok(true)
     }
 
@@ -314,6 +325,10 @@ impl Batch {
             if !task.state.is_terminal() {
                 task.cancel_requested = true;
             }
+        }
+        drop(state);
+        if let Some(engine) = &self.engine {
+            engine.wake_runtime_queue();
         }
         Ok(())
     }
@@ -420,6 +435,9 @@ impl BatchProgress {
         self.state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+    pub(crate) fn cancel_requested(&self, index: usize) -> bool {
+        self.lock().tasks[index].cancel_requested
     }
     pub(crate) fn begin_task(&self, index: usize) -> bool {
         let mut state = self.lock();

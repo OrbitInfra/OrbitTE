@@ -2,8 +2,8 @@
 
 P1.4 implements a bounded CPU/TCP subset of TENT F08/F10. The
 [completion plan](completion-plan.md) remains the only execution queue. This
-source profile is pending independent acceptance; RDMA/CUDA and installed
-consumer qualification are separate.
+source profile has CPU controls; RDMA/CUDA source controls and installed
+consumer qualification are recorded separately in the [qualification ledger](qualification.md).
 
 ## Ownership and API
 
@@ -43,6 +43,72 @@ from bypassing the thread or retained-owner limits.
 
 `submit_async(...)` allocates, submits one group and seals it. See the runnable
 [`async_batch` example](../examples/async_batch.rs) for multiple appends.
+
+## Runtime admission and dispatch window
+
+`EngineConfig::runtime_queue` defaults to `None`. Enable it to limit actual
+dispatch independently from accepted-owner retention:
+
+```rust
+use orbit_te::{EngineConfig, RuntimeQueueConfig, TransferEngine};
+
+let engine = TransferEngine::new(EngineConfig {
+    max_inflight_batches: 128,
+    max_inflight_bytes: 256 << 20,
+    runtime_queue: Some(RuntimeQueueConfig {
+        max_dispatch_owners: 8,
+        max_dispatch_bytes: 32 << 20,
+        deadline_aware: true,
+    }),
+    ..EngineConfig::default()
+})?;
+# Ok::<(), orbit_te::Error>(())
+```
+
+Each nonempty submission is one owner. `max_inflight_batches/bytes` retain their
+existing meaning: all accepted outgoing calls, queued work and uncertain native
+owners. The queue adds two positive limits on concurrently reserved submissions
+and their whole byte charges, including attached notification bytes. It is not
+a live WR count, bandwidth limiter or a separate pool of retained memory.
+A group exceeding `max_dispatch_bytes` returns `ResourceExhausted` before task
+publication or transfer. Default `RuntimeQueueConfig` uses 64 owners, 64 MiB and
+FIFO; the existing global budgets can impose tighter limits.
+
+FIFO uses original admission sequence. With `deadline_aware=true`, the eligible
+heads use earliest absolute submission deadline, with FIFO ties. All current
+submissions have a timeout/deadline; it includes preparation, queue residence,
+transport and attached notification. EDF only reorders heads that have not
+reserved a window; it does not preempt a reservation or posted DMA. RDMA
+`Priority` still independently orders payloads inside transport workers.
+Only the oldest retained submission in each Batch is eligible. Later submissions
+keep their original sequence and deadline when activated, so a short deadline
+cannot overtake its own dependency or cause self-deadlock. A head that does not
+fit remaining byte capacity blocks later heads until capacity is released.
+
+Both synchronous and asynchronous data submissions use this queue across TCP,
+RDMA, NVLink and outer staged transfers. Existing caller/Batch workers wait on a
+condition variable; no additional scheduler thread is created. Cancellation of
+the first task and queue expiry return before transport I/O and attached
+notification. Canceling a later task preserves the uncanceled prefix. A later
+group in one Batch is still observed only when its worker reaches that group.
+Standalone notifications, segment open, batch allocation and empty submissions
+keep their existing admission paths and do not acquire dispatch reservations.
+Internal staging CROSS calls do not reacquire an outer window.
+
+`EngineStats::runtime_queue` is `None` when disabled; otherwise it reports
+`queued_owners/bytes` and `dispatching_owners/bytes`. Queued counts include
+dependency-blocked groups. Dispatching counts mean reserved capacity, including
+owners whose worker has not started I/O yet. Reservations end after backing
+release; Unquiesced retains them, including the same-Batch dependency, until a
+physical reclaim proof exists. `close_requester` fences new submissions while
+accepted work continues to drain through the same queue.
+
+This follows frozen TENT's separation of `tryAdmit`, `pickForDispatch` and
+`refillDispatchWindow`. TENT schedules physical requests, including merged-task
+aliases; OrbitTE currently schedules whole ordered submissions. Physical-request
+granularity, staging reserves, deadline-infeasible cancellation/MLU and
+local-recompute hooks remain open. The [source controls](qualification.md#runtime-admission-and-dispatch-window)
+do not establish native fairness or a performance advantage.
 
 ## Results, cancellation and quiescence
 
@@ -148,5 +214,6 @@ false, `free` remains busy and close cannot report drain. No reclaim proof is
 implemented for this quarantine yet.
 
 Request merging/alias mappings, full transport selection policy, explicit
-progress, priority/EDF, provider abort/reclaim and language/wire compatibility
-remain open. No hardware backend inherits this CPU profile's drain proof.
+progress, complete deadline/QoS policy, provider abort/reclaim and language/wire
+compatibility remain open. Runtime FIFO/EDF and RDMA payload priority are
+implemented within their documented source scope. No hardware backend inherits this CPU profile's drain proof.

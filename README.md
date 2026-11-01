@@ -37,8 +37,9 @@ recovery policy and replica placement.
   allocations; asynchronous READ/WRITE batches, cancellation and notifications
   share bounded admission. Each request selects ordinary transfer or remote GPU
   staging over TCP/RDMA; mixed batches preserve ordered completion and reuse
-  bounded staging resources. Failed native cleanup
-  retains unresolved memory. Owner-backed [type and range locations](docs/rust-api.md#memory-type-and-location)
+  bounded staging resources. An opt-in [FIFO/EDF runtime queue](docs/async-batches.md#runtime-admission-and-dispatch-window)
+  bounds concurrent submission owners and bytes while preserving batch order.
+  Failed native cleanup retains unresolved memory and dispatch reservations. Owner-backed [type and range locations](docs/rust-api.md#memory-type-and-location)
   distinguish CPU/pinned DRAM and CUDA device/context without reprobing on queries.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ
   lanes and a transport worker pool serve concurrent requests. A periodic

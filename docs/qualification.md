@@ -2219,3 +2219,27 @@ byte quotas, tenant isolation, rate caps or strict per-WR timing. The name persi
 after owner exit and requires all participants to stop before administrative
 removal. Installed qualification, native contention/fairness and measured
 scheduler overhead/throughput remain unqualified. No hardware job was requested.
+
+
+## Runtime admission and dispatch window
+
+Source implements opt-in `LocalTransferAdmissionQueue` and an independent
+owner/byte dispatch window, corresponding to frozen TENT's admission and window
+refill owners. OrbitTE's scheduling unit is the complete ordered submission;
+physical-request/alias granularity, staging reserves and MLU remain open.
+
+CPU controls use real TCP writes and notification receipts to distinguish FIFO
+from EDF, preserve a later same-Batch group's dependency despite its earlier
+deadline, and drain accepted work after requester close. Focused queue controls
+cover equal-deadline FIFO ties, independent byte/count limits and head-of-line
+byte blocking. Public batch controls cover preflight oversize rejection,
+queued cancel/expiry with zero I/O, empty submissions and a canceled later task
+preserving its completed prefix. Existing RDMA cleanup-failure and mixed
+GPU/RDMA/TCP controls additionally consume the queue and retain dispatch charges
+with actual uncertain owners. Native calls in those controls are CPU fixtures.
+
+Logs, source archive and independent review are external at
+`/root/orbitte-artifacts/runtime-admission-20261102/`. Default and combined
+source gates and exact-commit CI are recorded in that handoff. Installed
+multi-transport contention, fairness and measured scheduler overhead/throughput
+remain unqualified. No hardware job was requested for this delivery.

@@ -24,6 +24,32 @@ memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
 OrbitTE v21 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
+## Runtime queue ownership
+
+`runtime/admission_queue.rs::LocalTransferAdmissionQueue` corresponds to frozen
+TENT's `LocalTransferAdmissionQueue` and `refillDispatchWindow`. It owns the
+ordered eligible-owner set, per-Batch dependency chains and dispatch counters.
+`PreparedSubmission` owns a `QueuePermit` after its real memory references and
+before its requester-admission permit. Drop therefore releases backing before
+window/global capacity. Unquiesced quarantine retains all three.
+
+The opt-in queue uses admission sequence for FIFO and `(absolute deadline,
+sequence)` for EDF. A balanced tree orders admission/activation in O(log n);
+refill only visits the ordered prefix until either count or byte capacity is
+full. A temporarily oversized head blocks later heads, matching TENT. Same-Batch
+successors activate after predecessor ownership ends. Only scheduling metadata
+lives under the queue mutex; data transfer and notification run outside it.
+Cancellation releases the Batch progress lock before acquiring the queue lock
+to wake waiters, which read the first-task cancel flag under queue-to-progress
+lock order. Condvar waits use the original submission deadline. There is no new
+progress thread or periodic queue scan; disabled engines allocate no queue.
+
+OrbitTE schedules an entire ordered submission, including notification bytes;
+TENT schedules prepared physical requests and maps derived public tasks to them.
+This explicit granularity preserves ordered failure prefixes and existing
+NVLink copy groups. Staging internals keep their existing transport path and do
+not recursively acquire an outer window. See [configuration and scope](async-batches.md#runtime-admission-and-dispatch-window).
+
 ## RDMA resource owners
 
 | Owner | Resource and lifetime | Frozen TENT correspondence |
