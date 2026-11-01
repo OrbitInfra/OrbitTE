@@ -1940,5 +1940,42 @@ deadline. This avoids device-wide producer synchronization but is not a measured
 speedup or an asynchronous consumer-stream dependency.
 
 No hardware task was requested. Native producer ordering, installed DMA and
-matched TENT performance remain unqualified. CUDA-pinned host producer handoff,
-consumer-stream chaining, broader P5 profiles and full TENT parity remain open.
+matched TENT performance remain unqualified. At `6909d69`, pinned host handoff
+remained open; the following [pinned substage](#pinned-host-producer-readiness)
+implements it. Consumer-stream chaining is not exposed; broader P5 profiles and
+full TENT parity remain open.
+
+
+## Pinned host producer readiness
+
+Source `eb609b4` extends explicit producer handoff to owned CUDA-pinned host
+memory. `HostMemory::record_producer_stream` checks shared CPU/DMA/IPC exclusion;
+the actual `PinnedAllocation` lazily owns the same `CallerSyncEvent` used by GPU
+allocations. CPU reads/writes, staging access, host DMA and local IPC consume the
+marker before bytes are touched. Final free/unregister drains pending readiness
+first; unproven producer completion retains native backing and producer inputs. Ordinary/external
+host wrappers are rejected. This profile uses the allocation's native context.
+
+Focused gates pass 128 CUDA tests, 15 memory-owner tests, formatting and
+RDMA/CUDA all-target Clippy. Four new controls cover actual DtoH bytes/guards,
+per-thread/explicit streams, cross-thread registration aliases, later producer
+work, one reusable event, all four public TCP host roles, staging, IPC READ/WRITE,
+DMA admission, existing loan rejection and final-drop/failure retention. These
+are source/CPU controls, not real GPU execution. Allocations without a producer
+create no new event; consumed generations are not waited again by subsequent aliases.
+
+Evidence: `/root/orbitte-artifacts/pinned-producer-readiness-20261101/`.
+`source-manifest.json` and `gates.json` bind commands, source and log hashes.
+The initial test compilation error is retained in `initial-tests.log`; its IPC
+export fixture was corrected to consume the move-only owner. Final controls
+also require the actual `event-sync` and `unpin` events when checking drop order.
+Independent review and final-head CI are recorded in this directory before
+PR readiness. No new hardware task was requested.
+
+Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` records a reusable
+caller-sync event and waits on the CPU before NVLink submission. OrbitTE reuses
+that event contract at actual pinned-owner access across transports, keeping
+the common state machine. Consumption remains CPU-blocking and deadlines cannot
+interrupt it. No throughput/latency gain is claimed. Native producer ordering,
+current installed DMA and matched TENT performance remain unqualified; full
+P5/TENT parity and OrbitKV linkage remain open.

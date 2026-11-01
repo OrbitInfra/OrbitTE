@@ -1,4 +1,4 @@
-//! Producer event generations owned by the actual GPU allocation.
+//! Producer event generations owned by actual device or pinned allocations.
 
 use std::ffi::c_void;
 
@@ -18,7 +18,7 @@ pub(super) struct CallerSyncEvent {
 unsafe impl Send for CallerSyncEvent {}
 
 impl CallerSyncEvent {
-    fn new(context: &Arc<Context>) -> Self {
+    pub(super) fn new(context: &Arc<Context>) -> Self {
         Self {
             context: Arc::clone(context),
             event: None,
@@ -28,7 +28,11 @@ impl CallerSyncEvent {
         }
     }
 
-    unsafe fn record(&mut self, stream: sys::CUstream, owner: Arc<dyn Send + Sync>) -> Result<()> {
+    pub(super) unsafe fn record(
+        &mut self,
+        stream: sys::CUstream,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<()> {
         self.owner = Some(owner);
         self.pending = true;
         // Until record succeeds, an old or unrecorded event proves nothing.
@@ -96,7 +100,7 @@ impl CallerSyncEvent {
         }
     }
 
-    fn wait(&mut self) -> Result<()> {
+    pub(super) fn wait(&mut self) -> Result<()> {
         if self.uncertain || self.context.poisoned.load(Ordering::Acquire) {
             return Err(Error::Unquiesced {
                 operation: "CUDA producer readiness",

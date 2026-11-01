@@ -21,8 +21,12 @@ GPU producers may use
 [`CudaMemory::record_producer_stream`](rdma-cuda.md#producer-stream-readiness)
 before handoff. Source export and requester GPU access consume the same
 allocation-owned event generation; this can block before transfer submission.
-The later group completion still uses shared event-query progress. CUDA-pinned
-host producer writes and consumer-stream handoff remain caller-coordinated.
+The later group completion still uses shared event-query progress. Owned local
+CUDA-pinned host producers use
+[`HostMemory::record_producer_stream`](rdma-cuda.md#pinned-host-producer-handoff)
+before requester access; both entry and final group admission consume the same
+native owner's marker. Consumers start after engine completion; no consumer
+stream dependency is inserted.
 
 An exported legacy CUDA IPC handle grants access to its **whole underlying
 allocation**. Driver hardware does not enforce a registered subrange or a

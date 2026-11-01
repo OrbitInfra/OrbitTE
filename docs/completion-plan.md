@@ -690,8 +690,11 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   GPU producer-stream readiness is implemented at `33ef0b1`, with explicit
   stream-context controls corrected at `6909d69`. Actual allocation owners share
   one reusable event generation across copies, staging, DMA and IPC access.
-  CUDA-pinned host producer handoff and consumer-stream chaining remain open.
-  See [producer readiness](qualification.md#cuda-producer-readiness).
+  Owned CUDA-pinned host handoff is implemented at `eb609b4`, sharing the same
+  marker at CPU/staging, host DMA and local IPC access and final pin release.
+  Consumers use existing engine completion receipts; consumer-stream chaining
+  is not exposed. See [GPU readiness](qualification.md#cuda-producer-readiness)
+  and [pinned readiness](qualification.md#pinned-host-producer-readiness).
   Current installed qualification remains open.
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
@@ -1055,15 +1058,23 @@ and consume a scoped event before allocation access. Aliases reuse one event;
 generation ownership and retained producer inputs survive cross-thread handoff.
 The wait remains CPU-blocking. See [readiness](qualification.md#cuda-producer-readiness).
 
-The next functional delivery extends that handoff to CUDA-pinned host owners.
-Consume a GPU producer's completion before CPU reads/writes, host RDMA loans or
-local pinned-host IPC copies can access those bytes. Keep readiness with the
-actual `HostMemory` / CUDA host owner and its existing access exclusion, without
-duplicating per-registration events. Ordinary host memory must not gain a CUDA
-dependency. Inspect these owners first and preserve the common event-generation
-and failure-retention contracts. Consumer-stream chaining remains a separate
-open P5 boundary. Automatic selection/QoS remains P6; native performance claims
-require matched hardware.
+Owned CUDA-pinned host handoff is implemented at `eb609b4`: the actual
+`PinnedAllocation` lazily owns the same event, while `HostMemory` supplies
+CPU/DMA/IPC exclusion. Readiness precedes payload access and final native pin
+release. Ordinary host memory remains independent of CUDA, and staging without
+a producer creates no new event. See [pinned readiness](qualification.md#pinned-host-producer-readiness).
+
+The next functional delivery is the existing P5 CUDA pointer/location contract
+(F02/F03). Follow frozen TENT's `MemoryProber` / `Platform` responsibilities,
+extending the current `CudaMemory::register` attribute checks and CPU location
+owners rather than duplicating them. Expose bounded owner-backed memory type,
+device/context and location information for registration and staging consumers;
+preserve actual owners and reject unsupported/unknown CUDA pointers without
+falling through to a CPU dereference. Full automatic selection/QoS stays P6.
+The frozen NVLink consumer boundary is `getTransferStatus` after event query,
+which OrbitTE already follows through engine completion. Consumer-stream chaining
+is an unimplemented extension, not an additional frozen-TENT parity gate.
+Native ordering and performance claims still require matched hardware.
 
 New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
 OrbitKV linkage remains deferred. Keep the physical/fabric requirements in

@@ -197,7 +197,7 @@ impl StagingCopy {
         checked_range(offset, length, self.length)?;
         let host = stage.buffer()?;
         checked_range(0, length, host.length)?;
-        host.check_access()?;
+        host.prepare_access()?;
         stage.submitting();
         let result = (|| {
             let host = stage.buffer()?;

@@ -1,6 +1,7 @@
 //! CUDA-pinned host allocation, copy stream and deallocation ownership.
 
 use std::mem::ManuallyDrop;
+use std::sync::OnceLock;
 
 use super::*;
 use crate::platform::numa::{MappedMemory, Numa};
@@ -17,6 +18,7 @@ pub(crate) struct PinnedAllocation {
     pub(crate) numa_node: Option<u32>,
     backing: Backing,
     pub(super) copy_stream: Mutex<Option<CopyStream>>,
+    producer: OnceLock<Mutex<CallerSyncEvent>>,
     cleanup_attempted: bool,
     released: bool,
     native_freed: bool,
@@ -27,7 +29,7 @@ unsafe impl Send for PinnedAllocation {}
 unsafe impl Sync for PinnedAllocation {}
 
 impl PinnedAllocation {
-    pub(crate) fn check_access(&self) -> Result<()> {
+    pub(crate) fn prepare_access(&self) -> Result<()> {
         let stream = self.copy_stream.lock().map_err(|_| Error::Unquiesced {
             operation: "CUDA pinned copy stream",
             code: -1,
@@ -40,7 +42,37 @@ impl PinnedAllocation {
                 code: -1,
             });
         }
+        drop(stream);
+        if let Some(producer) = self.producer.get() {
+            producer
+                .lock()
+                .map_err(|_| Error::Unquiesced {
+                    operation: "CUDA pinned producer readiness",
+                    code: -1,
+                })?
+                .wait()?;
+        }
         Ok(())
+    }
+
+    /// The caller holds the HostMemory lock after whole-allocation admission
+    /// and prepare_access, retaining the valid stream and its producer inputs.
+    pub(crate) unsafe fn record_producer_stream(
+        &self,
+        stream: *mut std::ffi::c_void,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<()> {
+        let mut producer = self
+            .producer
+            .get_or_init(|| Mutex::new(CallerSyncEvent::new(&self.context)))
+            .lock()
+            .map_err(|_| Error::Unquiesced {
+                operation: "CUDA pinned producer readiness",
+                code: -1,
+            })?;
+        // SAFETY: the caller retains the stream and producer inputs, with
+        // exclusive host access; prepare_access consumed the preceding marker.
+        unsafe { producer.record(stream.cast(), owner) }
     }
 
     pub(super) fn new(context: &Arc<Context>, length: usize) -> Result<Self> {
@@ -86,6 +118,7 @@ impl PinnedAllocation {
             numa_node: None,
             backing: Backing::Driver,
             copy_stream: Mutex::new(None),
+            producer: OnceLock::new(),
             cleanup_attempted: false,
             released: false,
             native_freed: false,
@@ -131,6 +164,7 @@ impl PinnedAllocation {
             numa_node: Some(node),
             backing: Backing::Mapped(ManuallyDrop::new(mapping)),
             copy_stream: Mutex::new(None),
+            producer: OnceLock::new(),
             cleanup_attempted: false,
             released: false,
             native_freed: false,
@@ -175,16 +209,7 @@ impl PinnedAllocation {
         // Mark the attempt before the native call: even a successful free with
         // failed context restoration is never retried by close or Drop.
         self.cleanup_attempted = true;
-        let quiescent = self
-            .copy_stream
-            .get_mut()
-            .is_ok_and(|stream| stream.as_ref().is_none_or(CopyStream::quiescent));
-        let result = if !quiescent || self.context.poisoned.load(Ordering::Acquire) {
-            Err(Error::Unquiesced {
-                operation: "CUDA pinned memory",
-                code: -1,
-            })
-        } else {
+        let result = self.prepare_access().and_then(|()| {
             let streams_closed = self
                 .copy_stream
                 .get_mut()
@@ -208,7 +233,7 @@ impl PinnedAllocation {
                     check(operation, status)
                 })
             })
-        };
+        });
         let result = result.and_then(|()| match &mut self.backing {
             Backing::Driver => Ok(()),
             Backing::Mapped(mapping) => mapping.close(),
