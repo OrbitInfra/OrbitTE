@@ -96,8 +96,11 @@ Unsafe `CudaMemory::record_producer_stream(stream, owner)` records already-queue
 GPU producer work on the caller's actual stream. Retain the live stream and all
 producer inputs in the supplied `Arc<dyn Send + Sync>`; aliases share one reusable
 event generation. Transfer access consumes readiness before reading or writing
-the allocation. This does not establish a consumer-stream dependency or hand off
-CUDA-pinned host producers. See the
+the allocation. `HostMemory::record_producer_stream` provides the same handoff
+for owned CUDA-pinned host memory, using the context selected at allocation.
+CPU/staging, host RDMA and local IPC access consume that marker. Ordinary or
+externally wrapped host memory is rejected; neither API establishes a
+consumer-stream dependency. See the
 [producer ownership contract](rdma-cuda.md#producer-stream-readiness) before using
 the unsafe API, and [RDMA and CUDA](rdma-cuda.md) for range, grant and drain rules.
 

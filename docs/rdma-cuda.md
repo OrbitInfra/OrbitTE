@@ -292,9 +292,9 @@ libcudart, cuBLAS or NVRTC to build.
 
 Callers exclude conflicting external access before handoff and coordinate
 consumers through their own stream/lifecycle contract. GPU producers can use
-the explicit readiness handoff below or finish their work before handoff.
-CUDA-pinned host producers still require caller synchronization. Failed copy
-synchronization, context restore or unpin retains the actual owner and is
+the explicit readiness handoff below for device or owned CUDA-pinned host
+allocations, or finish their work before handoff. Failed copy synchronization,
+context restore or unpin retains the actual owner and is
 observable through `cuda::retained_resources`.
 
 ### Producer-stream readiness
@@ -339,8 +339,39 @@ records a reusable event on `cudaStreamPerThread` and waits for it before
 submission. OrbitTE retains that scoped CPU event-wait boundary while accepting
 the caller's explicit stream and attaching its generation to the allocation
 across threads and transports. Producer readiness and transfer completion use
-separate events. CUDA-pinned host producer handoff and consumer-stream chaining
-remain open. See [source qualification](qualification.md#cuda-producer-readiness).
+separate events. Consumer-stream chaining is not exposed; consumers start after
+the engine's completion receipt. See [source qualification](qualification.md#cuda-producer-readiness).
+
+### Pinned host producer handoff
+
+With `cuda` enabled, unsafe `HostMemory::record_producer_stream(stream, owner)`
+accepts memory returned by `cuda::allocate_pinned_host`. It uses the same caller
+stream, producer-input retention and exclusive external-access contract above.
+Ordinary owned host memory and external `from_raw_parts` wrappers are rejected;
+the call does not register or copy arbitrary host bytes through CUDA.
+
+The stream must belong to the native context selected by
+`allocate_pinned_host(device, length)`. Portable pinned allocation makes bytes
+usable from other CUDA contexts, but this API deliberately retains a marker in
+the allocation's own context. It does not infer a foreign producer context.
+See NVIDIA's [portable host allocation contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
+
+`PinnedAllocation` lazily owns the existing `CallerSyncEvent`; registration
+aliases share it. `HostMemory` keeps its access lock through capture and rejects
+any existing DMA or IPC loan first. CPU read/write, staging byte/access loans,
+host RDMA admission and local pinned-host IPC access consume readiness before
+payload access. TCP therefore consumes the same marker on either side of
+READ/WRITE. Each generation waits once and reuses its event. Internal staging
+allocations without a producer skip this optional state and create no new event.
+
+Final native release consumes pending readiness before `cuMemFreeHost` or
+`cuMemHostUnregister`. Failed readiness keeps the actual pinned backing and
+producer inputs alive; release is attempted once. Successful readiness allows
+input release even if later event destruction or unpin fails. The shared wait
+remains CPU-blocking and cannot be interrupted by transfer deadlines.
+This extends TENT's caller-sync event boundary to OrbitTE's actual pinned owner;
+it adds neither a new transport nor a separate readiness state machine.
+See [source qualification](qualification.md#pinned-host-producer-readiness).
 
 ### Copy completion and reuse
 

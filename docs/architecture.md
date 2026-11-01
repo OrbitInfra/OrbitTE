@@ -482,9 +482,15 @@ access. Aliases consume each generation once and reuse its event. Final drop
 drains any pending generation. Unproven readiness fences the real allocation.
 This follows TENT's caller-sync event boundary, extended across transport and
 thread ownership; see [producer readiness](rdma-cuda.md#producer-stream-readiness).
+`PinnedAllocation` reuses this same event owner in a lazy `OnceLock` slot. Its
+existing access preparation and final native release consume pending readiness;
+ordinary staging without a producer skips the optional event mutex. The
+`HostMemory` lock excludes CPU/native access during explicit capture, and all
+aliases share the actual pinned backing. Host DMA/IPC admission checks existing
+loans before consuming readiness. See [pinned handoff](rdma-cuda.md#pinned-host-producer-handoff).
 Public read/write and producer event waits remain synchronous; initial allocation
-zeroing still synchronizes its context. CUDA-pinned host producer handoff,
-consumer-stream chaining and broader scheduling remain open.
+zeroing still synchronizes its context. Consumer-stream chaining is not exposed;
+consumer access follows engine completion. Broader scheduling remains open.
 
 ## CUDA IPC transport ownership
 

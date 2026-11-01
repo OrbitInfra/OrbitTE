@@ -48,8 +48,8 @@ recovery policy and replica placement.
 - **Optional NVIDIA support.** Device and pinned-host allocations use the CUDA
   Driver API. Device transfers select owned staging or explicit GPUDirect RDMA,
   with allocation-range ownership and consumer visibility before completion.
-  Explicit GPU producer-stream handoff shares one reusable readiness event across
-  aliases and transfers; current hardware qualification remains pending.
+  Device and owned pinned-host producer handoff shares one reusable readiness
+  event across aliases and transfers; current hardware qualification remains pending.
   Cooperative same-host GPU IPC adds explicit export ownership and close receipts;
   local owned pinned host READ/WRITE, bounded cross-submission import reuse,
   idle LRU reclamation and explicit cache flush are also available. Eligible
