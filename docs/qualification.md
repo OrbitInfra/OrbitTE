@@ -1861,3 +1861,43 @@ concurrency, native cleanup and matched TENT performance remain unqualified.
 Historical H20 results do not qualify this changed completion path. Query API
 counts and CPU shim concurrency are not native latency/bandwidth measurements.
 Full P5/TENT parity and OrbitKV integration remain open.
+
+
+## CUDA IPC native batch copy
+
+Source `d6b564f` adds optional CUDA 13 `cuMemcpyBatchAsync_v2` dispatch for
+independent NVLink groups. The driver probe checks the reported version and
+exact versioned symbol against generated `cudarc` 13.0 types. Copy descriptors
+retain request order; sorted address intervals reject overlapping writes and
+source/destination dependencies while allowing shared reads. Ineligible groups
+retain ordered enqueue. Both paths retain actual owners, the exclusive pooled
+stream, trailing event, shared completion progress and source receipts.
+
+Focused gates pass two driver tests (including a compiled native ABI/version
+control), three stream-pool tests, 32 IPC-related tests and 11 native-observer
+controls, plus formatting and RDMA/CUDA all-target Clippy. New CPU controls use
+a shim that deliberately executes batch members in reverse order and can fail
+after a non-prefix subset. They verify READ/WRITE bytes and guards for mixed
+GPU/pinned owners, read aliases, ordered overlapping writes, unavailable
+capability, cancellation prefixes, no replay, no fabricated completed prefix,
+and retained owners after uncertain completion. The native observer forwards
+the exact v2 entry unchanged and records one call plus its descriptors; the
+validator binds those descriptors to one group and its actual event generation.
+This is source/CPU evidence, not execution of a native GPU batch.
+
+Evidence: `/root/orbitte-artifacts/nvlink-batch-copy-20261101/`.
+`source-manifest.json` identifies the checked files; `gates.json` records
+commands, exits and log hashes. The initial failed assertion is retained in
+`initial-tests.log`; it used the wrong existing shim event label and was corrected.
+Independent review and final CI are recorded in the same external directory.
+
+Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` uses
+`NVLinkSubBatch` / `startTransfer` arrays, stream-ordered source attributes,
+`cudaMemcpyBatchAsync` and one trailing event. OrbitTE implements the CUDA 13
+Driver API counterpart, selects fallback before submission, and preserves
+ordered dependent-copy semantics. A failed native call never triggers replay.
+
+No hardware task was requested. Current installed batch-copy DMA, native
+partial-error behavior and matched TENT latency/bandwidth remain unqualified.
+The functional call-count reduction is not a measured performance result.
+Producer-stream readiness, broader P5 profiles and full TENT parity remain open.

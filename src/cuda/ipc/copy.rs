@@ -217,6 +217,11 @@ impl IpcMapping {
                         .map_err(|_| Error::ResourceExhausted)?;
                 }
             }
+            let mut batch = if copies.len() > 1 && self.context.driver.copy_batch.is_some() {
+                super::batch::CopyBatch::prepare(copies, self.address, to_remote)?
+            } else {
+                None
+            };
             // Commit all loans while the common lock order excludes competing access.
             for (memory, access) in owners.iter().zip(&mut guards) {
                 match access {
@@ -239,14 +244,21 @@ impl IpcMapping {
             // group loans survive every subsequent poll and context restoration.
             let result = unsafe {
                 stream.begin_group(|driver, stream| {
+                    let mut admission = Ok(());
                     for (index, copy) in copies.iter().enumerate() {
-                        begin(index)?;
+                        if let Err(error) = begin(index) {
+                            admission = Err(error);
+                            break;
+                        }
                         self.memories.push(copy.memory.clone());
                         group.attempted = index + 1;
                         let owner = owners
                             .binary_search_by_key(&owner_key(&copy.memory), |m| owner_key(m))
                             .map_err(|_| Error::Internal("CUDA IPC copy owner missing"))?;
                         group.loans[owner].1 = true;
+                        if batch.is_some() {
+                            continue;
+                        }
                         let remote = self.address + copy.remote_offset as u64;
                         let code = match &copy.memory {
                             Allocation::Cuda(memory) => {
@@ -277,6 +289,21 @@ impl IpcMapping {
                         check("CUDA IPC async copy", code)?;
                         group.submitted += 1;
                     }
+                    if let Some(batch) = &mut batch {
+                        if group.attempted != 0 {
+                            // A failed batch may have enqueued any subset. Do not
+                            // replay it or invent a completed prefix after drain.
+                            batch.enqueue(
+                                driver
+                                    .copy_batch
+                                    .ok_or(Error::Internal("CUDA batch entry missing"))?,
+                                group.attempted,
+                                stream,
+                            )?;
+                            group.submitted = group.attempted;
+                        }
+                    }
+                    admission?;
                     group.submitted_all = true;
                     Ok(())
                 })

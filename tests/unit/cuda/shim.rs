@@ -512,6 +512,7 @@ pub(super) fn driver() -> Arc<Driver> {
         ipc_export,
         ipc_open,
         ipc_close,
+        copy_batch: None,
         copy_device,
         to_host,
         to_device,
@@ -758,6 +759,44 @@ unsafe extern "C" fn copy_device(
         if error == 0 { length } else { length.min(1) },
     );
     status(error)
+}
+
+pub(super) unsafe extern "C" fn copy_batch(
+    destinations: *mut u64,
+    sources: *mut u64,
+    lengths: *mut usize,
+    count: usize,
+    attrs: *mut sys::CUmemcpyAttributes,
+    indices: *mut usize,
+    num_attrs: usize,
+    stream: sys::CUstream,
+) -> Status {
+    event("copy-batch");
+    assert!(count > 0 && num_attrs == 1);
+    unsafe {
+        assert_eq!(*indices, 0);
+        assert_eq!(
+            (*attrs).srcAccessOrder,
+            sys::CUmemcpySrcAccessOrder::CU_MEMCPY_SRC_ACCESS_ORDER_STREAM
+        );
+        assert_eq!((*attrs).flags, 0);
+        // Deliberately enqueue in reverse order; successful batches must not
+        // depend on request order. An error can follow a non-prefix subset.
+        for index in (0..count).rev() {
+            ipc_copy_control();
+            enqueue(
+                stream,
+                *sources.add(index) as usize,
+                *destinations.add(index) as usize,
+                *lengths.add(index),
+            );
+            let error = current().copy_error.load(Ordering::Acquire);
+            if error != 0 {
+                return status(error);
+            }
+        }
+    }
+    SUCCESS
 }
 
 fn ipc_copy_control() {
