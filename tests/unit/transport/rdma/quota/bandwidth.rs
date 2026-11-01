@@ -14,28 +14,37 @@ fn info() -> Arc<DeviceInfo> {
 }
 fn completed_work(info: &Arc<DeviceInfo>, start: Instant, end: Instant, length: usize) {
     let sq = SendQueue::new(2, Arc::default(), Some(Arc::clone(info))).unwrap();
-    let mut work = SendWork::new(length, length, 1, sq, 1).unwrap();
-    let wr = work.reserve(2).unwrap()[0];
+    let mut work = SendWork::new(length, length / 2, 2, sq, 1).unwrap();
+    let wrs = work.reserve(2).unwrap().to_vec();
     work.posted(
         0,
         sys::PostResult {
-            accepted: 1,
+            accepted: 2,
             uncertain: false,
         },
         start,
     )
     .unwrap();
-    work.complete(
-        sys::Completion {
-            id: wr.id,
-            opcode: 2,
-            length: wr.length,
-            ..Default::default()
-        },
-        TransferOp::Read,
-        end,
-    )
-    .unwrap();
+    let samples_before = info.snapshot(0, "nic", 0).transmit_samples;
+    for wr in wrs {
+        work.complete(
+            sys::Completion {
+                id: wr.id,
+                opcode: 2,
+                length: wr.length,
+                ..Default::default()
+            },
+            TransferOp::Read,
+            end,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        info.snapshot(0, "nic", 0).transmit_samples,
+        samples_before,
+        "one CQ pass must account all payload CQEs before closing its meter interval"
+    );
+    info.sample(end);
 }
 
 #[test]
@@ -213,6 +222,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
                 t + Duration::from_millis(10),
             )
             .unwrap();
+        info.sample(t + Duration::from_millis(10));
         let stats = info.snapshot(0, "nic", 0);
         assert_eq!(
             (stats.selection_samples, stats.transmit_samples),
@@ -228,7 +238,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
 fn rate_changes_reseed_once_and_reject_samples_from_an_older_link_generation() {
     let info = info();
     let t = Instant::now();
-    let generation = info.posted(10, t);
+    let generation = info.posted(10, false, t);
     info.set_bandwidth(Some(200_000));
     info.ended(10, true, t + Duration::from_millis(10));
     info.observe(10, Duration::from_millis(10), generation);

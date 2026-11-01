@@ -743,12 +743,12 @@ impl ProgressState {
                 .fault
                 .is_none()
         {
+            let completed_at = Instant::now();
             for (receive_cq, cq) in [(false, cqs[0]), (true, cqs[1])] {
                 let mut handles = sys::ConnectionHandles {
                     cq: cq.unwrap_or(std::ptr::null_mut()),
                     ..Default::default()
                 };
-                let completed_at = Instant::now();
                 for _ in 0..64 {
                     let mut completion = sys::Completion::default();
                     let count = unsafe { (self.verbs.poll)(&mut handles, &mut completion) };
@@ -776,6 +776,24 @@ impl ProgressState {
                     {
                         break;
                     }
+                }
+            }
+            let failed = self
+                .control
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .fault
+                .is_some();
+            // This lane's QPs share one NIC. Count the entire pass before
+            // sampling bytes against its common completion timestamp.
+            if let Some(info) = records
+                .first()
+                .and_then(|record| record.send_queue.bandwidth.as_ref())
+            {
+                if failed {
+                    info.invalidate();
+                } else if progressed {
+                    info.sample(completed_at);
                 }
             }
         }

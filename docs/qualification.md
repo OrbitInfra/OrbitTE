@@ -2085,7 +2085,8 @@ LAG speed query or extended XDR encoding. See [the contract](rdma-cuda.md#bandwi
 
 Focused source controls cover heterogeneous-rate selection, baseline round
 robin, mask/NUMA eligibility, retained charges, partial and uncertain posts,
-failed completions, idle-time exclusion, old-generation sample rejection and
+failed completions, complete same-timestamp CQ pass accounting, idle-time
+exclusion, old-generation sample rejection and
 rate-only monitor refresh. Public READ/WRITE controls exercise the actual
 engine/selector/SQ/CQ path through CPU verbs callbacks and inspect both peers'
 snapshots. They establish source behavior, not RNIC throughput. Existing RDMA

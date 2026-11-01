@@ -134,7 +134,8 @@ Two independent estimates share one per-NIC owner:
 - **Transmit bandwidth:** valid payload completion bytes divided by time with
   outstanding posted payload debt. Idle intervals are excluded. The old estimate
   has coefficient 0.9; the meter updates after 10 ms and drops intervals older
-  than 50 ms. Control WRs do not contribute payload bytes.
+  than 50 ms. Each CQ polling pass accounts all its completions before sampling
+  against their shared timestamp. Control WRs do not contribute payload bytes.
 
 Both estimates clamp to 0.1–10 times their seed. Invalid configuration is rejected
 before device construction. Partial/uncertain posts, failed completions and

@@ -100,7 +100,7 @@ impl DeviceInfo {
             .invalidate();
     }
 
-    pub(in crate::transport::rdma) fn posted(&self, bytes: u64, now: Instant) -> u64 {
+    pub(in crate::transport::rdma) fn posted(&self, bytes: u64, failed: bool, now: Instant) -> u64 {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let now = state.advance(now);
         if bytes != 0 {
@@ -119,6 +119,9 @@ impl DeviceInfo {
                     completed: state.completed,
                 });
             }
+        }
+        if failed {
+            state.invalidate();
         }
         state.generation
     }
@@ -141,7 +144,16 @@ impl DeviceInfo {
                 state.busy = state.busy.saturating_add(now.duration_since(since));
             }
         }
-        if !state.tainted && success {
+        if state.tainted && state.posted == 0 {
+            state.tainted = false;
+            state.meter = None;
+        }
+    }
+
+    pub(in crate::transport::rdma) fn sample(&self, now: Instant) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let now = state.advance(now);
+        if !state.tainted {
             let busy = state.busy_at(now);
             if let Some(old) = &state.meter {
                 let elapsed = now.duration_since(old.at);
@@ -167,10 +179,6 @@ impl DeviceInfo {
                     });
                 }
             }
-        }
-        if state.tainted && state.posted == 0 {
-            state.tainted = false;
-            state.meter = None;
         }
     }
 

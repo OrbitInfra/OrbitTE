@@ -161,11 +161,12 @@ impl SendQueue {
             .map(|request| u64::from(request.length))
             .sum();
         let generation = self.bandwidth.as_ref().and_then(|info| {
-            let generation = (bytes != 0).then(|| info.posted(bytes, now));
-            if code != 0 || uncertain {
-                info.invalidate();
+            let failed = code != 0 || uncertain;
+            if bytes == 0 && !failed {
+                return None;
             }
-            generation
+            let generation = info.posted(bytes, failed, now);
+            (bytes != 0).then_some(generation)
         });
         Ok((owed, generation))
     }
