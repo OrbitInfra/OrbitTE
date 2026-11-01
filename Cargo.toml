@@ -11,12 +11,12 @@ homepage = "https://github.com/OrbitInfra/OrbitTE"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["build.rs", "src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]
 default = []
-rdma = ["dep:ibverbs-sys", "dep:libc", "dep:serde", "dep:serde_json"]
+rdma = ["dep:cc", "dep:bindgen", "dep:ibverbs-sys", "dep:libc", "dep:libloading", "dep:serde", "dep:serde_json"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2", "dep:libc"]
 
 [dependencies]
@@ -29,6 +29,10 @@ socket2 = { version = "=0.6.2", optional = true }
 
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1", optional = true }
+
+[build-dependencies]
+bindgen = { version = "=0.71.1", optional = true }
+cc = { version = "1", optional = true }
 
 [lib]
 name = "orbit_te"

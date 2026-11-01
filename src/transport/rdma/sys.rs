@@ -16,6 +16,7 @@ use crate::{Error, Result};
 mod cq;
 mod device;
 mod memory;
+mod port;
 mod qp;
 
 use cq::{
@@ -178,6 +179,7 @@ pub(super) struct AsyncVerbs {
     pub ack: unsafe extern "C" fn(*mut c_void, *mut AsyncEvent),
 }
 
+type QueryPortSpeed = unsafe fn(*const DeviceHandles, u8) -> Result<Option<u64>>;
 type Discover = fn(&RdmaConfig) -> Result<(Topology, Vec<RdmaAddress>)>;
 type CloseConnection = unsafe extern "C" fn(*mut ConnectionHandles) -> c_int;
 type CloseMemory = unsafe extern "C" fn(*mut MemoryHandles) -> c_int;
@@ -187,6 +189,7 @@ pub(super) struct Verbs {
     pub discover: Discover,
     pub query_address:
         unsafe fn(*const DeviceHandles, &RdmaAddress, Option<u8>) -> Result<RdmaAddress>,
+    pub query_port_speed: Option<QueryPortSpeed>,
     pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
     pub create_cq:
         unsafe extern "C" fn(*mut CqHandles, *const DeviceHandles, u32, *mut c_void) -> c_int,
@@ -321,6 +324,7 @@ destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
+    query_port_speed: Some(port::query_port_speed),
     discover: discovery::discover,
     query_address,
     completion: Some(CqEventVerbs {

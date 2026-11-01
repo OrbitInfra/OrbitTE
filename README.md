@@ -47,8 +47,8 @@ recovery policy and replica placement.
   feed precomputed NIC priorities, device masks and in-flight byte accounting.
   TENT-format priority matrices and topology files can override eligible NICs
   and ranks while preserving discovered device identities. Bandwidth-aware
-  selection combines negotiated port rates, successful payload observations
-  and physical grant charges. Whole-parent weighted slice plans and periodic
+  selection combines effective LAG or negotiated port rates, successful payload
+  observations and physical grant charges. Whole-parent weighted slice plans and periodic
   eligible-rail exploration share the same selector; a separate busy-time meter
   reports NIC throughput estimates. Each peer uses its memory owner's location; optional strict locality rejects
   known cross-NUMA paths. Parent completion requires every slice and its source

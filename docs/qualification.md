@@ -2080,8 +2080,9 @@ implemented against frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
 `ib_link_speed.h`. One selector retains configured topology and physical
 charges; per-NIC owners hold separate selection EWMA and posted-busy-time
 transmit estimates. Native port-rate refresh seeds both without replacing QPs.
-Current verbs bindings supply legacy speed/width, not the newer effective
-LAG speed query or extended XDR encoding. See [the contract](rdma-cuda.md#bandwidth-aware-rdma-selection).
+That delivery used legacy speed/width. The subsequent
+[effective-rate delivery](#rdma-effective-link-rate) adds optional LAG queries
+and header-supported extended XDR encoding. See [the contract](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 Focused source controls cover heterogeneous-rate selection, baseline round
 robin, mask/NUMA eligibility, retained charges, partial and uncertain posts,
@@ -2134,5 +2135,33 @@ Evidence is external at
 `/root/orbitte-artifacts/rdma-weighted-multipath-20261101/`, including source
 revisions, commands, logs, CI and independent review. Installed routing,
 throughput, fairness and a matched TENT performance comparison remain
-unqualified. No Forge task was requested. Effective LAG/extended speed queries,
-QoS/bandwidth arbitration and complete F16/P6 parity remain open.
+unqualified. No Forge task was requested. Effective LAG/extended speed queries
+are implemented in the subsequent delivery below; QoS/bandwidth arbitration and
+complete F16/P6 parity remain open.
+
+
+## RDMA effective link rate
+
+F16 rate discovery follows frozen TENT
+`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` `context.cpp`
+(`recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes`) and
+`ibv_loader.cpp` optional-symbol handling. The existing `ibverbs-sys` dependency
+and native resource owners remain. A thin C shim calls the system header's
+port-query inline and returns only a generated fixed-width result. No Rust
+mirror of `verbs_context` is maintained. Extended-speed support follows the
+installed header; older headers keep the legacy encoding. Effective speed is
+loaded once from the runtime library and converted from 100 Mb/s units.
+
+Source controls cover the C-header provider boundary, propagated query errors,
+optional-symbol absence, output units/overflow, XDR decoding and unknown values.
+The monitor control exercises degraded LAG rates, transient query errors,
+recovery and zero/unavailable fallback through the existing context/selector;
+health checks do not learn speed and rate changes preserve connection identity.
+These controls use CPU fixtures and do not establish native provider behavior.
+
+Evidence is external at
+`/root/orbitte-artifacts/rdma-effective-link-rate-20261101/`, preserving the
+initial compilation diagnostics, source checks, package build and review.
+Native LAG/XDR behavior, installed DMA, throughput and matched TENT performance
+remain unqualified. No hardware task was requested. Request priority, shared
+quota/bandwidth arbitration and complete F16/P6 parity remain open.

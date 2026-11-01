@@ -547,8 +547,14 @@ cannot teach selection. The connection retains the meter across reused grants,
 while `DeviceLease` still follows the actual grant through source receipts and
 native cleanup. Sampling does not acquire the selector's global lock.
 
-The periodic monitor publishes negotiated rates and reseeds only on a change.
-Route identity excludes speed, preserving QPs when only the rate changes.
+The periodic monitor publishes effective or negotiated rates and reseeds only
+on a change. `sys/port.c` calls the system header's port-query inline and returns
+a generated fixed-width ABI, while `sys/port.rs` loads the optional effective-rate
+symbol once. `RdmaContext` retains the last effective speed on query failure and
+publishes query diagnostics. These responsibilities correspond to TENT's
+`recordPortSpeed`, `queryEffectiveSpeed` and `refreshPortAttributes`; ordinary
+route health checks remain observational. Route identity excludes speed,
+preserving QPs when only the rate changes.
 `TransferEngine::nic_load_stats` reads initialized available devices without
 starting discovery. This maps to TENT's `setDeviceBandwidth`, `release`,
 `notePosted`/`notePostEnded`/`noteCompleted`, `maybeSampleTransmit` and
@@ -562,7 +568,8 @@ owners and returns unconsumed reservations on failure. It introduces no native
 resource, heap allocation or second scheduler. Source grants remain pinned to
 the agreed PD and uncertain writes are never replayed. Periodic probes rotate
 eligible NICs across parents, with one selector-owned counter shared by submitters.
-Effective LAG/extended rate queries and bandwidth arbitration remain P6 work.
+Bandwidth arbitration remains P6 work; native effective-rate behavior and
+matched throughput remain unqualified.
 See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection).
 
 ## CUDA IPC transport ownership

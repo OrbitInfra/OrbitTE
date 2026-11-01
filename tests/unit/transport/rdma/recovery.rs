@@ -408,3 +408,120 @@ fn active_port_rate_refresh_reseeds_selection_without_replacing_connections() {
         .close(Instant::now() + Duration::from_secs(2))
         .unwrap();
 }
+
+unsafe fn query_port_speed(
+    handles: *const sys::DeviceHandles,
+    _: u8,
+) -> crate::Result<Option<u64>> {
+    let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    let mut state = device.effective_speed.lock().unwrap();
+    state.2 += 1;
+    if state.1 != 0 {
+        Err(Error::Backend {
+            operation: "controlled effective speed",
+            code: state.1,
+        })
+    } else {
+        Ok(state.0)
+    }
+}
+
+#[test]
+fn effective_rate_refresh_keeps_degraded_lag_on_query_fault_and_never_rebuilds_qps() {
+    static VERBS: sys::Verbs = sys::Verbs {
+        query_port_speed: Some(query_port_speed),
+        ..crate::transport::rdma::tests::VERBS
+    };
+    let mut runtime = runtime("ok");
+    runtime.verbs = &VERBS;
+    let registry = crate::memory::MemoryRegistry::new(crate::SourceEpoch([1; 16]), 1, 8);
+    let memory = registry
+        .register(vec![0; 8].into_boxed_slice(), crate::Permission::LocalOnly)
+        .unwrap();
+    let mut grant = runtime
+        .endpoint(
+            &memory,
+            0,
+            8,
+            0,
+            Instant::now() + Duration::from_secs(30),
+            None,
+        )
+        .unwrap();
+    let owner = runtime.device().unwrap();
+    let original = grant.incarnation().unwrap();
+    assert_eq!(owner.address().unwrap().effective_speed_mbps, Some(200_000));
+    change_route(&runtime, |address| address.link_speed_mbps = Some(400_000));
+    {
+        let _contexts = runtime.context_set.lock().unwrap();
+        let mut before = 0;
+        native(&owner, |device| {
+            before = device.effective_speed.lock().unwrap().2
+        });
+        for _ in 0..3 {
+            owner.check_address().unwrap();
+        }
+        native(&owner, |device| {
+            assert_eq!(
+                device.effective_speed.lock().unwrap().2,
+                before,
+                "health checks must not query or learn speed"
+            )
+        });
+    }
+    for (rate, code, expected, failing) in [
+        (Some(100_000), 0, 100_000, false),
+        (Some(800_000), libc::EIO, 100_000, true),
+        (Some(300_000), 0, 300_000, false),
+        (Some(0), 0, 400_000, false),
+        (None, 0, 400_000, false),
+    ] {
+        let before = owner.address().unwrap().effective_speed_query_failures;
+        let queries = runtime.stats().unwrap().route_queries;
+        native(&owner, |device| {
+            let mut state = device.effective_speed.lock().unwrap();
+            state.0 = rate;
+            state.1 = code;
+        });
+        let end = Instant::now() + Duration::from_secs(6);
+        loop {
+            let address = owner.address().unwrap();
+            let stats = runtime.nic_load_stats().unwrap();
+            if runtime.stats().unwrap().route_queries > queries
+                && address.effective_speed_query_failing == failing
+                && address.link_speed_mbps == Some(expected)
+                && stats[0].link_speed_gbps == Some(expected as f64 / 1000.0)
+                && (failing || address.effective_speed_mbps == rate.filter(|v| *v != 0))
+            {
+                if failing {
+                    assert!(address.effective_speed_query_failures > before);
+                } else {
+                    assert!(address.effective_speed_query_failures >= before);
+                }
+                assert_eq!(stats[0].ewma_bandwidth_bps, expected as f64 * 125_000.0);
+                let topology = runtime.topology().unwrap().unwrap();
+                assert_eq!(
+                    topology.nic_list[0].device_attrs["rdma.effective_speed_query_failing"],
+                    failing.to_string()
+                );
+                break;
+            }
+            assert!(Instant::now() < end);
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!owner.asynchronous.paused());
+        assert_eq!(grant.incarnation().unwrap(), original);
+        assert_eq!(runtime.stats().unwrap().route_recoveries, 0);
+    }
+    assert_eq!(owner.address().unwrap().effective_speed_mbps, None);
+    assert!(
+        !runtime.topology().unwrap().unwrap().nic_list[0]
+            .device_attrs
+            .contains_key("rdma.effective_speed_mbps")
+    );
+    grant.close().unwrap();
+    drop(grant);
+    runtime
+        .close(Instant::now() + Duration::from_secs(2))
+        .unwrap();
+}
