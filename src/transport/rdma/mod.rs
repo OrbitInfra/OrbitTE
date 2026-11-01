@@ -30,6 +30,7 @@ mod sys;
 mod workers;
 
 pub use config::{RdmaConfig, RdmaCudaMemory, RdmaHostMemory, RdmaProgressMode};
+pub use quota::{NicLoadStats, SchedulingParams};
 pub(crate) use rdma_transport::RdmaTransport;
 #[cfg(feature = "cuda")]
 pub(crate) use rdma_transport::{RdmaSetup, RdmaTransfer};

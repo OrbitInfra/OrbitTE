@@ -58,6 +58,7 @@ Set `EngineConfig.rdma` to a configured `RdmaConfig`:
 | `strict_local_numa` | Reject known cross-NUMA NICs; default `false`; unknown locality stays eligible |
 | `priority_matrix` | Optional inline TENT matrix JSON; takes precedence over `custom_json_path` |
 | `custom_json_path` | Optional TENT matrix or native `nics`/`mems` JSON file, read at context initialization |
+| `scheduling` | TENT `SchedulingParams`: bandwidth-aware selection, NUMA weights, EWMA coefficients and transmit-meter intervals |
 
 Discovery prefers active routes and retains otherwise usable paused ports.
 Each selected context owns its actual device, protection domain (PD), key
@@ -76,7 +77,9 @@ The existing `DeviceSelector` compiles location priorities once. A registered
 owner supplies `cpu:N`, `cuda:N`, or unknown DRAM (`*`) for each request; aliases
 and contexts on the same GPU share its topology row. Selection intersects the
 device mask, healthy contexts, compatible paths and strict-NUMA eligibility,
-then chooses the best tier, fewer charged in-flight bytes and rotating ties.
+then chooses the lowest estimated service time with NUMA weights and rotating
+ties. [Bandwidth scheduling](#bandwidth-aware-rdma-selection) describes the
+formula and the optional baseline round-robin mode.
 Missing location metadata keeps unknown locality; it does not establish CPU
 access to GPU bytes. Explicit `preferred_numa_node` takes precedence.
 
@@ -93,6 +96,68 @@ authority. Actual connection descriptors must match the selected path. Explicit
 pins never silently fall back to another device, port or GID. See
 [initially paused contexts](#initially-paused-contexts-and-gid-reselection) for
 the recovery rules.
+
+## Bandwidth-aware RDMA selection
+
+`RdmaConfig::scheduling` exposes `SchedulingParams`, following frozen TENT's
+`DeviceSelector`. Smart selection is enabled by default. For each eligible NIC:
+
+```text
+score = (charged_inflight_bytes + slice_bytes) / selection_bandwidth_bytes_per_second
+        * numa_tier_weight
+```
+
+The lowest score wins; equal scores rotate. Tier weights default to `[1, 5, 10]`.
+Strict NUMA rules, configured candidates, masks and compatible paths remain hard
+eligibility limits. Weights can therefore favor an idle lower-ranked NIC, but
+cannot admit an excluded NIC. Set `scheduling.smart_selection = false` for
+round-robin selection within the first eligible tier. Both modes retain exact
+physical grant charges through source acknowledgement, native drain or failed
+cleanup; collecting a payload sample never releases that ownership.
+
+Native context initialization and periodic monitor queries obtain negotiated
+port speed/width through `ibv_query_port`. The selector seeds estimates from
+that rate; an unknown or out-of-range rate uses `default_bandwidth_gbps` (400).
+The default accepted range is 10–800 Gbit/s. An unknown actual rate remains
+`None` in load snapshots. A speed change reseeds the estimates and discards old
+sampling generations, while repeated unchanged queries preserve learning.
+Speed alone is not connection identity and does not recreate QPs. This provider
+currently decodes legacy active-speed/width fields; newer effective LAG rate
+queries and extended XDR encoding remain open.
+
+Two independent estimates share one per-NIC owner:
+
+- **Selection EWMA:** successful READ/WRITE payload bytes divided by the interval
+  from the first accepted native post to the last valid payload CQE. This
+  includes waits between WR windows, but excludes registration, handshake and
+  later source receipts. The old estimate has coefficient 0.01 by default.
+- **Transmit bandwidth:** valid payload completion bytes divided by time with
+  outstanding posted payload debt. Idle intervals are excluded. The old estimate
+  has coefficient 0.9; the meter updates after 10 ms and drops intervals older
+  than 50 ms. Control WRs do not contribute payload bytes.
+
+Both estimates clamp to 0.1–10 times their seed. Invalid configuration is rejected
+before device construction. Partial/uncertain posts, failed completions and
+fenced outstanding work invalidate affected samples; possible native debt
+remains charged until validated completion or physical drain. The transmit
+estimate never replaces the selection EWMA.
+
+`TransferEngine::nic_load_stats()` returns available initialized NICs without
+probing or opening devices. It is empty before initialization or after close.
+Snapshots expose stable IDs/names, actual optional link rate, charged grant bytes,
+currently posted payload bytes, cumulative valid completion bytes, both estimates
+in **bytes/s**, sample counts and cumulative busy time. Completed bytes can
+include a successful prefix of an attempt that later fails; only successful
+complete attempts update selection EWMA. These are local requester observations,
+not wire-level throughput or source-side remote DMA measurements.
+
+Selection reuses precompiled topology and an atomic per-NIC estimate; it adds no
+driver queries or allocation. Sampling uses the existing SQ/CQ owners, a per-NIC
+meter lock and one timestamp per CQ polling pass. No additional global completion
+lock is introduced. This stage selects each slice using current charges; TENT's
+whole-parent weighted slice distribution and periodic exploration remain the
+next F16 work. Hardware throughput and comparison with TENT remain unqualified;
+see [source evidence](qualification.md#rdma-bandwidth-selection).
 
 ## Custom topology and priority matrices
 

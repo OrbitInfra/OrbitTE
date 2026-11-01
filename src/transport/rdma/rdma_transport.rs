@@ -150,6 +150,20 @@ impl RdmaTransport {
         Ok(stats)
     }
 
+    pub(crate) fn nic_load_stats(&self) -> Result<Vec<super::NicLoadStats>> {
+        let contexts = self
+            .context_set
+            .lock()
+            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+        if contexts.closed {
+            return Ok(Vec::new());
+        }
+        Ok(contexts
+            .selector
+            .as_ref()
+            .map_or_else(Vec::new, |selector| selector.stats()))
+    }
+
     pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
         Ok(self
             .context_set

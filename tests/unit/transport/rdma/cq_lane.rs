@@ -141,6 +141,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
             send_queue: super::super::qp::send_queue::SendQueue::new(
                 runtime.config.max_send_wr,
                 Arc::clone(&runtime.usage),
+                None,
             )
             .unwrap(),
             device: Arc::clone(&device),

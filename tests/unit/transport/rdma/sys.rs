@@ -655,6 +655,7 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
 #[test]
 fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently() {
     let address = RdmaAddress {
+        link_speed_mbps: None,
         device: "mlx5_0".into(),
         port: 1,
         active: true,
@@ -769,6 +770,7 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
     assert_ne!(index, 0, "Linux loopback interface must have an index");
     let handles = DeviceHandles::default();
     let address = RdmaAddress {
+        link_speed_mbps: None,
         device: "fixture".into(),
         port: 1,
         active: true,

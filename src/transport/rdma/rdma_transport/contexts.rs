@@ -35,7 +35,7 @@ impl RdmaTransport {
         contexts
             .slots
             .resize_with(topology.nic_list.len(), ContextSlot::default);
-        let selector = DeviceSelector::new(&topology, 0, self.config.strict_local_numa)?;
+        let selector = DeviceSelector::new(&topology, 0, &self.config)?;
         for (id, slot) in contexts.slots.iter_mut().enumerate() {
             let name = topology.nic_list[id].name.clone();
             for address in candidates.iter().filter(|address| address.device == name) {
@@ -49,7 +49,9 @@ impl RdmaTransport {
                 ) {
                     Ok(owner) => {
                         if owner.asynchronous.check().is_ok() {
-                            owner.address()?.publish(&mut topology)?;
+                            let address = owner.address()?;
+                            address.publish(&mut topology)?;
+                            selector.set_bandwidth(id, address.link_speed_mbps);
                             selector.set_available(id, true);
                         }
                         slot.owner = Some(owner);

@@ -3,7 +3,7 @@
 use super::*;
 
 impl ProgressState {
-    pub(super) fn complete(&self, completion: sys::Completion, receive_cq: bool) {
+    pub(super) fn complete(&self, completion: sys::Completion, receive_cq: bool, now: Instant) {
         let Some(tag) = completion
             .id
             .checked_sub(1)
@@ -42,7 +42,7 @@ impl ProgressState {
         let result = if completion.qpn != request.qpn {
             Err(Error::Protocol("RDMA completion QP identity"))
         } else if let Some(work) = &mut request.work {
-            work.queue.complete(completion, work.operation)
+            work.queue.complete(completion, work.operation, now)
         } else {
             Err(Error::Protocol("RDMA completion before submission"))
         };

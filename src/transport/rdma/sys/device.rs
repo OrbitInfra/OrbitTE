@@ -42,7 +42,7 @@ pub(super) unsafe fn query_descriptor(
     port: u8,
     gid_index: u8,
 ) -> std::result::Result<Descriptor, c_int> {
-    let (descriptor, active) = unsafe { read_descriptor(device, port, gid_index) }?;
+    let (descriptor, active, _) = unsafe { read_descriptor(device, port, gid_index) }?;
     if !active {
         return Err(libc::ENETDOWN);
     }
@@ -53,7 +53,7 @@ unsafe fn read_descriptor(
     device: *const DeviceHandles,
     port: u8,
     gid_index: u8,
-) -> std::result::Result<(Descriptor, bool), c_int> {
+) -> std::result::Result<(Descriptor, bool, Option<u64>), c_int> {
     unsafe {
         let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
         // All consumed fields are in the published binding's legacy output prefix.
@@ -97,9 +97,38 @@ unsafe fn read_descriptor(
                 ..Descriptor::default()
             },
             active,
+            link_speed_mbps(attr.active_speed, attr.active_width),
         ))
     }
 }
+
+// Frozen TENT ib_link_speed.h; only the legacy ibv_query_port output prefix
+// is consumed. Extended XDR and effective LAG speed queries need newer verbs.
+fn link_speed_mbps(speed: u8, width: u8) -> Option<u64> {
+    let lane = match speed {
+        1 => 2_500,
+        2 => 5_000,
+        4 | 8 => 10_000,
+        16 => 14_000,
+        32 => 25_000,
+        64 => 50_000,
+        128 => 100_000,
+        _ => return None,
+    };
+    let lanes = match width {
+        1 => 1,
+        2 => 4,
+        4 => 8,
+        8 => 12,
+        16 => 2,
+        _ => return None,
+    };
+    Some(lane * lanes)
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/transport/rdma/sys/link_speed.rs"]
+mod link_speed_tests;
 
 pub(super) fn validate_gid_entry(entry: &ffi::ibv_gid_entry, address: &RdmaAddress) -> Result<()> {
     let (kind, link_layer) = match address.gid_type {
@@ -131,7 +160,7 @@ unsafe fn read_address(
         return result;
     }
 
-    let (descriptor, active) = unsafe {
+    let (descriptor, active, link_speed_mbps) = unsafe {
         read_descriptor(device, expected.port, expected.gid_index)
     }
     .map_err(|code| Error::Backend {
@@ -159,6 +188,7 @@ unsafe fn read_address(
     )?;
     let observed = RdmaAddress {
         active,
+        link_speed_mbps,
         descriptor,
         gid_type,
         net_device,

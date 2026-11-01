@@ -488,6 +488,7 @@ impl ProgressState {
         *phase = Phase::Posted;
         let owner = Arc::clone(&resources.connection);
         let mut connection = owner.retiring();
+        let posted_at = Instant::now();
         let code = unsafe {
             match work.operation {
                 slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(
@@ -531,7 +532,7 @@ impl ProgressState {
             }
         };
         drop(connection);
-        if let Err(error) = work.queue.posted(code, posted) {
+        if let Err(error) = work.queue.posted(code, posted, posted_at) {
             let fault = Fault::from_error(error);
             let pending = work.queue.pending();
             request.failure = Some(fault);
@@ -747,6 +748,7 @@ impl ProgressState {
                     cq: cq.unwrap_or(std::ptr::null_mut()),
                     ..Default::default()
                 };
+                let completed_at = Instant::now();
                 for _ in 0..64 {
                     let mut completion = sys::Completion::default();
                     let count = unsafe { (self.verbs.poll)(&mut handles, &mut completion) };
@@ -754,7 +756,7 @@ impl ProgressState {
                         0 => break,
                         1 => {
                             progressed = true;
-                            self.complete(completion, receive_cq);
+                            self.complete(completion, receive_cq, completed_at);
                         }
                         code if code < 0 => {
                             self.fail(Fault::Backend("ibv_poll_cq", code));

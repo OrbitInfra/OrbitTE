@@ -113,7 +113,7 @@ impl RdmaContext {
                 expected.active = observed.active;
                 expected.descriptor.lid = observed.descriptor.lid;
                 expected.descriptor.mtu = observed.descriptor.mtu;
-                if observed != expected {
+                if !observed.same_route(&expected) {
                     return Err(Error::Unavailable(
                         "RDMA discovery route changed during construction",
                     ));
@@ -200,7 +200,7 @@ impl RdmaContext {
             }
             return AddressRefresh::Paused;
         }
-        if address != resources.address && !self.asynchronous.paused() {
+        if !address.same_route(&resources.address) && !self.asynchronous.paused() {
             self.asynchronous.fence_route();
             return AddressRefresh::Paused;
         }
@@ -214,6 +214,7 @@ impl RdmaContext {
             }
             return AddressRefresh::Resumed(address);
         }
+        resources.address.link_speed_mbps = address.link_speed_mbps;
         AddressRefresh::Active(address)
     }
 
@@ -226,7 +227,7 @@ impl RdmaContext {
                 Some(resources.address.gid_index),
             )
         };
-        if !observed.is_ok_and(|address| address == resources.address) {
+        if !observed.is_ok_and(|address| address.same_route(&resources.address)) {
             self.asynchronous.fence_route();
         }
         self.asynchronous.check()

@@ -3,6 +3,12 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::{Error, MemType, MemoryLocation, Result, Topology};
 
+mod bandwidth;
+mod scheduling;
+pub(super) use bandwidth::DeviceInfo;
+pub use bandwidth::NicLoadStats;
+pub use scheduling::SchedulingParams;
+
 /// Wakes context progress when aggregate SQ/RQ completion debt returns capacity.
 #[derive(Default)]
 pub(super) struct CqQuota {
@@ -35,6 +41,9 @@ pub(super) struct DeviceSelector {
     fallback: DevicePriority,
     unlisted_cpu: DevicePriority,
     state: Mutex<State>,
+    devices: Vec<Arc<DeviceInfo>>,
+    names: Vec<String>,
+    scheduling: SchedulingParams,
 }
 
 /// Compiled once per location; selection performs no topology walks or allocation.
@@ -65,6 +74,9 @@ pub(super) struct DeviceLease {
 }
 
 impl DeviceLease {
+    pub(super) fn device_info(&self) -> Arc<DeviceInfo> {
+        Arc::clone(&self.selector.devices[self.device_id])
+    }
     pub(super) fn device_id(&self) -> usize {
         self.device_id
     }
@@ -88,8 +100,10 @@ impl DeviceSelector {
     pub(super) fn new(
         topology: &Topology,
         available: u64,
-        strict_local_numa: bool,
+        config: &super::RdmaConfig,
     ) -> Result<Arc<Self>> {
+        config.scheduling.validate()?;
+        let strict_local_numa = config.strict_local_numa;
         let count = topology.nic_list.len();
         if count > 64 {
             return Err(Error::InvalidConfig(
@@ -181,6 +195,15 @@ impl DeviceSelector {
             .filter(|(_, nic)| nic.numa_node.is_none())
             .fold(0, |mask, (id, _)| mask | (1u64 << id));
         Ok(Arc::new(Self {
+            devices: (0..count)
+                .map(|_| Arc::new(DeviceInfo::new(config.scheduling.clone())))
+                .collect(),
+            names: topology
+                .nic_list
+                .iter()
+                .map(|nic| nic.name.clone())
+                .collect(),
+            scheduling: config.scheduling.clone(),
             priorities,
             unlisted_cpu: DevicePriority {
                 ranks: fallback.ranks,
@@ -209,8 +232,25 @@ impl DeviceSelector {
         if available {
             state.available |= 1u64 << id;
         } else {
+            if state.available & (1u64 << id) != 0 {
+                self.devices[id].invalidate();
+            }
             state.available &= !(1u64 << id);
         }
+    }
+
+    pub(super) fn set_bandwidth(&self, id: usize, mbps: Option<u64>) {
+        self.devices[id].set_bandwidth(mbps);
+    }
+
+    pub(super) fn stats(&self) -> Vec<NicLoadStats> {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.devices
+            .iter()
+            .enumerate()
+            .filter(|(id, _)| state.available & (1u64 << id) != 0)
+            .map(|(id, info)| info.snapshot(id, &self.names[id], state.inflight[id]))
+            .collect()
     }
 
     pub(super) fn allocate(
@@ -230,12 +270,18 @@ impl DeviceSelector {
         let count = state.inflight.len();
         let chosen = (0..count)
             .filter(|id| mask & state.available & priority.eligible & (1u64 << id) != 0)
-            .min_by_key(|id| {
-                (
-                    priority.ranks[*id],
-                    state.inflight[*id],
-                    (id + count - state.cursor) % count,
-                )
+            .min_by(|a, b| {
+                let score = |id: usize| {
+                    if self.scheduling.smart_selection {
+                        (state.inflight[id] as f64 + length as f64) / self.devices[id].bandwidth()
+                            * self.scheduling.numa_tier_weights[priority.ranks[id] as usize]
+                    } else {
+                        f64::from(priority.ranks[id])
+                    }
+                };
+                score(*a).total_cmp(&score(*b)).then_with(|| {
+                    ((a + count - state.cursor) % count).cmp(&((b + count - state.cursor) % count))
+                })
             })
             .ok_or(Error::Unavailable(
                 "no enabled RDMA device matches location and rail mask",

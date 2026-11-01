@@ -1,6 +1,9 @@
 //! Physical QP send depth and the exact WRs still owned by the provider.
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use super::super::quota::DeviceInfo;
 
 use super::super::{RdmaStats, sys};
 use crate::{Error, Result};
@@ -8,6 +11,7 @@ use crate::{Error, Result};
 struct Entry {
     id: u64,
     posted: bool,
+    length: u64,
 }
 
 struct State {
@@ -19,6 +23,7 @@ struct State {
 pub(in crate::transport::rdma) struct SendQueue {
     limit: usize,
     state: Mutex<State>,
+    pub(in crate::transport::rdma) bandwidth: Option<Arc<DeviceInfo>>,
     pub(in crate::transport::rdma) usage: Arc<Mutex<RdmaStats>>,
 }
 
@@ -26,6 +31,7 @@ impl SendQueue {
     pub(in crate::transport::rdma) fn new(
         limit: usize,
         usage: Arc<Mutex<RdmaStats>>,
+        bandwidth: Option<Arc<DeviceInfo>>,
     ) -> Result<Arc<Self>> {
         if !(1..=64).contains(&limit) {
             return Err(Error::InvalidConfig("RDMA QP send depth must be in 1..=64"));
@@ -36,6 +42,7 @@ impl SendQueue {
             .map_err(|_| Error::ResourceExhausted)?;
         Ok(Arc::new(Self {
             limit,
+            bandwidth,
             state: Mutex::new(State {
                 entries,
                 drained: false,
@@ -84,6 +91,7 @@ impl SendQueue {
             .extend(requests[..count].iter().map(|request| Entry {
                 id: request.id,
                 posted: false,
+                length: u64::from(request.length),
             }));
         usage.work_requests += count;
         usage.peak_work_requests = usage.peak_work_requests.max(usage.work_requests);
@@ -95,7 +103,8 @@ impl SendQueue {
         requests: &[sys::WorkRequest],
         code: i32,
         result: sys::PostResult,
-    ) -> Result<usize> {
+        now: Instant,
+    ) -> Result<(usize, Option<u64>)> {
         let mut state = self
             .state
             .lock()
@@ -146,10 +155,27 @@ impl SendQueue {
             usage.partial_posts += u64::from(code != 0 && result.accepted != 0);
         }
         state.fenced |= code != 0 || uncertain;
-        Ok(owed)
+        drop(usage);
+        let bytes = requests[..owed]
+            .iter()
+            .map(|request| u64::from(request.length))
+            .sum();
+        let generation = self.bandwidth.as_ref().and_then(|info| {
+            let generation = (bytes != 0).then(|| info.posted(bytes, now));
+            if code != 0 || uncertain {
+                info.invalidate();
+            }
+            generation
+        });
+        Ok((owed, generation))
     }
 
-    pub(in crate::transport::rdma) fn complete(&self, id: u64, failed: bool) -> Result<()> {
+    pub(in crate::transport::rdma) fn complete(
+        &self,
+        id: u64,
+        failed: bool,
+        now: Instant,
+    ) -> Result<()> {
         let mut state = self
             .state
             .lock()
@@ -163,9 +189,16 @@ impl SendQueue {
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        state.entries.swap_remove(index);
+        let entry = state.entries.swap_remove(index);
         state.fenced |= failed;
         usage.work_requests -= 1;
+        drop(usage);
+        if let Some(info) = &self.bandwidth {
+            if failed && entry.length == 0 {
+                info.invalidate();
+            }
+            info.ended(entry.length, !failed, now);
+        }
         Ok(())
     }
 
@@ -178,7 +211,13 @@ impl SendQueue {
     }
 
     pub(in crate::transport::rdma) fn fence(&self) {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).fenced = true;
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if !state.fenced && state.entries.iter().any(|e| e.posted && e.length != 0) {
+            if let Some(info) = &self.bandwidth {
+                info.invalidate();
+            }
+        }
+        state.fenced = true;
     }
 
     // Called only after every associated QP and both CQs were destroyed.
@@ -187,6 +226,16 @@ impl SendQueue {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
         usage.work_requests -= state.entries.len();
+        drop(usage);
+        let bytes = state
+            .entries
+            .iter()
+            .filter(|entry| entry.posted)
+            .map(|entry| entry.length)
+            .sum();
+        if let Some(info) = &self.bandwidth {
+            info.ended(bytes, false, Instant::now());
+        }
         state.entries.clear();
         state.drained = true;
     }

@@ -79,6 +79,24 @@ metadata and apply to each peer's actual owner location; see
 [custom topology](rdma-cuda.md#custom-topology-and-priority-matrices).
 Current hardware/performance limits are in [qualification](qualification.md#cuda-pointer-and-location).
 
+## RDMA bandwidth and load
+
+With the `rdma` feature, `RdmaConfig::scheduling` configures bandwidth-aware
+`DeviceSelector` policy through `transport::rdma::SchedulingParams`. Smart
+selection defaults to enabled; setting `smart_selection` to `false` selects
+the first eligible topology tier with round-robin ties. Both modes preserve
+device masks, strict locality and actual grant charges.
+
+`TransferEngine::nic_load_stats() -> Result<Vec<transport::rdma::NicLoadStats>>`
+returns initialized available NICs, or an empty vector when RDMA is disabled,
+not yet initialized or closed. The call performs no device discovery. Rate
+estimates are **bytes per second**; `link_speed_gbps` is the optional queried
+port rate in Gbit/s. `inflight_bytes` is physical grant admission;
+`posted_bytes` is outstanding native payload debt. `completed_bytes` and
+`busy_time` are cumulative local observations, and sample counts distinguish
+learned rates from initialized values. The selection and transmit estimates are
+independent. See [parameters and sampling](rdma-cuda.md#bandwidth-aware-rdma-selection).
+
 ## Peer authority
 
 ```rust
