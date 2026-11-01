@@ -46,6 +46,31 @@ struct Resources {
     gid_index: Option<u8>,
 }
 
+impl Resources {
+    fn refresh_port_speed(&self, verbs: &sys::Verbs, address: &mut RdmaAddress) {
+        let observed = match verbs.query_port_speed {
+            Some(query) => unsafe { query(&self.handles, address.port) },
+            None => Ok(None),
+        };
+        address.effective_speed_query_failures = self.address.effective_speed_query_failures;
+        match observed {
+            Ok(rate) => {
+                address.effective_speed_mbps = rate.filter(|rate| *rate != 0);
+                address.effective_speed_query_failing = false;
+            }
+            Err(_) => {
+                // A transient query fault must not replace degraded LAG bandwidth
+                // with the larger encoded speed of its still-active logical port.
+                address.effective_speed_mbps = self.address.effective_speed_mbps;
+                address.effective_speed_query_failures =
+                    address.effective_speed_query_failures.saturating_add(1);
+                address.effective_speed_query_failing = true;
+            }
+        }
+        address.link_speed_mbps = address.effective_speed_mbps.or(address.link_speed_mbps);
+    }
+}
+
 impl Drop for Resources {
     fn drop(&mut self) {
         let mut usage = self
@@ -102,7 +127,7 @@ impl RdmaContext {
             // SAFETY: RdmaContext retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
-                let observed = unsafe {
+                let mut observed = unsafe {
                     (verbs.query_address)(
                         &resources.handles,
                         &resources.address,
@@ -121,6 +146,7 @@ impl RdmaContext {
                 if !observed.active {
                     owner.asynchronous.fence_route();
                 }
+                resources.refresh_port_speed(verbs, &mut observed);
                 resources.address = observed;
                 if let Some(asynchronous) = verbs.asynchronous {
                     let context = NonNull::new(resources.handles.context)
@@ -182,7 +208,7 @@ impl RdmaContext {
         let observed = unsafe {
             (self.verbs.query_address)(&resources.handles, &resources.address, gid_index)
         };
-        let Ok(address) = observed else {
+        let Ok(mut address) = observed else {
             if !self.asynchronous.paused() {
                 self.asynchronous.fence_route();
             }
@@ -208,13 +234,15 @@ impl RdmaContext {
             if !drained || self.asynchronous.generation() != generation {
                 return AddressRefresh::Paused;
             }
+            resources.refresh_port_speed(self.verbs, &mut address);
             resources.address = address.clone();
             if !self.asynchronous.resume(generation) {
                 return AddressRefresh::Paused;
             }
             return AddressRefresh::Resumed(address);
         }
-        resources.address.link_speed_mbps = address.link_speed_mbps;
+        resources.refresh_port_speed(self.verbs, &mut address);
+        resources.address = address.clone();
         AddressRefresh::Active(address)
     }
 

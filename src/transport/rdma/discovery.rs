@@ -31,8 +31,11 @@ pub(super) struct RdmaAddress {
     pub device: String,
     pub port: u8,
     pub active: bool,
-    /// Negotiated encoded port rate; None means unknown, never a guessed rate.
+    /// Effective rate when reported, otherwise encoded rate; None means unknown.
     pub link_speed_mbps: Option<u64>,
+    pub effective_speed_mbps: Option<u64>,
+    pub effective_speed_query_failures: u64,
+    pub effective_speed_query_failing: bool,
     pub gid_index: u8,
     pub gid_type: GidType,
     pub net_device: Option<String>,
@@ -61,13 +64,26 @@ impl RdmaAddress {
                 "selected RDMA device is missing from topology",
             ))?;
         let attrs = &mut nic.device_attrs;
-        if let Some(rate) = self.link_speed_mbps {
-            attrs.insert("rdma.link_speed_mbps".into(), rate.to_string());
-        } else {
-            attrs.remove("rdma.link_speed_mbps");
+        for (key, rate) in [
+            ("rdma.link_speed_mbps", self.link_speed_mbps),
+            ("rdma.effective_speed_mbps", self.effective_speed_mbps),
+        ] {
+            if let Some(rate) = rate {
+                attrs.insert(key.into(), rate.to_string());
+            } else {
+                attrs.remove(key);
+            }
         }
         for (key, value) in [
             ("rdma.selected", "true".into()),
+            (
+                "rdma.effective_speed_query_failures",
+                self.effective_speed_query_failures.to_string(),
+            ),
+            (
+                "rdma.effective_speed_query_failing",
+                self.effective_speed_query_failing.to_string(),
+            ),
             ("rdma.port", self.port.to_string()),
             ("rdma.gid_index", self.gid_index.to_string()),
             ("rdma.gid", Ipv6Addr::from(self.descriptor.gid).to_string()),
@@ -303,6 +319,9 @@ pub(super) fn port_addresses(
             port,
             active,
             link_speed_mbps: None,
+            effective_speed_mbps: None,
+            effective_speed_query_failures: 0,
+            effective_speed_query_failing: false,
             gid_index: index,
             gid_type,
             net_device,

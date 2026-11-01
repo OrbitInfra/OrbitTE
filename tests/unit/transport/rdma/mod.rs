@@ -20,6 +20,7 @@ pub(crate) struct FakeDevice {
     pub(super) route: Mutex<Option<discovery::RdmaAddress>>,
     pub(super) route_queries: Mutex<Vec<Option<u8>>>,
     pub(super) route_error: std::sync::atomic::AtomicI32,
+    pub(super) effective_speed: Mutex<(Option<u64>, i32, usize)>,
     asynchronous: Option<(
         Mutex<std::os::unix::net::UnixStream>,
         Mutex<std::os::unix::net::UnixStream>,
@@ -142,6 +143,7 @@ pub(super) unsafe extern "C" fn open_device(
         route: Mutex::default(),
         route_queries: Mutex::default(),
         route_error: std::sync::atomic::AtomicI32::new(0),
+        effective_speed: Mutex::new((Some(200_000), 0, 0)),
         asynchronous,
         async_acks: (Mutex::new(0), Condvar::new()),
         events: Arc::new(Mutex::new(vec!["open_device"])),
@@ -1300,6 +1302,9 @@ pub(super) fn discover(
     let name = config.device.as_deref().unwrap_or("ok");
     let address = discovery::RdmaAddress {
         link_speed_mbps: None,
+        effective_speed_mbps: None,
+        effective_speed_query_failures: 0,
+        effective_speed_query_failing: false,
         device: name.into(),
         port: config.port.unwrap_or(1),
         active: !name.contains("initial_down"),
@@ -1359,6 +1364,7 @@ unsafe fn query_address(
 }
 
 pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    query_port_speed: None,
     discover,
     query_address,
     asynchronous: None,

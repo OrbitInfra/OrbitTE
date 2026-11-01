@@ -745,8 +745,9 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
   distribution, periodic eligible-rail exploration, separate selection EWMA and
   posted busy-time transmit estimates. Exact folded-tail reservations remain
-  owned until grant cleanup. Remaining: effective LAG/extended rate queries;
-  installed throughput/fairness qualification remains open.
+  owned until grant cleanup. Optional effective LAG queries and header-supported
+  extended XDR rates are implemented; installed rate behavior and
+  throughput/fairness qualification remain open.
 - [ ] Implement submit/completion failover, physical-owner/alias mapping,
   per-owner retry budgets and rail cooldown/probe/half-open state. Never replay
   uncertain writes or recycle an old attempt without its declared proof.
@@ -1128,11 +1129,14 @@ allocation rotates eligible rails, including short parents with more NICs than
 slices. The selector reads each candidate estimate once and uses no extra heap
 allocation. See [source scope](qualification.md#rdma-weighted-multipath).
 
-The next functional delivery is F16 effective link-rate discovery: inspect the
-frozen TENT extended-speed/effective-LAG queries, consume supported provider ABI
-without breaking older rdma-core builds, and feed the existing monitor/selector
-owner. Unknown rates retain the explicit fallback. Then proceed to P6 request
-priority and shared quota/bandwidth arbitration. Matched throughput remains
+F16 effective link-rate discovery is implemented with the pinned `ibverbs-sys`
+and a thin C port-query shim. The installed header controls extended XDR
+availability; an optional runtime symbol supplies effective LAG bandwidth.
+Context/monitor owners retain the last effective value on query failure and
+feed the existing selector without replacing QPs. Unknown rates keep the
+explicit fallback. See [source scope](qualification.md#rdma-effective-link-rate).
+The next functional delivery is P6 request priority and shared quota/bandwidth
+arbitration. Matched throughput remains
 unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
 which OrbitTE already follows through engine completion. Consumer-stream chaining

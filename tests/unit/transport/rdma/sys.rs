@@ -656,6 +656,9 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
 fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently() {
     let address = RdmaAddress {
         link_speed_mbps: None,
+        effective_speed_mbps: None,
+        effective_speed_query_failures: 0,
+        effective_speed_query_failing: false,
         device: "mlx5_0".into(),
         port: 1,
         active: true,
@@ -771,6 +774,9 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
     let handles = DeviceHandles::default();
     let address = RdmaAddress {
         link_speed_mbps: None,
+        effective_speed_mbps: None,
+        effective_speed_query_failures: 0,
+        effective_speed_query_failing: false,
         device: "fixture".into(),
         port: 1,
         active: true,

@@ -182,6 +182,8 @@ dependencies = [
 name = "orbit-te"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "bindgen",
+ "cc",
  "cudarc",
  "ibverbs-sys",
  "libc",

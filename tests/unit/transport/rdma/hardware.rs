@@ -56,6 +56,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     completion: sys::REAL.completion,
     discover: sys::REAL.discover,
     query_address: sys::REAL.query_address,
+    query_port_speed: sys::REAL.query_port_speed,
     open_device: sys::REAL.open_device,
     create_cq: sys::REAL.create_cq,
     register_memory: sys::REAL.register_memory,

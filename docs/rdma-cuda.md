@@ -138,14 +138,33 @@ physical grant charges through source acknowledgement, native drain or failed
 cleanup; collecting a payload sample never releases that ownership.
 
 Native context initialization and periodic monitor queries obtain negotiated
-port speed/width through `ibv_query_port`. The selector seeds estimates from
-that rate; an unknown or out-of-range rate uses `default_bandwidth_gbps` (400).
+port speed/width through the public `ibv_query_port` inline in a thin C shim.
+When installed headers expose `active_speed_ex`, a nonzero extended encoding
+takes precedence, including XDR. Older headers keep the legacy encoding.
+The optional `ibv_query_port_speed` symbol supplies effective LAG bandwidth in
+100 Mb/s units, converted with overflow checking. A positive result takes
+precedence over encoded speed. An absent symbol or successful zero result uses
+encoded speed; a failed query retains the last effective value instead of
+restoring a potentially overstated nominal LAG rate. With no previous effective
+value, the encoded rate remains available. A speed-query failure alone does not
+fence a route or rebuild resources.
+
+Topology attributes `rdma.link_speed_mbps` and `rdma.effective_speed_mbps`
+distinguish the selected rate from a valid provider effective rate. The latter
+is omitted on fallback. `rdma.effective_speed_query_failures` is cumulative;
+`rdma.effective_speed_query_failing` clears after a successful or unavailable
+query. Native route health checks do not query or learn effective speed.
+
+The selector seeds estimates from the selected rate; an unknown or out-of-range
+rate uses `default_bandwidth_gbps` (400).
 The default accepted range is 10–800 Gbit/s. An unknown actual rate remains
 `None` in load snapshots. A speed change reseeds the estimates and discards old
 sampling generations, while repeated unchanged queries preserve learning.
-Speed alone is not connection identity and does not recreate QPs. This provider
-currently decodes legacy active-speed/width fields; newer effective LAG rate
-queries and extended XDR encoding remain open.
+Speed alone is not connection identity and does not recreate QPs. Symbol lookup
+is cached once; effective-rate queries stay on context initialization and periodic
+monitor refresh, outside slice submission and CQ polling. Existing route health
+checks still query port attributes. See
+[effective-rate source qualification](qualification.md#rdma-effective-link-rate).
 
 Two independent estimates share one per-NIC owner:
 

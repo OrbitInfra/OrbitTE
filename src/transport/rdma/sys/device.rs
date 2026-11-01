@@ -55,16 +55,7 @@ unsafe fn read_descriptor(
     gid_index: u8,
 ) -> std::result::Result<(Descriptor, bool, Option<u64>), c_int> {
     unsafe {
-        let mut attr: ffi::ibv_port_attr = std::mem::zeroed();
-        // All consumed fields are in the published binding's legacy output prefix.
-        let code = ffi::ibv_query_port(
-            (*device).context.cast(),
-            port,
-            (&mut attr as *mut ffi::ibv_port_attr).cast(),
-        );
-        if code != 0 {
-            return Err(code);
-        }
+        let attr = super::port::query_port((*device).context.cast(), port)?;
         let active = attr.state == ffi::ibv_port_state::IBV_PORT_ACTIVE;
         let mtu = attr.active_mtu as u8;
         if !matches!(attr.link_layer, 1 | 2)
@@ -97,38 +88,10 @@ unsafe fn read_descriptor(
                 ..Descriptor::default()
             },
             active,
-            link_speed_mbps(attr.active_speed, attr.active_width),
+            super::port::link_speed_mbps(&attr),
         ))
     }
 }
-
-// Frozen TENT ib_link_speed.h; only the legacy ibv_query_port output prefix
-// is consumed. Extended XDR and effective LAG speed queries need newer verbs.
-fn link_speed_mbps(speed: u8, width: u8) -> Option<u64> {
-    let lane = match speed {
-        1 => 2_500,
-        2 => 5_000,
-        4 | 8 => 10_000,
-        16 => 14_000,
-        32 => 25_000,
-        64 => 50_000,
-        128 => 100_000,
-        _ => return None,
-    };
-    let lanes = match width {
-        1 => 1,
-        2 => 4,
-        4 => 8,
-        8 => 12,
-        16 => 2,
-        _ => return None,
-    };
-    Some(lane * lanes)
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/unit/transport/rdma/sys/link_speed.rs"]
-mod link_speed_tests;
 
 pub(super) fn validate_gid_entry(entry: &ffi::ibv_gid_entry, address: &RdmaAddress) -> Result<()> {
     let (kind, link_layer) = match address.gid_type {
