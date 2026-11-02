@@ -274,7 +274,7 @@ also fails explicitly; no hidden pool or silent reduction of source depth is use
 Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
 18 added pipeline width and version 19 added the requester chunk cap.
 Version 20 introduced a separate CROSS capacity and `FinishCross`.
-Current version **21** adds `QueryDelegate`: Delegate acceptance no longer
+Version **21** introduced `QueryDelegate`: Delegate acceptance no longer
 permits READ CROSS, WRITE slot reuse or final Unpin. Both peers must use
 version 22; older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
