@@ -9,10 +9,12 @@ use crate::runtime::admission_queue::{
     LocalTransferAdmissionQueue, QueuePermit, RuntimeQueueStats,
 };
 use crate::runtime::control_plane::{self, ControlService};
+use crate::runtime::receiver_credit::{CreditPermit, SenderCreditLedger};
 use crate::transport::tcp::TcpTransport;
 use crate::{
-    EngineConfig, Error, HostMemory, Notification, NotificationFailure, NotificationStatus,
-    Permission, RegisteredMemory, RemoteRegion, RemoteSegment, Result, SourceEpoch,
+    CreditUpdateDisposition, EngineConfig, Error, HostMemory, Notification, NotificationFailure,
+    NotificationStatus, Permission, ReceiverCreditStats, ReceiverCreditUpdateV1, RegisteredMemory,
+    RemoteRegion, RemoteSegment, Result, SourceEpoch,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,6 +145,7 @@ pub struct TransferEngine {
     batches: Arc<RequesterAdmission>,
     allocations: Arc<AllocationBudget>,
     runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
+    receiver_credits: Option<Arc<SenderCreditLedger>>,
 }
 
 impl TransferEngine {
@@ -208,14 +211,63 @@ impl TransferEngine {
         });
         let control = ControlService::start(Arc::clone(&source), &config)?;
         let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
+        let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
+            SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
+        });
         Ok(Self {
             runtime_queue,
+            receiver_credits,
             config,
             source,
             control,
             batches: Arc::default(),
             allocations: Arc::new(AllocationBudget::new()),
         })
+    }
+
+    /// Activates one cooperative credit class for this peer/source epoch. Same
+    /// epoch replay does not reset totals; a newer epoch requires drained owners.
+    /// A recreated binding after deactivation requires a fresh administrative
+    /// epoch and fenced old updates. This API does not authenticate a receiver.
+    pub fn activate_receiver_credit(
+        &self,
+        peer: &RemoteSegment,
+        epoch: u64,
+        qos_class: u32,
+    ) -> Result<()> {
+        self.receiver_credits
+            .as_ref()
+            .ok_or(Error::Unavailable("receiver credits are disabled"))?
+            .activate(peer, epoch, qos_class)
+    }
+
+    /// Applies an application-delivered cumulative update and wakes eligible
+    /// data owners. Remains usable during requester close to drain accepted work.
+    pub fn apply_receiver_credit(
+        &self,
+        peer: &RemoteSegment,
+        update: &ReceiverCreditUpdateV1,
+    ) -> Result<CreditUpdateDisposition> {
+        self.receiver_credits
+            .as_ref()
+            .ok_or(Error::Unavailable("receiver credits are disabled"))?
+            .apply_update(peer, update)
+    }
+
+    /// Fences unstarted owners. Busy preserves the binding until all actual
+    /// owners drain; repeat with the same epoch to retire it. Started groups may
+    /// finish, and Unquiesced owners keep the binding busy.
+    pub fn deactivate_receiver_credit(&self, peer: &RemoteSegment, epoch: u64) -> Result<()> {
+        self.receiver_credits
+            .as_ref()
+            .ok_or(Error::Unavailable("receiver credits are disabled"))?
+            .deactivate(peer, epoch)
+    }
+
+    pub fn receiver_credit_stats(&self, peer: &RemoteSegment) -> Option<ReceiverCreditStats> {
+        self.receiver_credits
+            .as_ref()
+            .and_then(|ledger| ledger.stats(peer))
     }
 
     pub fn endpoint(&self) -> SocketAddr {
@@ -463,10 +515,11 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let deadline = deadline(timeout)?;
-        let mut total_bytes = match notification {
+        let notification_bytes = match notification {
             Some(notification) => self.validate_notification(notification)?,
             None => 0,
         };
+        let mut total_bytes = notification_bytes;
         let mut prepared = Vec::new();
         prepared
             .try_reserve_exact(requests.len())
@@ -545,11 +598,26 @@ impl TransferEngine {
             });
         }
         let admission = self.admit_batch(total_bytes)?;
+        let credit = self
+            .receiver_credits
+            .as_ref()
+            .filter(|_| !requests.is_empty())
+            .map(|ledger| ledger.prepare(peer, total_bytes - notification_bytes, requests.len()))
+            .transpose()?;
         let queue = self
             .runtime_queue
             .as_ref()
             .filter(|_| !requests.is_empty())
-            .map(|queue| queue.try_admit(total_bytes, deadline, batch))
+            .map(|queue| {
+                queue.try_admit(
+                    total_bytes,
+                    deadline,
+                    batch,
+                    credit
+                        .as_ref()
+                        .map(|credit| Arc::clone(&credit.reservation)),
+                )
+            })
             .transpose()?;
         Ok(PreparedSubmission {
             operation,
@@ -558,6 +626,7 @@ impl TransferEngine {
             notification: notification.cloned(),
             deadline,
             queue,
+            credit,
             _admission: admission,
         })
     }
@@ -604,18 +673,21 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
-        if let Some(queue) = &submission.queue {
-            if let Err(error) = queue
-                .wait(|| progress.is_some_and(|(progress, first)| progress.cancel_requested(first)))
-            {
-                report.failure = Some(TransferFailure {
-                    request_index: 0,
-                    affected_requests: 1,
-                    error,
-                    remote_effect: RemoteEffect::None,
-                });
-                return report;
-            }
+        let cancelled =
+            || progress.is_some_and(|(progress, first)| progress.cancel_requested(first));
+        let admission = match (&submission.queue, &submission.credit) {
+            (Some(queue), _) => queue.wait(cancelled),
+            (None, Some(credit)) => credit.reservation.wait(*deadline, cancelled),
+            (None, None) => Ok(()),
+        };
+        if let Err(error) = admission {
+            report.failure = Some(TransferFailure {
+                request_index: 0,
+                affected_requests: 1,
+                error,
+                remote_effect: RemoteEffect::None,
+            });
+            return report;
         }
         let mut index = 0;
         while index < requests.len() {
@@ -629,6 +701,19 @@ impl TransferEngine {
                         remote_effect: RemoteEffect::None,
                     });
                     break;
+                }
+            }
+            if index == 0 {
+                if let Some(credit) = &submission.credit {
+                    if let Err(error) = credit.reservation.commit() {
+                        report.failure = Some(TransferFailure {
+                            request_index: 0,
+                            affected_requests: 1,
+                            error,
+                            remote_effect: RemoteEffect::None,
+                        });
+                        break;
+                    }
                 }
             }
             let single = |result: std::result::Result<(), (Error, RemoteEffect)>| {
@@ -951,6 +1036,9 @@ impl TransferEngine {
         if let Some(queue) = &self.runtime_queue {
             queue.wake();
         }
+        if let Some(ledger) = &self.receiver_credits {
+            ledger.wake();
+        }
     }
 
     fn admit_batch(&self, bytes: usize) -> Result<BatchPermit> {
@@ -1058,6 +1146,8 @@ pub(crate) struct PreparedSubmission {
     pub(crate) deadline: Instant,
     // Field drop order returns dispatch and admission charges after backing.
     queue: Option<QueuePermit>,
+    // Remove queue metadata before rollback can wake/refill that same queue.
+    credit: Option<CreditPermit>,
     _admission: BatchPermit,
 }
 
