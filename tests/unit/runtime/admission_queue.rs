@@ -17,9 +17,9 @@ fn dispatch_window_preserves_fifo_ties_and_never_bypasses_a_large_head() {
             deadline_aware,
         });
         let now = Instant::now();
-        let first = queue.try_admit(5, now + TIMEOUT, None).unwrap();
-        let large = queue.try_admit(4, now + TIMEOUT, None).unwrap();
-        let small = queue.try_admit(3, now + TIMEOUT, None).unwrap();
+        let first = queue.try_admit(5, now + TIMEOUT, None, None).unwrap();
+        let large = queue.try_admit(4, now + TIMEOUT, None, None).unwrap();
+        let small = queue.try_admit(3, now + TIMEOUT, None, None).unwrap();
         assert_eq!(
             queue.stats().dispatching_owners,
             1,
@@ -27,7 +27,7 @@ fn dispatch_window_preserves_fifo_ties_and_never_bypasses_a_large_head() {
         );
         assert!(!queue.lock().owners[&small.id].dispatching);
         assert!(matches!(
-            queue.try_admit(9, now + TIMEOUT, None),
+            queue.try_admit(9, now + TIMEOUT, None, None),
             Err(Error::ResourceExhausted)
         ));
         drop(first);
@@ -44,10 +44,10 @@ fn dispatch_window_preserves_fifo_ties_and_never_bypasses_a_large_head() {
         assert_eq!(queue.stats(), RuntimeQueueStats::default());
 
         // The count limit must still apply when the byte window has room.
-        let held = queue.try_admit(1, now + TIMEOUT, None).unwrap();
-        let held2 = queue.try_admit(1, now + TIMEOUT, None).unwrap();
-        let tie1 = queue.try_admit(1, now + TIMEOUT, None).unwrap();
-        let tie2 = queue.try_admit(1, now + TIMEOUT, None).unwrap();
+        let held = queue.try_admit(1, now + TIMEOUT, None, None).unwrap();
+        let held2 = queue.try_admit(1, now + TIMEOUT, None, None).unwrap();
+        let tie1 = queue.try_admit(1, now + TIMEOUT, None, None).unwrap();
+        let tie2 = queue.try_admit(1, now + TIMEOUT, None, None).unwrap();
         drop(held);
         assert!(queue.lock().owners[&tie1.id].dispatching);
         assert!(!queue.lock().owners[&tie2.id].dispatching);

@@ -755,8 +755,13 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   drain remain independent of payload priority. TENT head-only/per-entry aging and
   optional shared priority-slot admission are implemented, including process
   attachment/exit and timer-driven progress. The frozen shared_quota is a slot
-  gate, not a global byte limit. Full QoS/tenant contracts, receiver pacing and
-  native fairness remain open. See
+  gate, not a global byte limit. Sender credit consumption now gates actual
+  sync/async submissions and queue eligibility using application-delivered
+  cumulative byte/request grants; epoch fencing, freshness and unstarted refund
+  preserve actual ownership. The frozen ledger is the accounting reference, not
+  an existing network implementation. Automatic receiver issuance/wire sync,
+  staging/consumer credit charges, full QoS/tenant contracts, pacing and native
+  fairness remain open. See [credit scope](async-batches.md#receiver-credit-gating) and
   [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 - [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
   strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
@@ -1164,8 +1169,15 @@ The FIFO/EDF runtime queue and independent dispatch window are implemented for
 whole ordered submissions. Eligible Batch heads retain admission sequence;
 queued cancel/expiry ends before I/O and uncertain native owners retain capacity.
 See [source evidence and TENT granularity differences](qualification.md#runtime-admission-and-dispatch-window).
-The next functional delivery is receiver credits/pacing and QoS contract
-consumption. Physical-owner queue granularity, staging reserves and
+Sender credit consumption is implemented: bounded peer/source-epoch bindings,
+atomic cumulative payload byte/request reservations, queue eligibility and direct
+dispatch waits, freshness and exact-epoch fencing. Unstarted groups can refund;
+committed and Unquiesced owners cannot fabricate new grants. Applications supply
+updates; this is not automatic receiver issuance or native rate pacing. See
+[source controls and limits](qualification.md#receiver-credit-gating).
+The next functional delivery is QoS contract consumption, followed by receiver
+issuance/update synchronization using those resource contracts. Staging/consumer
+credit charges, physical-owner queue granularity, staging reserves and
 deadline-infeasible cancellation remain open parts of P6.
 Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.

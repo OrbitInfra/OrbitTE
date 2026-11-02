@@ -29,19 +29,22 @@ protocol compatible with TENT's native RPC or metadata.
 `runtime/admission_queue.rs::LocalTransferAdmissionQueue` corresponds to frozen
 TENT's `LocalTransferAdmissionQueue` and `refillDispatchWindow`. It owns the
 ordered eligible-owner set, per-Batch dependency chains and dispatch counters.
-`PreparedSubmission` owns a `QueuePermit` after its real memory references and
-before its requester-admission permit. Drop therefore releases backing before
-window/global capacity. Unquiesced quarantine retains all three.
+`PreparedSubmission` owns, in release order, its real memory references, a
+`QueuePermit`, an optional `CreditPermit`, and its requester-admission permit.
+Drop removes scheduling metadata before refunding unstarted credit and releasing
+global capacity. Unquiesced quarantine retains all of these actual owners.
 
 The opt-in queue uses admission sequence for FIFO and `(absolute deadline,
 sequence)` for EDF. A balanced tree orders admission/activation in O(log n);
-refill only visits the ordered prefix until either count or byte capacity is
-full. A temporarily oversized head blocks later heads, matching TENT. Same-Batch
+refill visits heads once in order, skipping peers without usable credits. With
+credits disabled it visits only the ordered prefix. An eligible head that cannot
+fit the remaining byte window blocks later heads, matching TENT's window rule. Same-Batch
 successors activate after predecessor ownership ends. Only scheduling metadata
 lives under the queue mutex; data transfer and notification run outside it.
 Cancellation releases the Batch progress lock before acquiring the queue lock
 to wake waiters, which read the first-task cancel flag under queue-to-progress
-lock order. Condvar waits use the original submission deadline. There is no new
+lock order. Condvar waits retain the original submission deadline and also wake when a
+credit expiry can remove a byte-blocking head. There is no new
 progress thread or periodic queue scan; disabled engines allocate no queue.
 
 OrbitTE schedules an entire ordered submission, including notification bytes;
@@ -49,6 +52,26 @@ TENT schedules prepared physical requests and maps derived public tasks to them.
 This explicit granularity preserves ordered failure prefixes and existing
 NVLink copy groups. Staging internals keep their existing transport path and do
 not recursively acquire an outer window. See [configuration and scope](async-batches.md#runtime-admission-and-dispatch-window).
+
+`runtime/receiver_credit.rs::SenderCreditLedger` follows frozen TENT's cumulative
+`grant_total - consumed_total` ledger, resource tags and epoch/sequence checks.
+It additionally feeds actual submission and queue eligibility. The peer endpoint
+and authoritative source epoch identify a binding; one QoS class is active per
+binding and the sender identity is implicit in the engine. Queued owners already
+retain that binding, so epoch replacement cannot race old reservation cleanup.
+Queue metadata holds a reservation ID; only the `CreditPermit` owns rollback.
+Reservations atomically debit payload bytes and request counts at dispatch;
+whole-group handoff commits the debit before the first transport call.
+
+Queue refill may acquire the ledger mutex. Credit updates, deactivation and
+refunds release it before triggering queue refill, avoiding lock inversion. Direct
+dispatch without a runtime queue waits on the ledger condition variable. A
+completed committed owner needs no credit wake because completion does not grant
+new credit. Disabled engines allocate no ledger; enabled paths add checks per
+submission, not per slice/WR, and no scheduler thread or network round trip.
+The frozen ledger has no runtime consumer and does not consume its TTL field;
+OrbitTE's freshness gating and dispatch integration are explicit extensions.
+See [credit administration and limits](async-batches.md#receiver-credit-gating).
 
 ## RDMA resource owners
 

@@ -71,6 +71,10 @@ pub use memory::{
 };
 pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
 pub use runtime::admission_queue::RuntimeQueueStats;
+pub use runtime::receiver_credit::{
+    CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditStats,
+    ReceiverCreditUpdateV1,
+};
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 
 #[cfg(test)]

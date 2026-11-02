@@ -164,6 +164,7 @@ pub(crate) fn rdma_fixture_with_config(
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
+        receiver_credits: None,
         runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,
@@ -335,6 +336,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             deadline_aware: true,
         },
     ));
+    requester.receiver_credits = Some(SenderCreditLedger::new(1, requester.runtime_queue.as_ref()));
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = Arc::clone(&captured);
     crate::transport::rdma::tests::on_requester_close(move |endpoint, transfer| {
@@ -362,6 +364,31 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             source.endpoint(),
             source.source_epoch(),
             Duration::from_secs(2),
+        )
+        .unwrap();
+    requester.activate_receiver_credit(&peer, 1, 0).unwrap();
+    requester
+        .apply_receiver_credit(
+            &peer,
+            &crate::ReceiverCreditUpdateV1 {
+                schema_version: 1,
+                flags: 0,
+                receiver_session_id: peer.source_epoch(),
+                qos_class: 0,
+                epoch: 1,
+                sequence: 1,
+                freshness_ttl_ms: 0,
+                grants: vec![
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::DataBytes,
+                        grant_total: 8,
+                    },
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::RequestSlots,
+                        grant_total: 1,
+                    },
+                ],
+            },
         )
         .unwrap();
     let report = requester
@@ -398,6 +425,23 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             dispatching_bytes: 8,
         }
     );
+    let credits = requester.receiver_credit_stats(&peer).unwrap();
+    assert_eq!(
+        (
+            credits.consumed_bytes,
+            credits.consumed_requests,
+            credits.active_owners
+        ),
+        (8, 1, 1)
+    );
+    assert!(matches!(
+        requester.deactivate_receiver_credit(&peer, 1),
+        Err(Error::BatchBusy)
+    ));
+    assert!(matches!(
+        requester.activate_receiver_credit(&peer, 2, 0),
+        Err(Error::BatchBusy)
+    ));
     assert!(requester.close(Duration::from_millis(10)).is_err());
     source.close(Duration::from_secs(2)).unwrap();
 }
@@ -985,6 +1029,7 @@ pub(crate) fn staging_fixture(
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
+        receiver_credits: None,
         runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,

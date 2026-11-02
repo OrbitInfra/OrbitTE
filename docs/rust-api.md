@@ -43,6 +43,14 @@ owner/byte reservations appear in `EngineStats::runtime_queue`; existing infligh
 budgets still bound retained work. See [queue configuration, cancellation and
 scope](async-batches.md#runtime-admission-and-dispatch-window).
 
+`EngineConfig::max_receiver_credit_sessions` enables sender credit gating (zero
+disables it). `activate_receiver_credit`, `apply_receiver_credit`,
+`deactivate_receiver_credit` and `receiver_credit_stats` administer one class per
+peer/source epoch. Applications deliver cumulative payload byte/request grants;
+new dispatch requires both. The setting applies to sync and async submissions
+with or without a runtime queue. See [epochs, refunds, freshness and issuer
+obligations](async-batches.md#receiver-credit-gating).
+
 ## Memory type and location
 
 `RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the

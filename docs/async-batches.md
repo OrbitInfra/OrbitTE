@@ -83,7 +83,9 @@ reserved a window; it does not preempt a reservation or posted DMA. RDMA
 Only the oldest retained submission in each Batch is eligible. Later submissions
 keep their original sequence and deadline when activated, so a short deadline
 cannot overtake its own dependency or cause self-deadlock. A head that does not
-fit remaining byte capacity blocks later heads until capacity is released.
+fit remaining byte capacity blocks later eligible heads until capacity is released.
+When receiver credit gating is enabled, credit-starved or fenced heads are
+ineligible and may be bypassed; their same-Batch successors remain blocked.
 
 Both synchronous and asynchronous data submissions use this queue across TCP,
 RDMA, NVLink and outer staged transfers. Existing caller/Batch workers wait on a
@@ -109,6 +111,79 @@ aliases; OrbitTE currently schedules whole ordered submissions. Physical-request
 granularity, staging reserves, deadline-infeasible cancellation/MLU and
 local-recompute hooks remain open. The [source controls](qualification.md#runtime-admission-and-dispatch-window)
 do not establish native fairness or a performance advantage.
+
+## Receiver credit gating
+
+`EngineConfig::max_receiver_credit_sessions` defaults to zero (disabled). Set a
+positive bound, at most 4096, to require a cooperative credit binding for every
+nonempty outgoing data submission. A missing binding fails during preparation,
+before public task publication or transport I/O. Each binding identifies a peer
+endpoint and authoritative `RemoteSegment::source_epoch()`. READ and WRITE both
+consume request grants against that peer; on READ the payload receiver is local.
+These credits do not establish remote buffer/RQ capacity or a pacing rate.
+
+An application calls `activate_receiver_credit(peer, epoch, qos_class)`, then
+delivers `ReceiverCreditUpdateV1` through `apply_receiver_credit`. The update is
+a typed local API, not a TENT-compatible wire message. Use schema 1, flags 0, the
+peer's source epoch as `receiver_session_id`, matching QoS class, positive credit
+epoch and positive sequence. `DataBytes` and `RequestSlots` are **cumulative**
+grant totals, not increments. Both must cover the whole next submission:
+
+| Charge | Meaning |
+| --- | --- |
+| `DataBytes` | Sum of payload request lengths, excluding notification bytes |
+| `RequestSlots` | Number of public requests in the submission |
+| `StagingSlots`, `ConsumerSlots` | Reserved TENT schema tags; updates are rejected until a runtime charge mapping exists |
+
+Partial updates preserve omitted totals; a decreasing total or repeated resource
+rejects the whole update. Old/duplicate sequences have no effect. Sequence gaps
+are applied and reported as `SequenceGap`. Each engine is one sender ledger;
+applications must not copy one finite receiver grant independently to multiple
+senders. This API does not authenticate the issuer. One class is bound per peer;
+per-request QoS classes and the full QoS resolver remain open.
+
+With the runtime queue, a head lacking fresh credit waits without reserving the
+dispatch window, so another eligible peer can run. Without that queue, the
+caller/Batch worker waits on the credit ledger. Updates wake waiting owners and
+refill the queue. Original submission deadlines and cancellation still apply.
+All accepted owners, including those waiting for their first grant, retain the
+binding and existing inflight budgets. Empty groups, standalone notifications,
+registration/control work and internal staging CROSS work do not consume these
+credits. An outer staged group consumes exactly once.
+
+Credit is reserved atomically with dispatch eligibility. Cancellation, expiry or
+fencing before the first transport handoff refunds any reservation when the
+actual owner is released. At the first handoff, the **entire group's** debit is
+committed: success, a transport error, or a canceled later suffix does not
+refund it. Completion is not an automatic request-slot return; the issuer must
+grant additional cumulative totals. `receiver_credit_stats(peer)` exposes
+active/reserved owners and cumulative consumption, including still-refundable
+reservations. Unquiesced ownership retains its binding and reservation.
+
+`freshness_ttl_ms=0` has no expiry. Positive TTL gates new reservations only;
+already reserved work remains usable. A duplicate update cannot extend TTL;
+a new-sequence empty-grants heartbeat can refresh freshness without changing
+balances. If a credit-eligible large head blocks the byte window, existing
+waiters also wake at its credit expiry to reconsider smaller peers. No polling
+thread is added. The frozen TENT ledger carries this field but does not consume it.
+
+Activation in the same epoch preserves totals, sequence and freshness. A newer
+epoch requires every accepted owner to drain. `deactivate_receiver_credit`
+requires an exact epoch and fences new work plus reserved-but-uncommitted
+groups; already committed groups may finish. It returns `BatchBusy` while any
+actual owner remains, including uncertain DMA. Retry after drain to remove the
+binding. Same-epoch activation cannot undo a fence. After removal, the caller
+must use a fresh administrative epoch and reject delayed old updates: retired
+epoch history is not retained. Source restart also needs a fresh peer binding.
+Updates remain accepted during requester close so previously accepted work can
+drain.
+
+Frozen TENT's `SenderCreditLedger` provides the cumulative accounting model but
+is not wired into its transport/admission path. OrbitTE now consumes it at
+whole-submission granularity. Automatic receiver issuance, network delivery and
+resynchronization, staging/consumer credits and full QoS/pacing remain open.
+[Source controls](qualification.md#receiver-credit-gating) do not qualify native
+fairness, receiver protection or performance.
 
 ## Results, cancellation and quiescence
 

@@ -5,6 +5,8 @@ use std::time::Instant;
 use crate::engine::remaining;
 use crate::{BatchId, Error, Result, RuntimeQueueConfig};
 
+use super::receiver_credit::CreditReservation;
+
 /// Reservations for whole submissions, not a native WR/byte counter.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeQueueStats {
@@ -25,6 +27,7 @@ struct QueueOwner {
     batch: Option<BatchId>,
     key: DispatchKey,
     dispatching: bool,
+    credit: Option<Arc<CreditReservation>>,
 }
 
 #[derive(Default)]
@@ -36,6 +39,7 @@ struct QueueState {
     outstanding_bytes: usize,
     dispatching_owners: usize,
     dispatching_bytes: usize,
+    credit_wakeup: Option<Instant>,
 }
 
 /// Runtime admission owns only scheduling metadata. QueuePermit follows the
@@ -66,6 +70,7 @@ impl LocalTransferAdmissionQueue {
         bytes: usize,
         deadline: Instant,
         batch: Option<BatchId>,
+        credit: Option<Arc<CreditReservation>>,
     ) -> Result<QueuePermit> {
         if bytes > self.config.max_dispatch_bytes {
             return Err(Error::ResourceExhausted);
@@ -96,6 +101,7 @@ impl LocalTransferAdmissionQueue {
                 batch,
                 key,
                 dispatching: false,
+                credit,
             },
         );
         state.next_id = id;
@@ -125,23 +131,48 @@ impl LocalTransferAdmissionQueue {
     pub(crate) fn wake(&self) {
         // Cancellation publishes under BatchProgress, releases that lock, then
         // acquires this lock. A waiter cannot miss cancellation while parking.
-        let _state = self.lock();
+        let mut state = self.lock();
+        state.refill_dispatch_window(self.config);
         self.changed.notify_all();
     }
 }
 
 impl QueueState {
     fn refill_dispatch_window(&mut self, config: RuntimeQueueConfig) -> bool {
+        self.credit_wakeup = None;
         let mut changed = false;
+        let mut previous = None;
         while self.dispatching_owners < config.max_dispatch_owners {
-            let Some(key) = self.ready.first().copied() else {
-                break;
-            };
+            let key = match previous {
+                Some(key) => self
+                    .ready
+                    .range((std::ops::Bound::Excluded(key), std::ops::Bound::Unbounded))
+                    .next(),
+                None => self.ready.first(),
+            }
+            .copied();
+            let Some(key) = key else { break };
+            previous = Some(key);
             let owner = self.owners.get_mut(&key.1).expect("ready owner exists");
             if owner.bytes > config.max_dispatch_bytes - self.dispatching_bytes {
+                if let Some(credit) = &owner.credit {
+                    let (eligible, expires) = credit.availability().unwrap_or((false, None));
+                    if !eligible {
+                        continue;
+                    }
+                    // Expiry removes this byte-blocking head's eligibility.
+                    self.credit_wakeup = expires;
+                }
                 break;
             }
-            self.ready.pop_first();
+            if owner
+                .credit
+                .as_ref()
+                .is_some_and(|credit| !credit.try_reserve().unwrap_or(false))
+            {
+                continue;
+            }
+            self.ready.remove(&key);
             owner.dispatching = true;
             self.dispatching_owners += 1;
             self.dispatching_bytes += owner.bytes;
@@ -192,6 +223,11 @@ impl QueuePermit {
     pub(crate) fn wait(&self, cancelled: impl Fn() -> bool) -> Result<()> {
         let mut state = self.queue.lock();
         loop {
+            if state.credit_wakeup.is_some_and(|at| Instant::now() >= at)
+                && state.refill_dispatch_window(self.queue.config)
+            {
+                self.queue.changed.notify_all();
+            }
             if cancelled() {
                 return Err(Error::Cancelled);
             }
@@ -199,7 +235,13 @@ impl QueuePermit {
                 .owners
                 .get(&self.id)
                 .ok_or(Error::Internal("runtime queue owner missing"))?;
-            let timeout = remaining(owner.deadline)?;
+            let mut timeout = remaining(owner.deadline)?;
+            if let Some(wakeup) = state.credit_wakeup {
+                timeout = timeout.min(wakeup.saturating_duration_since(Instant::now()));
+            }
+            if let Some(credit) = &owner.credit {
+                credit.check_active()?;
+            }
             if owner.dispatching {
                 return Ok(());
             }

@@ -39,6 +39,9 @@ recovery policy and replica placement.
   staging over TCP/RDMA; mixed batches preserve ordered completion and reuse
   bounded staging resources. An opt-in [FIFO/EDF runtime queue](docs/async-batches.md#runtime-admission-and-dispatch-window)
   bounds concurrent submission owners and bytes while preserving batch order.
+  Optional [sender credit gating](docs/async-batches.md#receiver-credit-gating)
+  consumes application-delivered cumulative peer grants before transport handoff;
+  credit-starved peers wait without occupying a dispatch window.
   Failed native cleanup retains unresolved memory and dispatch reservations. Owner-backed [type and range locations](docs/rust-api.md#memory-type-and-location)
   distinguish CPU/pinned DRAM and CUDA device/context without reprobing on queries.
 - **Persistent host RDMA.** Context-owned MRs, reusable QP arrays, shared CQ

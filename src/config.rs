@@ -92,6 +92,10 @@ pub struct EngineConfig {
     pub max_allocated_requests: usize,
     /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
     pub runtime_queue: Option<RuntimeQueueConfig>,
+    /// Zero disables receiver credit gating. A positive limit (at most 4096)
+    /// requires an activated peer session for every nonempty data submission.
+    /// Applications deliver cumulative updates; no automatic wire issuer exists.
+    pub max_receiver_credit_sessions: usize,
     /// Accepted outgoing calls, including queued and unquiesced submissions.
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,
@@ -133,6 +137,7 @@ impl Default for EngineConfig {
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
             runtime_queue: None,
+            max_receiver_credit_sessions: 0,
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,
             max_transfer_bytes: 8 << 20,
@@ -147,6 +152,11 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.max_receiver_credit_sessions > 4096 {
+            return Err(Error::InvalidConfig(
+                "receiver credit sessions must be at most 4096",
+            ));
+        }
         if self
             .runtime_queue
             .is_some_and(|queue| queue.max_dispatch_owners == 0 || queue.max_dispatch_bytes == 0)
