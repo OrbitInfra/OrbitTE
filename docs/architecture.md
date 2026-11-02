@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v21 messages; moving them into their own module does not make this
+OrbitTE v22 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## Runtime queue ownership
@@ -67,9 +67,9 @@ whole-group handoff commits the debit before the first transport call.
 Queue refill may acquire the ledger mutex. Credit updates, deactivation and
 refunds release it before triggering queue refill, avoiding lock inversion. Direct
 dispatch without a runtime queue waits on the ledger condition variable. A
-completed committed owner needs no credit wake because completion does not grant
-new credit. Disabled engines allocate no ledger; enabled paths add checks per
-submission, not per slice/WR, and no scheduler thread or network round trip.
+completed automatic owner publishes a monotonic completion total at actual
+release and wakes both wait domains. Manual completions do not grant new credit.
+Disabled engines allocate no ledger; checks stay per submission, not per slice/WR.
 The frozen ledger has no runtime consumer and does not consume its TTL field;
 OrbitTE's freshness gating and dispatch integration are explicit extensions.
 See [credit administration and limits](async-batches.md#receiver-credit-gating).
@@ -91,6 +91,23 @@ ledger; disabled engines allocate no resolver. The existing transport workers
 consume the resolved priority. Frozen TENT's resolver is resolution-only;
 OrbitTE's per-contract admission and lifetime enforcement are explicit additions.
 See [scope, defaults and resource units](async-batches.md#qos-contracts).
+
+`runtime/receiver_credit/issuer.rs::ReceiverCreditIssuer` belongs to `Source`.
+It reserves fixed per-sender windows from aggregate byte/request budgets and
+retains terminal session tombstones. Sender `sync.rs` owns pending identity,
+single-flight control exchanges and cumulative completion reports. `protocol.rs`
+encodes bounded metadata on the shared control service; payload transports keep
+their owners and protocols. Automatic peer identity is unique by receiver epoch,
+so endpoint aliases cannot duplicate a balance. Manual and automatic authority
+cannot be mixed within a binding.
+
+Actual `CreditPermit` Drop publishes successful-group completion only after
+backing and queue owners release. A waiter checks the generation under its wait
+mutex, releases it before a sync RPC, and rechecks before parking. `SyncFlight`
+clears the in-flight flag and wakes followers on every exit. The issuer performs
+only a short metadata transaction, never waits for DMA or sender owners, and
+preserves fixed windows after failures or control EOF. Frozen TENT has no issuer
+or network consumer; see [the explicit extension and limits](async-batches.md#automatic-receiver-windows).
 
 ## RDMA resource owners
 
@@ -191,7 +208,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v21 handshake can attach independent grants to a
+QP creation lock. The public v22 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction

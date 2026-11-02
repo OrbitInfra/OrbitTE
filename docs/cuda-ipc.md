@@ -332,7 +332,7 @@ proves closure; only a successful retry of the idempotent source release can
 retire that obligation.
 
 Boot/process identities and epochs detect stale or incompatible peers; they are
-not authentication. Current wire version 21 keeps per-subbatch IPC opcodes 8/9
+not authentication. Current wire version 22 keeps per-subbatch IPC opcodes 8/9
 (`NVL1`) and the previously added cached READ/WRITE/close opcodes 10/11/12 (`NVL2` hello). Initial cached offers use
 ready status 12 with no handle payload. TCP/RDMA layouts are unchanged; older
 wire versions are rejected rather than interpreted as cached completion.

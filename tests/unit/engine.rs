@@ -140,6 +140,7 @@ pub(crate) fn rdma_fixture_with_config(
 ) -> TransferEngine {
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
         #[cfg(feature = "cuda")]
         remote_staging: config.remote_staging,
         #[cfg(feature = "cuda")]
@@ -190,8 +191,19 @@ pub(crate) fn source_runtime(engine: &TransferEngine) -> &crate::transport::rdma
 fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_drained() {
     // Actual control sockets and owners; verbs are a CPU ABI fault fixture.
     // No DMA success or physical RNIC termination is claimed.
-    let source = rdma_fixture("close1");
-    let requester = rdma_fixture("normal");
+    let source = rdma_fixture_with_config(
+        crate::transport::rdma::tests::runtime("close1"),
+        EngineConfig {
+            receiver_credit: Some(crate::ReceiverCreditConfig {
+                bytes_per_sender: 8,
+                requests_per_sender: 1,
+                ..Default::default()
+            }),
+            ..EngineConfig::default()
+        },
+    );
+    let mut requester = rdma_fixture("normal");
+    requester.receiver_credits = Some(SenderCreditLedger::new(1, None));
     let backing = Arc::new(HostMemory::new(vec![0x42; 8].into_boxed_slice()).unwrap());
     let weak = Arc::downgrade(&backing);
     let remote = source
@@ -206,6 +218,9 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
             source.source_epoch(),
             Duration::from_secs(2),
         )
+        .unwrap();
+    requester
+        .connect_receiver_credit(&peer, 0, Duration::from_secs(2))
         .unwrap();
     let report = requester
         .submit_and_wait(
@@ -230,6 +245,24 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
     assert_eq!(
         (report.completed_requests, report.transferred_bytes),
         (0, 0)
+    );
+    assert_eq!(
+        requester
+            .receiver_credit_stats(&peer)
+            .unwrap()
+            .completed_requests,
+        0
+    );
+    assert!(matches!(
+        requester.disconnect_receiver_credit(&peer, Duration::from_secs(1)),
+        Err(Error::BatchBusy)
+    ));
+    assert_eq!(
+        source
+            .receiver_credit_issuer_stats()
+            .unwrap()
+            .reserved_bytes,
+        8
     );
     let failure = report.failure.unwrap().error;
     assert!(
@@ -334,7 +367,17 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
 #[cfg(feature = "rdma")]
 #[test]
 fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners() {
-    let source = rdma_fixture("ok");
+    let source = rdma_fixture_with_config(
+        crate::transport::rdma::tests::runtime("ok"),
+        EngineConfig {
+            receiver_credit: Some(crate::ReceiverCreditConfig {
+                bytes_per_sender: 8,
+                requests_per_sender: 1,
+                ..Default::default()
+            }),
+            ..EngineConfig::default()
+        },
+    );
     let mut requester = rdma_fixture("post_close0");
     requester.runtime_queue = Some(LocalTransferAdmissionQueue::new(
         crate::RuntimeQueueConfig {
@@ -387,30 +430,8 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             Duration::from_secs(2),
         )
         .unwrap();
-    requester.activate_receiver_credit(&peer, 1, 0).unwrap();
     requester
-        .apply_receiver_credit(
-            &peer,
-            &crate::ReceiverCreditUpdateV1 {
-                schema_version: 1,
-                flags: 0,
-                receiver_session_id: peer.source_epoch(),
-                qos_class: 0,
-                epoch: 1,
-                sequence: 1,
-                freshness_ttl_ms: 0,
-                grants: vec![
-                    crate::CreditAmount {
-                        resource: crate::CreditResource::DataBytes,
-                        grant_total: 8,
-                    },
-                    crate::CreditAmount {
-                        resource: crate::CreditResource::RequestSlots,
-                        grant_total: 1,
-                    },
-                ],
-            },
-        )
+        .connect_receiver_credit(&peer, 0, Duration::from_secs(2))
         .unwrap();
     let report = requester
         .submit_and_wait(
@@ -434,6 +455,20 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
         report.failure.unwrap().error,
         Error::Unquiesced { .. }
     ));
+    let credit = requester.receiver_credit_stats(&peer).unwrap();
+    assert!(credit.automatic);
+    assert_eq!(credit.completed_requests, 0);
+    assert!(matches!(
+        requester.disconnect_receiver_credit(&peer, Duration::from_secs(1)),
+        Err(Error::BatchBusy)
+    ));
+    assert_eq!(
+        source
+            .receiver_credit_issuer_stats()
+            .unwrap()
+            .reserved_bytes,
+        8
+    );
     let stats = requester.stats().unwrap();
     let rdma = stats.rdma.unwrap();
     assert_eq!((rdma.retained_endpoints, rdma.retained_cqs), (1, 2));
@@ -464,14 +499,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
         ),
         (8, 1, 1)
     );
-    assert!(matches!(
-        requester.deactivate_receiver_credit(&peer, 1),
-        Err(Error::BatchBusy)
-    ));
-    assert!(matches!(
-        requester.activate_receiver_credit(&peer, 2, 0),
-        Err(Error::BatchBusy)
-    ));
+
     assert!(requester.close(Duration::from_millis(10)).is_err());
     source.close(Duration::from_secs(2)).unwrap();
 }
@@ -1044,6 +1072,7 @@ pub(crate) fn staging_fixture(
     config.validate().unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
         remote_staging: config.remote_staging,
         staging_pipeline_depth: config.staging_pipeline_depth,
         proxy,

@@ -219,8 +219,9 @@ pub(crate) struct QueuePermit {
 impl QueuePermit {
     /// The predicate only reads the first public task's cancellation flag. Lock
     /// order is queue -> BatchProgress; cancellation releases BatchProgress
-    /// before wake. No transport, backing drop or progress mutation runs here.
-    pub(crate) fn wait(&self, cancelled: impl Fn() -> bool) -> Result<()> {
+    /// before wake. Credit synchronization releases the queue lock before I/O;
+    /// no backing drop or progress mutation runs while the lock is held.
+    pub(crate) fn wait(&self, cancelled: impl Fn() -> bool + Sync) -> Result<()> {
         let mut state = self.queue.lock();
         loop {
             if state.credit_wakeup.is_some_and(|at| Instant::now() >= at)
@@ -244,6 +245,16 @@ impl QueuePermit {
             }
             if owner.dispatching {
                 return Ok(());
+            }
+            if let Some(credit) = &owner.credit {
+                if credit.needs_sync()? {
+                    let credit = Arc::clone(credit);
+                    let deadline = owner.deadline;
+                    drop(state);
+                    credit.synchronize(deadline, &cancelled)?;
+                    state = self.queue.lock();
+                    continue;
+                }
             }
             state = self
                 .queue

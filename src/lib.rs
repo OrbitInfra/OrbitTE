@@ -76,8 +76,8 @@ pub use runtime::qos_contract::{
     EffectiveQosPolicy, QosConfig, QosPolicyFields, QosRequestContext, QosTenantContract, QosUsage,
 };
 pub use runtime::receiver_credit::{
-    CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditStats,
-    ReceiverCreditUpdateV1,
+    CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditConfig,
+    ReceiverCreditIssuerStats, ReceiverCreditStats, ReceiverCreditUpdateV1,
 };
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 
