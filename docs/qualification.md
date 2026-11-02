@@ -2243,3 +2243,28 @@ Logs, source archive and independent review are external at
 source gates and exact-commit CI are recorded in that handoff. Installed
 multi-transport contention, fairness and measured scheduler overhead/throughput
 remain unqualified. No hardware job was requested for this delivery.
+
+## Receiver credit gating
+
+Source connects frozen TENT's cumulative `SenderCreditLedger` accounting model
+to actual sync/async transport handoff and runtime queue eligibility. The frozen
+ledger has no transport consumer and ignores TTL; OrbitTE's consumer and
+freshness gate are explicit additions. Applications deliver grants through the
+local Rust API. No automatic receiver issuer, credit wire protocol, staging or
+consumer resource mapping, native pacing or receiver-capacity proof is claimed.
+
+Four focused CPU controls cover atomic two-resource reservation, invalid/partial
+and old/gapped cumulative updates, freshness without duplicate renewal, epoch
+and source-session fencing, eligible large-head byte ordering and TTL-driven
+bypass without updates/releases, real two-peer TCP
+credit bypass and update wakeup, draining after close, cancel/expiry before I/O,
+unstarted refund and no refund after transport handoff (including a canceled
+multi-request suffix). The existing RDMA
+cleanup-failure control retains the actual uncertain native owners, dispatch
+window and credit binding; deactivation and epoch replacement stay busy. Native
+verbs in this control are a CPU ABI fixture, not hardware DMA evidence.
+
+Logs, source archive and independent review belong at
+`/root/orbitte-artifacts/receiver-credit-20261102/`. Source/CI gate results are
+recorded in the handoff. Native contention/fairness, measured overhead and
+throughput remain unqualified. No new hardware task is requested.
