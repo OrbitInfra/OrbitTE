@@ -2,9 +2,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::batch::{AllocationBudget, Batch, BatchProgress};
+use crate::batch::{AllocationBudget, Batch, BatchId, BatchProgress};
 use crate::memory::MemoryRegistry;
 use crate::notification::NotificationInbox;
+use crate::runtime::admission_queue::{
+    LocalTransferAdmissionQueue, QueuePermit, RuntimeQueueStats,
+};
 use crate::runtime::control_plane::{self, ControlService};
 use crate::transport::tcp::TcpTransport;
 use crate::{
@@ -122,6 +125,8 @@ pub struct EngineStats {
     pub retained_regions: usize,
     pub retained_bytes: usize,
     pub active_source_operations: usize,
+    /// Whole-submission dispatch reservations; None when the queue is disabled.
+    pub runtime_queue: Option<RuntimeQueueStats>,
     pub inflight_batches: usize,
     pub inflight_bytes: usize,
     pub queued_notifications: usize,
@@ -137,6 +142,7 @@ pub struct TransferEngine {
     control: ControlService,
     batches: Arc<RequesterAdmission>,
     allocations: Arc<AllocationBudget>,
+    runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
 }
 
 impl TransferEngine {
@@ -201,7 +207,9 @@ impl TransferEngine {
             drained: Condvar::new(),
         });
         let control = ControlService::start(Arc::clone(&source), &config)?;
+        let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         Ok(Self {
+            runtime_queue,
             config,
             source,
             control,
@@ -277,6 +285,7 @@ impl TransferEngine {
             retained_regions,
             retained_bytes,
             active_source_operations,
+            runtime_queue: self.runtime_queue.as_ref().map(|queue| queue.stats()),
             inflight_batches: batches.count,
             inflight_bytes: batches.bytes,
             queued_notifications,
@@ -448,6 +457,7 @@ impl TransferEngine {
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
+        batch: Option<BatchId>,
     ) -> Result<PreparedSubmission> {
         if requests.len() > self.config.max_batch_requests {
             return Err(Error::ResourceExhausted);
@@ -535,12 +545,19 @@ impl TransferEngine {
             });
         }
         let admission = self.admit_batch(total_bytes)?;
+        let queue = self
+            .runtime_queue
+            .as_ref()
+            .filter(|_| !requests.is_empty())
+            .map(|queue| queue.try_admit(total_bytes, deadline, batch))
+            .transpose()?;
         Ok(PreparedSubmission {
             operation,
             peer: peer.clone(),
             requests: prepared,
             notification: notification.cloned(),
             deadline,
+            queue,
             _admission: admission,
         })
     }
@@ -553,7 +570,7 @@ impl TransferEngine {
         notification: Option<&Notification>,
         timeout: Duration,
     ) -> Result<BatchReport> {
-        let prepared = self.prepare(operation, peer, requests, notification, timeout)?;
+        let prepared = self.prepare(operation, peer, requests, notification, timeout, None)?;
         let report = self.execute(&prepared, None);
         if !report.locally_drained {
             // Preserve actual registrations and admission, not a pointer surrogate.
@@ -587,6 +604,19 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
+        if let Some(queue) = &submission.queue {
+            if let Err(error) = queue
+                .wait(|| progress.is_some_and(|(progress, first)| progress.cancel_requested(first)))
+            {
+                report.failure = Some(TransferFailure {
+                    request_index: 0,
+                    affected_requests: 1,
+                    error,
+                    remote_effect: RemoteEffect::None,
+                });
+                return report;
+            }
+        }
         let mut index = 0;
         while index < requests.len() {
             let request = &requests[index];
@@ -917,6 +947,12 @@ impl TransferEngine {
         Ok(())
     }
 
+    pub(crate) fn wake_runtime_queue(&self) {
+        if let Some(queue) = &self.runtime_queue {
+            queue.wake();
+        }
+    }
+
     fn admit_batch(&self, bytes: usize) -> Result<BatchPermit> {
         let mut usage = self
             .batches
@@ -1020,6 +1056,8 @@ pub(crate) struct PreparedSubmission {
     pub(crate) requests: Vec<PreparedTransfer>,
     pub(crate) notification: Option<Notification>,
     pub(crate) deadline: Instant,
+    // Field drop order returns dispatch and admission charges after backing.
+    queue: Option<QueuePermit>,
     _admission: BatchPermit,
 }
 

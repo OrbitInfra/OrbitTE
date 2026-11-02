@@ -1,3 +1,4 @@
+pub(crate) mod admission_queue;
 pub(crate) mod control_plane;
 
 #[cfg(feature = "rdma")]

@@ -37,6 +37,12 @@ retains unpublished backing and its charges. This can fail at registration time
 when native resources or aggregate MR capacity are unavailable. See the
 [publication contract](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
 
+`EngineConfig::runtime_queue: Option<RuntimeQueueConfig>` opts synchronous and
+asynchronous data submissions into a FIFO/EDF dispatch window. Whole-submission
+owner/byte reservations appear in `EngineStats::runtime_queue`; existing inflight
+budgets still bound retained work. See [queue configuration, cancellation and
+scope](async-batches.md#runtime-admission-and-dispatch-window).
+
 ## Memory type and location
 
 `RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the

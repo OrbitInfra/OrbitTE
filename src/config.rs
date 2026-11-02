@@ -16,6 +16,31 @@ pub enum StagingLocation {
     Cpu(u32),
 }
 
+/// Opt-in runtime dispatch window across all outgoing data submissions.
+/// Total retained work remains bounded by EngineConfig's inflight budgets.
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeQueueConfig {
+    /// Maximum submissions holding dispatch reservations simultaneously.
+    pub max_dispatch_owners: usize,
+    /// Whole-submission bytes, including its attached notification. A submission
+    /// larger than this window is rejected before publishing tasks or doing I/O.
+    pub max_dispatch_bytes: usize,
+    /// Earliest absolute submission deadline first, with FIFO ties. False uses
+    /// admission FIFO. Later groups in the same Batch wait for their predecessor.
+    /// Running work is not preempted; this is independent of RDMA Priority.
+    pub deadline_aware: bool,
+}
+
+impl Default for RuntimeQueueConfig {
+    fn default() -> Self {
+        Self {
+            max_dispatch_owners: 64,
+            max_dispatch_bytes: 64 << 20,
+            deadline_aware: false,
+        }
+    }
+}
+
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -65,6 +90,9 @@ pub struct EngineConfig {
     pub max_batch_requests: usize,
     pub max_allocated_batches: usize,
     pub max_allocated_requests: usize,
+    /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
+    pub runtime_queue: Option<RuntimeQueueConfig>,
+    /// Accepted outgoing calls, including queued and unquiesced submissions.
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,
     pub max_transfer_bytes: usize,
@@ -104,6 +132,7 @@ impl Default for EngineConfig {
             max_batch_requests: 1024,
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
+            runtime_queue: None,
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,
             max_transfer_bytes: 8 << 20,
@@ -118,6 +147,14 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        if self
+            .runtime_queue
+            .is_some_and(|queue| queue.max_dispatch_owners == 0 || queue.max_dispatch_bytes == 0)
+        {
+            return Err(Error::InvalidConfig(
+                "runtime queue dispatch window must be positive",
+            ));
+        }
         #[cfg(feature = "cuda")]
         if !(1..=4096).contains(&self.nvlink_stream_count) {
             return Err(Error::InvalidConfig("NVLink stream count must be 1..=4096"));

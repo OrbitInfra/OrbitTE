@@ -15,6 +15,11 @@ fn engine() -> TransferEngine {
             staging_chunk_size: 7,
             staging_chunk_count: 2,
             max_inflight_batches: 1,
+            runtime_queue: Some(crate::RuntimeQueueConfig {
+                max_dispatch_owners: 1,
+                max_dispatch_bytes: 1024,
+                deadline_aware: true,
+            }),
             ..Default::default()
         },
     )
@@ -241,6 +246,8 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
         if retained {
             assert!(matches!(batch.free(), Err(Error::BatchBusy)));
             assert_eq!(requester.stats().unwrap().inflight_batches, 1);
+            let queue = requester.stats().unwrap().runtime_queue.unwrap();
+            assert_eq!((queue.dispatching_owners, queue.dispatching_bytes), (1, 36));
             assert_eq!(requester.stats().unwrap().staging.retained_chunks, 1);
         } else {
             batch.free().unwrap();
@@ -276,6 +283,11 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                         staging_pipeline_depth: 2,
                         handler_threads: 1,
                         max_inflight_batches: 1,
+                        runtime_queue: Some(crate::RuntimeQueueConfig {
+                            max_dispatch_owners: 1,
+                            max_dispatch_bytes: 1024,
+                            deadline_aware: true,
+                        }),
                         ..Default::default()
                     },
                 )

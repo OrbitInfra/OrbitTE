@@ -739,6 +739,13 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   owner/byte budgets, staging reserves and deadline-infeasible cancellation.
   Match eligibility rules, queue bypass, disabled defaults and absent-provider
   behavior. Do not advertise an unconsumed local-recompute callback.
+  Implemented: opt-in FIFO/EDF over eligible whole-submission owners, preserved
+  same-Batch dependencies, independent dispatch owner/byte limits, preflight
+  oversize rejection, queue cancel/expiry and retained Unquiesced window charges.
+  Existing inflight budgets bound all accepted owners. See the [granularity and
+  source scope](async-batches.md#runtime-admission-and-dispatch-window).
+  Physical-request/alias granularity, staging reserves and deadline-infeasible
+  cancellation remain open; native fairness/performance remain unqualified.
 - [ ] Complete per-worker QoS, shared cross-process quotas and cleanup,
   receiver credits/pacing, deadline bandwidth arbitration and telemetry.
   Implemented: public High/Medium/Low request priority propagates through ordinary
@@ -1153,8 +1160,13 @@ implemented with worker/process controls; see [scope](qualification.md#rdma-prom
 Shared slot attachment validates protocol, interval and clock namespace;
 worker-owned descriptors survive until the actual owner exits. No runtime
 rotation thread or shared byte counter is introduced.
-The next functional delivery is the frozen FIFO/EDF admission queue and dispatch
-window, followed by receiver credits/pacing and QoS contract consumption.
+The FIFO/EDF runtime queue and independent dispatch window are implemented for
+whole ordered submissions. Eligible Batch heads retain admission sequence;
+queued cancel/expiry ends before I/O and uncertain native owners retain capacity.
+See [source evidence and TENT granularity differences](qualification.md#runtime-admission-and-dispatch-window).
+The next functional delivery is receiver credits/pacing and QoS contract
+consumption. Physical-owner queue granularity, staging reserves and
+deadline-infeasible cancellation remain open parts of P6.
 Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,

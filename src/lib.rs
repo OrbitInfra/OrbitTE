@@ -58,9 +58,9 @@ pub use runtime::proxy_manager::StagingStats;
 #[cfg(feature = "cuda")]
 pub use transport::nvlink::NVLinkStats;
 
-pub use config::EngineConfig;
 #[cfg(feature = "cuda")]
 pub use config::StagingLocation;
+pub use config::{EngineConfig, RuntimeQueueConfig};
 pub use engine::{
     BatchReport, EngineStats, Priority, RemoteEffect, TransferEngine, TransferFailure, TransferOp,
     TransferRequest, Transport,
@@ -70,6 +70,7 @@ pub use memory::{
     HostMemory, MemoryLocation, MemoryType, Permission, RangeLocation, RegisteredMemory,
 };
 pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
+pub use runtime::admission_queue::RuntimeQueueStats;
 pub use segment::{RemoteRegion, RemoteSegment, SourceEpoch};
 
 #[cfg(test)]
