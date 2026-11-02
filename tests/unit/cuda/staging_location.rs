@@ -308,6 +308,7 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
                 )
                 .unwrap();
             let request = TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: true,
                 transport,

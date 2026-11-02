@@ -2268,3 +2268,30 @@ Logs, source archive and independent review belong at
 `/root/orbitte-artifacts/receiver-credit-20261102/`. Source/CI gate results are
 recorded in the handoff. Native contention/fairness, measured overhead and
 throughput remain unqualified. No new hardware task is requested.
+
+## QoS contract consumption
+
+Source implements typed `QosContractResolver` overlays and immutable engine-bound
+`EffectiveQosPolicy` handles. Frozen TENT supplies the resolution model only;
+OrbitTE additionally feeds effective priority into existing transports and
+atomically reserves aggregate retained bytes/requests per compiled contract.
+This is whole-submission ownership with per-contract charge coalescing, not
+hierarchical tenant limits or cluster-wide isolation.
+
+Four focused CPU controls cover overlay/zero/normalization rules, bounded static
+slots, mixed-contract all-or-nothing admission with a later slot already full,
+nonadjacent same-contract coalescing, repeated and unknown-name resolution sharing
+budgets, implicit default/unspec enforcement, foreign policy rejection, clean
+release after real TCP writes, credit-wait cancellation/expiry and the difference
+between returning inflight QoS budgets and retaining committed cumulative credit.
+Existing public ordinary/sliced RDMA priority controls now consume default and
+explicit resolved policies before native post. The existing uncertain native
+cleanup control retains actual backing, dispatch, credit and QoS ownership.
+Native verbs in these controls are CPU ABI fixtures.
+
+Logs, source archive and independent review are external at
+`/root/orbitte-artifacts/qos-contract-20261102/`. Exact-commit source/CI results
+belong to its handoff. JSON config interoperability, automatic receiver issuance,
+degraded actions, hierarchical/cluster quotas and hardware fairness/throughput
+remain unqualified. No hardware job was requested and no performance advantage
+is claimed.

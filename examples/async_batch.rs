@@ -20,6 +20,7 @@ fn main() -> orbit_te::Result<()> {
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: orbit_te::Transport::Tcp,

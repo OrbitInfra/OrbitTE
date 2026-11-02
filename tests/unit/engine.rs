@@ -165,6 +165,12 @@ pub(crate) fn rdma_fixture_with_config(
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
         receiver_credits: None,
+        qos: config
+            .qos
+            .as_ref()
+            .map(QosContractResolver::new)
+            .transpose()
+            .unwrap(),
         runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,
@@ -206,6 +212,7 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -337,6 +344,20 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
         },
     ));
     requester.receiver_credits = Some(SenderCreditLedger::new(1, requester.runtime_queue.as_ref()));
+    requester.qos = Some(
+        QosContractResolver::new(&crate::QosConfig {
+            defaults: crate::QosPolicyFields {
+                max_inflight_bytes: Some(8),
+                max_inflight_requests: Some(1),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let qos = requester
+        .resolve_qos(&crate::QosRequestContext::default())
+        .unwrap();
     let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = Arc::clone(&captured);
     crate::transport::rdma::tests::on_requester_close(move |endpoint, transfer| {
@@ -396,6 +417,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -423,6 +445,14 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             queued_bytes: 0,
             dispatching_owners: 1,
             dispatching_bytes: 8,
+        }
+    );
+    assert_eq!(
+        qos.usage().unwrap(),
+        crate::QosUsage {
+            owners: 1,
+            inflight_bytes: 8,
+            inflight_requests: 1
         }
     );
     let credits = requester.receiver_credit_stats(&peer).unwrap();
@@ -537,6 +567,7 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
@@ -629,6 +660,7 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
                 )
                 .unwrap();
             let request = TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -710,6 +742,7 @@ fn failed_direct_write_can_change_remote_bytes_without_done_and_always_reports_u
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
@@ -762,6 +795,7 @@ fn failed_direct_read_receipt_preserves_local_changes_and_retains_remote_access_
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -837,6 +871,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -951,6 +986,7 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
             });
         }
         let request = TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: Transport::Rdma,
@@ -1030,6 +1066,12 @@ pub(crate) fn staging_fixture(
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     TransferEngine {
         receiver_credits: None,
+        qos: config
+            .qos
+            .as_ref()
+            .map(QosContractResolver::new)
+            .transpose()
+            .unwrap(),
         runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
         config,
         source,

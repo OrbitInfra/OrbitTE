@@ -67,6 +67,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: true,
                             transport,
@@ -206,6 +207,7 @@ fn self_peer_pipeline_requires_both_ring_budgets_before_any_payload_copy() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Tcp,
@@ -270,6 +272,7 @@ fn expired_final_post_drains_every_slot_before_releasing_local_owners() {
             TransferOp::Read,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: true,
                 transport: Transport::Tcp,

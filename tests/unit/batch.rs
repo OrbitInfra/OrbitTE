@@ -29,6 +29,7 @@ fn capacity_ids_append_and_sealed_status_follow_actual_tcp_bytes() {
         .unwrap();
     let requests = [
         TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: crate::Transport::Tcp,
@@ -37,6 +38,7 @@ fn capacity_ids_append_and_sealed_status_follow_actual_tcp_bytes() {
             length: 8,
         },
         TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: crate::Transport::Tcp,
@@ -129,6 +131,7 @@ fn rejected_group_changes_no_tasks_and_later_groups_survive_a_failed_prefix() {
         .unwrap();
     source.unregister_memory(&retired).unwrap();
     let request = |local_offset, remote: &crate::RegisteredMemory| TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,
@@ -138,6 +141,7 @@ fn rejected_group_changes_no_tasks_and_later_groups_survive_a_failed_prefix() {
     };
     let valid = request(0, &first);
     let invalid = TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,
@@ -255,6 +259,7 @@ fn empty_batches_and_notification_failure_keep_data_completion_separate() {
     };
     source.send_local_notification(&notification).unwrap();
     let request = TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,

@@ -30,7 +30,8 @@ protocol compatible with TENT's native RPC or metadata.
 TENT's `LocalTransferAdmissionQueue` and `refillDispatchWindow`. It owns the
 ordered eligible-owner set, per-Batch dependency chains and dispatch counters.
 `PreparedSubmission` owns, in release order, its real memory references, a
-`QueuePermit`, an optional `CreditPermit`, and its requester-admission permit.
+`QueuePermit`, an optional `CreditPermit`, an optional `QosPermit`, and its
+requester-admission permit.
 Drop removes scheduling metadata before refunding unstarted credit and releasing
 global capacity. Unquiesced quarantine retains all of these actual owners.
 
@@ -72,6 +73,24 @@ submission, not per slice/WR, and no scheduler thread or network round trip.
 The frozen ledger has no runtime consumer and does not consume its TTL field;
 OrbitTE's freshness gating and dispatch integration are explicit extensions.
 See [credit administration and limits](async-batches.md#receiver-credit-gating).
+
+`runtime/qos_contract.rs::QosContractResolver` uses frozen TENT's global,
+tenant-default and tenant-intent field overlays. Initialization compiles a
+bounded table of immutable contracts and stable numeric slots. The default/unspec
+contract is cached. `resolve_qos` produces an immutable, engine-bound
+`EffectiveQosPolicy`; requests clone it instead of normalizing/hashing names in
+the submission path. Unknown identities reuse the corresponding fallback slot,
+so repeated resolution cannot create fresh quota buckets.
+
+`QosQuota` owns one mutex over fixed per-contract counters. Preparation coalesces
+adjacent charges, sorts only the remaining runs by slot and checks every charge
+before mutating any counter. One `QosPermit` retains the grouped charges until
+actual ownership ends. Quota locks never cover memory operations, queue waits,
+transport calls or credit updates. Priority-only policies allocate no quota
+ledger; disabled engines allocate no resolver. The existing transport workers
+consume the resolved priority. Frozen TENT's resolver is resolution-only;
+OrbitTE's per-contract admission and lifetime enforcement are explicit additions.
+See [scope, defaults and resource units](async-batches.md#qos-contracts).
 
 ## RDMA resource owners
 

@@ -85,6 +85,7 @@ fn pending_native_finish(send_pending: bool) {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Rdma,
@@ -259,6 +260,7 @@ fn fragmented_native_receipts_resume_once_and_validate_the_binding() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Rdma,

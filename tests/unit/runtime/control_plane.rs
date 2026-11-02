@@ -237,6 +237,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
 
 fn fault_request(engine: &TransferEngine, peer: &RemoteSegment) -> TransferRequest {
     TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,
@@ -743,6 +744,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
     let request = TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,
@@ -838,6 +840,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
             .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
             .unwrap();
         let request = TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: crate::Transport::Tcp,
@@ -990,6 +993,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
     let request = TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: crate::Transport::Tcp,

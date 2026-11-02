@@ -193,6 +193,7 @@ fn private_gpu_grants_drain_in_order_or_keep_actual_owner_and_admission() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,

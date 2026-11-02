@@ -185,7 +185,7 @@ fn shared_worker_dispatches_priority_then_optional_deadline_across_contexts() {
 
 #[test]
 fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
-    use crate::engine::tests::{rdma_fixture_with_runtime, source_runtime};
+    use crate::engine::tests::{rdma_fixture_with_config, source_runtime};
     use crate::{Permission, TransferRequest, Transport};
     let _serial = SERIAL.lock().unwrap();
     for (lanes, priority, count) in [(1, Priority::Medium, 1), (2, Priority::Low, 4)] {
@@ -197,7 +197,19 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
             runtime.config.max_endpoints = 8;
             runtime.config.max_staging_bytes = 128;
             runtime.config.block_size = 2;
-            rdma_fixture_with_runtime(runtime)
+            rdma_fixture_with_config(
+                runtime,
+                crate::EngineConfig {
+                    qos: Some(crate::QosConfig {
+                        defaults: crate::QosPolicyFields {
+                            priority: Some(priority),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
         };
         let requester = engine("priority_copy");
         let source = engine("copy");
@@ -212,7 +224,12 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
             .open_segment(source.endpoint(), source.source_epoch(), timeout)
             .unwrap();
         let request = TransferRequest {
-            priority,
+            qos: (lanes == 2).then(|| {
+                requester
+                    .resolve_qos(&crate::QosRequestContext::default())
+                    .unwrap()
+            }),
+            priority: Priority::High,
             remote_staging: false,
             transport: Transport::Rdma,
             local_address: local.base_address(),

@@ -112,6 +112,105 @@ granularity, staging reserves, deadline-infeasible cancellation/MLU and
 local-recompute hooks remain open. The [source controls](qualification.md#runtime-admission-and-dispatch-window)
 do not establish native fairness or a performance advantage.
 
+## QoS contracts
+
+`EngineConfig::qos` defaults to `None`. `Some(QosConfig)` enables typed version-1
+contracts with the frozen TENT overlay order: global defaults, tenant defaults,
+then that tenant's intent override. Each field overrides independently. A field
+set to `None` inherits the earlier layer; an effective `None` has no contract cap.
+`Some(0)` is a hard zero budget. Empty/all-whitespace request identity resolves to
+`default`/`unspec`. Names use ASCII whitespace trimming and ASCII lowercase;
+configuration keys must be nonempty, at most 256 bytes and unique after
+normalization. At most 4096 compiled contracts, including defaults, are allowed.
+
+```rust
+use orbit_te::{EngineConfig, Priority, QosConfig, QosPolicyFields,
+    QosRequestContext, QosTenantContract, TransferEngine};
+
+let requester = TransferEngine::new(EngineConfig {
+    qos: Some(QosConfig {
+        defaults: QosPolicyFields {
+            max_inflight_bytes: Some(64 << 20),
+            max_inflight_requests: Some(128),
+            ..Default::default()
+        },
+        tenants: vec![QosTenantContract {
+            name: "tenant-a".into(),
+            intents: [("foreground_get".into(), QosPolicyFields {
+                priority: Some(Priority::High),
+                max_inflight_bytes: Some(128 << 20),
+                ..Default::default()
+            })].into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }),
+    ..EngineConfig::default()
+})?;
+let policy = requester.resolve_qos(&QosRequestContext {
+    tenant_id: "tenant-a".into(),
+    intent: "foreground_get".into(),
+    requested_priority: Priority::Low,
+})?;
+assert_eq!(policy.effective_priority(), Priority::High);
+// Set TransferRequest::qos to Some(policy.clone()) for repeated submissions.
+# Ok::<(), orbit_te::Error>(())
+```
+
+`EffectiveQosPolicy` is an immutable engine-bound handle. Explicit handles use
+the `requested_priority` captured at resolution when no layer overrides it;
+they replace the request's legacy `priority`. `TransferRequest::qos=None` still
+uses the engine's precompiled `default`/`unspec` contract, falling back to that
+request's `priority` only when no layer specifies one. It cannot bypass a
+configured default budget. With QoS disabled, ordinary `qos=None` requests keep
+their prior behavior; an explicitly resolved disabled handle retains its
+context priority. A handle from another engine returns `ForeignQosPolicy` during
+preparation. This new request field requires `qos: None` in existing literals.
+
+Effective priority follows the existing transport contract: RDMA supports
+High/Medium/Low, including ordinary and sliced payloads and staging CROSS work;
+TCP/NVLink currently require High. Unsupported effective priorities fail during
+preparation. Policies neither reorder requests within a Batch nor change
+FIFO/EDF selection. Byte/request caps apply to all data transports through the
+shared preparation owner.
+
+Each **resolved contract** has its own aggregate retained-byte/request budget:
+an unknown tenant shares `global_default`; an unknown intent of a known tenant
+shares that tenant's default bucket; an explicit intent uses its compiled bucket.
+Repeated resolution, different fallback priorities and arbitrary unknown names
+cannot create new counters. Field inheritance does not imply simultaneous
+parent/child charging: an intent budget is independent of its tenant-default
+bucket. Existing engine-wide inflight budgets remain the aggregate outer bound.
+These cooperative identities are application-supplied, not authentication.
+
+Preparation groups mixed-contract requests by static slot and atomically checks
+the entire submission before charging any slot or publishing public tasks.
+`max_inflight_bytes` counts payload lengths; `max_inflight_requests` counts public
+requests, not submissions or native slices. Attached notifications are covered
+by existing global budgets. Over-cap groups return `ResourceExhausted` immediately
+without queueing for QoS space. Existing accepted work, including credit waits,
+dispatch waits and uncertain DMA, retains the charge. Clean cancellation, expiry
+or failure releases it only when actual prepared ownership ends; Unquiesced
+retains it. Internal staging legs are not charged again. Empty groups, standalone
+notifications and registration/control calls have no QoS data charge.
+
+`policy.fields()`, `matched_contract()`, `effective_priority()` and the normalized
+identity accessors explain resolution. `policy.usage()` returns that contract's
+current owners, payload bytes and public request count, or `None` for an uncapped
+policy. A priority-only configuration creates no quota ledger. Resolution is
+reusable; submission uses numeric slots, one atomic admission lock per bounded
+group and no additional per-slice policy lookup or network message.
+
+Frozen TENT's `QosContractResolver` resolves policy and reports
+`diagnostic_scope=resolution_only`; it has no runtime consumer in the frozen
+tree. OrbitTE now consumes priority and retained-resource limits. Typed Rust
+configuration, rejecting normalized duplicate intent keys and treating all-blank
+request identity as the default are deliberate differences. TENT JSON loading,
+degraded-action execution, parent/child and cluster-wide quotas, native fairness
+and full QoS remain open. Receiver-credit `qos_class` is still a separate peer
+binding and is not implicitly mapped from these contracts. See the
+[source qualification](qualification.md#qos-contract-consumption).
+
 ## Receiver credit gating
 
 `EngineConfig::max_receiver_credit_sessions` defaults to zero (disabled). Set a
@@ -140,7 +239,7 @@ rejects the whole update. Old/duplicate sequences have no effect. Sequence gaps
 are applied and reported as `SequenceGap`. Each engine is one sender ledger;
 applications must not copy one finite receiver grant independently to multiple
 senders. This API does not authenticate the issuer. One class is bound per peer;
-per-request QoS classes and the full QoS resolver remain open.
+mapping from per-request QoS contracts to credit classes remains open.
 
 With the runtime queue, a head lacking fresh credit waits without reserving the
 dispatch window, so another eligible peer can run. Without that queue, the

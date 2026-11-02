@@ -690,6 +690,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let requests: Vec<_> = entries
             .iter()
             .map(|(local, source, length)| TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging,
                 transport,

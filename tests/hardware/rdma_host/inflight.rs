@@ -153,6 +153,7 @@ pub(super) fn run(case: &Case) -> Result<()> {
             },
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,

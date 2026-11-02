@@ -39,6 +39,9 @@ recovery policy and replica placement.
   staging over TCP/RDMA; mixed batches preserve ordered completion and reuse
   bounded staging resources. An opt-in [FIFO/EDF runtime queue](docs/async-batches.md#runtime-admission-and-dispatch-window)
   bounds concurrent submission owners and bytes while preserving batch order.
+  [QoS contracts](docs/async-batches.md#qos-contracts) resolve global, tenant and
+  intent priorities once and enforce retained payload byte/request budgets per
+  resolved contract. Reusable policy handles avoid name lookup during submission.
   Optional [sender credit gating](docs/async-batches.md#receiver-credit-gating)
   consumes application-delivered cumulative peer grants before transport handoff;
   credit-starved peers wait without occupying a dispatch window.
