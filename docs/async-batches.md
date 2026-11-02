@@ -221,7 +221,7 @@ endpoint and authoritative `RemoteSegment::source_epoch()`. READ and WRITE both
 consume request grants against that peer; on READ the payload receiver is local.
 These credits do not establish remote buffer/RQ capacity or a pacing rate.
 
-An application calls `activate_receiver_credit(peer, epoch, qos_class)`, then
+In manual mode, an application calls `activate_receiver_credit(peer, epoch, qos_class)`, then
 delivers `ReceiverCreditUpdateV1` through `apply_receiver_credit`. The update is
 a typed local API, not a TENT-compatible wire message. Use schema 1, flags 0, the
 peer's source epoch as `receiver_session_id`, matching QoS class, positive credit
@@ -279,10 +279,116 @@ drain.
 
 Frozen TENT's `SenderCreditLedger` provides the cumulative accounting model but
 is not wired into its transport/admission path. OrbitTE now consumes it at
-whole-submission granularity. Automatic receiver issuance, network delivery and
-resynchronization, staging/consumer credits and full QoS/pacing remain open.
+whole-submission granularity. The optional receiver issuer and cumulative wire
+synchronization are described below. Staging/consumer credits and full QoS/pacing
+remain open.
 [Source controls](qualification.md#receiver-credit-gating) do not qualify native
 fairness, receiver protection or performance.
+
+## Automatic receiver windows
+
+Configure `EngineConfig::receiver_credit=Some(ReceiverCreditConfig)` on the
+authoritative peer and enable `max_receiver_credit_sessions` on the requester.
+Call `connect_receiver_credit(peer, qos_class, timeout)` once before data
+submission. Ordinary TCP, RDMA, NVLink and staged requests then share the same
+credit owner; no manual update loop is required.
+
+```rust
+use orbit_te::{EngineConfig, ReceiverCreditConfig, TransferEngine};
+use std::time::Duration;
+
+let source = TransferEngine::new(EngineConfig {
+    receiver_credit: Some(ReceiverCreditConfig {
+        max_sessions: 128,
+        max_bytes: 256 << 20,
+        max_requests: 1024,
+        bytes_per_sender: 64 << 20,
+        requests_per_sender: 256,
+    }),
+    ..EngineConfig::default()
+})?;
+let requester = TransferEngine::new(EngineConfig {
+    max_receiver_credit_sessions: 32,
+    ..EngineConfig::default()
+})?;
+let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(3))?;
+requester.connect_receiver_credit(&peer, 0, Duration::from_secs(3))?;
+// Register memory and submit through the ordinary APIs.
+// After every accepted data owner has completed and dropped:
+requester.disconnect_receiver_credit(&peer, Duration::from_secs(3))?;
+# Ok::<(), orbit_te::Error>(())
+```
+
+Each sender engine has one source-instance identity. The receiver reserves a
+fixed byte/request window for that identity and returns its credit epoch.
+`max_bytes` and `max_requests` bound the sum of these windows. The issuer's
+`max_sessions` bounds active and retired sender records; the requester's separate
+`max_receiver_credit_sessions` bounds its active, pending and retired receiver
+bindings. Window capacity can fill before the session-count limit. Defaults are 128 sessions, 64 MiB/1024
+aggregate, and 1 MiB/16 public requests per sender. Each whole submission must
+fit its window, otherwise preparation returns `ResourceExhausted` before task
+publication. Windows count payload bytes and public requests, as in manual mode.
+
+Automatic bindings cannot be manually activated, updated or retired. Within a
+requester engine, one receiver source epoch may have only one endpoint binding;
+using another address/relay for that same receiver cannot create another balance.
+An initial exchange records its identity before I/O. If its reply is lost, retry
+the same peer and class to recover the existing epoch and window. Pending state
+is retained, even when the caller has stopped requester admission. Existing
+automatic connections can still be recovered after `close_requester`; opening a
+new binding requires outgoing admission. A pending epoch-zero binding must be
+recovered before disconnect; an unknown close never claims success.
+
+The receiver issues cumulative grants as `window + completed_total`. The sender
+reports only monotonic committed and successfully completed data-group totals.
+`BatchReport::is_complete()` marks a successful data group; notification failure
+does not turn successful data into failure. Completed totals are published only
+when the actual `PreparedSubmission` drops its backing and queue owners before
+its `CreditPermit`. A partial/cancelled suffix, a transport error, or uncertain
+remote cleanup earns no new grant, even if the requester is locally drained.
+Unquiesced owners retain their original charge. Unstarted reservations still
+roll back locally. No failure path invents a fresh window.
+
+When the next group lacks credit and there are newly completed owners, its
+existing caller/Batch worker performs one cumulative sync. Concurrent requests
+share one in-flight sync per peer. The queue and ledger mutexes are released
+before network I/O; completion and sync exit wake both wait domains. If another
+group completes during the exchange, waiters reconsider that newer total before
+parking. There is no background credit thread, per-slice RPC or completion-time
+network call. An unchanged snapshot with no new completion causes no repeated
+polling. Sync/close retries resend cumulative metadata, never payload.
+
+Automatic windows have no freshness expiry. Std TCP connection establishment
+is capped at 250 ms or the original remaining deadline, whichever is shorter;
+after connection, control I/O retains that original deadline and checks
+cancellation at the existing 25 ms socket polling boundary. A failed exchange
+fails its current waiting submission and leaves the cumulative snapshot available
+for a subsequent attempt; it does not poison other waiters or reset consumption.
+
+`disconnect_receiver_credit` permanently fences new work on the binding. It
+returns `BatchBusy` while owners remain or any committed group lacks successful
+completion. Retry after clean drain. Existing sync and close receipts remain
+serviceable after source admission closes; new receiver sessions do not.
+Successful disconnect returns the fixed window and records a terminal tombstone
+before acknowledging. Lost close replies can be retried. Neither side reopens
+that sender/receiver identity, and tombstones count toward the session limit
+until engine exit. EOF, TTL, sender crash and local handle drop never reclaim a
+window automatically. Recovery of failed/uncertain groups and crashed senders
+requires a separate physical proof; it is not implemented by this API.
+
+`receiver_credit_stats(peer)` adds automatic-mode and completed-total counters.
+`receiver_credit_issuer_stats()` reports active/retired senders and reserved
+window bytes/requests. These are cooperative scheduling grants, not measured
+receiver buffer/RQ occupancy, authorization or a native rate guarantee. Fixed
+windows do not redistribute idle capacity or map QoS intent into credit classes.
+
+OrbitTE wire **v22** adds fixed-size `CreditSync`/`CreditClose` metadata frames;
+both peers must use v22, including when automatic credits are disabled. Existing
+payload framing is otherwise unchanged. Frozen TENT supplies the sender ledger
+and resource/epoch/sequence model, but has no receiver issuer or network consumer.
+This bounded issuer is an OrbitTE extension. Staging/consumer-specific charges,
+adaptive windows, failed-sender reclamation and native fairness/performance remain
+open. See [source qualification](qualification.md#automatic-receiver-credit-windows).
 
 ## Results, cancellation and quiescence
 
@@ -356,7 +462,7 @@ Per-request `remote_staging=true` also permits remote Pin/Delegate/Unpin over
 TCP/RDMA in the same engine and batch; only the source needs its incoming Pin
 capability enabled. The source validates the actual CUDA allocation. Private
 host staging grants follow host RDMA policy independently of GPU Direct. See
-[remote selection](staging.md#serial-remote-staging). Installed v21 DMA,
+[remote selection](staging.md#serial-remote-staging). Installed v22 DMA,
 concurrent transport dispatch and end-to-end throughput remain separate work.
 
 Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and

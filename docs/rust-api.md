@@ -43,6 +43,14 @@ owner/byte reservations appear in `EngineStats::runtime_queue`; existing infligh
 budgets still bound retained work. See [queue configuration, cancellation and
 scope](async-batches.md#runtime-admission-and-dispatch-window).
 
+`EngineConfig::receiver_credit` enables the receiver-side issuer.
+`connect_receiver_credit` negotiates a bounded automatic window and
+`disconnect_receiver_credit` fences and retires it after proven successful owner
+release. Existing pending bindings can recover after requester close. Automatic
+and manual bindings remain separate; endpoint aliases cannot duplicate automatic
+authority. `receiver_credit_issuer_stats` exposes reserved windows and retained
+tombstones. See [automatic windows](async-batches.md#automatic-receiver-windows).
+
 `EngineConfig::max_receiver_credit_sessions` enables sender credit gating (zero
 disables it). `activate_receiver_credit`, `apply_receiver_credit`,
 `deactivate_receiver_credit` and `receiver_credit_stats` administer one class per

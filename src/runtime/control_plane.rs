@@ -18,7 +18,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 21;
+const VERSION: u16 = 22;
 pub(crate) const REQUEST_SIZE: usize = 52;
 pub(crate) const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
@@ -48,6 +48,8 @@ pub(crate) enum Operation {
     Unpin = 17,
     FinishCross = 18,
     QueryDelegate = 19,
+    CreditSync = 20,
+    CreditClose = 21,
 }
 
 #[derive(Clone, Copy)]
@@ -95,6 +97,8 @@ impl Request {
             17 => Operation::Unpin,
             18 => Operation::FinishCross,
             19 => Operation::QueryDelegate,
+            20 => Operation::CreditSync,
+            21 => Operation::CreditClose,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -104,12 +108,12 @@ impl Request {
             offset: u64_at(bytes, 36),
             length: u64_at(bytes, 44),
         };
-        if operation == Operation::Describe
-            && (request.region != 0 || request.offset != 0 || request.length != 0)
+        if matches!(
+            operation,
+            Operation::Describe | Operation::CreditSync | Operation::CreditClose
+        ) && (request.region != 0 || request.offset != 0 || request.length != 0)
         {
-            return Err(Error::Protocol(
-                "descriptor request contains a memory range",
-            ));
+            return Err(Error::Protocol("metadata request contains a memory range"));
         }
         if operation == Operation::Notify && request.region != 0 {
             return Err(Error::Protocol("notification contains a registration ID"));
@@ -324,6 +328,7 @@ pub(crate) fn notify(
 #[derive(Clone, Copy)]
 pub(crate) enum Stop<'a> {
     Source(&'a AtomicBool),
+    Cancelled(&'a (dyn Fn() -> bool + Sync)),
     #[cfg(feature = "cuda")]
     Task(&'a AtomicBool),
 }
@@ -332,6 +337,7 @@ impl Stop<'_> {
     fn check(self) -> Result<()> {
         match self {
             Self::Source(flag) if flag.load(Ordering::Acquire) => Err(Error::SourceClosed),
+            Self::Cancelled(check) if check() => Err(Error::Cancelled),
             #[cfg(feature = "cuda")]
             Self::Task(flag) if flag.load(Ordering::Acquire) => Err(Error::Cancelled),
             _ => Ok(()),
@@ -559,6 +565,19 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
     };
     if request.epoch != source.epoch {
         channel.reply(source.epoch, 1, 0)?;
+        return Ok(());
+    }
+    if matches!(
+        request.operation,
+        Operation::CreditSync | Operation::CreditClose
+    ) {
+        if let Err(error) = crate::runtime::receiver_credit::protocol::serve(
+            channel,
+            source,
+            request.operation == Operation::CreditClose,
+        ) {
+            channel.reply(source.epoch, error_status(&error), 0)?;
+        }
         return Ok(());
     }
     // A close receipt releases an existing export; it grants no new access.

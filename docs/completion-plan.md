@@ -702,7 +702,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   worker, with busy cleanup locks yielding and retained output awaiting a complete
   lane receipt. Independent source review accepts `b2a0aba`; see
   [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
-  Reconcile remaining resource/source control boundaries with frozen TENT and current v21 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Reconcile remaining resource/source control boundaries with frozen TENT and current v22 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -759,9 +759,12 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   sync/async submissions and queue eligibility using application-delivered
   cumulative byte/request grants; epoch fencing, freshness and unstarted refund
   preserve actual ownership. The frozen ledger is the accounting reference, not
-  an existing network implementation. Automatic receiver issuance/wire sync,
-  staging/consumer credit charges, full QoS/tenant contracts, pacing and native
-  fairness remain open. Typed global/tenant/intent QoS resolution now feeds
+  an existing network implementation. Bounded receiver issuance and on-demand
+  cumulative sync now consume successful actual-owner completion. Per-sender
+  windows, single-flight sync, endpoint-alias rejection and terminal retirement
+  preserve authority across lost responses. Staging/consumer credit charges,
+  adaptive windows, uncertain-sender reclamation, full QoS/pacing and native
+  fairness remain open; see [automatic windows](async-batches.md#automatic-receiver-windows). Typed global/tenant/intent QoS resolution now feeds
   effective RDMA priority and atomic per-contract retained byte/request caps.
   Immutable engine-bound handles reuse compiled slots; fallback names cannot
   create new budgets, and Unquiesced retains charges. JSON loading, degraded
@@ -1079,7 +1082,7 @@ independent incoming Pin capability and actual source authorization. Prepared
 owners retain staging intent; payload CROSS stays in TCP/RDMA and private host
 MRs follow host policy. See [remote selection](qualification.md#per-request-remote-staging).
 Producer readiness remains an explicit caller handoff; automatic routing/QoS
-remains P6. Current v21 installed qualification and full P5 remain open.
+remains P6. Current v22 installed qualification and full P5 remain open.
 
 P5.4d idle LRU reclaim and continuing flush are implemented at `fd55f15`.
 Changing working sets can continue within the entry limit; a replacement
@@ -1178,8 +1181,9 @@ See [source evidence and TENT granularity differences](qualification.md#runtime-
 Sender credit consumption is implemented: bounded peer/source-epoch bindings,
 atomic cumulative payload byte/request reservations, queue eligibility and direct
 dispatch waits, freshness and exact-epoch fencing. Unstarted groups can refund;
-committed and Unquiesced owners cannot fabricate new grants. Applications supply
-updates; this is not automatic receiver issuance or native rate pacing. See
+committed and Unquiesced owners cannot fabricate new grants. Manual bindings
+accept application updates; automatic bindings use the receiver-owned windows
+described below. This is not native rate pacing. See
 [source controls and limits](qualification.md#receiver-credit-gating).
 QoS contract consumption is implemented at source scope: typed global,
 tenant-default and intent overlays compile once; immutable policies feed the
@@ -1188,10 +1192,19 @@ Queued and uncertain owners preserve charges, while clean drain returns them.
 This follows frozen TENT's resolution fields and adds real consumption; it does
 not establish parent/child tenant limits, degraded actions or full QoS parity.
 See [source controls](qualification.md#qos-contract-consumption).
-The next functional delivery is receiver issuance/update synchronization using
-these resource contracts. Staging/consumer credit charges, JSON QoS loading,
-degraded actions, hierarchical/cluster quotas, physical-owner queue granularity,
-staging reserves and deadline-infeasible cancellation remain open parts of P6.
+Receiver issuance/update synchronization is implemented at source scope in
+wire v22. Source-owned windows bound aggregate authorization; actual successful
+data-owner Drop publishes completion totals, and existing waiters coalesce
+single-flight cumulative sync without extra threads or per-slice RPCs. Unknown
+Open outcomes retain identity; endpoint aliases cannot clone authority; close
+requires successful drain and preserves terminal tombstones. This does not
+qualify physical receiver capacity, adaptive sharing or crashed-sender recovery.
+See [source controls](qualification.md#automatic-receiver-credit-windows).
+The next functional delivery is staging/consumer resource charging against the
+existing ProxyManager slot owners. JSON QoS loading, degraded actions,
+hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
+physical-owner queue granularity, staging reserves and deadline-infeasible
+cancellation remain open parts of P6.
 Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,

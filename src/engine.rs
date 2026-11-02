@@ -10,7 +10,7 @@ use crate::runtime::admission_queue::{
 };
 use crate::runtime::control_plane::{self, ControlService};
 use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
-use crate::runtime::receiver_credit::{CreditPermit, SenderCreditLedger};
+use crate::runtime::receiver_credit::{CreditPermit, ReceiverCreditIssuer, SenderCreditLedger};
 use crate::transport::tcp::TcpTransport;
 use crate::{
     CreditUpdateDisposition, EngineConfig, Error, HostMemory, Notification, NotificationFailure,
@@ -193,6 +193,7 @@ impl TransferEngine {
             })
             .transpose()?;
         let source = Arc::new(Source {
+            credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
             #[cfg(feature = "cuda")]
             remote_staging: config.remote_staging,
             #[cfg(feature = "cuda")]
@@ -289,6 +290,49 @@ impl TransferEngine {
         self.receiver_credits
             .as_ref()
             .and_then(|ledger| ledger.stats(peer))
+    }
+
+    /// Negotiates a receiver-owned fixed window for this sender instance.
+    /// Subsequent credit shortages synchronize completed ownership automatically.
+    /// A failed initial exchange remains pending; retry this same peer and class.
+    pub fn connect_receiver_credit(
+        &self,
+        peer: &RemoteSegment,
+        qos_class: u32,
+        timeout: Duration,
+    ) -> Result<()> {
+        let deadline = deadline(timeout)?;
+        let ledger = self
+            .receiver_credits
+            .as_ref()
+            .ok_or(Error::Unavailable("receiver credits are disabled"))?;
+        let _admission = if ledger.stats(peer).is_some_and(|entry| entry.automatic) {
+            None
+        } else {
+            Some(self.admit_batch(0)?)
+        };
+        ledger.connect_automatic(peer, self.source.epoch, qos_class, deadline)
+    }
+
+    /// Permanently fences this binding and returns its window only after all
+    /// data owners completed successfully and dropped. Busy/uncertain bindings
+    /// stay fenced; retry after clean drain. Closed identities cannot reopen.
+    pub fn disconnect_receiver_credit(
+        &self,
+        peer: &RemoteSegment,
+        timeout: Duration,
+    ) -> Result<()> {
+        self.receiver_credits
+            .as_ref()
+            .ok_or(Error::Unavailable("receiver credits are disabled"))?
+            .disconnect_automatic(peer, deadline(timeout)?)
+    }
+
+    pub fn receiver_credit_issuer_stats(&self) -> Option<crate::ReceiverCreditIssuerStats> {
+        self.source
+            .credit_issuer
+            .as_ref()
+            .map(ReceiverCreditIssuer::stats)
     }
 
     pub fn endpoint(&self) -> SocketAddr {
@@ -865,6 +909,9 @@ impl TransferEngine {
             index += completed;
         }
         if report.is_complete() && !requests.is_empty() {
+            if let Some(credit) = &submission.credit {
+                credit.reservation.complete();
+            }
             if let Some(notification) = notification {
                 report.notification = match self.notify(peer, notification, *deadline) {
                     Ok(()) => NotificationStatus::Delivered,
@@ -1131,6 +1178,7 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
+    pub(crate) credit_issuer: Option<ReceiverCreditIssuer>,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
     #[cfg(feature = "cuda")]

@@ -42,6 +42,9 @@ recovery policy and replica placement.
   [QoS contracts](docs/async-batches.md#qos-contracts) resolve global, tenant and
   intent priorities once and enforce retained payload byte/request budgets per
   resolved contract. Reusable policy handles avoid name lookup during submission.
+  Optional [automatic receiver windows](docs/async-batches.md#automatic-receiver-windows)
+  issue bounded peer grants and coalesce successful-owner completion updates;
+  credit sync runs only on demand through existing waiters.
   Optional [sender credit gating](docs/async-batches.md#receiver-credit-gating)
   consumes application-delivered cumulative peer grants before transport handoff;
   credit-starved peers wait without occupying a dispatch window.

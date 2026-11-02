@@ -97,8 +97,10 @@ pub struct EngineConfig {
     pub qos: Option<crate::QosConfig>,
     /// Zero disables receiver credit gating. A positive limit (at most 4096)
     /// requires an activated peer session for every nonempty data submission.
-    /// Applications deliver cumulative updates; no automatic wire issuer exists.
+    /// Bindings either accept application updates or connect to a peer issuer.
     pub max_receiver_credit_sessions: usize,
+    /// Receiver-side fixed cooperative windows; None allocates no issuer.
+    pub receiver_credit: Option<crate::ReceiverCreditConfig>,
     /// Accepted outgoing calls, including queued and unquiesced submissions.
     pub max_inflight_batches: usize,
     pub max_inflight_bytes: usize,
@@ -142,6 +144,7 @@ impl Default for EngineConfig {
             runtime_queue: None,
             qos: None,
             max_receiver_credit_sessions: 0,
+            receiver_credit: None,
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,
             max_transfer_bytes: 8 << 20,
@@ -156,6 +159,9 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(credit) = self.receiver_credit {
+            credit.validate()?;
+        }
         if self.max_receiver_credit_sessions > 4096 {
             return Err(Error::InvalidConfig(
                 "receiver credit sessions must be at most 4096",

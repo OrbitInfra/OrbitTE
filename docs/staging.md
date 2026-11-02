@@ -75,7 +75,7 @@ mean node zero. Auto then selects the first eligible host node, as TENT's
 `Topology::findNearMem` does after failing to find a matching NUMA location.
 Discovery errors, an empty eligible set and a selected node's allocation/binding
 failure are errors. They do not silently switch to the wildcard allocator.
-No topology is exchanged in the v21 wire protocol.
+No topology is exchanged in the v22 wire protocol.
 
 `Any` preserves OrbitTE's existing driver policy. TENT also spells a wildcard
 location `*`, but its frozen host allocator resolves that wildcard to node zero;
@@ -274,9 +274,9 @@ also fails explicitly; no hidden pool or silent reduction of source depth is use
 Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
 18 added pipeline width and version 19 added the requester chunk cap.
 Version 20 introduced a separate CROSS capacity and `FinishCross`.
-Current version **21** adds `QueryDelegate`: Delegate acceptance no longer
+Version **21** introduced `QueryDelegate`: Delegate acceptance no longer
 permits READ CROSS, WRITE slot reuse or final Unpin. Both peers must use
-version 21; older headers are rejected.
+version 22; older headers are rejected.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
@@ -415,7 +415,7 @@ Socket work is bounded to the small header and at most two small reads per turn;
 precede any state transition. An incomplete socket result differs from a fully
 received QueryDelegate NOT_READY. Initial queries follow Delegate acceptance
 before admission of more CROSS work; later queries rotate across pending slots.
-The wire remains v21.
+The current wire is v22; this staging layout is unchanged from v21.
 
 The single socket never interleaves two exchanges. Native payload completion can
 still be observed during a pending control response, but a bilateral finish must
@@ -656,7 +656,7 @@ priority over admitting another ready FinishCross.
 This follows frozen TENT `e2d6e8e`'s ProxyManager/transport/Workers ownership split
 and submitted-batch observation. TENT's Workers can themselves perform endpoint
 bootstrap outside the endpoint lock; this change does not imply that TENT has
-universally asynchronous connection setup. OrbitTE retains its own v21 framing
+universally asynchronous connection setup. OrbitTE uses its own v22 framing
 and exact-grant completion protocol. Passive/source cold-builder waits in
 `connection()`, native resource creation/open/connect/fill, failure drain and
 source handlers remain synchronous; locks and provider calls are not preemptible.
@@ -857,7 +857,7 @@ execution: native receipts do not establish execution overlap or throughput.
 The historical 24-case installed matrix uses wire v18 and the generation-aware
 observer. Four fresh independent repeats and their cleanup audit also pass;
 earlier serial evidence remains bound to its original observer and wire version.
-The current v21 requester ring, concurrent RDMA CROSS and remote Delegate queries require their own artifact and evidence. The
+The current v22 requester ring, concurrent RDMA CROSS and remote Delegate queries require their own artifact and evidence. The
 controller supports independent widths and conservative local capacity, but
 hardware execution is deferred while new resource requests are paused. The
 shared worker shards and requester query event loop also require fresh installed

@@ -1,5 +1,10 @@
 # Qualification
 
+Current production wire is **v22**. Historical sections below retain the
+protocol version and revision of their recorded evidence; they do not qualify
+current installed v22 hardware execution. The receiver-window source gate is
+recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows).
+
 Qualification belongs to an exact source, artifact and execution profile.
 The [capability matrix](capabilities.md) describes current behavior; the
 [completion plan](completion-plan.md#p4-remaining-delivery) is the only queue
@@ -2295,3 +2300,32 @@ belong to its handoff. JSON config interoperability, automatic receiver issuance
 degraded actions, hierarchical/cluster quotas and hardware fairness/throughput
 remain unqualified. No hardware job was requested and no performance advantage
 is claimed.
+
+
+## Automatic receiver credit windows
+
+Source implements bounded receiver issuance and demand-driven cumulative control
+synchronization on OrbitTE wire v22. `ReceiverCreditIssuer` reserves per-sender
+windows from aggregate capacity, and `SenderCreditLedger` replenishes only from
+successful actual-owner release. This is cooperative public-submission credit,
+not physical RQ/buffer accounting or native pacing. Frozen TENT supplies the
+sender-ledger model and has no receiver/network consumer.
+
+Four focused CPU controls cover the new boundaries: one issuer state table
+checks conservation, replay and terminal close; one public TCP WRITE control
+checks direct and EDF queue waits, no return before actual Drop and reuse of
+remaining grants; two real control-TCP relay cases drive the sender ledger to
+check pending identity, alias/manual-mode rejection, lost Open/Close replies,
+sync cancellation and completion arriving during an in-flight sync. The lost-Open
+case also recovers through the public engine API after requester admission closes.
+Two existing public RDMA READ CPU ABI controls now retain automatic credit for
+requester Unquiesced and remote native-cleanup failure even when the requester is
+locally drained. Native verbs in these controls are fixtures, not hardware DMA
+evidence. No new hardware task is requested.
+
+Logs, source archive and independent review are external at
+`/root/orbitte-artifacts/receiver-credit-issuer-20261102/`; its handoff records
+exact-commit gates. Fixed windows do not redistribute idle capacity. Failed or
+crashed senders retain authority until a separate reclaim proof exists; terminal
+tombstones remain bounded and do not reopen identities. Staging/consumer charges,
+QoS-class mapping, adaptive windows, hardware fairness and throughput remain open.

@@ -1,3 +1,10 @@
+mod issuer;
+pub(crate) mod protocol;
+mod sync;
+
+pub(crate) use issuer::ReceiverCreditIssuer;
+pub use issuer::{ReceiverCreditConfig, ReceiverCreditIssuerStats};
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
@@ -26,8 +33,9 @@ pub struct CreditAmount {
     pub grant_total: u64,
 }
 
-/// A cooperative receiver's cumulative update, delivered by the application.
-/// This is a typed local API, not a TENT wire-compatible message.
+/// A cooperative receiver's application-delivered cumulative update.
+/// Automatic bindings synchronize equivalent totals over OrbitTE's control wire;
+/// neither API nor encoding is TENT wire-compatible.
 #[derive(Clone, Debug)]
 pub struct ReceiverCreditUpdateV1 {
     pub schema_version: u16,
@@ -52,6 +60,10 @@ pub enum CreditUpdateDisposition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReceiverCreditStats {
+    pub automatic: bool,
+    /// Successful data groups whose actual owners have been released.
+    pub completed_bytes: u64,
+    pub completed_requests: u64,
     pub epoch: u64,
     pub qos_class: u32,
     pub sequence: u64,
@@ -90,6 +102,9 @@ struct Entry {
     expires: Option<Instant>,
     grants: [u64; 2],
     consumed: [u64; 2],
+    committed: [u64; 2],
+    completed: [u64; 2],
+    automatic: Option<sync::AutomaticCredit>,
     active: usize,
     reserved: usize,
 }
@@ -104,6 +119,9 @@ impl Entry {
             expires: None,
             grants: [0; 2],
             consumed: [0; 2],
+            committed: [0; 2],
+            completed: [0; 2],
+            automatic: None,
             active: 0,
             reserved: 0,
         }
@@ -129,6 +147,7 @@ struct CreditOwner {
     charge: [u64; 2],
     reserved: bool,
     committed: bool,
+    completed: bool,
 }
 
 #[derive(Default)]
@@ -213,6 +232,13 @@ impl SenderCreditLedger {
         }
         let key = CreditKey::from(peer);
         let mut state = self.lock();
+        if state.entries.iter().any(|(existing, entry)| {
+            existing.receiver_session == key.receiver_session && entry.automatic.is_some()
+        }) {
+            return Err(Error::InvalidConfig(
+                "automatic receiver credit identity cannot be manually activated",
+            ));
+        }
         if let Some(entry) = state.entries.get(&key) {
             if epoch < entry.epoch {
                 return Err(Error::EpochMismatch);
@@ -248,6 +274,11 @@ impl SenderCreditLedger {
         let Some(entry) = state.entries.get_mut(&key) else {
             return Ok(());
         };
+        if entry.automatic.is_some() {
+            return Err(Error::InvalidConfig(
+                "use disconnect_receiver_credit for automatic bindings",
+            ));
+        }
         if entry.epoch != epoch {
             return Err(Error::EpochMismatch);
         }
@@ -292,6 +323,11 @@ impl SenderCreditLedger {
             .entries
             .get_mut(&CreditKey::from(peer))
             .ok_or(Error::Unavailable("receiver credit session is not active"))?;
+        if entry.automatic.is_some() {
+            return Err(Error::InvalidConfig(
+                "automatic receiver credit binding rejects manual updates",
+            ));
+        }
         if entry.epoch != update.epoch {
             return Err(Error::EpochMismatch);
         }
@@ -360,6 +396,14 @@ impl SenderCreditLedger {
         if !entry.open {
             return Err(Error::Cancelled);
         }
+        if entry.epoch == 0 {
+            return Err(Error::Unavailable(
+                "receiver credit connection is not ready",
+            ));
+        }
+        if entry.exceeds_window(charge) {
+            return Err(Error::ResourceExhausted);
+        }
         entry.active = entry
             .active
             .checked_add(1)
@@ -373,6 +417,7 @@ impl SenderCreditLedger {
                 charge,
                 reserved: false,
                 committed: false,
+                completed: false,
             },
         );
         state.next_owner = id;
@@ -397,6 +442,9 @@ impl SenderCreditLedger {
             [0; 2]
         };
         Some(ReceiverCreditStats {
+            automatic: entry.automatic.is_some(),
+            completed_bytes: entry.completed[0],
+            completed_requests: entry.completed[1],
             epoch: entry.epoch,
             qos_class: entry.qos_class,
             sequence: entry.sequence,
@@ -446,7 +494,11 @@ impl CreditReservation {
         self.ledger.lock().try_reserve(self.id)
     }
 
-    pub(crate) fn wait(&self, deadline: Instant, cancelled: impl Fn() -> bool) -> Result<()> {
+    pub(crate) fn wait(
+        &self,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool + Sync,
+    ) -> Result<()> {
         let mut state = self.ledger.lock();
         loop {
             if cancelled() {
@@ -455,6 +507,13 @@ impl CreditReservation {
             let timeout = remaining(deadline)?;
             if state.try_reserve(self.id)? {
                 return Ok(());
+            }
+            let (owner, entry) = state.owner(self.id)?;
+            if entry.needs_sync(owner) {
+                drop(state);
+                self.synchronize(deadline, &cancelled)?;
+                state = self.ledger.lock();
+                continue;
             }
             state = self
                 .ledger
@@ -471,12 +530,27 @@ impl CreditReservation {
         if !owner.reserved {
             return Err(Error::Internal("unreserved receiver credit handoff"));
         }
+        if !owner.committed {
+            let entry = state
+                .entries
+                .get_mut(&owner.key)
+                .ok_or(Error::Internal("credit session missing"))?;
+            for (i, charge) in owner.charge.iter().enumerate() {
+                entry.committed[i] += charge;
+            }
+        }
         state
             .owners
             .get_mut(&self.id)
             .ok_or(Error::Internal("credit owner missing"))?
             .committed = true;
         Ok(())
+    }
+
+    pub(crate) fn complete(&self) {
+        if let Some(owner) = self.ledger.lock().owners.get_mut(&self.id) {
+            owner.completed = owner.committed;
+        }
     }
 }
 
@@ -496,6 +570,12 @@ impl Drop for CreditPermit {
                 .filter(|entry| entry.epoch == owner.epoch)
             {
                 entry.active -= 1;
+                if owner.completed {
+                    for (i, charge) in owner.charge.iter().enumerate() {
+                        entry.completed[i] += charge;
+                    }
+                    refunded |= entry.automatic.is_some();
+                }
                 if owner.reserved {
                     entry.reserved -= 1;
                     if !owner.committed {
