@@ -164,15 +164,19 @@ pub(crate) fn rdma_fixture_with_config(
         drained: Condvar::new(),
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
+    let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
+    let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
+        SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
+    });
     TransferEngine {
-        receiver_credits: None,
+        receiver_credits,
         qos: config
             .qos
             .as_ref()
             .map(QosContractResolver::new)
             .transpose()
             .unwrap(),
-        runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
+        runtime_queue,
         config,
         source,
         control,

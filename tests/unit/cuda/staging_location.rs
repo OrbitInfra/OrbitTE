@@ -119,7 +119,12 @@ fn location_selection_reuses_only_matching_context_and_node_under_one_physical_b
     // Busy slots are not a per-location budget: another location cannot exceed it.
     let context = gpu.allocation.lock().unwrap().context.clone();
     let active = pool
-        .pin_stage_buffer(context.raw.as_ptr() as usize, Some(2), |_| unreachable!())
+        .pin_stage_buffer(
+            context.raw.as_ptr() as usize,
+            Some(2),
+            None,
+            |_| unreachable!(),
+        )
         .unwrap();
     ALLOW_NEAR.store(true, Ordering::Release);
     assert!(matches!(

@@ -16,6 +16,7 @@ use crate::cuda::PinnedAllocation;
 use crate::engine::remaining;
 use crate::memory::Allocation;
 use crate::platform::numa::{NATIVE, Numa, page_round};
+use crate::runtime::receiver_credit::ReceiverResourceLease;
 use crate::{Error, RegisteredMemory, Result, StagingLocation};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -132,6 +133,7 @@ impl ProxyManager {
         self: &Arc<Self>,
         context: usize,
         numa_node: Option<u32>,
+        mut credit: Option<ReceiverResourceLease>,
         allocate: impl FnOnce(usize) -> Result<PinnedAllocation>,
     ) -> Result<StageBufferLease> {
         let (index, previous, reused) = {
@@ -165,6 +167,9 @@ impl ProxyManager {
             }
             (index, previous, matching.is_some())
         };
+        if let Some(credit) = &mut credit {
+            credit.bind();
+        }
         let buffer = if let StageBuffer::Idle(buffer) = previous {
             if buffer.context_id() == context && buffer.numa_node == numa_node {
                 Ok(buffer)
@@ -183,6 +188,7 @@ impl ProxyManager {
                     index,
                     buffer: Some(buffer),
                     safe_to_release: true,
+                    credit,
                 };
                 if !reused {
                     self.buffers
@@ -205,6 +211,11 @@ impl ProxyManager {
                         StageBuffer::Vacant
                     },
                 );
+                if !matches!(error, Error::Unquiesced { .. }) {
+                    if let Some(credit) = credit {
+                        let _ = credit.release();
+                    }
+                }
                 Err(error)
             }
         }
@@ -340,6 +351,7 @@ pub(crate) struct StageBufferLease {
     index: usize,
     buffer: Option<PinnedAllocation>,
     safe_to_release: bool,
+    credit: Option<ReceiverResourceLease>,
 }
 
 impl StageBufferLease {
@@ -386,6 +398,9 @@ impl StageBufferLease {
         if result.is_ok() {
             self.manager
                 .finish_slot(self.index, StageBuffer::Idle(buffer));
+            if let Some(credit) = self.credit.take() {
+                let _ = credit.release();
+            }
         } else {
             self.manager.finish_slot(self.index, StageBuffer::Retained);
             buffer.retain();
@@ -396,6 +411,9 @@ impl StageBufferLease {
     pub(crate) fn quarantine(&mut self) {
         self.safe_to_release = false;
         self.manager.finish_slot(self.index, StageBuffer::Retained);
+        if let Some(credit) = &mut self.credit {
+            credit.retain();
+        }
     }
     pub(crate) fn retain(mut self) {
         self.safe_to_release = false;
@@ -415,6 +433,9 @@ impl Drop for StageBufferLease {
             // Closing claims returned chunks in its drain loop, outside the map lock.
             self.manager
                 .finish_slot(self.index, StageBuffer::Idle(buffer));
+            if let Some(credit) = self.credit.take() {
+                let _ = credit.release();
+            }
         }
     }
 }

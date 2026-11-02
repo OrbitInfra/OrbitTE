@@ -9,22 +9,29 @@ use super::stage_buffer_cache::StageBufferCache;
 use super::stage_registration::{PinnedStage, StageRegistration};
 use super::staging_task::{Command, StagingTask, WORKER_STOPPED, receive};
 use super::worker_shard::{TaskHandle, Terminal};
-use crate::engine::{PreparedTransfer, Source, remaining};
+use crate::engine::{PreparedSubmission, PreparedTransfer, Source, remaining};
 use crate::memory::Allocation;
 use crate::runtime::control_plane::buffer;
-use crate::{Error, HostMemory, RemoteEffect, RemoteSegment, TransferOp};
+use crate::{Error, HostMemory, RemoteEffect, TransferOp};
 
 impl ProxyManager {
     pub(crate) fn transfer_remote(
         self: &Arc<Self>,
-        operation: TransferOp,
-        peer: &RemoteSegment,
+        submission: &PreparedSubmission,
         request: &PreparedTransfer,
         source: &Arc<Source>,
-        deadline: Instant,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
+        let operation = submission.operation;
+        let peer = &submission.peer;
+        let deadline = submission.deadline;
         let mut effect = RemoteEffect::None;
         let result = (|| {
+            let binding = submission
+                .credit
+                .as_ref()
+                .map(|credit| credit.reservation.pin_binding())
+                .transpose()?
+                .flatten();
             let mut transfer = |stages: &mut StageBufferCache<'_>| {
                 let width = stages.width();
                 let (send, commands) = mpsc::sync_channel(width);
@@ -35,7 +42,6 @@ impl ProxyManager {
                 let task_peer = peer.clone();
                 let task_request = request.clone();
                 let task_source = Arc::clone(source);
-                let chunk_size = self.chunk_size;
                 let worker = self
                     .workers
                     .submit(operation, deadline, stopping, move || {
@@ -46,7 +52,7 @@ impl ProxyManager {
                                 &task_peer,
                                 &task_request,
                                 &task_source,
-                                chunk_size,
+                                binding,
                                 deadline,
                                 &stop,
                             )?;
@@ -92,7 +98,7 @@ impl ProxyManager {
                     let width = source
                         .staging_pipeline_depth
                         .min(request.length.div_ceil(self.chunk_size));
-                    gpu.with_staging(base, request.length, self, width, |copy, leases| {
+                    gpu.with_staging(base, request.length, self, width, None, |copy, leases| {
                         let mut slots = Vec::with_capacity(width);
                         let built = leases.into_iter().try_for_each(|lease| {
                             slots.push(PinnedStage::new(lease, source, request.transport)?);

@@ -209,7 +209,7 @@ fn pin_error_and_invalid_negotiation_never_wait_for_a_success_tail_or_start_cros
         socket
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        let mut pin = [0; 63];
+        let mut pin = [0; 87];
         socket.read_exact(&mut pin).unwrap();
         socket
             .write_all(

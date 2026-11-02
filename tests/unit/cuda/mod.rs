@@ -36,6 +36,7 @@ mod shim;
 mod socket_gate;
 mod socket_progress;
 mod staging;
+mod staging_credit;
 #[cfg(feature = "rdma")]
 mod staging_cross;
 mod staging_events;

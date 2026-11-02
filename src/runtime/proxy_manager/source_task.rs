@@ -5,10 +5,12 @@ use std::sync::Arc;
 use super::remote_stage_operation::{RemoteStageOperation, read_request};
 use super::stage_registration::PinnedStage;
 use super::{ProxyManager, StageBufferLease};
+use crate::CreditResource;
 use crate::cuda::StagingCopy;
 use crate::engine::Source;
 use crate::memory::Allocation;
 use crate::runtime::control_plane::{ControlChannel, Operation, Request};
+use crate::runtime::receiver_credit::protocol::PinCredit;
 use crate::transport::tcp::TcpTransport;
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport};
 
@@ -99,6 +101,9 @@ impl ProxyManager {
         }
         let mut hello = [0; 11];
         channel.read_exact(&mut hello)?;
+        let mut binding = [0; 24];
+        channel.read_exact(&mut binding)?;
+        let binding = PinCredit::decode(&binding)?;
         let transport = match hello[0] {
             0 => Transport::Tcp,
             1 => {
@@ -162,7 +167,20 @@ impl ProxyManager {
             nonce: SourceEpoch::generate()?,
             region: request.region,
         };
-        gpu.with_staging(base, total, self, depth, |copy, leases| {
+        let mut credits = source
+            .credit_issuer
+            .as_ref()
+            .map(|issuer| issuer.reserve_staging(binding, depth))
+            .transpose()?
+            .flatten();
+        let mut consumer = credits
+            .as_mut()
+            .map(|credits| credits.take(CreditResource::ConsumerSlots))
+            .transpose()?;
+        if let Some(consumer) = &mut consumer {
+            consumer.bind();
+        }
+        let result = gpu.with_staging(base, total, self, depth, credits, |copy, leases| {
             let mut chunks = Vec::with_capacity(depth);
             let result = (|| {
                 for (slot, lease) in leases.into_iter().enumerate() {
@@ -342,7 +360,15 @@ impl ProxyManager {
                 result = chunk.finish(result);
             }
             result
-        })?;
+        });
+        // The range owner has dropped and every private CUDA/MR/transport owner
+        // has finished before returning session capacity. A lost ACK is separate.
+        if !matches!(result, Err(Error::Unquiesced { .. })) {
+            if let Some(consumer) = consumer.take() {
+                consumer.release()?;
+            }
+        }
+        result?;
         self.completed_remote(Operation::Unpin);
         remote.respond(channel, Operation::Unpin, total, 0)
     }

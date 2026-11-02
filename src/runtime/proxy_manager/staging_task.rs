@@ -16,6 +16,8 @@ use crate::{
     SourceEpoch, TransferOp, Transport,
 };
 
+use crate::runtime::receiver_credit::protocol::PinCredit;
+
 pub(super) const WORKER_STOPPED: &str = "staging worker stopped before completion";
 
 pub(super) enum Command {
@@ -44,10 +46,11 @@ impl<'a> StagingTask<'a> {
         peer: &'a RemoteSegment,
         request: &'a PreparedTransfer,
         source: &'a Source,
-        chunk_size: usize,
+        binding: Option<PinCredit>,
         deadline: Instant,
         stopping: &'a AtomicBool,
     ) -> Result<Self> {
+        let chunk_size = source.proxy.chunk_size;
         let cross_limit = match request.transport {
             #[cfg(feature = "rdma")]
             Transport::Rdma => source
@@ -85,16 +88,17 @@ impl<'a> StagingTask<'a> {
             }
             .encode(),
         )?;
-        channel.write_all(&[
-            match request.transport {
-                Transport::Tcp => 0,
-                Transport::Rdma => 1,
-                _ => return Err(Error::Unavailable("remote staging requires TCP or RDMA")),
-            },
-            source.staging_pipeline_depth as u8,
-        ])?;
-        channel.write_all(&(chunk_size as u64).to_be_bytes())?;
-        channel.write_all(&[cross_limit as u8])?;
+        let mut hello = [0; 35];
+        hello[0] = match request.transport {
+            Transport::Tcp => 0,
+            Transport::Rdma => 1,
+            _ => return Err(Error::Unavailable("remote staging requires TCP or RDMA")),
+        };
+        hello[1] = source.staging_pipeline_depth as u8;
+        hello[2..10].copy_from_slice(&(chunk_size as u64).to_be_bytes());
+        hello[10] = cross_limit as u8;
+        hello[11..].copy_from_slice(&PinCredit::encode(binding));
+        channel.write_all(&hello)?;
         let pin = Reply::read(&mut channel, peer.epoch)?;
         let chunk = usize::try_from(pin.length).map_err(|_| Error::InvalidRange)?;
         if pin.status != 0 || chunk == 0 || chunk > chunk_size {
