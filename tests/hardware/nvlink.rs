@@ -272,6 +272,7 @@ fn requester(
         .iter()
         .enumerate()
         .map(|(index, &(offset, length))| TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: Transport::Nvlink,

@@ -1,0 +1,402 @@
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+
+use crate::{Error, Priority, Result, SourceEpoch};
+
+/// None inherits the less specific layer. An effective None is unlimited;
+/// Some(0) is a hard zero budget. Counts cover retained public data requests.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QosPolicyFields {
+    pub priority: Option<Priority>,
+    pub max_inflight_bytes: Option<usize>,
+    pub max_inflight_requests: Option<usize>,
+}
+
+impl QosPolicyFields {
+    fn overlay(self, specific: Self) -> Self {
+        Self {
+            priority: specific.priority.or(self.priority),
+            max_inflight_bytes: specific.max_inflight_bytes.or(self.max_inflight_bytes),
+            max_inflight_requests: specific
+                .max_inflight_requests
+                .or(self.max_inflight_requests),
+        }
+    }
+
+    fn bounded(self) -> bool {
+        self.max_inflight_bytes.is_some() || self.max_inflight_requests.is_some()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct QosTenantContract {
+    pub name: String,
+    pub defaults: QosPolicyFields,
+    pub intents: BTreeMap<String, QosPolicyFields>,
+}
+
+/// Typed TENT-style global -> tenant -> intent resolution. EngineConfig::qos
+/// opts in; budgets aggregate by the resolved contract, not by a parent tree.
+#[derive(Clone, Debug)]
+pub struct QosConfig {
+    pub version: u32,
+    pub defaults: QosPolicyFields,
+    pub tenants: Vec<QosTenantContract>,
+}
+
+impl Default for QosConfig {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            defaults: QosPolicyFields::default(),
+            tenants: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct QosRequestContext {
+    pub tenant_id: String,
+    pub intent: String,
+    /// Used only when no contract layer supplies a priority.
+    pub requested_priority: Priority,
+}
+
+impl Default for QosRequestContext {
+    fn default() -> Self {
+        Self {
+            tenant_id: "default".into(),
+            intent: "unspec".into(),
+            requested_priority: Priority::High,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QosUsage {
+    pub owners: usize,
+    pub inflight_bytes: usize,
+    pub inflight_requests: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompiledContract {
+    name: String,
+    pub(crate) fields: QosPolicyFields,
+    slot: usize,
+}
+
+#[derive(Debug)]
+struct Resolution {
+    engine: SourceEpoch,
+    tenant_id: String,
+    intent: String,
+    requested_priority: Priority,
+    matched: bool,
+    contract: Option<Arc<CompiledContract>>,
+    quota: Option<Arc<QosQuota>>,
+}
+
+/// Immutable engine-bound resolution. Clone it into requests to reuse the
+/// compiled policy and budget slot without resolving names on each submission.
+#[derive(Clone, Debug)]
+pub struct EffectiveQosPolicy(Arc<Resolution>);
+
+impl EffectiveQosPolicy {
+    pub fn enabled(&self) -> bool {
+        self.0.contract.is_some()
+    }
+    pub fn matched(&self) -> bool {
+        self.0.matched
+    }
+    pub fn tenant_id(&self) -> &str {
+        &self.0.tenant_id
+    }
+    pub fn intent(&self) -> &str {
+        &self.0.intent
+    }
+    pub fn requested_priority(&self) -> Priority {
+        self.0.requested_priority
+    }
+    pub fn effective_priority(&self) -> Priority {
+        self.fields().priority.unwrap_or(self.0.requested_priority)
+    }
+    pub fn matched_contract(&self) -> &str {
+        self.0
+            .contract
+            .as_ref()
+            .map_or("compatibility_default", |contract| &contract.name)
+    }
+    pub fn fields(&self) -> QosPolicyFields {
+        self.0
+            .contract
+            .as_ref()
+            .map_or(QosPolicyFields::default(), |contract| contract.fields)
+    }
+    /// Unbounded policies are not charged and return None.
+    pub fn usage(&self) -> Option<QosUsage> {
+        let contract = self.0.contract.as_ref()?;
+        if !contract.fields.bounded() {
+            return None;
+        }
+        let quota = self.0.quota.as_ref()?;
+        Some(quota.usage.lock().unwrap_or_else(|p| p.into_inner())[contract.slot])
+    }
+
+    pub(crate) fn contract(&self, engine: SourceEpoch) -> Result<Option<&CompiledContract>> {
+        if self.0.engine != engine {
+            return Err(Error::ForeignQosPolicy);
+        }
+        Ok(self.0.contract.as_deref())
+    }
+}
+
+struct TenantContract {
+    defaults: Arc<CompiledContract>,
+    intents: HashMap<String, Arc<CompiledContract>>,
+}
+
+/// Owns the immutable resolution table and a single atomic admission ledger.
+pub(crate) struct QosContractResolver {
+    global: Arc<CompiledContract>,
+    tenants: HashMap<String, TenantContract>,
+    default: Arc<CompiledContract>,
+    quota: Option<Arc<QosQuota>>,
+}
+
+fn normalize(value: &str, fallback: &str) -> Result<String> {
+    if value.len() > 256 {
+        return Err(Error::InvalidConfig("QoS identifiers must fit 256 bytes"));
+    }
+    let value = value.trim_matches(|c: char| c.is_ascii_whitespace());
+    let value = if value.is_empty() { fallback } else { value };
+    if value.is_empty() {
+        return Err(Error::InvalidConfig("empty QoS contract name"));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+impl QosContractResolver {
+    pub(crate) fn new(config: &QosConfig) -> Result<Self> {
+        if config.version != 1 {
+            return Err(Error::InvalidConfig("unsupported QoS version"));
+        }
+        let mut limits = Vec::new();
+        let mut compile =
+            |name: String, fields: QosPolicyFields| -> Result<Arc<CompiledContract>> {
+                if limits.len() == 4096 {
+                    return Err(Error::InvalidConfig("at most 4096 QoS contracts"));
+                }
+                let slot = limits.len();
+                limits.push(fields);
+                Ok(Arc::new(CompiledContract { name, fields, slot }))
+            };
+        let global = compile("global_default".into(), config.defaults)?;
+        let mut tenants = HashMap::new();
+        for tenant in &config.tenants {
+            let name = normalize(&tenant.name, "")?;
+            if tenants.contains_key(&name) {
+                return Err(Error::InvalidConfig("duplicate QoS tenant"));
+            }
+            let fields = config.defaults.overlay(tenant.defaults);
+            let defaults = compile(format!("{name}.default"), fields)?;
+            let mut intents = HashMap::new();
+            for (intent, policy) in &tenant.intents {
+                let intent = normalize(intent, "")?;
+                if intents.contains_key(&intent) {
+                    return Err(Error::InvalidConfig("duplicate QoS intent"));
+                }
+                let contract = compile(format!("{name}.{intent}"), fields.overlay(*policy))?;
+                intents.insert(intent, contract);
+            }
+            tenants.insert(name, TenantContract { defaults, intents });
+        }
+        let quota = limits.iter().any(|policy| policy.bounded()).then(|| {
+            Arc::new(QosQuota {
+                usage: Mutex::new(vec![QosUsage::default(); limits.len()]),
+                limits,
+            })
+        });
+        let mut resolver = Self {
+            default: Arc::clone(&global),
+            global,
+            tenants,
+            quota,
+        };
+        resolver.default = Arc::clone(resolver.lookup("default", "unspec").0);
+        Ok(resolver)
+    }
+
+    fn lookup(&self, tenant: &str, intent: &str) -> (&Arc<CompiledContract>, bool) {
+        match self.tenants.get(tenant) {
+            None => (&self.global, false),
+            Some(tenant) => match tenant.intents.get(intent) {
+                Some(contract) => (contract, true),
+                None => (&tenant.defaults, false),
+            },
+        }
+    }
+
+    pub(crate) fn default_contract(&self) -> &CompiledContract {
+        &self.default
+    }
+
+    pub(crate) fn resolve(
+        resolver: Option<&Self>,
+        engine: SourceEpoch,
+        context: &QosRequestContext,
+    ) -> Result<EffectiveQosPolicy> {
+        let tenant_id = normalize(&context.tenant_id, "default")?;
+        let intent = normalize(&context.intent, "unspec")?;
+        let (contract, matched) = match resolver {
+            Some(resolver) => {
+                let (contract, matched) = resolver.lookup(&tenant_id, &intent);
+                (Some(Arc::clone(contract)), matched)
+            }
+            None => (None, false),
+        };
+        Ok(EffectiveQosPolicy(Arc::new(Resolution {
+            engine,
+            tenant_id,
+            intent,
+            requested_priority: context.requested_priority,
+            contract,
+            matched,
+            quota: resolver.and_then(|resolver| resolver.quota.clone()),
+        })))
+    }
+
+    pub(crate) fn admit(&self, charges: Vec<QosCharge>) -> Result<Option<QosPermit>> {
+        if charges.is_empty() {
+            return Ok(None);
+        }
+        self.quota
+            .as_ref()
+            .ok_or(Error::Internal("QoS quota missing"))?
+            .admit(charges)
+            .map(Some)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct QosCharge {
+    slot: usize,
+    bytes: usize,
+    requests: usize,
+}
+
+impl QosCharge {
+    pub(crate) fn add(
+        charges: &mut Vec<Self>,
+        contract: &CompiledContract,
+        bytes: usize,
+    ) -> Result<()> {
+        if !contract.fields.bounded() {
+            return Ok(());
+        }
+        if let Some(last) = charges.last_mut().filter(|last| last.slot == contract.slot) {
+            last.bytes = last
+                .bytes
+                .checked_add(bytes)
+                .ok_or(Error::ResourceExhausted)?;
+            last.requests = last
+                .requests
+                .checked_add(1)
+                .ok_or(Error::ResourceExhausted)?;
+        } else {
+            charges
+                .try_reserve(1)
+                .map_err(|_| Error::ResourceExhausted)?;
+            charges.push(Self {
+                slot: contract.slot,
+                bytes,
+                requests: 1,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct QosQuota {
+    limits: Vec<QosPolicyFields>,
+    usage: Mutex<Vec<QosUsage>>,
+}
+
+impl QosQuota {
+    fn admit(self: &Arc<Self>, mut charges: Vec<QosCharge>) -> Result<QosPermit> {
+        // Adjacent requests coalesce while preparing; sort only the remaining runs.
+        charges.sort_unstable_by_key(|charge| charge.slot);
+        let mut count = 0;
+        for index in 0..charges.len() {
+            let charge = charges[index];
+            if count > 0 && charges[count - 1].slot == charge.slot {
+                let previous = &mut charges[count - 1];
+                previous.bytes = previous
+                    .bytes
+                    .checked_add(charge.bytes)
+                    .ok_or(Error::ResourceExhausted)?;
+                previous.requests = previous
+                    .requests
+                    .checked_add(charge.requests)
+                    .ok_or(Error::ResourceExhausted)?;
+            } else {
+                charges[count] = charge;
+                count += 1;
+            }
+        }
+        charges.truncate(count);
+        let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
+        for charge in &charges {
+            let current = usage[charge.slot];
+            let limits = self.limits[charge.slot];
+            let bytes = current
+                .inflight_bytes
+                .checked_add(charge.bytes)
+                .ok_or(Error::ResourceExhausted)?;
+            let requests = current
+                .inflight_requests
+                .checked_add(charge.requests)
+                .ok_or(Error::ResourceExhausted)?;
+            if limits.max_inflight_bytes.is_some_and(|cap| bytes > cap)
+                || limits
+                    .max_inflight_requests
+                    .is_some_and(|cap| requests > cap)
+                || current.owners == usize::MAX
+            {
+                return Err(Error::ResourceExhausted);
+            }
+        }
+        for charge in &charges {
+            let current = &mut usage[charge.slot];
+            current.inflight_bytes += charge.bytes;
+            current.inflight_requests += charge.requests;
+            current.owners += 1;
+        }
+        Ok(QosPermit {
+            quota: Arc::clone(self),
+            charges,
+        })
+    }
+}
+
+pub(crate) struct QosPermit {
+    quota: Arc<QosQuota>,
+    charges: Vec<QosCharge>,
+}
+
+impl Drop for QosPermit {
+    fn drop(&mut self) {
+        let mut usage = self.quota.usage.lock().unwrap_or_else(|p| p.into_inner());
+        for charge in &self.charges {
+            let current = &mut usage[charge.slot];
+            current.inflight_bytes -= charge.bytes;
+            current.inflight_requests -= charge.requests;
+            current.owners -= 1;
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/runtime/qos_contract.rs"]
+mod tests;

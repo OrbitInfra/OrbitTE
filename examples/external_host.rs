@@ -33,6 +33,7 @@ fn main() -> orbit_te::Result<()> {
         Duration::from_secs(1),
     )?;
     let transfer = TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: orbit_te::Transport::Tcp,

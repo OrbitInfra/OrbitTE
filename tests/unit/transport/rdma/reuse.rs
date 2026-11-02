@@ -19,6 +19,7 @@ fn transfer(
             operation,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -552,6 +553,7 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
                 TransferOp::Write,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
@@ -900,6 +902,7 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                     TransferOp::Write,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
@@ -1089,6 +1092,7 @@ fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,

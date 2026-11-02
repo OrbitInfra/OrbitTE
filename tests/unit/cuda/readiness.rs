@@ -243,6 +243,7 @@ fn cuda_producer_readiness_orders_public_tcp_source_and_destination() {
                 op,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     transport: Transport::Tcp,
                     remote_staging: false,

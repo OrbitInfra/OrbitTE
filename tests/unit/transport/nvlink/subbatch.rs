@@ -90,6 +90,7 @@ pub(crate) fn run_case(
     };
     let requests: Vec<_> = (0..3)
         .map(|i| TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: Transport::Nvlink,
@@ -252,6 +253,7 @@ pub(crate) fn run_case(
             .open_segment(tcp_source.endpoint(), tcp_source.source_epoch(), timeout)
             .unwrap();
         let tcp_request = TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: Transport::Tcp,

@@ -47,6 +47,7 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: true,
                             transport,
@@ -169,6 +170,7 @@ fn not_ready_followed_by_context_restore_failure_retains_actual_owners() {
                 operation,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: true,
                     transport: Transport::Tcp,

@@ -1260,6 +1260,7 @@ fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
@@ -1368,6 +1369,7 @@ fn exhausted_local_claim_token_retires_the_actual_idle_qp_without_wrapping() {
                 TransferOp::Read,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,

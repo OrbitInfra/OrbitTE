@@ -74,6 +74,7 @@ fn partial_native_setup_keeps_other_cross_errors_observable() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: true,
                             transport: Transport::Rdma,
@@ -217,6 +218,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Rdma,

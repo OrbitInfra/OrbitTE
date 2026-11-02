@@ -92,6 +92,9 @@ pub struct EngineConfig {
     pub max_allocated_requests: usize,
     /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
     pub runtime_queue: Option<RuntimeQueueConfig>,
+    /// Immutable typed QoS contracts. None preserves caller priorities and adds
+    /// no QoS ledger. Resolved contract budgets cover retained payload owners.
+    pub qos: Option<crate::QosConfig>,
     /// Zero disables receiver credit gating. A positive limit (at most 4096)
     /// requires an activated peer session for every nonempty data submission.
     /// Applications deliver cumulative updates; no automatic wire issuer exists.
@@ -137,6 +140,7 @@ impl Default for EngineConfig {
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
             runtime_queue: None,
+            qos: None,
             max_receiver_credit_sessions: 0,
             max_inflight_batches: 32,
             max_inflight_bytes: 64 << 20,

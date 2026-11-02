@@ -188,6 +188,7 @@ fn register(engine: &TransferEngine, memory: &Arc<CudaMemory>) -> crate::Registe
 }
 fn request(local: &crate::RegisteredMemory, remote: &crate::RegisteredMemory) -> TransferRequest {
     TransferRequest {
+        qos: None,
         priority: Default::default(),
         remote_staging: false,
         transport: Transport::Nvlink,

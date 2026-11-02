@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         TransferOp::Read,
         &peer,
         &[TransferRequest {
+            qos: None,
             priority: Default::default(),
             remote_staging: false,
             transport: orbit_te::Transport::Tcp,

@@ -18,6 +18,7 @@
 //! let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(1))?;
 //! let remote = peer.regions().iter().find(|r| r.id() == exported.id()).ok_or(orbit_te::Error::RegionNotFound)?;
 //! let request = TransferRequest {
+//!     qos: None,
 //!     priority: Default::default(),
 //!     remote_staging: false,
 //!     transport: orbit_te::Transport::Tcp,
@@ -71,6 +72,9 @@ pub use memory::{
 };
 pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
 pub use runtime::admission_queue::RuntimeQueueStats;
+pub use runtime::qos_contract::{
+    EffectiveQosPolicy, QosConfig, QosPolicyFields, QosRequestContext, QosTenantContract, QosUsage,
+};
 pub use runtime::receiver_credit::{
     CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditStats,
     ReceiverCreditUpdateV1,

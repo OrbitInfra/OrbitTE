@@ -51,6 +51,14 @@ new dispatch requires both. The setting applies to sync and async submissions
 with or without a runtime queue. See [epochs, refunds, freshness and issuer
 obligations](async-batches.md#receiver-credit-gating).
 
+`EngineConfig::qos: Option<QosConfig>` compiles typed global/tenant/intent
+contracts. `resolve_qos(&QosRequestContext)` returns a reusable immutable
+`EffectiveQosPolicy` for `TransferRequest::qos`. `None` selects default/unspec;
+explicit handles use their captured fallback priority. Per-contract payload
+byte/request caps are reserved atomically for each mixed submission and retained
+through actual drain. `fields()` and resolution accessors explain the policy;
+`usage()` samples its shared budget. See [configuration and scope](async-batches.md#qos-contracts).
+
 ## Memory type and location
 
 `RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the

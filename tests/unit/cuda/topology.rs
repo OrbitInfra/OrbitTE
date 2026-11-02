@@ -180,6 +180,7 @@ fn public_gpu_read_write_slices_use_owner_locations_at_both_peers() {
                     op,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,

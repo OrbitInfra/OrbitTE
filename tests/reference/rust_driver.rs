@@ -205,6 +205,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             return Err("invalid slice".into());
                         };
                         requests.push(TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: false,
                             transport: orbit_te::Transport::Tcp,

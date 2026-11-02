@@ -89,6 +89,7 @@ fn exchange(
             op,
             &peer,
             &[TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: false,
                 transport: Transport::Rdma,
@@ -716,6 +717,7 @@ fn one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_repo
                 op,
                 &peer,
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
@@ -1106,6 +1108,7 @@ fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recove
                     .unwrap()
                 });
                 let request = TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
@@ -1213,6 +1216,7 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: false,
                             transport: Transport::Rdma,
@@ -1337,6 +1341,7 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
                     operation,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,
@@ -1626,6 +1631,7 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
                     op,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,

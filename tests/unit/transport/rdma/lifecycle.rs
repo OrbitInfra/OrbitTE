@@ -294,6 +294,7 @@ fn round(
                 operation,
                 peer.unwrap(),
                 &[TransferRequest {
+                    qos: None,
                     priority: Default::default(),
                     remote_staging: false,
                     transport: Transport::Rdma,
@@ -669,6 +670,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                     operation,
                     old,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: false,
                         transport: Transport::Rdma,

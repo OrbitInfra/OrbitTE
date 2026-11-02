@@ -9,6 +9,7 @@ use crate::runtime::admission_queue::{
     LocalTransferAdmissionQueue, QueuePermit, RuntimeQueueStats,
 };
 use crate::runtime::control_plane::{self, ControlService};
+use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
 use crate::runtime::receiver_credit::{CreditPermit, SenderCreditLedger};
 use crate::transport::tcp::TcpTransport;
 use crate::{
@@ -45,6 +46,10 @@ pub enum Priority {
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 pub struct TransferRequest {
+    /// Pre-resolved engine-bound contract. None uses the engine's default/unspec
+    /// contract, with `priority` as its fallback. Some captures its own requested
+    /// priority at resolution and replaces this request's legacy priority.
+    pub qos: Option<crate::EffectiveQosPolicy>,
     /// Local RDMA payload dispatch priority. TCP/NVLink require High.
     /// This does not reorder requests within a batch or preempt posted DMA.
     pub priority: Priority,
@@ -146,11 +151,17 @@ pub struct TransferEngine {
     allocations: Arc<AllocationBudget>,
     runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
     receiver_credits: Option<Arc<SenderCreditLedger>>,
+    qos: Option<QosContractResolver>,
 }
 
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
+        let qos = config
+            .qos
+            .as_ref()
+            .map(QosContractResolver::new)
+            .transpose()?;
         let epoch = SourceEpoch::generate()?;
         #[cfg(feature = "cuda")]
         let proxy = crate::runtime::proxy_manager::ProxyManager::new(
@@ -217,12 +228,22 @@ impl TransferEngine {
         Ok(Self {
             runtime_queue,
             receiver_credits,
+            qos,
             config,
             source,
             control,
             batches: Arc::default(),
             allocations: Arc::new(AllocationBudget::new()),
         })
+    }
+
+    /// Resolves names once and returns an immutable policy handle for reuse in
+    /// requests. Repeated resolutions share the same configured budget slot.
+    pub fn resolve_qos(
+        &self,
+        context: &crate::QosRequestContext,
+    ) -> Result<crate::EffectiveQosPolicy> {
+        QosContractResolver::resolve(self.qos.as_ref(), self.source.epoch, context)
     }
 
     /// Activates one cooperative credit class for this peer/source epoch. Same
@@ -520,6 +541,7 @@ impl TransferEngine {
             None => 0,
         };
         let mut total_bytes = notification_bytes;
+        let mut qos_charges = Vec::new();
         let mut prepared = Vec::new();
         prepared
             .try_reserve_exact(requests.len())
@@ -527,7 +549,22 @@ impl TransferEngine {
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
         for request in requests {
-            if request.priority != Priority::High && request.transport != Transport::Rdma {
+            let (priority, contract) = match &request.qos {
+                Some(policy) => (
+                    policy.effective_priority(),
+                    policy.contract(self.source.epoch)?,
+                ),
+                None => {
+                    let contract = self.qos.as_ref().map(QosContractResolver::default_contract);
+                    (
+                        contract
+                            .and_then(|contract| contract.fields.priority)
+                            .unwrap_or(request.priority),
+                        contract,
+                    )
+                }
+            };
+            if priority != Priority::High && request.transport != Transport::Rdma {
                 return Err(Error::Unavailable("request priority requires RDMA"));
             }
             if request.remote_staging && request.transport == Transport::Nvlink {
@@ -584,9 +621,12 @@ impl TransferEngine {
             total_bytes = total_bytes
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
+            if let Some(contract) = contract {
+                QosCharge::add(&mut qos_charges, contract, request.length)?;
+            }
             prepared.push(PreparedTransfer {
                 #[cfg(feature = "rdma")]
-                priority: request.priority,
+                priority,
                 #[cfg(feature = "cuda")]
                 remote_staging: request.remote_staging,
                 transport: request.transport,
@@ -598,6 +638,10 @@ impl TransferEngine {
             });
         }
         let admission = self.admit_batch(total_bytes)?;
+        let qos = match &self.qos {
+            Some(resolver) => resolver.admit(qos_charges)?,
+            None => None,
+        };
         let credit = self
             .receiver_credits
             .as_ref()
@@ -627,6 +671,7 @@ impl TransferEngine {
             deadline,
             queue,
             credit,
+            _qos: qos,
             _admission: admission,
         })
     }
@@ -1148,6 +1193,7 @@ pub(crate) struct PreparedSubmission {
     queue: Option<QueuePermit>,
     // Remove queue metadata before rollback can wake/refill that same queue.
     credit: Option<CreditPermit>,
+    _qos: Option<QosPermit>,
     _admission: BatchPermit,
 }
 

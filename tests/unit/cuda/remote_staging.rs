@@ -66,6 +66,7 @@ fn remote_chunks_cross_real_transports_with_one_handler_and_one_parent_slot() {
                 )
                 .unwrap();
             let request = TransferRequest {
+                qos: None,
                 priority: Default::default(),
                 remote_staging: true,
                 transport,
@@ -349,6 +350,7 @@ fn remote_cuda_failures_keep_confirmed_drain_separate_from_success() {
                     },
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Tcp,
@@ -436,6 +438,7 @@ fn self_peer_gpu_ranges_require_two_slots_and_reject_overlap_before_copy() {
                         operation,
                         &peer,
                         &[TransferRequest {
+                            qos: None,
                             priority: Default::default(),
                             remote_staging: true,
                             transport: Transport::Tcp,
@@ -578,6 +581,7 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
                             operation,
                             &peer,
                             &[TransferRequest {
+                                qos: None,
                                 priority: Default::default(),
                                 remote_staging: true,
                                 transport: Transport::Rdma,
@@ -782,6 +786,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                     operation,
                     &peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Tcp,
@@ -912,6 +917,7 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
                     TransferOp::Read,
                     peer,
                     &[TransferRequest {
+                        qos: None,
                         priority: Default::default(),
                         remote_staging: true,
                         transport: Transport::Tcp,

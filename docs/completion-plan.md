@@ -761,7 +761,13 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   preserve actual ownership. The frozen ledger is the accounting reference, not
   an existing network implementation. Automatic receiver issuance/wire sync,
   staging/consumer credit charges, full QoS/tenant contracts, pacing and native
-  fairness remain open. See [credit scope](async-batches.md#receiver-credit-gating) and
+  fairness remain open. Typed global/tenant/intent QoS resolution now feeds
+  effective RDMA priority and atomic per-contract retained byte/request caps.
+  Immutable engine-bound handles reuse compiled slots; fallback names cannot
+  create new budgets, and Unquiesced retains charges. JSON loading, degraded
+  actions and hierarchical/cluster quota enforcement remain open. See
+  [QoS contract consumption](async-batches.md#qos-contracts),
+  [credit scope](async-batches.md#receiver-credit-gating) and
   [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 - [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
   strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
@@ -1175,10 +1181,17 @@ dispatch waits, freshness and exact-epoch fencing. Unstarted groups can refund;
 committed and Unquiesced owners cannot fabricate new grants. Applications supply
 updates; this is not automatic receiver issuance or native rate pacing. See
 [source controls and limits](qualification.md#receiver-credit-gating).
-The next functional delivery is QoS contract consumption, followed by receiver
-issuance/update synchronization using those resource contracts. Staging/consumer
-credit charges, physical-owner queue granularity, staging reserves and
-deadline-infeasible cancellation remain open parts of P6.
+QoS contract consumption is implemented at source scope: typed global,
+tenant-default and intent overlays compile once; immutable policies feed the
+actual priority path and atomic per-contract retained-byte/request admission.
+Queued and uncertain owners preserve charges, while clean drain returns them.
+This follows frozen TENT's resolution fields and adds real consumption; it does
+not establish parent/child tenant limits, degraded actions or full QoS parity.
+See [source controls](qualification.md#qos-contract-consumption).
+The next functional delivery is receiver issuance/update synchronization using
+these resource contracts. Staging/consumer credit charges, JSON QoS loading,
+degraded actions, hierarchical/cluster quotas, physical-owner queue granularity,
+staging reserves and deadline-infeasible cancellation remain open parts of P6.
 Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
 The frozen NVLink consumer boundary is `getTransferStatus` after event query,
