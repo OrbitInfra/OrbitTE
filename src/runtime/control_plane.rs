@@ -1,3 +1,4 @@
+mod accept;
 #[cfg(feature = "cuda")]
 mod connection;
 #[cfg(feature = "cuda")]
@@ -492,7 +493,7 @@ impl ControlService {
         listener.set_nonblocking(true)?;
         let endpoint = listener.local_addr()?;
         let mut listener = mio::net::TcpListener::from_std(listener);
-        let mut poll = mio::Poll::new()?;
+        let poll = mio::Poll::new()?;
         poll.registry()
             .register(&mut listener, mio::Token(0), mio::Interest::READABLE)?;
         let accept_wake = mio::Waker::new(poll.registry(), mio::Token(1))?;
@@ -548,41 +549,20 @@ impl ControlService {
         }
         let stopping = Arc::clone(&service.stopping);
         let timeout = config.handler_timeout;
+        let accept = move || listener.accept().map(|(stream, _)| stream.into());
+        #[cfg(test)]
+        let accept = accept::tests::instrument(accept);
         service.acceptor = Some(
             thread::Builder::new()
                 .name("orbitte-control-accept".into())
-                .spawn(move || {
-                    let mut events = mio::Events::with_capacity(2);
-                    while !stopping.load(Ordering::Acquire) {
-                        match listener.accept() {
-                            Ok((stream, _)) => {
-                                let stream: TcpStream = stream.into();
-                                if stream.set_nonblocking(false).is_err()
-                                    || stream.set_nodelay(true).is_err()
-                                {
-                                    continue;
-                                }
-                                let Ok(deadline) = deadline(timeout) else {
-                                    continue;
-                                };
-                                // The queue and worker count bound sockets and payloads.
-                                let _ = sender.try_send((stream, deadline));
-                            }
-                            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                                // Only the listener and shutdown wake are registered. Either
-                                // event restarts the accept loop. The bound also covers a failed wake.
-                                if let Err(error) = poll.poll(&mut events, Some(IO_POLL)) {
-                                    if error.kind() != io::ErrorKind::Interrupted {
-                                        log::error!("control listener readiness failed: {error}");
-                                        break;
-                                    }
-                                }
-                            }
-                            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                            Err(_) => break,
+                .spawn(
+                    move || match accept::run(poll, accept, sender, &stopping, timeout) {
+                        Ok(()) => log::debug!("control acceptor at {endpoint} stopped"),
+                        Err(error) => {
+                            log::error!("control acceptor at {endpoint} stopped: {error}")
                         }
-                    }
-                })?,
+                    },
+                )?,
         );
         Ok(service)
     }
@@ -600,7 +580,10 @@ impl Drop for ControlService {
             if let Err(error) = self.accept_wake.wake() {
                 log::warn!("control listener shutdown wake failed: {error}");
             }
-            let _ = acceptor.join();
+            acceptor.thread().unpark();
+            if acceptor.join().is_err() {
+                log::error!("control acceptor at {} panicked", self.endpoint);
+            }
         }
         for worker in self.workers.drain(..) {
             let _ = worker.join();

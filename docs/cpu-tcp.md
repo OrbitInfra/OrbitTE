@@ -26,7 +26,10 @@ replica grants and recovery policy stay with OrbitKV.
 
 Each ordinary TCP request opens a connection. The control acceptor waits for
 socket readiness and hands each accepted stream to the bounded handler queue.
-A full queue closes the new connection. Shutdown signals the same acceptor and
+A full queue closes the new connection. A peer reset or timeout leaves the
+listener available. Descriptor or memory exhaustion logs once per burst and
+retries on a bounded interval, even with clients waiting. A fatal listener
+error is logged. Shutdown signals the same acceptor and
 joins it before the handlers. Both ends enable TCP_NODELAY. The previous
 2 ms sleep after an empty accept delayed short loopback READs by an idle
 polling interval. The S10 benchmark measures this path with a 64-byte payload
