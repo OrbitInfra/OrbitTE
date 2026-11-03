@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(feature = "rdma")]
 use crate::runtime::proxy_manager::ProxyManager;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 fn engine(transport: Transport) -> TransferEngine {
     let config = EngineConfig {
@@ -9,6 +10,7 @@ fn engine(transport: Transport) -> TransferEngine {
         staging_chunk_count: 16,
         staging_pipeline_depth: 1,
         handler_threads: 16,
+        handler_timeout: crate::test_support::EVENTUAL_PROGRESS,
         max_inflight_batches: 16,
         ..EngineConfig::default()
     };
@@ -64,11 +66,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                     .remove(0),
             );
             let peer = requester
-                .open_segment(
-                    source.endpoint(),
-                    source.source_epoch(),
-                    Duration::from_secs(3),
-                )
+                .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                 .unwrap();
             let request = |index: usize| {
                 TransferRequest::new(
@@ -84,13 +82,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 device.query_hold.store(true, Ordering::Release);
                 active.push(
                     requester
-                        .submit_async(
-                            operation,
-                            &peer,
-                            &[request(index)],
-                            None,
-                            Duration::from_secs(5),
-                        )
+                        .submit_async(operation, &peer, &[request(index)], None, EVENTUAL_PROGRESS)
                         .unwrap(),
                 );
                 wait_pending(device, 1);
@@ -102,7 +94,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
             );
             assert_eq!(source.stats().unwrap().staging.remote_pins, 8);
             // Directional source close must not stop this engine's outgoing pool.
-            requester.close_source(Duration::from_secs(1)).unwrap();
+            requester.close_source(EVENTUAL_PROGRESS).unwrap();
             let mut queued = requester
                 .submit_async(
                     operation,
@@ -112,7 +104,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                     Duration::from_millis(500),
                 )
                 .unwrap();
-            let until = std::time::Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
+            let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
             while requester.stats().unwrap().staging.queued_tasks == 0 {
                 assert!(std::time::Instant::now() < until);
                 assert_eq!(queued.status().unwrap().state, BatchState::Pending);
@@ -120,7 +112,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
             }
             assert_eq!(queued_gpu.allocation.lock().unwrap().dma, vec![2..10]);
             assert_eq!(queued_device.pins.lock().unwrap().len(), 1);
-            let report = queued.wait(Duration::from_secs(1)).unwrap();
+            let report = queued.wait(EVENTUAL_PROGRESS).unwrap();
             assert!(
                 report.state == BatchState::Failed && report.locally_drained,
                 "{transport:?}/{operation:?}: {report:?}"
@@ -147,7 +139,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 device.query_hold.store(false, Ordering::Release);
             }
             for mut batch in active {
-                let report = batch.wait(Duration::from_secs(3)).unwrap();
+                let report = batch.wait(EVENTUAL_PROGRESS).unwrap();
                 assert!(
                     report.state == BatchState::Completed && report.locally_drained,
                     "{transport:?}/{operation:?}: {report:?}; {:?}",
@@ -156,7 +148,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 batch.free().unwrap();
             }
             let report = requester
-                .submit_and_wait(operation, &peer, &[request(8)], Duration::from_secs(3))
+                .submit_and_wait(operation, &peer, &[request(8)], EVENTUAL_PROGRESS)
                 .unwrap();
             assert!(report.is_complete() && report.locally_drained, "{report:?}");
             for (local, gpu) in local.iter().zip(&memories) {
@@ -174,7 +166,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 }
                 assert_eq!(actual, expected);
             }
-            requester.close_requester(Duration::from_secs(3)).unwrap();
+            requester.close_requester(EVENTUAL_PROGRESS).unwrap();
             let stats = requester.stats().unwrap().staging;
             assert_eq!(
                 (
@@ -185,8 +177,8 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                 ),
                 (8, 8, 0, 0)
             );
-            requester.close(Duration::from_secs(3)).unwrap();
-            source.close(Duration::from_secs(3)).unwrap();
+            requester.close(EVENTUAL_PROGRESS).unwrap();
+            source.close(EVENTUAL_PROGRESS).unwrap();
             assert_eq!(requester.stats().unwrap().staging.worker_shards, 0);
             assert!(queued_device.pins.lock().unwrap().is_empty());
             assert!(

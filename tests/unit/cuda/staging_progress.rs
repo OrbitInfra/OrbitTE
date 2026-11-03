@@ -148,11 +148,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
             .unwrap()
             .remove(0);
         let peer = requester
-            .open_segment(
-                source.endpoint(),
-                source.source_epoch(),
-                Duration::from_secs(3),
-            )
+            .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
             .unwrap();
         a.query_hold_address
             .store(remote.base_address() as usize + 7, Ordering::Release);
@@ -174,7 +170,7 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
         wait_until(|| a.event_not_ready.load(Ordering::Acquire) != 0);
         assert_eq!(source.stats().unwrap().staging.remote_crosses, 3);
         assert_eq!(source.stats().unwrap().staging.remote_delegates, 2);
-        let report = batch.wait(Duration::from_secs(2)).unwrap();
+        let report = batch.wait(EVENTUAL_PROGRESS).unwrap();
         assert!(
             report.state == BatchState::Failed && report.locally_drained,
             "{transport:?}: {report:?}"
@@ -199,8 +195,8 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
         assert_eq!(source_gpu.allocation.lock().unwrap().dma, vec![1..9]);
         a.query_hold_address.store(0, Ordering::Release);
         batch.free().unwrap();
-        requester.close(Duration::from_secs(3)).unwrap();
-        source.close(Duration::from_secs(3)).unwrap();
+        requester.close(EVENTUAL_PROGRESS).unwrap();
+        source.close(EVENTUAL_PROGRESS).unwrap();
         assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
         let mut bytes = [0; 32];
         source_gpu.read(0, &mut bytes).unwrap();

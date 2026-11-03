@@ -12,7 +12,7 @@ use crate::transport::rdma::{
 use crate::{Permission, RemoteRegion, TransferEngine, TransferRequest, Transport};
 use std::{io, net::TcpListener, thread, time::Duration};
 
-const TIMEOUT: Duration = Duration::from_secs(3);
+use crate::test_support::EVENTUAL_PROGRESS as TIMEOUT;
 
 fn identity(epoch: u8, domain: u8, generation: u64) -> Identity {
     let mut connection = [domain; 24];
@@ -458,9 +458,9 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
         .unwrap();
     let request = request(epoch, memory.id());
     let (mut peer, mut channel) = channels();
-    channel.deadline = deadline(Duration::from_secs(1)).unwrap();
-    thread::scope(|scope| {
-        let handler = scope.spawn(|| runtime.serve(&mut channel, epoch, &request, &memory));
+    let mut transfer = thread::scope(|scope| {
+        let handler =
+            scope.spawn(|| runtime.prepare_source(&mut channel, epoch, &request, &memory, 1));
         let (paths, _) = path::read_paths(&mut peer, epoch).unwrap();
         Hello {
             requester: identity(9, 8, 7),
@@ -505,19 +505,30 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
         }
         binding.write(&mut peer, DONE).unwrap();
         assert_eq!(runtime.stats().unwrap().receive_work_requests, 1);
-        let result = handler.join().unwrap();
-        assert!(
-            matches!(
-                result,
-                Err(Error::Timeout
-                    | Error::Unquiesced {
-                        operation: "RDMA close deadline before quiescence",
-                        code: libc::ETIMEDOUT
-                    })
-            ),
-            "{result:?}"
-        );
+        handler
+            .join()
+            .unwrap()
+            .unwrap()
+            .expect("source accepted the grant")
     });
+    // serve calls prepare_source and then finish. Start the same one-second
+    // missing-receive deadline after the peer has actually sent DONE.
+    channel.deadline = deadline(Duration::from_secs(1)).unwrap();
+    for slice in &mut transfer.slices {
+        slice.grant.deadline = channel.deadline;
+    }
+    let result = transfer.finish(&runtime, &mut channel);
+    assert!(
+        matches!(
+            result,
+            Err(Error::Timeout
+                | Error::Unquiesced {
+                    operation: "RDMA close deadline before quiescence",
+                    code: libc::ETIMEDOUT
+                })
+        ),
+        "{result:?}"
+    );
     // Successful ACK cannot be present, even for an exact, correctly bound DONE.
     drop(channel);
     expect_closed_without_next_phase(&mut peer);

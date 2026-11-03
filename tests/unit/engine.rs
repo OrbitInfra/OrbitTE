@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "rdma")]
+use crate::test_support::EVENTUAL_PROGRESS;
 
 #[test]
 fn source_close_is_permanent_and_timeout_is_not_a_drain_receipt() {
@@ -135,6 +137,7 @@ pub(crate) fn rdma_fixture_with_runtime(
         runtime,
         EngineConfig {
             max_failover_attempts: 0,
+            handler_timeout: EVENTUAL_PROGRESS,
             ..Default::default()
         },
     )
@@ -740,11 +743,7 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
                 .register_memory(vec![0xcc; 32].into_boxed_slice(), Permission::LocalOnly)
                 .unwrap();
             let peer = requester
-                .open_segment(
-                    source.endpoint(),
-                    source.source_epoch(),
-                    Duration::from_secs(2),
-                )
+                .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                 .unwrap();
             let request = TransferRequest::new(
                 Transport::Rdma,
@@ -757,7 +756,7 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
                     TransferOp::Read,
                     &peer,
                     std::slice::from_ref(&request),
-                    Duration::from_secs(2),
+                    EVENTUAL_PROGRESS,
                 )
                 .unwrap();
             assert!(
@@ -771,14 +770,14 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
             assert_eq!(observed, expected);
             local.write(3, &[0x77; 8]).unwrap();
             let report = requester
-                .submit_and_wait(TransferOp::Write, &peer, &[request], Duration::from_secs(2))
+                .submit_and_wait(TransferOp::Write, &peer, &[request], EVENTUAL_PROGRESS)
                 .unwrap();
             assert!(
                 report.failure.is_none(),
                 "{source_mode}/{requester_mode}: {report:?}"
             );
-            requester.close(Duration::from_secs(2)).unwrap();
-            source.close(Duration::from_secs(2)).unwrap();
+            requester.close(EVENTUAL_PROGRESS).unwrap();
+            source.close(EVENTUAL_PROGRESS).unwrap();
             remote.read(0, &mut observed).unwrap();
             let mut expected = [0x44; 32];
             expected[9..17].fill(0x77);
@@ -938,11 +937,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
         .register_host_memory(fixture.memory.clone(), 4, 8, Permission::LocalOnly)
         .unwrap();
     let peer = requester
-        .open_segment(
-            source.endpoint(),
-            source.source_epoch(),
-            Duration::from_secs(2),
-        )
+        .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
         .unwrap();
     let mut batch = requester
         .submit_async(
@@ -955,7 +950,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
                 8,
             )],
             None,
-            Duration::from_secs(2),
+            EVENTUAL_PROGRESS,
         )
         .unwrap();
     let (lock, ready) = &*pause;
@@ -1017,7 +1012,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
         );
         std::thread::yield_now();
     }
-    source.close(Duration::from_secs(2)).unwrap();
+    source.close(EVENTUAL_PROGRESS).unwrap();
     assert!(events.lock().unwrap().contains(&"dealloc_pd"));
     assert!(events.lock().unwrap().contains(&"close_device"));
     let stats = usage.lock().unwrap();
@@ -1046,12 +1041,17 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
             .register_memory(vec![0xcc; 8].into_boxed_slice(), Permission::LocalOnly)
             .unwrap();
         let peer = requester
-            .open_segment(
-                source.endpoint(),
-                source.source_epoch(),
-                Duration::from_secs(2),
-            )
+            .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
             .unwrap();
+        // Start both sides' native workers before the short data deadline.
+        // The timed public READ must reach a posted WR with a withheld CQE.
+        for engine in [&source, requester.as_ref()] {
+            source_runtime(engine)
+                .staging_endpoint(8, 0)
+                .unwrap()
+                .close()
+                .unwrap();
+        }
         let captured = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let observed = Arc::clone(&captured);
         // execute() runs in the submitting thread for the synchronous path.
@@ -1084,7 +1084,7 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
                 )
                 .unwrap();
             batch.seal().unwrap();
-            let status = batch.wait(Duration::from_secs(2)).unwrap();
+            let status = batch.wait(EVENTUAL_PROGRESS).unwrap();
             assert!(status.locally_drained && status.state == crate::BatchState::Failed);
             batch.free().unwrap();
         } else {
@@ -1107,9 +1107,9 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
             "native destroy completed but requester admission escaped into quarantine"
         );
         requester.unregister_memory(&local).unwrap();
-        requester.close(Duration::from_secs(2)).unwrap();
+        requester.close(EVENTUAL_PROGRESS).unwrap();
         source.unregister_memory(&remote).unwrap();
-        source.close(Duration::from_secs(2)).unwrap();
+        source.close(EVENTUAL_PROGRESS).unwrap();
     }
 }
 

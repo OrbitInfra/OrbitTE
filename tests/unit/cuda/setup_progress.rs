@@ -194,11 +194,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
                 .unwrap()
                 .remove(0);
             let mut peer = requester
-                .open_segment(
-                    source.endpoint(),
-                    source.source_epoch(),
-                    Duration::from_secs(3),
-                )
+                .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                 .unwrap();
             let mut gate = SocketGate::new(
                 source.endpoint(),
@@ -228,7 +224,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
                     )
                     .with_remote_staging(true)],
                     None,
-                    Duration::from_secs(10),
+                    EVENTUAL_PROGRESS,
                 )
                 .unwrap();
             gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
@@ -243,7 +239,7 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
             );
             assert_eq!(rdma.work_requests, 0);
             gate.resume();
-            let report = batch.wait(Duration::from_secs(3)).unwrap();
+            let report = batch.wait(EVENTUAL_PROGRESS).unwrap();
             assert!(report.locally_drained, "{report:?}");
             if corrupt.is_some() {
                 assert_eq!(report.state, BatchState::Failed);
@@ -284,8 +280,8 @@ fn fragmented_native_setup_validates_all_grants_before_payload() {
             }
             batch.free().unwrap();
             drop(gate);
-            requester.close(Duration::from_secs(3)).unwrap();
-            source.close(Duration::from_secs(3)).unwrap();
+            requester.close(EVENTUAL_PROGRESS).unwrap();
+            source.close(EVENTUAL_PROGRESS).unwrap();
             assert!(a.pins.lock().unwrap().is_empty() && b.pins.lock().unwrap().is_empty());
         }
     }

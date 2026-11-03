@@ -45,9 +45,15 @@ impl SocketGate {
                 .unwrap();
             let mut input = client.try_clone().unwrap();
             let mut output = server.try_clone().unwrap();
+            let (release_eof, may_close) = mpsc::sync_channel(1);
             let upstream = std::thread::spawn(move || {
                 let _ = copy(&mut input, &mut output);
                 let _ = gone.send(());
+                // Preserve the held boundary until release. Once released, a
+                // requester FIN must reach the source without a handler timeout.
+                if may_close.recv().is_ok() {
+                    let _ = output.shutdown(Shutdown::Write);
+                }
             });
             #[cfg(feature = "rdma")]
             let mut rest = Vec::new();
@@ -114,7 +120,9 @@ impl SocketGate {
                 }
             }
             entered.send(()).unwrap();
-            if resumed.recv() == Ok(true) && client.write_all(&rest).is_ok() {
+            let forward = resumed.recv() == Ok(true);
+            let _ = release_eof.send(());
+            if forward && client.write_all(&rest).is_ok() {
                 let _ = copy(&mut server, &mut client);
             }
             let _ = client.shutdown(Shutdown::Both);
