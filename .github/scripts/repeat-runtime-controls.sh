@@ -21,6 +21,7 @@ controls=(
   notification::tests::attached_targets_retry_only_missing_peers_and_keep_self_deliverable
   notification::tests::notification_routes_try_only_unposted_unavailable_channels
   notification::tests::notification_receive_keeps_draining_after_a_channel_fails
+  runtime::receiver_credit::issuer::tests::lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable
   engine::tests::cancelling_a_running_rdma_alias_drains_posts_and_suppresses_the_remaining_slices
   engine::tests::direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exit
   runtime::control_plane::tests::one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit

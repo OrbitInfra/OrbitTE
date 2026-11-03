@@ -333,6 +333,9 @@ impl Relay {
                         }
                         Err(error) => panic!("credit relay accept: {error}"),
                     };
+                    // BSD can inherit O_NONBLOCK from the listener. The relay
+                    // must consume the whole RPC even if the body arrives later.
+                    incoming.set_nonblocking(false).unwrap();
                     incoming.set_read_timeout(Some(TIMEOUT)).unwrap();
                     incoming.set_write_timeout(Some(TIMEOUT)).unwrap();
                     let mut bytes = [0; 52 + 64];
