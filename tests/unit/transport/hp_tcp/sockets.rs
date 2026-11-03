@@ -398,3 +398,52 @@ fn backpressured_write_keeps_its_only_task_and_byte_charge_until_ack() {
     assert_eq!(bytes(&local), vec![0xee; len + 2]);
     assert_eq!(dst.stats().unwrap().inflight_bytes, 0);
 }
+
+#[test]
+fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
+    let mut c = cfg();
+    let dst = TransferEngine::new(c.clone()).unwrap();
+    let backing = Arc::new(crate::HostMemory::new(vec![0xa5; 12].into()).unwrap());
+    let (old_addr, old_epoch, old_frame) = {
+        let engine = TransferEngine::new(c.clone()).unwrap();
+        let reg = engine
+            .register_host_memory(backing.clone(), 0, 12, Permission::RemoteReadWrite)
+            .unwrap();
+        let peer = dst
+            .open_segment(engine.endpoint(), engine.source_epoch(), WAIT)
+            .unwrap();
+        c.bind_addr = engine.endpoint();
+        c.hp_tcp.port = address(&peer).port();
+        (
+            reg.base_address(),
+            peer.epoch,
+            frame(&peer, TransferOp::Write, 1, 4),
+        )
+    };
+    let engine = TransferEngine::new(c).unwrap();
+    let reg = engine
+        .register_host_memory(backing, 0, 12, Permission::RemoteReadWrite)
+        .unwrap();
+    assert_eq!(reg.base_address(), old_addr);
+    assert_ne!(engine.source_epoch(), old_epoch);
+    assert!(matches!(
+        dst.open_segment(engine.endpoint(), old_epoch, WAIT),
+        Err(Error::EpochMismatch)
+    ));
+    let peer = dst
+        .open_segment(engine.endpoint(), engine.source_epoch(), WAIT)
+        .unwrap();
+    let mut s = connect(address(&peer));
+    s.write_all(&old_frame.encode()).unwrap();
+    s.write_all(b"lost").unwrap();
+    assert_eq!(response(&mut s).status, Status::Stale);
+    assert_eq!(bytes(&reg), [0xa5; 12]);
+    let mut s = connect(address(&peer));
+    s.write_all(&frame(&peer, TransferOp::Write, 1, 4).encode())
+        .unwrap();
+    s.write_all(b"live").unwrap();
+    assert_eq!(response(&mut s).committed, 4);
+    let mut expected = [0xa5; 12];
+    expected[1..5].copy_from_slice(b"live");
+    assert_eq!(bytes(&reg), expected);
+}

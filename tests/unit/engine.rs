@@ -1291,3 +1291,64 @@ fn cancelling_a_running_rdma_alias_drains_posts_and_suppresses_the_remaining_sli
     );
     Ok(())
 }
+
+#[test]
+fn hp_worker_failure_preserves_an_already_completed_batch() -> Result<()> {
+    let config = || EngineConfig {
+        tcp: false,
+        hp_tcp: crate::HpTcpConfig {
+            enable: true,
+            worker_count: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let src = TransferEngine::new(config())?;
+    let dst = Arc::new(TransferEngine::new(config())?);
+    let source = src.register_memory(vec![0xa5, 1, 2, 3, 0xa5].into(), Permission::RemoteRead)?;
+    let local = dst.register_memory(vec![0xee; 5].into(), Permission::LocalOnly)?;
+    let peer = dst.open_segment(
+        src.endpoint(),
+        src.source_epoch(),
+        crate::test_support::EVENTUAL_PROGRESS,
+    )?;
+    let req = TransferRequest::new(
+        Transport::HpTcp,
+        local.base_address() + 1,
+        source.base_address() + 1,
+        3,
+    );
+    let mut batch = dst.submit_async(
+        TransferOp::Read,
+        &peer,
+        std::slice::from_ref(&req),
+        None,
+        crate::test_support::EVENTUAL_PROGRESS,
+    )?;
+    batch.wait(crate::test_support::EVENTUAL_PROGRESS)?;
+    dst.hp_tcp.as_ref().unwrap().fail_worker_for_test();
+    let task = batch.task_status(0)?;
+    assert_eq!(task.state, crate::TaskState::Completed);
+    assert_eq!(task.transferred_bytes, 3);
+    let mut got = [0; 5];
+    local.read(0, &mut got)?;
+    assert_eq!(got, [0xee, 1, 2, 3, 0xee]);
+    source.read(0, &mut got)?;
+    assert_eq!(got, [0xa5, 1, 2, 3, 0xa5]);
+    batch.free()?;
+    assert!(matches!(
+        dst.submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[req],
+            crate::test_support::EVENTUAL_PROGRESS
+        ),
+        Err(Error::Internal(_))
+    ));
+    assert!(matches!(
+        dst.close(crate::test_support::EVENTUAL_PROGRESS),
+        Err(Error::Internal(_))
+    ));
+    dst.close(crate::test_support::EVENTUAL_PROGRESS)?;
+    Ok(())
+}

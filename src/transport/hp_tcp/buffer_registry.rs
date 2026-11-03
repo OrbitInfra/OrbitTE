@@ -12,10 +12,6 @@ pub(super) fn registration(epoch: SourceEpoch, id: u64) -> u64 {
 }
 
 pub(crate) fn host(memory: &RegisteredMemory) -> bool {
-    #[cfg(feature = "cuda")]
-    if memory.is_cuda_pinned_host() {
-        return false;
-    }
     memory.memory_type() == MemoryType::Cpu
 }
 

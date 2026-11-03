@@ -76,8 +76,11 @@ impl Workers {
         });
     }
     pub(super) fn ready(&self) -> Result<()> {
-        if self.failed.load(Ordering::Acquire) || self.stopping.load(Ordering::Acquire) {
-            return Err(Error::Unavailable("HP-TCP workers are stopped or failed"));
+        if self.failed.load(Ordering::Acquire) {
+            return Err(Error::Internal("HP-TCP socket worker failed"));
+        }
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(Error::RequesterClosed);
         }
         Ok(())
     }
@@ -87,6 +90,9 @@ impl Workers {
     pub(super) fn stop(&self) -> Result<()> {
         self.stopping.store(true, Ordering::Release);
         let mut owners = self.owners.lock().unwrap_or_else(|p| p.into_inner());
+        if owners.is_empty() {
+            return Ok(());
+        }
         for w in &mut *owners {
             if let Some(stop) = w.stop.take() {
                 let _ = stop.send(());
@@ -100,7 +106,11 @@ impl Workers {
                 ));
             }
         }
-        result
+        result?;
+        if self.failed.load(Ordering::Acquire) {
+            return Err(Error::Internal("HP-TCP socket worker failed"));
+        }
+        Ok(())
     }
 }
 impl Drop for Workers {

@@ -107,14 +107,8 @@ fn bytes(mem: &crate::RegisteredMemory) -> Vec<u8> {
 
 #[test]
 fn frozen_frames_match_literal_bytes_and_reject_malformed_fields() {
-    const REQ: [u8; 48] = [
-        0x4d, 0x43, 0x54, 0x50, 0, 1, 2, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0,
-        0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    const ACK: [u8; 32] = [
-        0x4d, 0x43, 0x54, 0x50, 0, 1, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0,
-        0, 0, 0, 0, 0, 0,
-    ];
+    const REQ: [u8; 48] = *include_bytes!("../../../reference/hp_tcp/write.bin");
+    const ACK: [u8; 32] = *include_bytes!("../../../reference/hp_tcp/ack.bin");
     let req = Request {
         op: TransferOp::Write,
         id: 0x0102030405060708,
@@ -123,6 +117,14 @@ fn frozen_frames_match_literal_bytes_and_reject_malformed_fields() {
         length: 3,
     };
     assert_eq!(req.encode(), REQ);
+    assert_eq!(
+        (Request {
+            op: TransferOp::Read,
+            ..req
+        })
+        .encode(),
+        *include_bytes!("../../../reference/hp_tcp/read.bin")
+    );
     assert_eq!(Request::decode(&REQ), Ok(req));
     let ack = Response {
         id: req.id,
@@ -209,6 +211,11 @@ fn config_defaults_rails_limits_and_excluded_modes() {
         },
         HpTcpConfig {
             bind_address: "127.0.0.1".into(),
+            rail_addresses: vec![Ipv4Addr::new(127, 0, 0, 2)],
+            ..full.clone()
+        },
+        HpTcpConfig {
+            bind_address: "127.0.0.1".into(),
             ..full.clone()
         },
         HpTcpConfig {
@@ -231,7 +238,26 @@ fn config_defaults_rails_limits_and_excluded_modes() {
 fn describe_and_registration_are_scoped_to_the_source_incarnation() {
     let (_, dst, _remote, _local, peer) = setup(cfg(), 8);
     let first = frame(&peer, TransferOp::Read, 0, 8).registration;
-    let (_s2, _d2, _m2, _l2, p2) = setup(cfg(), 8);
+    let (s2, d2, _m2, _l2, p2) = setup(cfg(), 8);
+    let private = s2
+        .register_memory(vec![0x42; 8].into(), Permission::LocalOnly)
+        .unwrap();
+    let readonly = d2
+        .open_segment(s2.endpoint(), s2.source_epoch(), WAIT)
+        .unwrap();
+    assert!(matches!(
+        readonly.resolve_address(private.base_address(), 1),
+        Err(Error::RegionNotFound)
+    ));
+    let denied = Request {
+        address: private.base_address(),
+        registration: buffer_registry::registration(p2.epoch, private.id()),
+        ..frame(&p2, TransferOp::Read, 0, 8)
+    };
+    let mut raw = connect(address(&p2));
+    raw.write_all(&denied.encode()).unwrap();
+    assert_eq!(response(&mut raw).status, Status::Permission);
+    assert_eq!(bytes(&private), [0x42; 8]);
     assert_ne!(first, frame(&p2, TransferOp::Read, 0, 8).registration);
     let mut s = connect(address(&p2));
     let mut stale = frame(&p2, TransferOp::Read, 0, 8);
@@ -361,8 +387,8 @@ fn a_failed_worker_fences_new_admission_and_teardown_still_joins() {
         assert!(Instant::now() < until);
         thread::yield_now();
     }
-    assert!(matches!(workers.ready(), Err(Error::Unavailable(_))));
-    workers.stop().unwrap();
+    assert!(matches!(workers.ready(), Err(Error::Internal(_))));
+    assert!(matches!(workers.stop(), Err(Error::Internal(_))));
     workers.stop().unwrap();
 }
 
@@ -386,4 +412,17 @@ fn peer_frame_limit_keeps_adjacent_aliases_separate_before_payload() {
     ));
     assert_eq!(bytes(&remote), [0xa5; 16]);
     assert_eq!(bytes(&local), [0xee; 16]);
+}
+
+impl HpTcpTransport {
+    pub(crate) fn fail_worker_for_test(&self) {
+        self.workers.execute(0, async {
+            panic!("injected worker failure after terminal status")
+        });
+        let until = Instant::now() + WAIT;
+        while self.workers.ready().is_ok() {
+            assert!(Instant::now() < until);
+            thread::yield_now();
+        }
+    }
 }
