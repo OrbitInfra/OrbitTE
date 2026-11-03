@@ -16,7 +16,7 @@ fn required() -> bool {
     std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref() == Ok("1")
 }
 
-fn kernel() -> bool {
+pub(crate) fn kernel() -> bool {
     match ring::create(2) {
         Ok(_) => true,
         Err(e) if !required() => {
@@ -27,15 +27,15 @@ fn kernel() -> bool {
     }
 }
 
-struct Fixture {
-    engine: Arc<TransferEngine>,
-    segment: FileSegment,
-    memory: RegisteredMemory,
-    path: PathBuf,
+pub(crate) struct Fixture {
+    pub(crate) engine: Arc<TransferEngine>,
+    pub(crate) segment: FileSegment,
+    pub(crate) memory: RegisteredMemory,
+    pub(crate) path: PathBuf,
 }
 
 impl Fixture {
-    fn new(dir: &Path, bytes: &[u8], engine: TransferEngine) -> Result<Self> {
+    pub(crate) fn new(dir: &Path, bytes: &[u8], engine: TransferEngine) -> Result<Self> {
         let path = dir.join(format!("orbitte-uring-{}", SourceEpoch::generate()?));
         fs::write(&path, bytes)?;
         let segment = engine.open_file_segment(
@@ -51,7 +51,46 @@ impl Fixture {
             path,
         })
     }
-    fn request(&self, local: usize, remote: u64, length: usize) -> TransferRequest {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn deny_bounce(&mut self) {
+        Arc::get_mut(&mut self.engine)
+            .unwrap()
+            .io_uring
+            .as_mut()
+            .unwrap()
+            .allocate = |_, _| Err(Error::ResourceExhausted);
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn observe_ring(
+        &mut self,
+        short_middle: bool,
+        before: impl Fn(u32) -> io::Result<()> + Send + Sync + 'static,
+    ) -> Arc<Mutex<std::sync::Weak<()>>> {
+        let lifetime = Arc::new(Mutex::new(std::sync::Weak::new()));
+        let observed = Arc::clone(&lifetime);
+        Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
+            allocate: task::Bounce::new,
+            create: Arc::new(move |size| {
+                before(size)?;
+                let alive = Arc::new(());
+                *observed.lock().unwrap() = Arc::downgrade(&alive);
+                Ok(Box::new(FaultRing {
+                    inner: ring::create(size)?,
+                    calls: 0,
+                    fault: if short_middle {
+                        Fault::MiddleShort
+                    } else {
+                        Fault::Pass
+                    },
+                    _lifetime: alive,
+                }))
+            }),
+        });
+        lifetime
+    }
+
+    pub(crate) fn request(&self, local: usize, remote: u64, length: usize) -> TransferRequest {
         TransferRequest::new(
             Transport::Unspec,
             self.memory.base_address() + local as u64,
@@ -59,7 +98,7 @@ impl Fixture {
             length,
         )
     }
-    fn run(&self, op: TransferOp, requests: &[TransferRequest]) -> Result<BatchReport> {
+    pub(crate) fn run(&self, op: TransferOp, requests: &[TransferRequest]) -> Result<BatchReport> {
         self.engine
             .submit_and_wait(op, &self.segment, requests, TIMEOUT)
     }
@@ -330,6 +369,10 @@ fn short_write_reports_only_the_prefix_written_by_the_kernel() -> Result<()> {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Fault {
+    #[cfg(feature = "cuda")]
+    MiddleShort,
+    #[cfg(feature = "cuda")]
+    Pass,
     Short,
     ShortThenError,
     NoSpace,
@@ -342,6 +385,8 @@ struct FaultRing {
     inner: Box<dyn Ring>,
     fault: Fault,
     calls: usize,
+    #[cfg(feature = "cuda")]
+    _lifetime: Arc<()>,
 }
 
 impl Ring for FaultRing {
@@ -375,6 +420,8 @@ impl Ring for FaultRing {
         Ok((
             id,
             match self.fault {
+                #[cfg(feature = "cuda")]
+                Fault::MiddleShort if self.calls == 1 && id == 1 && n > 1 => 1,
                 Fault::CqeError => -libc::EIO,
                 Fault::OversizedCqe => i32::MAX,
                 _ => n,
@@ -392,6 +439,8 @@ fn fault_fixture(fault: Fault) -> Result<Fixture> {
                 inner: ring::create(n)?,
                 fault,
                 calls: 0,
+                #[cfg(feature = "cuda")]
+                _lifetime: Arc::new(()),
             }))
         }),
     });

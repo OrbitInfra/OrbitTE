@@ -33,7 +33,8 @@ external output directory; failed runs are kept.
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
-| GPU↔file staging (S3), native GDS (S4), RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
+| Native GDS (S4), RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -47,11 +48,17 @@ EOF and integer overflow, positioned reads and read-only denial. A worker
 holds an admitted write while the pathname is replaced and close times out.
 The test checks the entire original and replacement files, then verifies fd
 release and slot reuse after drain. The same tests run in the Linux feature
-matrix. With `io-uring` and `rdma,cuda,io-uring`, CI requires a live kernel
+matrix. All `io-uring` feature sets require a live kernel
 ring (`ORBITTE_REQUIRE_IO_URING=1`), ext4 direct I/O and tmpfs buffered I/O.
 The file tests check all bytes and guards, EOF/truncation, short submission,
 syscall failure, queued cancellation, QoS, deadlines and concurrent close.
-CUDA file staging, native GDS and physical storage performance remain open.
+The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
+with real files to check multi-chunk bytes, short READs, producer events,
+copy failures, retained owners and queued cancellation. Build the installed
+consumer with `python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain stable --output "$ART"`.
+The queued driver checks the selected GPU UUID and local PCIe NVMe ext4 mount,
+holds both existing resource locks and uses a fresh scratch file. The physical
+GPU/file path, GDS and storage performance remain unqualified.
 
 ## Per-request remote staging
 

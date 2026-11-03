@@ -34,7 +34,7 @@ pub enum Transport {
     Tcp,
     Rdma,
     Nvlink,
-    /// Linux io_uring for DRAM and local regular files.
+    /// Linux io_uring for local regular files and registered memory.
     IoUring,
     /// Choose an eligible transport before any payload I/O. No failure replay.
     Unspec,
@@ -777,8 +777,10 @@ impl TransferEngine {
                     requests: files,
                     ..
                 } => {
-                    if request.remote_staging || !local.is_file_dram() {
-                        return Err(Error::Unavailable("file I/O requires unstaged DRAM"));
+                    if request.remote_staging {
+                        return Err(Error::Unavailable(
+                            "file I/O does not support remote staging",
+                        ));
                     }
                     TransportSelector::select_file(
                         self.selector.as_ref(),
@@ -988,7 +990,15 @@ impl TransferEngine {
                 requests,
                 ..
             } => {
-                transport.execute(*operation, requests, *deadline, progress, &mut report);
+                transport.execute(
+                    *operation,
+                    requests,
+                    *deadline,
+                    progress,
+                    &mut report,
+                    #[cfg(feature = "cuda")]
+                    &self.source.proxy,
+                );
                 return report;
             }
         };

@@ -544,16 +544,9 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
-    #[cfg(feature = "io-uring")]
-    pub(crate) fn is_file_dram(&self) -> bool {
-        #[cfg(feature = "cuda")]
-        {
-            matches!(&self.0.allocation, Allocation::Host(host) if !host.cuda_pinned)
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            true
-        }
+    #[cfg(all(feature = "io-uring", feature = "cuda"))]
+    pub(crate) fn is_cuda_pinned_host(&self) -> bool {
+        matches!(&self.0.allocation, Allocation::Host(host) if host.cuda_pinned)
     }
 
     #[cfg(feature = "cuda")]

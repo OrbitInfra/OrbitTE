@@ -52,10 +52,30 @@ impl Task {
         request: &FileRequest,
         allocate: fn(usize, usize) -> Result<Bounce>,
     ) -> Result<(Self, libc::iovec)> {
-        let (file, alignment) = request.lease.io_file(request.offset, request.length)?;
         let memory = request
             .local
             .dma_lease(request.local_offset, request.length)?;
+        // CUDA-owned host memory is directly accessible after dma_lease consumes
+        // its producer event. Use buffered I/O for an unaligned view, without a copy.
+        #[cfg(feature = "cuda")]
+        let direct_host = if request.local.is_cuda_pinned_host() {
+            Some((
+                request.lease.file_for_buffer(
+                    request.offset,
+                    request.length,
+                    memory.address().as_ptr() as usize,
+                )?,
+                1,
+            ))
+        } else {
+            None
+        };
+        #[cfg(not(feature = "cuda"))]
+        let direct_host = None;
+        let (file, alignment) = match direct_host {
+            Some(descriptor) => descriptor,
+            None => request.lease.io_file(request.offset, request.length)?,
+        };
         let bounce = if memory.address().as_ptr() as usize % alignment != 0 {
             let bounce = allocate(request.length, alignment)?;
             if operation == TransferOp::Write {
@@ -100,22 +120,7 @@ impl Task {
     }
 
     pub(super) fn observed_error(&self, operation: TransferOp) -> Option<Error> {
-        match self.result? {
-            code if code < 0 => Some(Error::Backend {
-                operation: "io_uring CQE",
-                code,
-            }),
-            bytes if bytes as usize != self.length => Some(Error::Io(std::io::Error::new(
-                if operation == TransferOp::Read {
-                    std::io::ErrorKind::UnexpectedEof
-                } else {
-                    std::io::ErrorKind::WriteZero
-                },
-                "short io_uring completion",
-            ))),
-            _ if self.late => Some(Error::Timeout),
-            _ => None,
-        }
+        cqe_error(operation, self.result?, self.length, self.late)
     }
 
     pub(super) fn entry(
@@ -124,14 +129,8 @@ impl Task {
         iov: &libc::iovec,
         index: usize,
     ) -> squeue::Entry {
-        let fd = types::Fd(self.file.as_raw_fd());
-        let entry = match operation {
-            TransferOp::Read => opcode::Readv::new(fd, iov, 1).offset(self.offset).build(),
-            TransferOp::Write => opcode::Writev::new(fd, iov, 1).offset(self.offset).build(),
-        };
-        entry.user_data(index as u64)
+        entry(&self.file, self.offset, operation, iov, index)
     }
-
     #[allow(unsafe_code)]
     pub(super) fn complete(&mut self, operation: TransferOp, result: i32, late: bool) -> bool {
         let Some(memory) = &self.memory else {
@@ -160,5 +159,44 @@ impl Task {
         self.bounce.take();
         self.memory.take();
         true
+    }
+}
+
+pub(super) fn entry(
+    file: &File,
+    offset: u64,
+    operation: TransferOp,
+    iov: &libc::iovec,
+    index: usize,
+) -> squeue::Entry {
+    let fd = types::Fd(file.as_raw_fd());
+    let entry = match operation {
+        TransferOp::Read => opcode::Readv::new(fd, iov, 1).offset(offset).build(),
+        TransferOp::Write => opcode::Writev::new(fd, iov, 1).offset(offset).build(),
+    };
+    entry.user_data(index as u64)
+}
+
+pub(super) fn cqe_error(
+    operation: TransferOp,
+    result: i32,
+    length: usize,
+    late: bool,
+) -> Option<Error> {
+    match result {
+        code if code < 0 => Some(Error::Backend {
+            operation: "io_uring CQE",
+            code,
+        }),
+        bytes if bytes as usize != length => Some(Error::Io(std::io::Error::new(
+            if operation == TransferOp::Read {
+                std::io::ErrorKind::UnexpectedEof
+            } else {
+                std::io::ErrorKind::WriteZero
+            },
+            "short io_uring completion",
+        ))),
+        _ if late => Some(Error::Timeout),
+        _ => None,
     }
 }

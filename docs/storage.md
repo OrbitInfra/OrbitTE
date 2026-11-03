@@ -51,7 +51,6 @@ let report = engine.submit_and_wait(TransferOp::Read, &segment, &[request], time
 Engine construction probes ring setup. An unavailable kernel rejects file
 submissions. QoS, the runtime window and the submission deadline apply to
 files. Local files require no receiver credit and reject attached notifications.
-CUDA device memory and CUDA-owned pinned allocations are outside this profile.
 
 The caller or existing batch worker owns one ring per submission. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,
@@ -79,3 +78,26 @@ then, the group reports `Error::Unquiesced` at the first unsuccessful index
 with `locally_drained = false`.
 The ring, fds, iovecs, outstanding bounce buffers, memory loans and admission
 charges stay retained. See [real-file controls](qualification.md#local-file-segments).
+
+## CUDA transfers through pinned host memory
+
+With the Linux `cuda,io-uring` features, use the same submission APIs with a
+registered CUDA address. The caller or batch worker holds the whole device
+range and consumes its producer event before access. TENT allocates a host
+buffer per request. OrbitTE leases page-aligned pinned chunks from the
+engine's `ProxyManager`, bounded by `staging_chunk_count` and
+`staging_chunk_size`. A round runs with the chunks it can lease. If none are
+available the request fails with `ResourceExhausted`.
+
+WRITE confirms each device-to-host copy and restores the CUDA context before
+submitting the round. READ drains the SQEs first and copies back consecutive
+file bytes in offset order, including a short final prefix. A gap stops the
+byte count even if a later SQE succeeds. A submitted WRITE can still affect
+the file beyond that gap. The same worker releases its chunks after both I/O
+and CUDA completion before starting another round. An uncertain copy, event
+or context restore retains the affected loan, chunks, ring and admission.
+
+Memory from `cuda::allocate_pinned_host` consumes its producer event and goes
+directly through the host file path. Each chunk or pinned view uses the direct
+fd when its address and extent satisfy DIO alignment, and the buffered fd
+otherwise. The installed GPU and local NVMe profile is [queued for verification](qualification.md#verification-queue).

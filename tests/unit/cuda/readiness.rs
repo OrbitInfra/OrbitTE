@@ -4,14 +4,14 @@ use crate::cuda::ipc::{IpcExport, IpcMapping};
 use crate::memory::Allocation;
 use crate::runtime::proxy_manager::ProxyManager;
 
-struct Producer {
+pub(super) struct Producer {
     context: Arc<Context>,
     stream: usize,
     bytes: Box<[u8]>,
 }
 
 impl Producer {
-    fn new(memory: &CudaMemory, value: u8, per_thread: bool) -> Arc<Self> {
+    pub(super) fn new(memory: &CudaMemory, value: u8, per_thread: bool) -> Arc<Self> {
         let context = memory.allocation.lock().unwrap().context.clone();
         let stream = if per_thread {
             2
@@ -35,7 +35,7 @@ impl Producer {
         })
     }
 
-    fn enqueue(&self, address: u64, length: usize) {
+    pub(super) fn enqueue(&self, address: u64, length: usize) {
         self.context
             .current(|| {
                 // SAFETY: The producer owns the host input and stream, and the fixture retains
@@ -52,7 +52,7 @@ impl Producer {
             .unwrap();
     }
 
-    fn record(self: &Arc<Self>, memory: &CudaMemory) -> Result<()> {
+    pub(super) fn record(self: &Arc<Self>, memory: &CudaMemory) -> Result<()> {
         // SAFETY: The producer owns this live stream and the cloned owner retains its copy inputs
         // through completion.
         self.context.current(|| unsafe {

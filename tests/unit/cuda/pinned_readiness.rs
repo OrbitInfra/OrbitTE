@@ -3,14 +3,14 @@ use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
 use crate::memory::Allocation;
 
-struct Producer {
+pub(super) struct Producer {
     input: Arc<CudaMemory>,
     context: Arc<Context>,
     stream: usize,
 }
 
 impl Producer {
-    fn new(device: &Arc<Device>, per_thread: bool) -> Arc<Self> {
+    pub(super) fn new(device: &Arc<Device>, per_thread: bool) -> Arc<Self> {
         let input = memory(device);
         let context = input.allocation.lock().unwrap().context.clone();
         let stream = if per_thread {
@@ -35,7 +35,7 @@ impl Producer {
         })
     }
 
-    fn enqueue(&self, host: &HostMemory, offset: usize, length: usize) {
+    pub(super) fn enqueue(&self, host: &HostMemory, offset: usize, length: usize) {
         self.context
             .current(|| {
                 // SAFETY: The producer retains its source and stream and the pinned destination
@@ -52,14 +52,14 @@ impl Producer {
             .unwrap();
     }
 
-    fn record(self: &Arc<Self>, host: &HostMemory) -> Result<()> {
+    pub(super) fn record(self: &Arc<Self>, host: &HostMemory) -> Result<()> {
         self.context
             // SAFETY: The producer owns this live stream and the cloned owner retains its copy
             // inputs through completion.
             .current(|| unsafe { host.record_producer_stream(self.stream as *mut _, self.clone()) })
     }
 
-    fn pinned(&self) -> Arc<HostMemory> {
+    pub(super) fn pinned(&self) -> Arc<HostMemory> {
         let host = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
             PinnedAllocation::new(&self.context, 64).unwrap(),
         )));

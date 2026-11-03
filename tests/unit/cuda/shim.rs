@@ -14,6 +14,21 @@ type Gate = Option<(
     std::sync::mpsc::Receiver<()>,
 )>;
 
+// Driver-pinned host memory is page aligned. Keep the padded box owned while
+// exposing exactly the requested bytes to shim tests and driver consumers.
+pub(super) struct Pin {
+    storage: Box<[u8]>,
+    offset: usize,
+    length: usize,
+}
+
+impl std::ops::Deref for Pin {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.storage[self.offset..self.offset + self.length]
+    }
+}
+
 pub(super) struct Device {
     pub(super) copy_gate: Mutex<Gate>,
     pub(super) event_gate: Mutex<
@@ -23,7 +38,7 @@ pub(super) struct Device {
         )>,
     >,
     pub(super) bytes: UnsafeCell<Box<[u8]>>,
-    pub(super) pins: Mutex<BTreeMap<usize, Box<[u8]>>>,
+    pub(super) pins: Mutex<BTreeMap<usize, Pin>>,
     pub(super) host_registrations: Mutex<BTreeMap<usize, usize>>,
     pub(super) ordinal: AtomicI32,
     pub(super) pci_device: AtomicI32,
@@ -497,8 +512,14 @@ unsafe extern "C" fn to_device(
 }
 unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c_uint) -> Status {
     event("pin");
-    let mut bytes = vec![0; length].into_boxed_slice();
-    let pointer = bytes.as_mut_ptr();
+    let mut storage = vec![0; length + 4095].into_boxed_slice();
+    let offset = storage.as_ptr().align_offset(4096);
+    let pointer = storage[offset..].as_mut_ptr();
+    let bytes = Pin {
+        storage,
+        offset,
+        length,
+    };
     current()
         .pins
         .lock()
