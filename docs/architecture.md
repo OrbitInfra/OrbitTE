@@ -51,11 +51,11 @@ claim a device is healthy. See [semantics and reference](transport-selection.md)
 `runtime/admission_queue.rs::LocalTransferAdmissionQueue` corresponds to frozen
 TENT's `LocalTransferAdmissionQueue` and `refillDispatchWindow`. It owns the
 ordered eligible-owner set, per-Batch dependency chains and dispatch counters.
-`PreparedSubmission` owns, in release order, its real memory references, a
-`QueuePermit`, an optional `CreditPermit`, an optional `QosPermit`, and its
-requester-admission permit.
-Drop removes scheduling metadata before refunding unstarted credit and releasing
-global capacity. Unquiesced quarantine retains all of these actual owners.
+`PreparedSubmission` owns, in release order, its real memory references, an
+optional `QosPermit`, an optional `QueuePermit`, an optional `CreditPermit`, and
+its requester-admission permit. QoS retirement precedes queue removal so another
+dispatch cannot reacquire a releasing owner's quota. Drop removes scheduling
+metadata before refunding unstarted credit and releasing global capacity. Unquiesced quarantine retains all of these actual owners.
 
 The opt-in queue uses admission sequence for FIFO and `(absolute deadline,
 sequence)` for EDF. A balanced tree orders admission/activation in O(log n);
