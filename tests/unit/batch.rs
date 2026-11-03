@@ -4,6 +4,58 @@ use crate::{EngineConfig, Permission};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
+impl Batch {
+    // The receiver does not keep the batch alive. Only the destructor for this
+    // particular reservation can publish the receipt after removing its ID.
+    pub(crate) fn allocation_release_receipt(&self) -> std::sync::mpsc::Receiver<()> {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        self.progress()
+            .unwrap()
+            .reservation
+            .release_receipt
+            .set(send)
+            .unwrap();
+        receive
+    }
+}
+
+#[test]
+fn a_progress_lookup_keeps_its_own_reservation_after_public_free() {
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            enable_progress_worker: true,
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let mut first = engine.allocate_batch(1).unwrap();
+    let mut second = engine.allocate_batch(1).unwrap();
+    let id = second.id().unwrap();
+    assert_ne!(first.id().unwrap(), id);
+    let released = second.allocation_release_receipt();
+    // Hold precisely the strong reference obtained by Wakes::run.
+    let observer = second
+        .progress()
+        .unwrap()
+        .reservation
+        .budget
+        .lookup(id)
+        .unwrap();
+    second.free().unwrap();
+    assert!(matches!(engine.progress_batch(id), Err(Error::BatchClosed)));
+    assert_eq!(engine.stats().unwrap().allocated_batches, 2);
+    assert!(matches!(
+        released.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    drop(observer);
+    released
+        .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+        .unwrap();
+    assert_eq!(engine.stats().unwrap().allocated_batches, 1);
+    first.free().unwrap();
+}
+
 #[test]
 fn capacity_ids_append_and_sealed_status_follow_actual_tcp_bytes() {
     let source = TransferEngine::new(EngineConfig::default()).unwrap();

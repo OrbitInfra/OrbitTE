@@ -1371,6 +1371,8 @@ impl AllocationBudget {
             budget: Arc::clone(self),
             id,
             capacity,
+            #[cfg(test)]
+            release_receipt: Default::default(),
         })
     }
     fn worker(self: &Arc<Self>) -> Result<WorkerToken> {
@@ -1387,6 +1389,8 @@ struct Reservation {
     budget: Arc<AllocationBudget>,
     id: BatchId,
     capacity: usize,
+    #[cfg(test)]
+    release_receipt: std::sync::OnceLock<std::sync::mpsc::SyncSender<()>>,
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
@@ -1398,6 +1402,10 @@ impl Drop for Reservation {
         state.registry.remove(&self.id);
         state.count -= 1;
         state.capacity -= self.capacity;
+        #[cfg(test)]
+        if let Some(receipt) = self.release_receipt.get() {
+            let _ = receipt.try_send(());
+        }
     }
 }
 struct WorkerToken {

@@ -191,7 +191,7 @@ fn real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats() {
 }
 #[test]
 fn busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers() {
-    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let (held, _guard) = guarded_port();
     let port = held.local_addr().unwrap().port();
     let e = TransferEngine::new(config(port)).unwrap();
     assert_eq!(e.metrics().unwrap().http_port(), 0);
@@ -253,11 +253,9 @@ fn an_expired_owner_records_a_reason_without_fabricating_bytes_or_latency() {
 
 #[test]
 fn stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable() {
-    let port = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let (listener, _guard) = guarded_port();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
     let mut cfg = config(port);
     cfg.metrics.http_server_threads = 1;
     cfg.metrics.report_interval_seconds = 3600;

@@ -21,19 +21,23 @@ fn config(port: u16) -> EngineConfig {
         ..Default::default()
     }
 }
+// A live accepted connection keeps the local port out of automatic port
+// allocation. Dropping the listener permits an explicit rebind at the same
+// address. Keep the pair alive across that handoff and any final rebind.
+fn guarded_port() -> (TcpListener, [TcpStream; 2]) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let client = TcpStream::connect_timeout(&listener.local_addr().unwrap(), WAIT).unwrap();
+    let (accepted, _) = listener.accept().unwrap();
+    (listener, [client, accepted])
+}
+
 fn engine() -> TransferEngine {
-    for _ in 0..20 {
-        let port = TcpListener::bind(("127.0.0.1", 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let engine = TransferEngine::new(config(port)).unwrap();
-        if engine.metrics().unwrap().http_port() != 0 {
-            return engine;
-        }
-    }
-    panic!("no free loopback metrics port");
+    let (listener, _guard) = guarded_port();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let engine = TransferEngine::new(config(port)).unwrap();
+    assert_eq!(engine.metrics().unwrap().http_port(), port);
+    engine
 }
 fn get(port: u16, request: &[u8]) -> (String, String) {
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
