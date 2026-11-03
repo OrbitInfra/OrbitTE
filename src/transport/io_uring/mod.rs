@@ -18,6 +18,7 @@ use self::task::Task;
 use crate::batch::BatchProgress;
 use crate::engine::remaining;
 use crate::segment::file::FileLease;
+use crate::transport::DESTRUCTION_TIMEOUT;
 use crate::{
     BatchReport, Error, RegisteredMemory, RemoteEffect, Result, TransferFailure, TransferOp,
 };
@@ -122,6 +123,51 @@ struct LiveBatch {
     _iovecs: Vec<libc::iovec>,
 }
 
+struct Drain {
+    // Only this prefix was consumed. If SQ accounting itself is invalid,
+    // every published SQE must be treated as potentially in flight.
+    consumed: usize,
+    submit_error: i32,
+    status: std::result::Result<(), i32>,
+}
+
+impl Drain {
+    fn invalid_sq(count: usize) -> Self {
+        Self {
+            consumed: count,
+            submit_error: -libc::EPROTO,
+            status: Err(-libc::EPROTO),
+        }
+    }
+
+    fn missing_error(&self, index: usize) -> Error {
+        if index < self.consumed {
+            if let Err(code) = self.status {
+                return unquiesced(code);
+            }
+        }
+        Error::Backend {
+            operation: "io_uring submit",
+            code: self.submit_error,
+        }
+    }
+
+    fn effect(&self, op: TransferOp, index: usize) -> RemoteEffect {
+        if op == TransferOp::Write && index < self.consumed {
+            RemoteEffect::Unknown
+        } else {
+            RemoteEffect::None
+        }
+    }
+}
+
+fn unquiesced(code: i32) -> Error {
+    Error::Unquiesced {
+        operation: "io_uring drain",
+        code,
+    }
+}
+
 impl LiveBatch {
     fn run(
         self,
@@ -131,55 +177,55 @@ impl LiveBatch {
         progress: Option<(&BatchProgress, usize)>,
         report: &mut BatchReport,
     ) -> Result<()> {
+        let drain_deadline =
+            deadline
+                .checked_add(DESTRUCTION_TIMEOUT)
+                .ok_or(Error::InvalidConfig(
+                    "file drain deadline overflows monotonic clock",
+                ))?;
         let mut live = ManuallyDrop::new(self);
         if let Err(error) = live.ring.push(entries) {
             // push_multiple is all-or-nothing and no enter has taken place.
             drop(ManuallyDrop::into_inner(live));
             return Err(error.into());
         }
-        let (submit_error, drain) = live.submit_and_drain(operation, deadline, progress);
-        report.locally_drained = drain.is_ok();
+        let drain = live.submit_and_drain(operation, deadline, drain_deadline, progress);
+        report.locally_drained = drain.status.is_ok();
+        // CQEs already published independent task outcomes. Finish any tasks
+        // without a receipt, including the tail a failed enter never consumed.
+        if let Some((p, first)) = progress {
+            for (index, _) in live
+                .tasks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.result.is_none())
+            {
+                p.fail_file_task(
+                    first + index,
+                    0,
+                    drain.missing_error(index),
+                    drain.effect(operation, index),
+                    report.locally_drained || index >= drain.consumed,
+                );
+            }
+        }
+        // The group report, like a network report, counts only the successful prefix.
         for (index, task) in live.tasks.iter().enumerate() {
-            let bytes = task.bytes();
-            report.transferred_bytes += bytes;
-            let error = || match task.result {
-                None => match drain {
-                    Err(code) => Some(Error::Unquiesced {
-                        operation: "io_uring drain",
-                        code,
-                    }),
-                    Ok(()) => Some(Error::Backend {
-                        operation: "io_uring submit",
-                        code: submit_error,
-                    }),
-                },
+            let error = match task.result {
+                None => Some(drain.missing_error(index)),
                 Some(_) => task.observed_error(operation),
             };
-            if let Some(reason) = error() {
-                let uncertain = matches!(reason, Error::Unquiesced { .. });
-                let effect =
-                    if operation == TransferOp::Write && (task.result.is_some() || uncertain) {
-                        RemoteEffect::Unknown
-                    } else {
-                        RemoteEffect::None
-                    };
-                if let Some((p, first)) = progress.filter(|_| task.result.is_none()) {
-                    if let Some(reason) = error() {
-                        p.fail_file_task(first + index, bytes, reason, effect, !uncertain);
-                    }
-                }
-                if report.failure.is_none()
-                    || uncertain
-                        && report
-                            .failure
-                            .as_ref()
-                            .is_some_and(|f| !matches!(f.error, Error::Unquiesced { .. }))
-                {
-                    report.failure = Some(failure(index, reason, effect));
-                }
-            } else {
-                report.completed_requests += 1;
+            if let Some(reason) = error {
+                report.failure = Some(TransferFailure {
+                    request_index: index,
+                    affected_requests: drain.consumed.saturating_sub(index).max(1),
+                    error: drain.status.err().map_or(reason, unquiesced),
+                    remote_effect: drain.effect(operation, index),
+                });
+                break;
             }
+            report.completed_requests += 1;
+            report.transferred_bytes += task.bytes();
         }
         if report.locally_drained {
             drop(ManuallyDrop::into_inner(live));
@@ -193,8 +239,9 @@ impl LiveBatch {
         &mut self,
         operation: TransferOp,
         deadline: Instant,
+        drain_deadline: Instant,
         progress: Option<(&BatchProgress, usize)>,
-    ) -> (i32, std::result::Result<(), i32>) {
+    ) -> Drain {
         let count = self.tasks.len();
         let mut submitted = 0;
         let mut retries = 0;
@@ -207,7 +254,7 @@ impl LiveBatch {
                 }
                 Ok(0) if retries < 3 => retries += 1,
                 Ok(0) => break,
-                Ok(_) => return (code, Err(-libc::EPROTO)),
+                Ok(_) => return Drain::invalid_sq(count),
                 Err(e)
                     if matches!(e.raw_os_error(), Some(libc::EINTR | libc::EAGAIN))
                         && retries < 3 =>
@@ -225,31 +272,53 @@ impl LiveBatch {
             }
         }
         // Even a failed enter must not erase a prefix already consumed from the SQ.
-        let Some(consumed) = count.checked_sub(self.ring.queued()) else {
-            return (code, Err(-libc::EPROTO));
+        let Some(consumed) = count
+            .checked_sub(self.ring.queued())
+            .filter(|n| *n >= submitted)
+        else {
+            return Drain::invalid_sq(count);
         };
-        if consumed < submitted {
-            return (code, Err(-libc::EPROTO));
+        let status = self.drain(consumed, operation, deadline, drain_deadline, progress);
+        Drain {
+            consumed,
+            submit_error: code,
+            status,
         }
+    }
+
+    fn drain(
+        &mut self,
+        consumed: usize,
+        operation: TransferOp,
+        deadline: Instant,
+        drain_deadline: Instant,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> std::result::Result<(), i32> {
         for _ in 0..consumed {
             let (id, result) = loop {
-                match self.ring.reap() {
+                if Instant::now() >= drain_deadline {
+                    return Err(-libc::ETIMEDOUT);
+                }
+                match self.ring.reap(drain_deadline) {
                     Ok(cqe) => break cqe,
+                    // A wakeup or interrupted wait never starts a new window.
                     Err(e)
-                        if e.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline =>
+                        if e.kind() == io::ErrorKind::Interrupted
+                            || e.kind() == io::ErrorKind::TimedOut
+                            || e.raw_os_error() == Some(libc::ETIME) =>
                     {
                         continue;
                     }
-                    Err(e) => return (code, Err(-e.raw_os_error().unwrap_or(libc::EIO))),
+                    Err(e) => return Err(-e.raw_os_error().unwrap_or(libc::EIO)),
                 }
             };
             let Ok(index) = usize::try_from(id) else {
-                return (code, Err(-libc::EPROTO));
+                return Err(-libc::EPROTO);
             };
             if index >= consumed
                 || !self.tasks[index].complete(operation, result, Instant::now() >= deadline)
             {
-                return (code, Err(-libc::EPROTO));
+                return Err(-libc::EPROTO);
             }
             if let Some((p, first)) = progress {
                 let task = &self.tasks[index];
@@ -265,6 +334,6 @@ impl LiveBatch {
                 }
             }
         }
-        (code, Ok(()))
+        Ok(())
     }
 }

@@ -140,17 +140,16 @@ pub enum RemoteEffect {
 #[derive(Debug)]
 pub struct TransferFailure {
     pub request_index: usize,
-    /// Consecutive requests sharing this failure, beginning at request_index.
-    /// Network requests after this span were skipped. File tasks have individual CQEs.
+    /// Consecutive requests affected by the failure, beginning at request_index.
+    /// For concurrent file I/O the span includes later requests submitted to the kernel.
     pub affected_requests: usize,
     pub error: Error,
     pub remote_effect: RemoteEffect,
 }
 
-/// Network requests run in order and stop on the first failure. Earlier completed
-/// requests remain committed. A shared transport failure covers its explicit
-/// affected span. File SQEs complete independently. Counts and bytes include all
-/// completions, including the exact prefix of a short file operation.
+/// Counts and bytes cover the consecutive fully successful requests before the
+/// first failure. A later file SQE may have completed inside the affected span.
+/// Async task status reports its individual result and exact transferred bytes.
 #[derive(Debug)]
 pub struct BatchReport {
     pub completed_requests: usize,

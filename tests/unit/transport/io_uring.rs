@@ -146,11 +146,7 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> {
-    if !kernel() {
-        return Ok(());
-    }
+fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     let dir = std::env::temp_dir();
     let mut f = Fixture::new(
         &dir,
@@ -161,11 +157,20 @@ fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> 
     Arc::get_mut(&mut f.engine).unwrap().io_uring = Some(IoUringTransport {
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
-            assert_eq!(n, 3);
+            assert_eq!(n, depth);
             fs::OpenOptions::new().write(true).open(&path)?.set_len(3)?;
             ring::create(n)
         }),
     });
+    Ok(f)
+}
+
+#[test]
+fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let f = truncate_on_ring_creation(3)?;
     let r = [f.request(1, 0, 8), f.request(21, 8, 4), f.request(41, 0, 2)];
     let batch = f
         .engine
@@ -196,6 +201,69 @@ fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> 
     expected[1..4].copy_from_slice(b"abc");
     expected[41..43].copy_from_slice(b"ab");
     assert_eq!(got, expected);
+    Ok(())
+}
+
+#[test]
+fn group_report_counts_only_the_successful_prefix_for_concurrent_file_requests() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let f = truncate_on_ring_creation(2)?;
+    let short = f.request(1, 0, 8);
+    let full = f.request(21, 1, 2);
+    for (requests, prefix, bytes, failed) in [
+        ([short.clone(), full.clone()], 0, 0, Some((0, 2))),
+        ([full.clone(), short.clone()], 1, 2, Some((1, 1))),
+        ([f.request(1, 0, 3), full.clone()], 2, 5, None),
+    ] {
+        fs::write(&f.path, b"abcdefghijklmnop")?;
+        let report = f.run(TransferOp::Read, &requests)?;
+        assert!(report.locally_drained);
+        assert_eq!(
+            (report.completed_requests, report.transferred_bytes),
+            (prefix, bytes)
+        );
+        assert_eq!(
+            report
+                .failure
+                .as_ref()
+                .map(|f| (f.request_index, f.affected_requests)),
+            failed
+        );
+        if let Some(failure) = report.failure {
+            assert!(
+                matches!(failure.error, Error::Io(e) if e.kind() == io::ErrorKind::UnexpectedEof)
+            );
+            assert_eq!(failure.remote_effect, RemoteEffect::None);
+        }
+    }
+
+    fs::write(&f.path, b"abcdefghijklmnop")?;
+    let batch =
+        f.engine
+            .submit_async(TransferOp::Read, &f.segment, &[short, full], None, TIMEOUT)?;
+    let status = batch.wait(TIMEOUT)?;
+    assert_eq!((status.completed_tasks, status.transferred_bytes), (1, 5));
+    let tasks = batch.task_statuses()?;
+    assert_eq!(
+        (tasks[0].state, tasks[0].transferred_bytes),
+        (TaskState::Failed, 3)
+    );
+    assert_eq!(
+        (tasks[1].state, tasks[1].transferred_bytes),
+        (TaskState::Completed, 2)
+    );
+    let submissions = batch.submissions()?;
+    assert_eq!(
+        (
+            submissions[0].completed_requests,
+            submissions[0].transferred_bytes
+        ),
+        (0, 0)
+    );
+    let failure = submissions[0].failure.as_ref().unwrap();
+    assert_eq!((failure.request_index, failure.affected_requests), (0, 2));
     Ok(())
 }
 
@@ -234,16 +302,28 @@ fn short_write_reports_only_the_prefix_written_by_the_kernel() -> Result<()> {
         return Err(io::Error::last_os_error().into());
     }
     f.memory.write(1, b"ABCD")?;
-    let report = f.run(TransferOp::Write, &[f.request(1, 4094, 4)])?;
+    f.memory.write(9, b"XY")?;
+    let report = f.run(
+        TransferOp::Write,
+        &[f.request(1, 4094, 4), f.request(9, 16, 2)],
+    )?;
     assert!(report.locally_drained);
     assert_eq!(
         (report.completed_requests, report.transferred_bytes),
-        (0, 2)
+        (0, 0)
     );
-    assert!(
-        matches!(report.failure.unwrap().error, Error::Io(e) if e.kind() == io::ErrorKind::WriteZero)
+    let failure = report.failure.unwrap();
+    assert!(matches!(failure.error, Error::Io(e) if e.kind() == io::ErrorKind::WriteZero));
+    assert_eq!(
+        (
+            failure.request_index,
+            failure.affected_requests,
+            failure.remote_effect
+        ),
+        (0, 2, RemoteEffect::Unknown)
     );
     expected[4094..4096].copy_from_slice(b"AB");
+    expected[16..18].copy_from_slice(b"XY");
     assert_eq!(fs::read(&f.path)?, expected);
     Ok(())
 }
@@ -287,11 +367,11 @@ impl Ring for FaultRing {
             _ => self.inner.submit(n),
         }
     }
-    fn reap(&mut self) -> io::Result<(u64, i32)> {
+    fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
         if self.fault == Fault::ReapError {
             return Err(io::Error::from_raw_os_error(libc::EIO));
         }
-        let (id, n) = self.inner.reap()?;
+        let (id, n) = self.inner.reap(until)?;
         Ok((
             id,
             match self.fault {
@@ -325,21 +405,31 @@ fn short_enter_flushes_only_the_tail_or_drains_the_accepted_prefix() -> Result<(
     }
     for fault in [Fault::Short, Fault::ShortThenError, Fault::NoSpace] {
         let f = fault_fixture(fault)?;
-        f.memory.write(1, b"1234")?;
-        let r = [f.request(1, 2, 2), f.request(3, 5, 2)];
+        f.memory.write(1, b"12345")?;
+        let r = [f.request(1, 2, 2), f.request(3, 5, 2), f.request(5, 7, 1)];
         let report = f.run(TransferOp::Write, &r)?;
         assert!(report.locally_drained);
-        let (done, expected) = match fault {
-            Fault::Short => (2, b"ab12e34h"),
-            Fault::ShortThenError => (1, b"ab12efgh"),
-            _ => (0, b"abcdefgh"),
+        let (done, bytes, expected) = match fault {
+            Fault::Short => (3, 5, b"ab12e345"),
+            Fault::ShortThenError => (1, 2, b"ab12efgh"),
+            _ => (0, 0, b"abcdefgh"),
         };
         assert_eq!(
             (report.completed_requests, report.transferred_bytes),
-            (done, done * 2)
+            (done, bytes)
         );
         assert_eq!(fs::read(&f.path)?, expected);
-        assert_eq!(report.is_complete(), done == 2);
+        assert_eq!(report.is_complete(), done == 3);
+        if let Some(failure) = report.failure {
+            assert_eq!(
+                (
+                    failure.request_index,
+                    failure.affected_requests,
+                    failure.remote_effect
+                ),
+                (done, 1, RemoteEffect::None)
+            );
+        }
         f.engine.close_file_segment(&f.segment, TIMEOUT)?;
     }
     let f = fault_fixture(Fault::CqeError)?;
@@ -383,8 +473,14 @@ fn missing_drain_receipt_quarantines_ring_file_memory_and_admission() -> Result<
 
 struct HoldReap {
     inner: Box<dyn Ring>,
-    started: mpsc::SyncSender<()>,
+    started: mpsc::SyncSender<ReapWait>,
     release: Arc<Mutex<mpsc::Receiver<()>>>,
+    lifetime: Arc<()>,
+}
+
+struct ReapWait {
+    until: Instant,
+    ring: std::sync::Weak<()>,
 }
 
 impl Ring for HoldReap {
@@ -400,14 +496,33 @@ impl Ring for HoldReap {
     fn submit(&mut self, n: u32) -> io::Result<usize> {
         self.inner.submit(n)
     }
-    fn reap(&mut self) -> io::Result<(u64, i32)> {
-        self.started.send(()).unwrap();
-        self.release.lock().unwrap().recv_timeout(TIMEOUT).unwrap();
-        self.inner.reap()
+    fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+        self.started
+            .send(ReapWait {
+                until,
+                ring: Arc::downgrade(&self.lifetime),
+            })
+            .unwrap();
+        match self
+            .release
+            .lock()
+            .unwrap()
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            Ok(()) => self.inner.reap(until),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(io::Error::from_raw_os_error(libc::ETIMEDOUT))
+            }
+            // Withhold the data ring's CQE. Exercise the actual timed syscall on
+            // an empty ring, where no completion can wake the waiter early.
+            Err(mpsc::RecvTimeoutError::Disconnected) => ring::create(1)?.reap(until),
+        }
     }
 }
 
-fn held_file(config: EngineConfig) -> Result<(Fixture, mpsc::Receiver<()>, mpsc::SyncSender<()>)> {
+fn held_file(
+    config: EngineConfig,
+) -> Result<(Fixture, mpsc::Receiver<ReapWait>, mpsc::SyncSender<()>)> {
     let mut engine = TransferEngine::new(config)?;
     let (started, starting) = mpsc::sync_channel(1);
     let (release, releasing) = mpsc::sync_channel(1);
@@ -419,6 +534,7 @@ fn held_file(config: EngineConfig) -> Result<(Fixture, mpsc::Receiver<()>, mpsc:
                 inner: ring::create(n)?,
                 started: started.clone(),
                 release: Arc::clone(&releasing),
+                lifetime: Arc::new(()),
             }))
         }),
     });
@@ -473,6 +589,94 @@ fn a_late_cqe_times_out_only_its_own_task_and_keeps_its_bytes() -> Result<()> {
     expected[1..3].copy_from_slice(b"12");
     expected[9..11].copy_from_slice(b"34");
     assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn a_missing_cqe_at_the_drain_deadline_quarantines_the_submitted_span() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let (f, starting, release) = held_file(EngineConfig::default())?;
+    let requests = [f.request(1, 0, 2), f.request(9, 4, 2)];
+    let timeout = Duration::from_secs(2);
+    let window = Duration::from_secs(30);
+    let before = Instant::now();
+    let mut batch =
+        f.engine
+            .submit_async(TransferOp::Write, &f.segment, &requests, None, timeout)?;
+    let after = Instant::now();
+    let first = starting.recv_timeout(TIMEOUT).unwrap();
+    assert!((before + timeout + window..=after + timeout + window).contains(&first.until));
+    // One CQE arrives late but within the destruction window. Hide the other.
+    std::thread::sleep((first.until - window).saturating_duration_since(Instant::now()));
+    release.send(()).unwrap();
+    let second = starting.recv_timeout(TIMEOUT).unwrap();
+    assert_eq!(second.until, first.until);
+    drop(release);
+
+    let status = batch.wait(second.until.saturating_duration_since(Instant::now()) + TIMEOUT)?;
+    assert!(!status.locally_drained);
+    assert!(Instant::now() >= second.until);
+    let submissions = batch.submissions()?;
+    let group = &submissions[0];
+    assert_eq!((group.completed_requests, group.transferred_bytes), (0, 0));
+    let failure = group.failure.as_ref().unwrap();
+    assert!(matches!(failure.error, Error::Unquiesced { code, .. } if code == -libc::ETIMEDOUT));
+    assert_eq!(
+        (
+            failure.request_index,
+            failure.affected_requests,
+            failure.remote_effect
+        ),
+        (0, 2, RemoteEffect::Unknown)
+    );
+
+    let tasks = batch.task_statuses()?;
+    let observed = tasks.iter().position(|task| task.locally_drained).unwrap();
+    assert!(matches!(
+        tasks[observed].failure.as_ref().unwrap().error,
+        Error::Timeout
+    ));
+    assert_eq!(tasks[observed].transferred_bytes, 2);
+    assert!(matches!(
+        tasks[1 - observed].failure.as_ref().unwrap().error,
+        Error::Unquiesced { .. }
+    ));
+    assert_eq!(tasks[1 - observed].transferred_bytes, 0);
+
+    assert!(second.ring.upgrade().is_some());
+    f.engine.unregister_memory(&f.memory)?;
+    assert!(f.memory.read([9, 1][observed], &mut [0; 2]).is_err());
+    assert_eq!(f.engine.stats()?.inflight_bytes, 4);
+    assert!(matches!(
+        f.engine.close_file_segment(&f.segment, Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(
+        f.engine.close_requester(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+    Ok(())
+}
+
+#[test]
+fn poll_fallback_times_out_and_wakes_for_a_real_completion() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let mut raw = io_uring::IoUring::new(1)?;
+    let wait = Duration::from_millis(20);
+    let start = Instant::now();
+    ring::wait_readable(&raw, wait)?;
+    assert!(start.elapsed() >= wait);
+    assert!(raw.completion().next().is_none());
+    raw.push(&[io_uring::opcode::Nop::new().build().user_data(7)])?;
+    assert_eq!(Ring::submit(&mut raw, 1)?, 1);
+    ring::wait_readable(&raw, TIMEOUT)?;
+    let cqe = raw.completion().next().unwrap();
+    assert_eq!((cqe.user_data(), cqe.result()), (7, 0));
     Ok(())
 }
 

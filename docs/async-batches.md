@@ -346,17 +346,21 @@ admission. See [qualification](qualification.md#staging-and-consumer-owner-credi
 
 ## Results, cancellation and quiescence
 
-Tasks report waiting, running, completed, failed, cancelled or skipped states,
-the bytes of fully completed requests and a structured failure. `request_index`
-names the first failed task and `affected_requests` the consecutive span that
-shares the failure (for example a shared NVLink close); later tasks are skipped
-without I/O. A failed remote staging request can show completed READ chunks while
-reporting zero completed bytes. Each group's `NotificationStatus` is separate, so
-successful data can coexist with a failed notification.
+Group reports count the fully successful prefix in request order and sum only
+its bytes. `request_index` names the first unsuccessful request.
+`affected_requests` covers the consecutive span that may have executed,
+including later file SQEs submitted concurrently. Each file task retains its
+own result. A short first READ can report three bytes and the next task can
+complete, even when the group reports zero completed requests and zero bytes.
+A failed remote staging request can show completed READ chunks while reporting
+zero completed bytes. Each group's `NotificationStatus` is separate.
 
 `cancel(task)` and `cancel_all()` stop work that has not started. A running
 operation finishes or hits its deadline; cancellation never interrupts an
 unproven physical operation or relabels committed bytes.
+File requests wait for missing CQEs until 30 seconds after the submission
+deadline. Expiry returns `Error::Unquiesced` and keeps unresolved owners and
+admission charges retained.
 
 `locally_drained` means the requester's access to its backing has ended. It does
 **not** prove remote quiescence: a lost WRITE acknowledgement leaves

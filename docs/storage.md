@@ -56,10 +56,13 @@ CUDA device memory and CUDA-owned pinned allocations are outside this profile.
 The caller or existing batch worker owns one ring per submission. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,
 allocates aligned bounce buffers and checks SQ space. An overlapping host
-loan fails the group before I/O. Each CQE publishes its task result while other file I/O can still be running.
-A short READ or WRITE fails with the exact byte count, including zero at EOF.
-Only the returned READ prefix is copied back. Inspect async task results for
-individual outcomes when another request in the group fails.
+loan fails the group before I/O. The synchronous report counts only the
+consecutive fully successful requests before the first failure, and only their
+bytes. The failure span includes later SQEs submitted to the kernel. For a
+WRITE, any submitted request in that span makes the remote effect `Unknown`.
+Async tasks publish their individual CQEs. A short READ or WRITE fails with
+its exact byte count, including zero at EOF. A later task may succeed. Only
+the returned READ prefix is copied back.
 
 OrbitTE reopens the retained inode with the segment's access rights.
 `file_segment_info().direct_io` records whether a direct fd was obtained.
@@ -70,6 +73,9 @@ and otherwise assumes 4096 bytes. tmpfs uses the buffered fd.
 
 After a short submit, the worker flushes only the remaining SQEs. On a
 persistent submit failure it drains the consumed prefix and fails the unsent
-tail. Cancellation stops queued work. Started I/O drains even past a deadline.
-If the worker cannot account for its CQEs, `Unquiesced` retains the ring, fds,
-memory and admission charges. See [real-file controls](qualification.md#local-file-segments).
+tail. Cancellation stops queued work. All waits for consumed SQEs share one
+cutoff, 30 seconds after the submission deadline. If a CQE is still missing
+then, the group reports `Error::Unquiesced` at the first unsuccessful index
+with `locally_drained = false`.
+The ring, fds, iovecs, outstanding bounce buffers, memory loans and admission
+charges stay retained. See [real-file controls](qualification.md#local-file-segments).
