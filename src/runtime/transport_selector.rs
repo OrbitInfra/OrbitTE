@@ -146,12 +146,15 @@ impl SelectionContext<'_> {
         }
     }
 
-    pub(crate) fn select(
+    pub(crate) fn select_bound(
         &self,
         selector: Option<&TransportSelector>,
         request: &crate::TransferRequest,
+        bound: Option<u8>,
     ) -> Result<SelectionResult> {
-        TransportSelector::select(selector, self.filters(), request, |t| self.available(t))
+        TransportSelector::select(selector, self.filters(), request, bound, |t| {
+            self.available(t)
+        })
     }
 }
 
@@ -196,7 +199,7 @@ impl TransportSelector {
                 }
             }
             result.qp_pool = Some(layout.range(rule.qp_pool.as_deref()));
-            result.service_level = rule.service_level;
+            result.service_level = rule.service_level.filter(|&sl| sl <= 15);
             result.traffic_class = rule.traffic_class;
             if rule.service_level.is_some() || rule.traffic_class.is_some() {
                 let _ = writeln!(
@@ -218,10 +221,60 @@ impl TransportSelector {
         })
     }
 
+    // Bind the whole group before a file lease can open its descriptor. Unnamed
+    // groups allocate nothing here; the sparse entries contain only indices.
+    pub(crate) fn bindings(
+        selector: Option<&Self>,
+        segment: SegmentType,
+        requests: &[crate::TransferRequest],
+    ) -> Result<Vec<(usize, u8)>> {
+        let mut bindings = Vec::new();
+        for (i, request) in requests.iter().enumerate() {
+            if let Some(name) = &request.policy_name {
+                if let Some(index) = Self::bind(selector, segment, name)? {
+                    bindings
+                        .try_reserve(1)
+                        .map_err(|_| Error::ResourceExhausted)?;
+                    bindings.push((i, index));
+                }
+            }
+        }
+        Ok(bindings)
+    }
+
+    fn bind(
+        selector: Option<&Self>,
+        segment: SegmentType,
+        name: &PolicyName,
+    ) -> Result<Option<u8>> {
+        let rules = selector.map_or(&[][..], |s| s.policies.as_slice());
+        if rules.is_empty() {
+            let default_name = match segment {
+                SegmentType::Memory => "memory_default",
+                SegmentType::File => "file_storage",
+            };
+            if name.as_str() == default_name {
+                return Ok(None);
+            }
+        }
+        let rule = rules
+            .iter()
+            .find(|p| p.rule.name == name.as_str())
+            .ok_or_else(|| Error::TransportPolicy {
+                policy: name.clone(),
+                reason: "unknown policy",
+            })?;
+        if rule.rule.segment_type != segment {
+            return Err(rule.result.rejected("policy targets another segment type"));
+        }
+        Ok(rule.result.policy_index)
+    }
+
     pub(crate) fn select(
         selector: Option<&Self>,
         ctx: Filters,
         request: &crate::TransferRequest,
+        bound: Option<u8>,
         available: impl Fn(Transport) -> bool,
     ) -> Result<SelectionResult> {
         let defaults: &[Transport] = match ctx.segment {
@@ -236,31 +289,13 @@ impl TransportSelector {
         let legacy = selector
             .is_some_and(|s| s.legacy && !(s.force_tcp && ctx.segment == SegmentType::Memory));
         let candidates = if rules.is_empty() || (legacy && named.is_none()) {
-            let default_name = if ctx.segment == SegmentType::File {
-                "file_storage"
-            } else {
-                "memory_default"
-            };
-            if let Some(name) = named {
-                result.policy = Some(name.clone());
-                if name.as_str() != default_name {
-                    return Err(result.rejected("unknown policy for this segment"));
-                }
-            }
+            result.policy.clone_from(&request.policy_name);
             defaults
         } else {
-            let rule = if let Some(name) = named {
-                let rule = rules
-                    .iter()
-                    .find(|p| p.rule.name == name.as_str())
-                    .ok_or_else(|| Error::TransportPolicy {
-                        policy: name.clone(),
-                        reason: "unknown policy",
-                    })?;
-                if rule.rule.segment_type != ctx.segment {
-                    return Err(rule.result.rejected("policy targets another segment type"));
-                }
-                rule
+            let rule = if let Some(index) = bound {
+                rules
+                    .get(usize::from(index))
+                    .ok_or(Error::Internal("invalid compiled policy index"))?
             } else {
                 rules
                     .iter()
@@ -294,6 +329,16 @@ impl TransportSelector {
             } else {
                 candidates
             };
+        let reject = |reason, memory, file| {
+            if result.policy.is_some() {
+                result.rejected(reason)
+            } else {
+                Error::Unavailable(match ctx.segment {
+                    SegmentType::Memory => memory,
+                    SegmentType::File => file,
+                })
+            }
+        };
         let hint = request.transport;
         result.transport = if hint == Transport::Unspec {
             candidates
@@ -301,27 +346,26 @@ impl TransportSelector {
                 .copied()
                 .find(|t| available(*t))
                 .ok_or_else(|| {
-                    if result.policy.is_some() {
-                        result.rejected("no eligible transport")
-                    } else {
-                        Error::Unavailable(match ctx.segment {
-                            SegmentType::Memory => "memory_default: no eligible transport",
-                            SegmentType::File => "file_storage: no eligible transport",
-                        })
-                    }
+                    reject(
+                        "no eligible transport",
+                        "memory_default: no eligible transport",
+                        "file_storage: no eligible transport",
+                    )
                 })?
-        } else if candidates.contains(&hint) && available(hint) {
-            hint
+        } else if !candidates.contains(&hint) {
+            return Err(reject(
+                "transport hint is excluded by the policy",
+                "memory_default: transport hint is excluded",
+                "file_storage: transport hint is excluded",
+            ));
+        } else if !available(hint) {
+            return Err(reject(
+                "hinted transport is unavailable on these owners",
+                "memory_default: hinted transport is unavailable",
+                "file_storage: hinted transport is unavailable",
+            ));
         } else {
-            let error = if result.policy.is_some() {
-                result.rejected("hint excluded or transport unavailable")
-            } else {
-                Error::Unavailable(match ctx.segment {
-                    SegmentType::Memory => "memory_default: hint excluded or transport unavailable",
-                    SegmentType::File => "file_storage: hint excluded or transport unavailable",
-                })
-            };
-            return Err(error);
+            hint
         };
         result.named = named.is_some();
         result.intent = request.intent;

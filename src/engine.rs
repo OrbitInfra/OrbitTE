@@ -829,6 +829,13 @@ impl TransferEngine {
         }
         let deadline = deadline(timeout)?;
         let target = peer.into();
+        let kind = match target {
+            TransferTarget::Memory(_) => crate::SegmentType::Memory,
+            TransferTarget::File(_) => crate::SegmentType::File,
+        };
+        let mut bindings = TransportSelector::bindings(self.selector.as_ref(), kind, requests)?
+            .into_iter()
+            .peekable();
         let mut payload = match target {
             TransferTarget::Memory(peer) => PreparedTarget::Memory {
                 peer: peer.clone(),
@@ -845,7 +852,9 @@ impl TransferEngine {
                     && !self.file_available(Transport::Gds, None)
                     && !self.file_available(Transport::IoUring, None)
                 {
-                    return Err(Error::Unavailable("no local file transport is available"));
+                    return Err(Error::Unavailable(
+                        "file_storage: no local file transport is available",
+                    ));
                 }
                 PreparedTarget::File {
                     segment: segment.clone(),
@@ -854,7 +863,9 @@ impl TransferEngine {
             }
             #[cfg(not(any(feature = "io-uring", feature = "gds")))]
             TransferTarget::File(_) => {
-                return Err(Error::Unavailable("no local file transport is available"));
+                return Err(Error::Unavailable(
+                    "file_storage: no local file transport is available",
+                ));
             }
         };
         let notification_bytes = match notification {
@@ -875,7 +886,8 @@ impl TransferEngine {
         .map_err(|_| Error::ResourceExhausted)?;
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
-        for request in requests {
+        for (index, request) in requests.iter().enumerate() {
+            let bound = bindings.next_if(|(i, _)| *i == index).map(|(_, rule)| rule);
             let (priority, contract) = match &request.qos {
                 Some(policy) => (
                     policy.effective_priority(),
@@ -928,6 +940,7 @@ impl TransferEngine {
                             same_machine: true,
                         },
                         request,
+                        bound,
                         |t| self.file_available(t, Some(&local)),
                     )?;
                     let (lease, offset) = self.files.admit(
@@ -977,7 +990,7 @@ impl TransferEngine {
                 priority,
                 remote_staging: request.remote_staging,
             };
-            let selection = context.select(self.selector.as_ref(), request)?;
+            let selection = context.select_bound(self.selector.as_ref(), request, bound)?;
             let transport = selection.transport;
             if request.remote_staging && transport == Transport::Nvlink {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
@@ -1009,7 +1022,11 @@ impl TransferEngine {
                             .rdma
                             .as_ref()
                             .ok_or(Error::Unavailable("RDMA is not configured"))?
-                            .check_ready()?;
+                            .check_ready()
+                            .map_err(|error| match error {
+                                Error::Unavailable(reason) => selection.rejected(reason),
+                                error => error,
+                            })?;
                         rdma_ready = true;
                     }
                 }

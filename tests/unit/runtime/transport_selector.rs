@@ -5,6 +5,21 @@ use super::*;
 use crate::segment::ProcessIdentity;
 use crate::{EngineConfig, Permission, SourceEpoch, TransferEngine, TransferOp, TransferRequest};
 
+impl SelectionContext<'_> {
+    fn select(
+        &self,
+        selector: Option<&TransportSelector>,
+        request: &TransferRequest,
+    ) -> Result<SelectionResult> {
+        let bound = TransportSelector::bindings(
+            selector,
+            SegmentType::Memory,
+            std::slice::from_ref(request),
+        )?;
+        self.select_bound(selector, request, bound.first().map(|(_, index)| *index))
+    }
+}
+
 fn make_selector(config: &TransportSelectorConfig) -> Result<TransportSelector> {
     TransportSelector::compile(config, None, &QpLayout::new(&config.qp_pools, 1)?)
 }
@@ -256,6 +271,10 @@ fn transport_selector_rejects_invalid_or_unconsumed_configuration() {
         ),
         ("null bound", r#"{"segment_type":"memory","max_size":null}"#),
         (
+            "numeric hint",
+            r#"{"segment_type":"memory","transports":[123]}"#,
+        ),
+        (
             "invalid intent",
             r#"{"segment_type":"memory","intent_type":"nebulous"}"#,
         ),
@@ -482,10 +501,10 @@ fn device_masks_compile_once_against_stable_topology_ids() -> Result<()> {
     assert_eq!(compiled.unresolved_devices, 2);
     let mask =
         |s: &TransportSelector| -> Result<u64> { Ok(ctx.select(Some(s), &req)?.device_mask) };
-    assert_eq!(mask(&compiled)?, 1 << 2 | 1 << 7);
+    assert_eq!(mask(&compiled)?, (1 << 2) | (1 << 7));
     names.swap(7, 0);
-    assert_eq!(mask(&compiled)?, 1 << 2 | 1 << 7);
-    assert_eq!(mask(&compile(Some(&names))?)?, 1 << 2 | 1);
+    assert_eq!(mask(&compiled)?, (1 << 2) | (1 << 7));
+    assert_eq!(mask(&compile(Some(&names))?)?, (1 << 2) | 1);
     let missing = compile(Some(&[]))?;
     assert_eq!(missing.unresolved_devices, 4);
     assert_eq!(mask(&missing)?, u64::MAX);
@@ -497,7 +516,7 @@ fn device_masks_compile_once_against_stable_topology_ids() -> Result<()> {
 fn qp_pool_layout_and_spray_partition_the_native_indices() -> Result<()> {
     let cfg = TransportSelectorConfig::from_json(
         r#"{"transports":{"rdma":{"endpoint":{"qp_mul_factor":2,
-       "qp_pools":[{"name":"kv","num_qp":4,"service_level":5,"traffic_class":96},{"name":"ctrl","num_qp":2}]}}}}"#,
+       "qp_pools":[{"name":"kv","num_qp":4,"service_level":5,"traffic_class":96},{"name":"ctrl","num_qp":2,"service_level":-1,"traffic_class":-1}]}}}}"#,
     )?;
     assert_eq!(cfg.qp_mul_factor, Some(2));
     let layout = QpLayout::new(&cfg.qp_pools, 2)?;

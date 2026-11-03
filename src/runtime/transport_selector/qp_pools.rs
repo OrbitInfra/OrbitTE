@@ -1,15 +1,25 @@
 //! TENT endpoint QP indices partitioned into contiguous, named segments.
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::{Error, Result};
 
+/// One contiguous group of RDMA endpoint QPs. Unset link attributes inherit the RDMA defaults.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QpPool {
     pub name: String,
     pub num_qp: usize,
+    #[serde(default, deserialize_with = "link_attribute")]
     pub service_level: Option<u8>,
+    #[serde(default, deserialize_with = "link_attribute")]
     pub traffic_class: Option<u8>,
+}
+
+fn link_attribute<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u8>, D::Error> {
+    match Option::<i64>::deserialize(d)? {
+        Some(n) if n >= 0 => u8::try_from(n).map(Some).map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,9 +83,7 @@ impl QpLayout {
     }
 
     pub(crate) fn range(&self, name: Option<&str>) -> QpRange {
-        self.pools
-            .iter()
-            .find(|(p, _)| Some(&*p.name) == name)
+        name.and_then(|name| self.pools.iter().find(|(p, _)| p.name == name))
             .map_or(
                 QpRange {
                     begin: 0,

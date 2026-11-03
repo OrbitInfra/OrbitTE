@@ -98,11 +98,11 @@ and multirail slice plans intersect this mask with the engine's device mask,
 location restrictions, healthy contexts and compatible peer paths. A mask never
 overrides any of those checks.
 
-Named pools partition the data QPs in configuration order. Counts are positive
+Named pools have unique names and partition the data QPs in configuration order. Counts are positive
 and their sum fits the endpoint limit of 64. With empty pools the flat width is
 `qp_mul_factor`, defaulting to `RdmaConfig::num_lanes`. With pools the sum sets
 the endpoint width independently of the worker/CQ lane count. Each selected
-index inherits its pool's SL (0–15) and TC (0–255), or the RDMA defaults.
+index inherits its pool's SL (0–15) and TC (0–255), or the RDMA defaults when omitted or set to the TENT sentinel `-1`.
 The requester folds its least-loaded worker's index into the selected range.
 The QP uses the CQ at that index modulo the lane count.
 Unbound traffic can use a named pool's QP and inherit its settings too. Both

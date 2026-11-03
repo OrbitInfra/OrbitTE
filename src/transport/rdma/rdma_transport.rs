@@ -179,7 +179,10 @@ impl RdmaTransport {
         location: crate::MemoryLocation,
         selection: &SelectionResult,
     ) -> Result<Vec<path::NicPath>> {
-        let mut paths = self.paths(location)?;
+        let mut paths = self.paths(location).map_err(|error| match error {
+            Error::Unavailable(reason) => selection.rejected(reason),
+            other => other,
+        })?;
         paths.retain(|p| selection.device_mask & (1u64 << p.nic_id) != 0);
         if paths.is_empty() {
             return Err(selection.rejected("device mask excludes every eligible RDMA NIC"));
