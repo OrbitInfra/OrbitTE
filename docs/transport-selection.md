@@ -163,8 +163,12 @@ automatic memory selection keeps NVLink → RDMA → TCP. A policy can reverse
 that order. TENT documents GDS → io_uring → RDMA for files. Its frozen
 `getDefaultPolicies` lists GDS and io_uring. OrbitTE supports these two local
 owners. RDMA-to-file needs a remote file segment. SHM and HP-TCP have no
-executor yet. The selector rejects fallback indices, local recompute and
-compression. No failure triggers replay.
+executor yet. The selected rule retains its bounded candidate order. Only the engine’s
+physical retry owner advances that index. A rejected initial hint still fails
+selection. An eligible hint moves to the front of the rule and its later
+candidates can run only after a safe failure. Caller-supplied fallback indices,
+local recompute and compression remain unsupported. See
+[transport attempts](async-batches.md#transport-attempts).
 
 The selector scans at most 256 compiled rules and three candidates, once per
 public request. The compiled rule scan allocates no strings, takes no selector lock and calls

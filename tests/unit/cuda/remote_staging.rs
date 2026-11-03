@@ -1,9 +1,11 @@
 use super::*;
 #[cfg(feature = "rdma")]
 use crate::runtime::proxy_manager::ProxyManager;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 fn config() -> EngineConfig {
     EngineConfig {
+        max_failover_attempts: 0, // isolate the staging/native fault under test
         remote_staging: true,
         staging_chunk_size: 3,
         staging_chunk_count: 1,
@@ -1056,4 +1058,39 @@ fn pin_rejects_non_cuda_opt_out_and_source_permission_before_allocation() {
         assert_eq!(source.stats().unwrap().staging.allocations, 0);
         source.close(Duration::from_secs(2)).unwrap();
     }
+}
+
+#[test]
+fn rejected_staging_retries_the_same_policy_without_staging_and_keeps_gpu_guards()
+-> crate::Result<()> {
+    let engine = Arc::new(TransferEngine::new(EngineConfig {
+        staging_chunk_count: 1,
+        max_failover_attempts: 1,
+        ..config()
+    })?);
+    let original: [u8; 24] = std::array::from_fn(|i| i as u8);
+    let allocation = allocation(&original);
+    let gpu = memory(&allocation);
+    let memory = engine
+        .register_cuda_memory_batch(&[(gpu.clone(), 0, 24)], Permission::RemoteReadWrite)?
+        .remove(0);
+    let peer = engine.open_segment(engine.endpoint(), engine.source_epoch(), EVENTUAL_PROGRESS)?;
+    let request = TransferRequest::new(
+        Transport::Tcp,
+        memory.base_address() + 12,
+        memory.base_address(),
+        8,
+    )
+    .with_remote_staging(true);
+    let batch =
+        engine.submit_async(TransferOp::Read, &peer, &[request], None, EVENTUAL_PROGRESS)?;
+    assert_eq!(batch.wait(EVENTUAL_PROGRESS)?.completed_tasks, 1);
+    let task = batch.task_status(0)?;
+    assert_eq!((task.transport, task.failover_count), (Transport::Tcp, 1));
+    let mut actual = [0; 24];
+    memory.read(0, &mut actual)?;
+    let mut expected = original;
+    expected[12..20].copy_from_slice(&original[..8]);
+    assert_eq!(actual, expected);
+    Ok(())
 }

@@ -116,6 +116,25 @@ for a real proxy session, whose private CROSS tasks already have a bounded
 lifetime inside that owner. This avoids reacquiring the parent’s window from
 its worker. See [admission](async-batches.md#runtime-admission-and-dispatch-window).
 
+### Retry ownership
+
+The compiled selection fixes candidate order before merge. The existing batch
+worker keeps a private, bounded decision slot for a drained completion. Poll,
+explicit progress, cancel and free arbitrate that slot under the batch lock.
+The same worker starts the next attempt. Public terminal states have no path
+back to pending.
+
+Frozen TENT permits duplicate same-content WRITEs after partial enqueue.
+OrbitTE requires proof that a WRITE posted nothing. It has no general remote
+revocation receipt for replay. A lost TCP ACK or a failed native WRITE can
+therefore make the effect unknown. A drained READ can replay after QP retirement
+or a confirmed CUDA copy and stage release. An unquiesced destination, an
+overlap with the source, a short file result or an expired deadline prevents
+that replay. The controls hold a real posting call, fail teardown, drop a WRITE
+ACK and check the untouched guards. The file owners keep confirmed siblings.
+A Describe RPC alone retries a connection error once, with the original
+deadline and epoch. A replaced registration cannot inherit an admitted WRITE.
+
 ## RDMA resource owners
 
 | Owner | Resource and lifetime | Frozen TENT correspondence |

@@ -1657,3 +1657,59 @@ fn shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write() {
         assert!(matches!(l.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
     }
 }
+
+#[test]
+fn describe_retries_only_read_only_io_on_a_fresh_connection_with_the_same_epoch() {
+    for mode in ["healthy", "reset", "twice", "malformed", "wrong_epoch"] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let epoch = SourceEpoch::generate().unwrap();
+        let expected = if matches!(mode, "reset" | "twice") {
+            2
+        } else {
+            1
+        };
+        let worker = thread::spawn(move || {
+            for i in 0..expected {
+                let (mut c, _) = listener.accept().unwrap();
+                let mut header = [0; REQUEST_SIZE];
+                c.read_exact(&mut header).unwrap();
+                let r = Request::decode(&header).unwrap();
+                assert!(r.operation == Operation::Describe && r.epoch == epoch);
+                if mode == "twice" || (mode == "reset" && i == 0) {
+                    continue;
+                }
+                let reply = Reply {
+                    status: 0,
+                    epoch: if mode == "wrong_epoch" {
+                        SourceEpoch::generate().unwrap()
+                    } else {
+                        epoch
+                    },
+                    length: if mode == "malformed" {
+                        1
+                    } else {
+                        DESCRIPTOR_HEADER as u64
+                    },
+                };
+                c.write_all(&reply.encode()).unwrap();
+                if mode != "malformed" && mode != "wrong_epoch" {
+                    c.write_all(&[0; DESCRIPTOR_HEADER]).unwrap();
+                }
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        });
+        let result = open_segment(endpoint, epoch, deadline(TIMEOUT).unwrap());
+        match mode {
+            "wrong_epoch" => assert!(matches!(result, Err(Error::EpochMismatch))),
+            "malformed" => assert!(matches!(result, Err(Error::Protocol(_)))),
+            "twice" => assert!(matches!(result, Err(Error::Io(_)))),
+            _ => assert_eq!(result.unwrap().source_epoch(), epoch),
+        }
+        worker.join().unwrap();
+    }
+}

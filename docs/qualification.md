@@ -36,7 +36,8 @@ external output directory; failed runs are kept.
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
 | Native GDS / NVMe ext4 with nvidia-fs | Implemented, installed profile unqualified | `python3 "$ART/gds_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | cuFile and CUDA shim controls |
-| RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITTE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbitte-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
+| MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -2284,6 +2285,15 @@ after owner exit and requires all participants to stop before administrative
 removal. Installed qualification, native contention/fairness and measured
 scheduler overhead/throughput remain unqualified. No hardware job was requested.
 
+
+## Transport retry
+
+Real TCP fault injection counts attempted payloads and lost acknowledgements.
+The RDMA sys shim distinguishes a clean bootstrap rejection, a drained CQE
+failure, a partially posted WRITE and a retained QP. Destination bytes and
+guards are checked on the original public mapping. CUDA and file shims
+exercise staged and per-provider receipts. Native RNIC failover remains
+unqualified pending the installed gate above.
 
 ## Runtime admission and dispatch window
 

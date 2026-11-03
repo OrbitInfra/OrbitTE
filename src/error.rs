@@ -48,10 +48,9 @@ pub enum Error {
     Io(io::Error),
 }
 
-#[cfg(any(feature = "gds", all(feature = "io-uring", feature = "cuda")))]
 impl Error {
-    // Concurrent file tasks and their completed-prefix group each own an error.
-    pub(crate) fn for_file_report(&self) -> Self {
+    // The task and its group report each retain the concrete error.
+    pub(crate) fn for_report(&self) -> Self {
         match self {
             Self::BatchBusy => Self::BatchBusy,
             Self::BatchClosed => Self::BatchClosed,

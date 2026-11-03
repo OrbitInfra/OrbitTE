@@ -5,6 +5,7 @@ use std::time::Instant;
 
 pub(super) fn engine(transport: Transport, chunk: usize, depth: usize) -> TransferEngine {
     let config = EngineConfig {
+        max_failover_attempts: 0, // isolate the staging/native fault under test
         remote_staging: true,
         staging_chunk_size: chunk,
         staging_chunk_count: depth,

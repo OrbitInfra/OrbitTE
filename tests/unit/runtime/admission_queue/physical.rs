@@ -381,3 +381,24 @@ fn promotion_and_deadline_drop_share_a_refill_without_charging_a_dropped_owner()
         (1, 1)
     );
 }
+
+#[test]
+fn switching_transports_moves_the_bandwidth_term_without_readmitting_the_owner() {
+    let q = LocalTransferAdmissionQueue::new(Default::default());
+    let p = q
+        .admit(
+            vec![input(8, None, QueueOwnerKind::User, Some(Transport::Rdma))],
+            None,
+        )
+        .unwrap();
+    let stats = q.stats();
+    assert_eq!(q.lock().eligible_bytes[Transport::Rdma as usize], 8);
+    p[0].reroute(None);
+    assert_eq!(stats, q.stats());
+    assert_eq!(q.lock().eligible_bytes[Transport::Rdma as usize], 0);
+    p[0].reroute(Some((Transport::Rdma, 1)));
+    assert_eq!(stats, q.stats());
+    assert_eq!(q.lock().eligible_bytes[Transport::Rdma as usize], 8);
+    drop(p);
+    assert_eq!(q.stats(), RuntimeQueueStats::default());
+}

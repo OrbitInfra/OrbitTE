@@ -53,6 +53,7 @@ pub(crate) struct RdmaSetup {
     retries: usize,
     slices: Vec<RdmaSlice>,
     pub(super) effect: RemoteEffect,
+    pub(super) payload_started: bool,
 }
 
 impl RdmaSetup {
@@ -94,6 +95,7 @@ impl RdmaSetup {
             retries: 0,
             slices: Vec::new(),
             effect: RemoteEffect::None,
+            payload_started: false,
         })
     }
 
@@ -246,6 +248,7 @@ impl RdmaSetup {
             Phase::Submit(index) => {
                 if let Some(slice) = self.slices.get(index) {
                     // All grants have been validated before the first payload.
+                    self.payload_started = true;
                     if self.operation == TransferOp::Write {
                         self.effect = RemoteEffect::Unknown;
                     }

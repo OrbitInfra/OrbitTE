@@ -15,7 +15,7 @@ pub(super) struct Submission<'a> {
     pub proxy: &'a Arc<ProxyManager>,
     pub operation: TransferOp,
     pub deadline: Instant,
-    pub progress: Option<(&'a BatchProgress, usize)>,
+    pub progress: Option<(&'a FileAttempts<'a>, usize)>,
 }
 
 enum Backing {
@@ -170,7 +170,7 @@ impl Submission<'_> {
                 if let Err(error) = result {
                     if matches!(error, Error::Unquiesced { .. }) {
                         task.uncertain = true;
-                        fatal.get_or_insert_with(|| error.for_file_report());
+                        fatal.get_or_insert_with(|| error.for_report());
                     }
                     task.error = Some(error);
                 }
@@ -265,7 +265,7 @@ impl Submission<'_> {
                     if self.operation == TransferOp::Write {
                         remaining(self.deadline)?;
                         if let Err(e) = copy.copy(stage, piece.offset, piece.length, false) {
-                            task.error = Some(e.for_file_report());
+                            task.error = Some(e.for_report());
                             return Err(e);
                         }
                     }
@@ -333,11 +333,14 @@ impl Submission<'_> {
         let Some((p, first)) = self.progress else {
             return;
         };
+        if task.submitted {
+            p.posted(first + index);
+        }
         if let Some(error) = &task.error {
             p.fail_file_task(
                 first + index,
                 task.bytes,
-                error.for_file_report(),
+                error.for_report(),
                 effect(self.operation, task.submitted),
                 drained,
             );
@@ -363,10 +366,7 @@ impl Submission<'_> {
         } else {
             tasks[first].error.as_ref().or(stop.as_ref())
         };
-        let error = error.map_or(
-            Error::Internal("unfinished file task"),
-            Error::for_file_report,
-        );
+        let error = error.map_or(Error::Internal("unfinished file task"), Error::for_report);
         report.failure = Some(TransferFailure {
             request_index: first,
             affected_requests: submitted.map_or(1, |i| i + 1),
@@ -381,7 +381,7 @@ impl Submission<'_> {
                 continue;
             }
             if task.error.is_none() {
-                task.error = stop.as_ref().map(Error::for_file_report);
+                task.error = stop.as_ref().map(Error::for_report);
             }
             if report.locally_drained {
                 task.backing.take();

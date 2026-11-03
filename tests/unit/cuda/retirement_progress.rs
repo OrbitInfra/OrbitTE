@@ -17,6 +17,7 @@ fn engine(mode: &str, depth: usize) -> (TransferEngine, PayloadHold) {
         rdma_fixture_with_config(
             runtime,
             EngineConfig {
+                max_failover_attempts: 0, // isolate the staging/native fault under test
                 remote_staging: true,
                 staging_chunk_size: 7,
                 staging_chunk_count: depth,

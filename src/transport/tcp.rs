@@ -19,6 +19,7 @@ impl TcpTransport {
         peer: &RemoteSegment,
         request: &PreparedTransfer,
         deadline: Instant,
+        posted: &mut bool,
         #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
             crate::runtime::proxy_manager::ProxyManager,
         >,
@@ -57,6 +58,7 @@ impl TcpTransport {
                 idle = idle.saturating_add(1);
             }
         })();
+        *posted = task.payload_started();
         result.map_err(|error| (error, task.effect()))
     }
 

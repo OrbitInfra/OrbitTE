@@ -22,7 +22,7 @@ On a file target, SQEs within the group complete independently. Each task
 reports its own bytes, including a short prefix. See [file submission](storage.md).
 
 `seal()` stops appends. `status()`, `task_status()`, `task_statuses()` and
-`submissions()` only read published state. Before seal the overall state is
+`submissions()` expose published state. A status poll can also decide a pending transport retry as described below. Before seal the overall state is
 `Open`; after seal it becomes `Completed`, `Failed` or `Cancelled` once every
 group exits, and terminal states never change. `wait(timeout)` requires seal;
 its timeout neither cancels nor releases work. Each submission's deadline starts
@@ -66,6 +66,30 @@ task results to distinguish confirmed bytes, failures and skipped neighbours.
 An attached notification covers the original public interval and fires only
 after all of its owners succeed.
 
+## Transport attempts
+
+A physical owner keeps its original epoch, registration, deadline and permits
+across attempts. Its public aliases report the same `transport` and
+`failover_count`. `EngineConfig::max_failover_attempts` defaults to three
+additional attempts. Zero pins the first route. A clean submit rejection can
+advance directly to the next eligible candidate in the original policy. A
+failed proxy session first tries the same route without remote staging.
+
+Completion-stage retry requires a backend release receipt. A READ can retry
+after its last possible write to the destination has drained. A WRITE that
+might have posted reports `RemoteEffect::Unknown`. An expired deadline,
+accepted cancel or uncertain teardown ends retry. A short file completion
+keeps its own byte prefix. Within a native file batch, only eligible failed
+owners can retry after the group drains. If unregister closes a cuFile
+registration during preparation, an eligible io_uring route keeps its file lease.
+
+`enable_auto_failover_on_poll` defaults to true. A task, vector or overall
+status poll can advance one drained failure. With this setting disabled, a poll
+that observes the failure makes it terminal. Explicit `progress_batch`,
+`wait` and synchronous transfer can advance an unobserved failure. The batch
+worker executes the authorized attempt with its original budget. Cancellation
+through any alias fences that owner before the next handoff.
+
 ## Explicit progress
 
 `engine.progress_batch(id)?` dispatches at most one FIFO group or notification
@@ -73,7 +97,7 @@ retry, or publishes one completion. It returns the batch status. The caller
 can also probe a retired native submission for a late release receipt. The
 existing per-batch executor owns the blocking socket, native calls and copies.
 Independent batch IDs use separate locks. A freed or foreign ID returns
-`BatchClosed`. Status reads and waits are observational in both modes.
+`BatchClosed`. Ordinary observation does no backend I/O. A pending failover is decided under the batch lock.
 
 The optional progress worker coalesces wakes by batch ID and shares a single
 runtime-queue wake. The wake set fits `max_allocated_batches`. Enabling the

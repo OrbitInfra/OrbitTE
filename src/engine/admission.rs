@@ -1,6 +1,6 @@
 //! Physical permits for a prepared submission. The executing batch worker
 //! alone commits credit and returns each dispatch slot after physical drain.
-use super::{PreparedSubmission, PreparedTarget, TransferEngine, remaining};
+use super::{PreparedSubmission, PreparedTarget, SelectionResult, TransferEngine, remaining};
 use crate::runtime::admission_queue::{QueueInput, QueueOwnerKind, QueuePermit, QueueTicket};
 use crate::runtime::qos_contract::{CompiledContract, QosCharge, QosPermit};
 use crate::runtime::receiver_credit::CreditPermit;
@@ -118,6 +118,16 @@ pub(super) struct OwnerAdmission {
     permits: Mutex<Option<OwnerPermits>>,
 }
 impl OwnerAdmission {
+    pub(super) fn reroute(&self, selection: &SelectionResult, staging: bool) {
+        let permits = self.permits.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(q) = permits.as_ref().and_then(|p| p.queue.as_ref()) {
+            q.reroute(
+                (!staging && selection.transport == Transport::Rdma)
+                    .then_some((Transport::Rdma, selection.device_mask)),
+            );
+        }
+    }
+
     pub(super) fn start(&self, cancelled: impl Fn() -> bool + Sync) -> Result<()> {
         let permits = self.permits.lock().unwrap_or_else(|e| e.into_inner());
         let p = permits
@@ -197,6 +207,13 @@ impl PreparedSubmission {
         }
         self.notification = None;
     }
+    pub(crate) fn route(&self, i: usize) -> &SelectionResult {
+        match &self.payload {
+            PreparedTarget::Memory { requests, .. } => &requests[i].selection,
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            PreparedTarget::File { requests, .. } => &requests[i].selection,
+        }
+    }
     pub(crate) fn running_cancel(&self, _i: usize) -> crate::batch::RunningCancel {
         use crate::batch::RunningCancel;
         match &self.payload {
@@ -205,8 +222,14 @@ impl PreparedSubmission {
                 ..
             } => {
                 #[cfg(feature = "rdma")]
-                if let Some(flag) = &_requests[_i].rdma_cancel {
-                    return RunningCancel::Rdma(flag.clone());
+                if _requests[_i].selection.transport == Transport::Rdma {
+                    #[cfg(feature = "cuda")]
+                    if _requests[_i].remote_staging {
+                        return RunningCancel::Unsupported;
+                    }
+                    if let Some(flag) = &_requests[_i].rdma_cancel {
+                        return RunningCancel::Rdma(flag.clone());
+                    }
                 }
                 RunningCancel::Unsupported
             }

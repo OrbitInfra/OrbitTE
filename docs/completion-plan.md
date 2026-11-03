@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS and credits implemented; failover and metrics open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Admission, selection and explicit progress implemented. The P6 section tracks recovery and qualification. Metrics open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -86,7 +86,7 @@ fixes the order (S0–S26) for this period; this plan remains the status record.
 
 S0 and S0b delivered the request API and pre-release wire rules. S1–S5
 complete P7 at source level. S6 implements P6 selector routing and S7 implements explicit progress and
-notification fallback. S8 implements physical admission and merge. S9 is next. OrbitKV
+notification fallback. S8 implements physical admission and merge. S9 covers transport failover and RDMA rail recovery. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -283,6 +283,9 @@ Done (source scope, CPU controls):
   identity. Strict hints, per-request NIC masks and endpoint QP pools reach
   the executing owner. Installed two-RNIC qualification is queued.
   See [transport selection](transport-selection.md).
+- **Transport failover (S9, F17).** Each physical owner pins its policy,
+  budget, epoch and registration. Submit and completion retries require
+  owner-specific release evidence. See [transport attempts](async-batches.md#transport-attempts).
 - **Physical admission and merge (S8, F08/F14).** Registered contiguous ranges
   share a physical owner across public task IDs. FIFO/EDF tracks physical
   windows, internal staging reserves, credit and QoS permits. The optional
@@ -307,8 +310,7 @@ Open:
 
 - [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
   reclamation and manual resource mapping (F15).
-- [ ] Submit- and completion-stage failover, per-owner retry budgets and rail
-  cooldown/probe/half-open state, never replaying uncertain writes (F17/F18).
+- [ ] Installed transport failover and physical rail fault qualification (F17/F18).
 - [ ] Required metrics, failure attribution and disabled-mode overhead (F20).
 
 Exit: deterministic-clock and fault-provider state-machine tests, race detection

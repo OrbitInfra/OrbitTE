@@ -40,6 +40,10 @@ impl TaskState {
 pub struct TaskStatus {
     /// Absolute public task ID of this transfer’s physical owner.
     pub physical_owner: usize,
+    /// Current route and additional attempts of the shared physical owner.
+    pub transport: crate::Transport,
+    /// Additional attempts, excluding the first dispatch.
+    pub failover_count: usize,
     pub state: TaskState,
     pub operation: TransferOp,
     pub transferred_bytes: usize,
@@ -151,6 +155,7 @@ impl Batch {
             .map_err(|_| Error::ResourceExhausted)?;
         let progress = Arc::new(BatchProgress {
             defer_free: engine.defers_busy_free(),
+            auto_failover: engine.auto_failover_on_poll(),
             wakes: engine.progress_worker.as_ref().map(|w| w.wakes.clone()),
             #[cfg(feature = "gds")]
             gds: engine.gds.as_ref().map(Arc::downgrade),
@@ -163,6 +168,7 @@ impl Batch {
                 queue,
                 ready: None,
                 receipt: None,
+                retry_gate: None,
                 hooks: VecDeque::new(),
                 retry: None,
                 active: false,
@@ -314,6 +320,8 @@ impl Batch {
                 });
                 state.tasks.push(TaskStatus {
                     physical_owner: first + owner.representative,
+                    transport: prepared.route(i).transport,
+                    failover_count: prepared.route(i).initial_attempts,
                     state: TaskState::Waiting,
                     operation,
                     transferred_bytes: 0,
@@ -371,13 +379,22 @@ impl Batch {
     }
 
     pub fn status(&self) -> Result<BatchStatus> {
-        Ok(self.progress()?.lock().status())
+        let p = self.progress()?;
+        let mut state = p.lock();
+        p.observe_retry(&mut state, None);
+        Ok(state.status())
     }
     pub fn task_status(&self, task: usize) -> Result<TaskStatus> {
-        self.progress()?.lock().public_status(task)
+        let p = self.progress()?;
+        let mut state = p.lock();
+        let owner = state.public.get(task).ok_or(Error::InvalidTask)?.owner;
+        p.observe_retry(&mut state, Some(owner));
+        state.public_status(task)
     }
     pub fn task_statuses(&self) -> Result<Vec<TaskStatus>> {
-        let s = self.progress()?.lock();
+        let p = self.progress()?;
+        let mut s = p.lock();
+        p.observe_retry(&mut s, None);
         (0..s.public.len()).map(|id| s.public_status(id)).collect()
     }
     pub fn submissions(&self) -> Result<Vec<SubmissionStatus>> {
@@ -435,7 +452,8 @@ impl Batch {
                 accepted = true;
                 continue;
             }
-            if task.state == TaskState::Running {
+            let between_attempts = state.retry_gate.as_ref().is_some_and(|g| g.owner == owner);
+            if task.state == TaskState::Running && !between_attempts {
                 match &control.running {
                     RunningCancel::Unsupported => {
                         unsupported = true;
@@ -456,6 +474,7 @@ impl Batch {
             state.tasks[owner].cancel_requested = true;
             accepted = true;
         }
+        self.progress()?.changed.notify_all();
         drop(state);
         for ticket in tickets {
             engine.cancel_queued(&ticket);
@@ -488,6 +507,7 @@ impl Batch {
         }
         let deadline = deadline(timeout)?;
         loop {
+            progress.decide_retry(&mut state, true);
             state = progress
                 .changed
                 .wait_timeout(state, remaining(deadline)?)
@@ -532,6 +552,12 @@ struct Retry {
     targets: NotificationHook,
     deadline: Instant,
 }
+struct RetryGate {
+    owner: usize,
+    failure: Arc<TransferFailure>,
+    decision: Option<bool>,
+}
+
 struct Receipt {
     notification: Option<Arc<NotificationStatus>>,
     submission: usize,
@@ -548,6 +574,7 @@ struct QueuedSubmission {
 
 pub(crate) struct BatchProgress {
     defer_free: bool,
+    auto_failover: bool,
     wakes: Option<Arc<crate::runtime::progress_worker::Wakes>>,
     #[cfg(feature = "gds")]
     gds: Option<Weak<crate::transport::gds::GdsTransport>>,
@@ -561,6 +588,8 @@ struct ProgressState {
     hooks: VecDeque<Retry>,
     retry: Option<Retry>,
     receipt: Option<Receipt>,
+    // At most one unresolved attempt on the single executing batch worker.
+    retry_gate: Option<RetryGate>,
     active: bool,
     abandoned: bool,
     tasks: Vec<TaskStatus>,
@@ -660,7 +689,95 @@ impl BatchProgress {
     // Exactly one receipt or one dispatch. The batch mutex covers transitions
     // only; the blocking payload call never holds it or the registry lock.
     pub(crate) fn step(&self) -> bool {
+        if self.decide_retry(&mut self.lock(), true) {
+            return true;
+        }
         self.advance(true)
+    }
+
+    fn decide_retry(&self, state: &mut ProgressState, allow: bool) -> bool {
+        let Some(gate) = &mut state.retry_gate else {
+            return false;
+        };
+        if gate.decision.is_some() {
+            return false;
+        }
+        gate.decision = Some(allow);
+        if !allow {
+            let task = &mut state.tasks[gate.owner];
+            task.state = TaskState::Failed;
+            task.failure = Some(gate.failure.clone());
+            task.locally_drained = true;
+        }
+        self.changed.notify_all();
+        true
+    }
+
+    fn observe_retry(&self, state: &mut ProgressState, owner: Option<usize>) {
+        if state
+            .retry_gate
+            .as_ref()
+            .is_some_and(|g| owner.is_none_or(|i| i == g.owner))
+        {
+            self.decide_retry(state, self.auto_failover);
+        }
+    }
+
+    /// Publish the drained backend failure privately until one poll, progress
+    /// turn or wait decides it. Logical failure, once observed, is final.
+    pub(crate) fn retry_on_progress(&self, owner: usize, error: Error, deadline: Instant) -> bool {
+        let mut s = self.lock();
+        if s.tasks[owner].cancel_requested || s.abandoned {
+            return false;
+        }
+        let span = s.public_span(owner..owner + 1);
+        s.retry_gate = Some(RetryGate {
+            owner,
+            decision: None,
+            failure: Arc::new(TransferFailure {
+                request_index: span.start,
+                affected_requests: span.len(),
+                error,
+                remote_effect: RemoteEffect::None,
+            }),
+        });
+        self.changed.notify_all();
+        if let Some(wakes) = &self.wakes {
+            wakes.batch(self.reservation.id);
+        }
+        let allow = loop {
+            if s.abandoned || s.tasks[owner].cancel_requested || Instant::now() >= deadline {
+                break false;
+            }
+            if let Some(d) = s.retry_gate.as_ref().and_then(|g| g.decision) {
+                break d;
+            }
+            s = self
+                .changed
+                .wait_timeout(s, deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        };
+        s.retry_gate = None;
+        allow
+    }
+
+    pub(crate) fn start_retry(
+        &self,
+        owner: usize,
+        transport: crate::Transport,
+        count: usize,
+        running: RunningCancel,
+    ) -> bool {
+        let mut s = self.lock();
+        if s.abandoned || s.tasks[owner].cancel_requested || s.tasks[owner].state.is_terminal() {
+            return false;
+        }
+        s.tasks[owner].transport = transport;
+        s.tasks[owner].failover_count = count;
+        s.controls[owner].running = running;
+        self.changed.notify_all();
+        true
     }
 
     fn advance(&self, allow_hook: bool) -> bool {
@@ -949,7 +1066,7 @@ impl BatchProgress {
     pub(crate) fn file_progress(&self, index: usize, bytes: usize) {
         self.lock().tasks[index].transferred_bytes = bytes;
     }
-    #[cfg(feature = "gds")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn complete_file_task(&self, index: usize, bytes: usize, drained: bool) {
         let mut state = self.lock();
         let task = &mut state.tasks[index];

@@ -1,4 +1,7 @@
 mod admission;
+mod failover;
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+pub(crate) mod file_attempt;
 use admission::OwnerAdmission;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
@@ -34,7 +37,7 @@ pub enum TransferOp {
     Write,
 }
 
-/// Byte transport or policy selection. Explicit hints never silently downgrade.
+/// Byte transport or policy selection. An explicit hint must be eligible for the first attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Transport {
@@ -45,7 +48,7 @@ pub enum Transport {
     IoUring,
     /// Local cuFile batch I/O.
     Gds,
-    /// Choose an eligible transport before any payload I/O. No failure replay.
+    /// Choose the first eligible transport in the matched policy.
     Unspec,
 }
 
@@ -424,6 +427,9 @@ impl TransferEngine {
         self.runtime_queue
             .as_ref()
             .is_some_and(|q| q.cancel(ticket))
+    }
+    pub(crate) fn auto_failover_on_poll(&self) -> bool {
+        self.config.enable_auto_failover_on_poll
     }
     pub(crate) fn defers_busy_free(&self) -> bool {
         self.config.enable_progress_worker
@@ -925,10 +931,23 @@ impl TransferEngine {
             .into_iter()
             .peekable();
         let mut payload = match target {
-            TransferTarget::Memory(peer) => PreparedTarget::Memory {
-                peer: peer.clone(),
-                requests: Vec::new(),
-            },
+            TransferTarget::Memory(peer) => {
+                let missing = requests.iter().any(|r| {
+                    matches!(
+                        peer.resolve_address(r.remote_address, r.length),
+                        Err(Error::RegionNotFound)
+                    )
+                });
+                let peer = if missing {
+                    control_plane::open_segment(peer.endpoint, peer.epoch, deadline)?
+                } else {
+                    peer.clone()
+                };
+                PreparedTarget::Memory {
+                    peer,
+                    requests: Vec::new(),
+                }
+            }
             TransferTarget::File(_) if notification.is_some() => {
                 return Err(Error::Unavailable(
                     "file transfers do not support notifications",
@@ -972,7 +991,6 @@ impl TransferEngine {
             } => prepared.try_reserve_exact(requests.len()),
         }
         .map_err(|_| Error::ResourceExhausted)?;
-        #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
         for (index, request) in requests.iter().enumerate() {
             let bound = bindings.next_if(|(i, _)| *i == index).map(|(_, rule)| rule);
@@ -1077,63 +1095,32 @@ impl TransferEngine {
                 remote_staging: request.remote_staging,
             };
             let selection = context.select_bound(self.selector.as_ref(), request, bound)?;
-            let transport = selection.transport;
-            if request.remote_staging && transport == Transport::Nvlink {
-                return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
-            }
-            #[cfg(not(feature = "cuda"))]
-            if request.remote_staging {
-                return Err(Error::Unavailable(
-                    "remote staging requires --features cuda",
-                ));
-            }
-            if transport == Transport::Rdma {
-                #[cfg(feature = "rdma")]
-                {
-                    if selection.device_mask != u64::MAX {
-                        self.source
-                            .rdma
-                            .as_ref()
-                            .ok_or_else(|| selection.rejected("RDMA is unavailable"))?
-                            .check_policy_paths(
-                                (!request.remote_staging)
-                                    .then(|| local.location())
-                                    .transpose()?
-                                    .map(|r| r.location),
-                                &selection,
-                            )?;
-                    }
-                    if !rdma_ready {
-                        self.source
-                            .rdma
-                            .as_ref()
-                            .ok_or(Error::Unavailable("RDMA is not configured"))?
-                            .check_ready()
-                            .map_err(|error| match error {
-                                Error::Unavailable(reason) => selection.rejected(reason),
-                                error => error,
-                            })?;
-                        rdma_ready = true;
+            let mut selected = selection;
+            let mut used = 0;
+            loop {
+                match self.validate_memory_route(
+                    &selected,
+                    &local,
+                    local_offset,
+                    request.length,
+                    request.remote_staging,
+                    deadline,
+                    &mut rdma_ready,
+                ) {
+                    Ok(()) => break,
+                    Err(error) => {
+                        let Some(next) = selected.candidate(used + 1).filter(|_| {
+                            used < self.config.max_failover_attempts && failover::retryable(&error)
+                        }) else {
+                            return Err(error);
+                        };
+                        used += 1;
+                        selected = next;
                     }
                 }
-                #[cfg(not(feature = "rdma"))]
-                return Err(Error::Unavailable("build with --features rdma"));
             }
-            if transport == Transport::Nvlink {
-                #[cfg(feature = "cuda")]
-                {
-                    self.source
-                        .nvlink
-                        .as_ref()
-                        .ok_or(Error::Unavailable("NVLink is not configured"))?;
-                    local
-                        .allocation_range(local_offset, request.length)?
-                        .0
-                        .ipc_context(deadline)?;
-                }
-                #[cfg(not(feature = "cuda"))]
-                return Err(Error::Unavailable("build with --features cuda"));
-            }
+            let mut selection = selected;
+            selection.initial_attempts = used;
             prepared.push(PreparedTransfer {
                 #[cfg(feature = "rdma")]
                 priority,
@@ -1183,10 +1170,8 @@ impl TransferEngine {
                     requests: transfers,
                     ..
                 } => {
-                    for (transfer, owner) in transfers.iter_mut().zip(&mapping.owners) {
-                        if transfer.selection.transport == Transport::Rdma
-                            && !requests[owner.representative].remote_staging
-                        {
+                    for transfer in transfers {
+                        if transfer.selection.includes(Transport::Rdma) {
                             transfer.rdma_cancel = Some(Arc::default());
                         }
                     }
@@ -1216,7 +1201,7 @@ impl TransferEngine {
             admission: Some(admission),
         };
         #[cfg(feature = "gds")]
-        let prepared = prepared.pin_gds_buffers()?;
+        let prepared = prepared.pin_gds_buffers(self.config.max_failover_attempts)?;
         Ok(prepared)
     }
 
@@ -1343,47 +1328,14 @@ impl TransferEngine {
                         .count();
                     let group = &requests[first..first + count];
                     let progress = progress.map(|(p, base)| (p, base + first));
-                    let mut result = BatchReport {
-                        completed_requests: 0,
-                        transferred_bytes: 0,
-                        failure: None,
-                        locally_drained: true,
-                        notification: NotificationStatus::NotRequested,
-                    };
-                    let executed = match transport {
-                        #[cfg(feature = "io-uring")]
-                        Transport::IoUring => self.io_uring.as_ref().map(|io| {
-                            io.execute(
-                                *operation,
-                                group,
-                                owner_deadline,
-                                progress,
-                                &mut result,
-                                #[cfg(feature = "cuda")]
-                                (&self.source.proxy, self.config.max_batch_requests),
-                            )
-                        }),
-                        #[cfg(feature = "gds")]
-                        Transport::Gds => self.gds.as_ref().map(|gds| {
-                            gds.execute(
-                                *operation,
-                                group,
-                                owner_deadline,
-                                progress,
-                                &mut result,
-                                &submission.gds_pending,
-                            )
-                        }),
-                        _ => None,
-                    };
-                    if executed.is_none() {
-                        result.failure = Some(TransferFailure {
-                            request_index: 0,
-                            affected_requests: 1,
-                            error: Error::Unavailable("selected file transport is unavailable"),
-                            remote_effect: RemoteEffect::None,
-                        });
-                    }
+                    let result = self.file_group(
+                        *operation,
+                        transport,
+                        group,
+                        owner_deadline,
+                        progress,
+                        submission,
+                    );
                     #[cfg(feature = "gds")]
                     let result = submission.finish_gds_range(result, group, progress);
                     if result.locally_drained {
@@ -1477,16 +1429,6 @@ impl TransferEngine {
                     break;
                 }
             }
-            let single = |result: std::result::Result<(), (Error, RemoteEffect)>| {
-                result
-                    .map(|()| 1)
-                    .map_err(|(error, remote_effect)| TransferFailure {
-                        request_index: 0,
-                        affected_requests: 1,
-                        error,
-                        remote_effect,
-                    })
-            };
             #[cfg(feature = "cuda")]
             let cohort = if request.selection.transport == Transport::Nvlink {
                 crate::transport::nvlink::NVLinkTransport::group_len(
@@ -1499,82 +1441,31 @@ impl TransferEngine {
             };
             #[cfg(not(feature = "cuda"))]
             let cohort = 1;
-            let result = match request.selection.transport {
-                Transport::IoUring | Transport::Gds | Transport::Unspec => single(Err((
-                    Error::Internal("unresolved transport"),
-                    RemoteEffect::None,
-                ))),
-                #[cfg(feature = "cuda")]
-                Transport::Tcp | Transport::Rdma if request.remote_staging => {
-                    single(self.source.proxy.transfer_remote(
-                        (*operation, owner_deadline),
-                        credit.as_deref(),
-                        peer,
-                        request,
-                        &self.source,
-                    ))
-                }
-                Transport::Tcp => single(TcpTransport::transfer(
+            let group = &requests[index..index + cohort];
+            let progress_at = progress.map(|(p, base)| (p, base + index));
+            let mut posted = false;
+            let result = self.memory_attempt(
+                *operation,
+                peer,
+                group,
+                owner_deadline,
+                credit.as_deref(),
+                progress_at,
+                &mut posted,
+            );
+            let result = match result {
+                Err(failure) => self.retry_memory_group(
                     *operation,
                     peer,
-                    request,
+                    group,
+                    &submission.owners[index..index + cohort],
                     owner_deadline,
-                    #[cfg(feature = "cuda")]
-                    &self.source.proxy,
-                )),
-                Transport::Nvlink => {
-                    #[cfg(feature = "cuda")]
-                    {
-                        match &self.source.nvlink {
-                            Some(transport) => transport.transfer(
-                                (*operation, owner_deadline),
-                                (peer, &requests[index..index + cohort]),
-                                self.source.epoch,
-                                |next| {
-                                    progress.is_none_or(|(progress, first_task)| {
-                                        progress.begin_task(first_task + index + next)
-                                    })
-                                },
-                            ),
-                            None => single(Err((
-                                Error::Unavailable("NVLink is not configured"),
-                                RemoteEffect::None,
-                            ))),
-                        }
-                    }
-                    #[cfg(not(feature = "cuda"))]
-                    {
-                        single(Err((
-                            Error::Unavailable("build with --features cuda"),
-                            RemoteEffect::None,
-                        )))
-                    }
-                }
-                Transport::Rdma => {
-                    #[cfg(feature = "rdma")]
-                    {
-                        single(match &self.source.rdma {
-                            Some(transport) => transport.transfer(
-                                *operation,
-                                peer,
-                                request,
-                                self.source.epoch,
-                                owner_deadline,
-                            ),
-                            None => Err((
-                                Error::Unavailable("RDMA is not configured"),
-                                RemoteEffect::None,
-                            )),
-                        })
-                    }
-                    #[cfg(not(feature = "rdma"))]
-                    {
-                        single(Err((
-                            Error::Unavailable("build with --features rdma"),
-                            RemoteEffect::None,
-                        )))
-                    }
-                }
+                    credit.as_deref(),
+                    progress_at,
+                    posted,
+                    failure,
+                ),
+                success => success,
             };
             let completed = match &result {
                 Ok(count) => *count,
@@ -2028,12 +1919,17 @@ pub(crate) struct PreparedSubmission {
 
 #[cfg(feature = "gds")]
 impl PreparedSubmission {
-    fn pin_gds_buffers(mut self) -> Result<Self> {
+    fn pin_gds_buffers(mut self, max_attempts: usize) -> Result<Self> {
         if let PreparedTarget::File { requests, .. } = &mut self.payload {
             for r in requests {
-                if r.selection.transport == Transport::Gds {
+                if r.selection.transport == Transport::Gds
+                    || (max_attempts != 0 && r.selection.includes(Transport::Gds))
+                {
                     match crate::transport::gds::BufferLease::acquire(&r.local) {
                         Ok(lease) => r.buffer = lease,
+                        // Unregister can retire a GDS slot after selection. It
+                        // cannot invalidate the independent file lease/CPU route.
+                        Err(Error::Unavailable(_)) if r.selection.omit_gds(max_attempts) => {}
                         Err(e) => return Err(self.abort_error(e)),
                     }
                 }
@@ -2068,7 +1964,7 @@ impl PreparedSubmission {
                     p.fail_file_task(
                         base + index,
                         0,
-                        error.for_file_report(),
+                        error.for_report(),
                         RemoteEffect::None,
                         false,
                     );

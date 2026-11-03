@@ -79,6 +79,7 @@ impl NVLinkTransport {
         (operation, deadline): (TransferOp, Instant),
         group: (&crate::RemoteSegment, &[crate::engine::PreparedTransfer]),
         requester: SourceEpoch,
+        posted: &mut bool,
         mut begin: impl FnMut(usize) -> bool,
     ) -> std::result::Result<usize, TransferFailure> {
         let (peer, requests) = group;
@@ -223,7 +224,9 @@ impl NVLinkTransport {
                                 if index != 0 && !begin(index) {
                                     return Err(Error::Cancelled);
                                 }
-                                remaining(deadline).map(|_| ())
+                                remaining(deadline)?;
+                                *posted = true;
+                                Ok(())
                             },
                             |group| self.progress.wait(group, deadline),
                         );

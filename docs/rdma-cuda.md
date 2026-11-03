@@ -110,6 +110,14 @@ Selection adds no driver query or heap allocation per slice. See
 [bandwidth](qualification.md#rdma-bandwidth-selection) and
 [multipath](qualification.md#rdma-weighted-multipath) evidence.
 
+## Completion and transport retry
+
+RDMA reports a replayable READ failure only after all affected QPs and WRs
+drain and their loans are released. A CQE error followed by failed retirement
+retains the backing and admission. A partially posted WRITE keeps its unknown
+effect even after local QP retirement. A transport switch consumes the same
+physical owner’s retry budget. See [transport attempts](async-batches.md#transport-attempts).
+
 ## Request priority and bandwidth arbitration
 
 `request.with_priority(...)` selects `High` (the default, as in TENT), `Medium`

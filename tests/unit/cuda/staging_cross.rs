@@ -23,6 +23,7 @@ pub(super) fn engine(
         crate::engine::tests::rdma_fixture_with_config(
             runtime,
             EngineConfig {
+                max_failover_attempts: 0, // observe this backend in isolation
                 remote_staging: true,
                 staging_chunk_size: chunk,
                 staging_chunk_count: depth,

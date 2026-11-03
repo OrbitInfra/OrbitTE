@@ -17,7 +17,7 @@ use io_uring::squeue;
 
 use self::ring::Ring;
 use self::task::Task;
-use crate::batch::BatchProgress;
+use crate::engine::file_attempt::FileAttempts;
 use crate::engine::remaining;
 use crate::transport::DESTRUCTION_TIMEOUT;
 use crate::{BatchReport, Error, RemoteEffect, Result, TransferFailure, TransferOp};
@@ -44,7 +44,7 @@ impl IoUringTransport {
         operation: TransferOp,
         requests: &[FileRequest],
         deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
+        progress: Option<(&FileAttempts<'_>, usize)>,
         report: &mut BatchReport,
         #[cfg(feature = "cuda")] (proxy, max_batch_requests): (
             &Arc<crate::runtime::proxy_manager::ProxyManager>,
@@ -189,7 +189,7 @@ impl LiveBatch {
         operation: TransferOp,
         entries: &[squeue::Entry],
         deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
+        progress: Option<(&FileAttempts<'_>, usize)>,
         report: &mut BatchReport,
     ) -> Result<()> {
         let drain_deadline =
@@ -217,6 +217,7 @@ impl LiveBatch {
                     return false;
                 }
                 if let Some((p, first)) = progress {
+                    p.posted(first + index);
                     if let Some(error) = task.observed_error(operation) {
                         let effect = if operation == TransferOp::Write {
                             RemoteEffect::Unknown
@@ -241,6 +242,9 @@ impl LiveBatch {
                 .enumerate()
                 .filter(|(_, t)| t.result.is_none())
             {
+                if index < drain.consumed {
+                    p.posted(first + index);
+                }
                 p.fail_file_task(
                     first + index,
                     0,

@@ -4,6 +4,18 @@ set -euo pipefail
 binary=$1
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$(nproc)}
 controls=(
+  engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch
+  transport::gds::tests::a_drained_file_read_can_switch_but_a_posted_write_and_a_short_read_cannot
+  engine::failover::tests::missing_descriptor_refreshes_once_in_the_original_epoch_before_admission
+  engine::failover::tests::a_refresh_cannot_rebind_an_admitted_write_to_a_replaced_registration
+  engine::failover::tests::native::submit_rejection_walks_the_pinned_policy_once_per_physical_owner
+  engine::failover::tests::native::polling_progress_wait_and_alias_cancel_decide_one_drained_attempt
+  engine::failover::tests::native::partial_rdma_read_replays_only_after_the_real_close_receipt
+  engine::failover::tests::native::ambiguous_write_and_unquiesced_read_never_start_a_fallback
+  engine::failover::tests::native::tcp_faults_keep_a_successful_sibling_and_never_replay_a_lost_write_ack
+  runtime::control_plane::tests::describe_retries_only_read_only_io_on_a_fresh_connection_with_the_same_epoch
+  cuda::tests::remote_staging::rejected_staging_retries_the_same_policy_without_staging_and_keeps_gpu_guards
+  transport::gds::tests::clean_file_submit_rejection_retries_each_owner_without_reissuing_its_neighbours
   batch::tests::one_progress_turn_dispatches_or_reaps_one_group_and_status_only_observes
   batch::tests::independent_batches_progress_while_a_sibling_progress_lock_is_held
   runtime::progress_worker::tests::worker_wakes_are_bounded_coalesced_and_stop_joins

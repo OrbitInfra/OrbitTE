@@ -11,6 +11,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 fn engine(transport: Transport, receiver: bool) -> TransferEngine {
     let depth = if receiver { 2 } else { 4 };
     let config = EngineConfig {
+        max_failover_attempts: 0, // observe this backend in isolation
         remote_staging: true,
         staging_chunk_size: if receiver { 3 } else { 7 },
         staging_chunk_count: depth,

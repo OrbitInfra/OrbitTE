@@ -62,6 +62,10 @@ impl Default for RuntimeQueueConfig {
 pub struct EngineConfig {
     /// Merge adjacent requests within the same pair of registered ranges.
     pub merge_requests: bool,
+    /// Maximum additional attempts per physical owner. Zero pins the first route.
+    pub max_failover_attempts: usize,
+    /// Status polling may advance a recoverable failure. Explicit progress and wait always can.
+    pub enable_auto_failover_on_poll: bool,
     /// Maximum number of 16 MiB slices in one cuFile batch.
     #[cfg(feature = "gds")]
     pub gds_batch_depth: u32,
@@ -179,6 +183,8 @@ impl Default for EngineConfig {
             #[cfg(feature = "rdma")]
             rdma: None,
             merge_requests: true,
+            max_failover_attempts: 3,
+            enable_auto_failover_on_poll: true,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,

@@ -20,6 +20,8 @@ mod cleanup;
 mod completion;
 #[path = "rdma_host/dependency.rs"]
 mod dependency;
+#[path = "rdma_host/failover.rs"]
+mod failover;
 #[path = "rdma_host/gate.rs"]
 mod gate;
 #[path = "rdma_host/inflight.rs"]
@@ -404,6 +406,9 @@ fn result(case: &Case) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    if env::args().skip(1).eq(["--failover"]) {
+        return failover::run();
+    }
     if env::args().skip(1).eq(["--protocol"]) {
         println!("{PROTOCOL}");
         return Ok(());

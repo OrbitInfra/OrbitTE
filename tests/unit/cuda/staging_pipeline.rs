@@ -6,6 +6,7 @@ use std::time::Instant;
 
 fn config(depth: usize) -> EngineConfig {
     EngineConfig {
+        max_failover_attempts: 0, // isolate the staging/native fault under test
         remote_staging: true,
         staging_chunk_size: 3,
         staging_chunk_count: depth,

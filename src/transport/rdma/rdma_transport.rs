@@ -343,6 +343,7 @@ impl RdmaTransport {
         request: &PreparedTransfer,
         epoch: SourceEpoch,
         deadline: Instant,
+        posted: &mut bool,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
@@ -365,7 +366,7 @@ impl RdmaTransport {
                     request,
                     epoch,
                     &mut channel,
-                    &mut effect,
+                    (&mut effect, posted),
                 );
             }
             let credits =
@@ -414,6 +415,7 @@ impl RdmaTransport {
                     continue;
                 };
                 let transfer = (|| {
+                    *posted = true;
                     if operation == TransferOp::Write {
                         effect = RemoteEffect::Unknown;
                     }
@@ -436,17 +438,19 @@ impl RdmaTransport {
         request: &PreparedTransfer,
         epoch: SourceEpoch,
         channel: &mut ControlChannel<'_>,
-        effect: &mut RemoteEffect,
+        (effect, posted): (&mut RemoteEffect, &mut bool),
     ) -> Result<()> {
         let transfer = self
             .submit_slices(operation, peer, request, epoch, channel, 1)
-            .map_err(|(error, observed)| {
+            .map_err(|(error, observed, started)| {
+                *posted = started;
                 *effect = observed;
                 error
             })?;
         if operation == TransferOp::Write {
             *effect = RemoteEffect::Unknown;
         }
+        *posted = true;
         transfer.finish(self, channel)
     }
 
@@ -458,9 +462,9 @@ impl RdmaTransport {
         epoch: SourceEpoch,
         channel: &mut ControlChannel<'_>,
         concurrency: usize,
-    ) -> std::result::Result<RdmaTransfer, (Error, RemoteEffect)> {
+    ) -> std::result::Result<RdmaTransfer, (Error, RemoteEffect, bool)> {
         let mut setup = RdmaSetup::new(self, operation, peer, request, epoch, concurrency)
-            .map_err(|error| (error, RemoteEffect::None))?;
+            .map_err(|error| (error, RemoteEffect::None, false))?;
         loop {
             let mut advanced = false;
             match setup.progress(self, channel, &mut advanced) {
@@ -472,7 +476,8 @@ impl RdmaTransport {
                 }
                 Err(error) => {
                     let effect = setup.effect;
-                    return Err((setup.abort(self, error), effect));
+                    let posted = setup.payload_started;
+                    return Err((setup.abort(self, error), effect, posted));
                 }
             }
         }
