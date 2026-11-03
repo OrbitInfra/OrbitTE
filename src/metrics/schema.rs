@@ -228,6 +228,7 @@ pub(super) struct Series {
     pub seen: AtomicBool,
 }
 pub(crate) struct Recorder {
+    pub(super) origin: std::time::Instant,
     pub(super) cells: [Box<[Series]>; SPECS.len()],
     pub enabled: AtomicBool,
 }
@@ -235,6 +236,7 @@ impl Recorder {
     pub(super) fn new() -> Self {
         Self {
             enabled: AtomicBool::new(true),
+            origin: std::time::Instant::now(),
             cells: std::array::from_fn(|i| {
                 let spec = &SPECS[i];
                 let n = match spec.labels {

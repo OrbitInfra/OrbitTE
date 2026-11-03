@@ -52,7 +52,7 @@ with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
 and a 64-byte loopback READ with metrics compiled out, configured
-off, and enabled. The S10 handoff records the host and measurements. Physical
+off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the host and measurements. Physical
 NIC and GPU performance remains unmeasured.
 
 ## Batch progress and notification fallback

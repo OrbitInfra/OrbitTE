@@ -41,6 +41,8 @@ impl Failure {
             .find(|r| r.code() == code)
     }
 }
+const UNTIMED_ATTEMPT: u64 = u64::MAX;
+
 pub(crate) struct Observation {
     cells: Arc<Recorder>,
     op: TransferOp,
@@ -85,9 +87,12 @@ impl Observation {
     }
     // Zero means no event. One represents an event at the submit instant.
     fn stamp(&self) -> u64 {
-        self.submitted.map_or(1, |s| {
-            s.elapsed().as_nanos().min(u128::from(u64::MAX - 1)) as u64 + 1
-        })
+        let origin = self.submitted.unwrap_or(self.cells.origin);
+        origin
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(UNTIMED_ATTEMPT - 2)) as u64
+            + 1
     }
     pub(crate) fn dispatched(&self) {
         if self.cells.enabled.load(Relaxed) {
@@ -101,7 +106,11 @@ impl Observation {
             return;
         }
         let enabled = self.cells.enabled.load(Relaxed);
-        let at = if enabled { self.stamp() } else { 1 };
+        let at = if enabled {
+            self.stamp()
+        } else {
+            UNTIMED_ATTEMPT
+        };
         if self
             .attempt
             .compare_exchange(0, at, Relaxed, Relaxed)
@@ -158,11 +167,13 @@ impl Observation {
         if reason.is_some_and(Failure::failed) {
             self.cells.add(M::AttemptFailures, i, 1);
         }
-        self.cells.observe(
-            M::AttemptLatency,
-            i,
-            self.stamp().saturating_sub(start) / 1000,
-        );
+        if start != UNTIMED_ATTEMPT {
+            self.cells.observe(
+                M::AttemptLatency,
+                i,
+                self.stamp().saturating_sub(start) / 1000,
+            );
+        }
     }
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn file_terminal(&self, reported: Option<&Error>) {
@@ -244,6 +255,11 @@ impl Observation {
             t,
             self.length,
         );
+        // Sampling may have resumed during a request. Its bytes are known,
+        // but no logical duration can be recovered without its submit timestamp.
+        if self.submitted.is_none() {
+            return;
+        }
         if latency > 0 {
             self.cells.observe(
                 if read {

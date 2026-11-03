@@ -112,3 +112,7 @@ counts rejected queue dispatches. `orbitte_rdma_open_rails` is a gauge, while
 On an initialized handle, `set_enabled(false)` pauses counter and histogram
 sampling. Gauge pairs continue across the toggle, so unregistering a buffer or
 finishing an attempt while paused cannot leave a stale value behind.
+
+After sampling resumes, a completion can add known bytes. A timing sample
+requires both timestamps. An attempt started while sampling was paused supplies
+no latency observation.

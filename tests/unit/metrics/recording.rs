@@ -95,6 +95,20 @@ fn gauges_survive_toggles_failures_keep_the_first_stage_and_quarantine_counts_on
     obs.finish(Some(&Error::Unavailable("fault")), false);
     obs.terminal(Some(&Error::Unavailable("fault")));
     obs.terminal(None);
+    assert_eq!(
+        scrape.json()["tent_transport_attempt_latency_us"]["count"],
+        0
+    );
+    let resumed = Observation::new(&cells, TransferOp::Read, Transport::Tcp, 1, None, None);
+    resumed.dispatched();
+    resumed.begin(Transport::Tcp);
+    resumed.finish(None, true);
+    resumed.terminal(None);
+    let json = scrape.json();
+    assert_eq!(json["tent_read_bytes_total"], 1);
+    assert_eq!(json["tent_read_latency_us"]["count"], 0);
+    assert_eq!(json["tent_stage_queue_wait_us"]["count"], 0);
+    assert_eq!(json["tent_transport_attempt_latency_us"]["count"], 1);
     cells.quarantine();
     assert_eq!(scrape.json()["tent_quarantined_batches_total"], 1);
     assert_eq!(scrape.json()["tent_deadline_infeasible_total"], 1);
