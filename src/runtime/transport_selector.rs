@@ -30,7 +30,7 @@ impl SelectionContext<'_> {
             return false;
         }
         match transport {
-            Transport::Unspec | Transport::IoUring => false,
+            Transport::Unspec | Transport::IoUring | Transport::Gds => false,
             Transport::Tcp => true,
             Transport::Rdma => self.local_segment.rdma && self.remote_segment.rdma,
             Transport::Nvlink => {
@@ -85,7 +85,7 @@ impl TransportSelector {
     ) -> Result<&[Transport]> {
         let defaults: &[Transport] = match segment {
             SegmentType::Memory => &DEFAULT_TRANSPORTS,
-            SegmentType::File => &[Transport::IoUring],
+            SegmentType::File => &[Transport::Gds, Transport::IoUring],
         };
         if self.policies.is_empty() {
             return Ok(defaults);
@@ -109,23 +109,22 @@ impl TransportSelector {
         })
     }
 
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn select_file(
         selector: Option<&Self>,
         local: MemoryType,
         size: usize,
         priority: Priority,
         hint: Transport,
+        available: impl Fn(Transport) -> bool,
     ) -> Result<Transport> {
         let candidates = match selector {
             Some(selector) => {
                 selector.candidates(SegmentType::File, local, MemoryType::Cpu, size, priority)?
             }
-            None => &[Transport::IoUring],
+            None => &[Transport::Gds, Transport::IoUring],
         };
-        Self::select_candidate(candidates, hint, |t| {
-            t == Transport::IoUring && (local == MemoryType::Cpu || cfg!(feature = "cuda"))
-        })
+        Self::select_candidate(candidates, hint, available)
     }
 
     pub(crate) fn select_default(context: &SelectionContext<'_>) -> Result<Transport> {

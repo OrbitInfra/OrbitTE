@@ -103,3 +103,44 @@ Memory from `cuda::allocate_pinned_host` consumes its producer event and goes
 directly through the host file path. Each chunk or pinned view uses the direct
 fd when its address and extent satisfy DIO alignment, and the buffered fd
 otherwise. The installed GPU and local NVMe profile is [queued for verification](qualification.md#verification-queue).
+
+## GDS with cuFile
+
+Enable the Linux `gds` feature and pass a file segment to the existing batch
+APIs. `Transport::Gds` supports both host and CUDA READ/WRITE. CUDA ranges
+register with cuFile in their owning context and consume producer readiness
+before I/O. A clean cuFile buffer registration failure increments
+`EngineStats::gds.buffer_registration_failures` and leaves the region available
+to other transports. An explicit GDS hint for that region returns `Unavailable`.
+Automatic selection and file policies can choose io_uring staging when allowed.
+An uncertain registration still fences and retains the CUDA allocation.
+Host ranges use their existing exclusive loan. A file entry owns
+one cuFile handle and its `O_DIRECT` descriptor until close drains its users.
+A failure after GDS selection is returned to the caller.
+
+The caller or batch worker sets up one native batch at `gds_batch_depth`
+(default 32). Requests split at 16 MiB. A group exceeding the configured
+slice count fails before submission. Each terminal cookie identifies one
+slice. The group reports the completed request prefix. Each async task's byte
+count advances as contiguous receipts arrive. Its final status also accounts
+for cleanup of its registration. Cancel requests native batch cancellation
+and can affect other slices. Only terminal receipts authorize destruction.
+An ambiguous submit drains without replay. After the deadline plus the
+30-second destruction window, unresolved I/O returns `Unquiesced` and keeps
+its registrations, loans and admission. A later submission or close polls
+quarantined batches. A failed destroy or deregister retains its owners and
+is never retried. OrbitTE uses a fresh batch handle per submission.
+
+`EngineStats::gds.mode` reports whether the driver disables, permits or
+forces compatibility I/O. `FileSegmentInfo::gds_mode` records that policy
+when the file handle is registered. `gds_require_native` excludes GDS when
+fallback is permitted or forced and rejects unaligned I/O or a slice exceeding
+cuFile's per-buffer cache. Physical route verification uses before/after
+nvidia-fs counters in the [installed gate](qualification.md#verification-queue).
+
+The runtime loads `libcufile.so.0`, including its effective boolean configuration
+API. Missing symbols, failed open or unreadable properties leave GDS unavailable.
+Engines share one process-wide driver open. The PID guard reopens on first use
+in a child and prevents reuse of parent handles. The fork control uses a shim.
+NVIDIA specifies undefined behavior after fork from an initialized process.
+Use a fresh executable for native child work. [cuFile API reference](https://docs.nvidia.com/gpudirect-storage/api-reference-guide/)

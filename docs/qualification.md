@@ -34,7 +34,8 @@ external output directory; failed runs are kept.
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
-| Native GDS (S4), RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| Native GDS / NVMe ext4 with nvidia-fs | Implemented, installed profile unqualified | `python3 "$ART/gds_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | cuFile and CUDA shim controls |
+| RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -59,6 +60,13 @@ consumer with `python3 tests/hardware/build_installed.py --consumer storage-cuda
 The queued driver checks the selected GPU UUID and local PCIe NVMe ext4 mount,
 holds both existing resource locks and uses a fresh scratch file. The physical
 GPU/file path, GDS and storage performance remain unqualified.
+
+Build the cuFile consumer with `python3 tests/hardware/build_installed.py --consumer gds --toolchain stable --output "$ART"`.
+On an otherwise idle GDS host the queued driver disables compatibility I/O,
+checks GPU and file guards, and requires nvidia-fs successful read/write counts
+and byte deltas matching the exercise. CI uses simulated cuFile receipts and
+real temporary files for registration, partial submit, short I/O, cancel,
+fork reopen, late quarantine cleanup and failed teardown.
 
 ## Per-request remote staging
 

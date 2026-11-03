@@ -19,11 +19,12 @@ def digest(path):
 def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     gpu = consumer_kind == "gpu"
     nvlink = consumer_kind == "nvlink"
-    storage = consumer_kind == "storage-cuda"
+    storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
         "host": (["rdma"], "orbitte-rdma-host", "orbitte-installed-host-v4", "tests/hardware/rdma_host.rs"),
         "gpu": (["rdma", "cuda"], "orbitte-hardware-peer", "orbitte-hardware-peer-v1", "examples/hardware_peer.rs"),
         "nvlink": (["cuda"], "orbitte-nvlink", "orbitte-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
+        "gds": (["gds"], "orbitte-gds", "orbitte-installed-gds-v1", "tests/hardware/gds.rs"),
         "storage-cuda": (["cuda", "io-uring"], "orbitte-storage-cuda", "orbitte-installed-storage-cuda-v1", "tests/hardware/storage_cuda.rs"),
     }[consumer_kind]
     root, output = root.resolve(), output.resolve()
@@ -85,12 +86,16 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
         if storage:
-            relative = 'tests/hardware/storage_cuda_run.py'
-            driver = library / relative
-            if driver.read_bytes() != (root / relative).read_bytes():
-                raise ValueError('packaged storage driver differs from source')
-            fixture_hashes[relative] = digest(driver)
-            shutil.copy2(driver, output / driver.name)
+            drivers = ['storage_cuda_run.py']
+            if consumer_kind == 'gds':
+                drivers.append('gds_run.py')
+            for name in drivers:
+                relative = 'tests/hardware/' + name
+                driver = library / relative
+                if driver.read_bytes() != (root / relative).read_bytes():
+                    raise ValueError('packaged storage driver differs from source')
+                fixture_hashes[relative] = digest(driver)
+                shutil.copy2(driver, output / driver.name)
         elif nvlink:
             for relative in ('tests/hardware/nvlink_observer.c', 'tests/hardware/nvlink_run.py'):
                 source = library / relative
@@ -160,7 +165,10 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if len(dependency) != 1 or Path(dependency[0]['manifest_path']) != library / 'Cargo.toml':
             raise ValueError('consumer resolved an unexpected OrbitTE source')
         resolved = next(n['features'] for n in metadata['resolve']['nodes'] if n['id'] == dependency[0]['id'])
-        if set(resolved) != {'default', *features}:
+        expected_features = {'default', *features}
+        if consumer_kind == 'gds':
+            expected_features.add('cuda')
+        if set(resolved) != expected_features:
             raise ValueError('consumer must use only its declared normal dependency features')
         old = tomllib.loads((library / 'Cargo.lock').read_text())['package']
         new = tomllib.loads((consumer / 'Cargo.lock').read_text())['package']
@@ -200,6 +208,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

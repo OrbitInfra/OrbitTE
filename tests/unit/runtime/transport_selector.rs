@@ -219,8 +219,12 @@ fn transport_selector_rejects_invalid_or_unconsumed_configuration() {
             "positional policy",
             r#"["x","memory","*","*",0,8,0,["tcp"]]"#,
         ),
-        #[cfg(not(feature = "io-uring"))]
+        #[cfg(not(any(feature = "io-uring", feature = "gds")))]
         ("file", r#"{"segment_type":"file"}"#),
+        (
+            "file provider on memory",
+            r#"{"segment_type":"memory","transports":["gds"]}"#,
+        ),
         (
             "bad memory",
             r#"{"segment_type":"memory","local_memory":"npu"}"#,

@@ -42,7 +42,9 @@ iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. CUDA/file submissions use the same
 worker and ring for successive rounds of pinned chunks from `ProxyManager`.
 The whole GPU range stays loaned through file receipts and CUDA copy events.
-See the [file guide](storage.md) for alignment, completion and retention.
+GDS binds a cuFile handle to the retained file entry and pins the CUDA
+registration across queued and running batches. Its caller owns status polling
+and quarantine. See the [file guide](storage.md) for completion and retention.
 
 ## Transport selector ownership
 

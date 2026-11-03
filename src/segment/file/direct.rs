@@ -63,7 +63,7 @@ impl DirectFile {
 }
 
 impl FileLease {
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", feature = "io-uring"))]
     pub(crate) fn file_for_buffer(
         &self,
         offset: u64,
@@ -80,6 +80,7 @@ impl FileLease {
 
     /// Select before building SQEs. A direct-capable file can still require a
     /// buffered request for its offset or length.
+    #[cfg(feature = "io-uring")]
     pub(crate) fn io_file(&self, offset: u64, length: usize) -> Result<(Arc<File>, usize)> {
         let entry = &self.permit.0;
         let mut state = entry.lock()?;
@@ -93,5 +94,46 @@ impl FileLease {
             }
         }
         Ok((Arc::clone(&self.file), 4096))
+    }
+}
+
+#[cfg(feature = "gds")]
+impl FileLease {
+    pub(crate) fn gds_handle(
+        &self,
+        driver: &Arc<crate::transport::gds::Driver>,
+        mode: crate::GdsMode,
+    ) -> Result<usize> {
+        let entry = &self.permit.0;
+        let mut state = entry.lock()?;
+        if let Some(code) = state.gds_open_uncertain {
+            return Err(Error::Unquiesced {
+                operation: "cuFileHandleRegister",
+                code,
+            });
+        }
+        if let Some(handle) = &state.gds {
+            if handle.pid == driver.pid() {
+                return Ok(handle.raw);
+            }
+        }
+        let direct = state
+            .direct
+            .get_or_insert_with(|| DirectFile::open(self.file(), entry.permission));
+        let fd = direct
+            .file
+            .as_ref()
+            .ok_or(Error::Unavailable(
+                "GDS requires an O_DIRECT file descriptor",
+            ))?
+            .clone();
+        let handle = crate::transport::gds::FileHandle::new(driver, fd, mode).inspect_err(|e| {
+            if let Error::Unquiesced { code, .. } = e {
+                state.gds_open_uncertain = Some(*code);
+            }
+        })?;
+        let raw = handle.raw;
+        state.gds = Some(handle);
+        Ok(raw)
     }
 }

@@ -25,6 +25,7 @@ behind every hardware result.
 | Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Later nonblocking progress work is implemented only; full ProxyManager parity is open. See [remote pipeline](staging.md#bounded-remote-pipeline) |
 | Mixed GPU Direct and staged batches | Implemented | Per-request remote staging next to GPU Direct in one ordered batch. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
 | DRAM or CUDA ↔ local file (io_uring) | Implemented (Linux) | Real ext4/tmpfs DRAM transfers and CUDA shim staging through pinned host chunks. Installed GPU/NVMe profile unqualified. See [file transfers](storage.md) |
+| GDS / cuFile | Implemented, installed profile unqualified | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
 | HP-TCP, SHM | Planned (P3) | |
 | MNNVL / EGM | Planned (P5) | |
 | MPComm, libfabric/EFA | Planned (P8) | Optional network providers |

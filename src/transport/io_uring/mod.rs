@@ -19,19 +19,10 @@ use self::ring::Ring;
 use self::task::Task;
 use crate::batch::BatchProgress;
 use crate::engine::remaining;
-use crate::segment::file::FileLease;
 use crate::transport::DESTRUCTION_TIMEOUT;
-use crate::{
-    BatchReport, Error, RegisteredMemory, RemoteEffect, Result, TransferFailure, TransferOp,
-};
+use crate::{BatchReport, Error, RemoteEffect, Result, TransferFailure, TransferOp};
 
-pub(crate) struct FileRequest {
-    pub(crate) local: RegisteredMemory,
-    pub(crate) local_offset: usize,
-    pub(crate) lease: FileLease,
-    pub(crate) offset: u64,
-    pub(crate) length: usize,
-}
+use crate::segment::file::FileRequest;
 
 #[derive(Clone)]
 pub(crate) struct IoUringTransport {

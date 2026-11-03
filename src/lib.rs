@@ -37,7 +37,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(unsupported_native_target)]
-compile_error!("OrbitTE's `cuda`, `rdma` and `io-uring` features require a Linux target");
+compile_error!("OrbitTE's `cuda`, `rdma`, `io-uring` and `gds` features require a Linux target");
 
 #[cfg(not(unsupported_native_target))]
 mod batch;
@@ -60,6 +60,8 @@ mod segment;
 #[cfg(not(unsupported_native_target))]
 pub mod transport;
 
+#[cfg(all(target_os = "linux", feature = "gds"))]
+pub use transport::gds::{GdsMode, GdsStats};
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub mod cuda;
 #[cfg(all(target_os = "linux", feature = "rdma"))]

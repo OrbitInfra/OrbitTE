@@ -10,6 +10,8 @@ use crate::{
 mod connect_progress;
 #[cfg(feature = "rdma")]
 mod finish_progress;
+#[cfg(feature = "gds")]
+mod gds;
 #[cfg(feature = "rdma")]
 mod grant_progress;
 mod ipc;

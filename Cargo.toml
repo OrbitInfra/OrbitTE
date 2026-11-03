@@ -19,6 +19,7 @@ default = []
 rdma = ["dep:cc", "dep:bindgen", "dep:ibverbs-sys", "dep:libloading"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
+gds = ["cuda"]
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
@@ -78,3 +79,8 @@ required-features = ["cuda"]
 name = "storage_cuda"
 path = "tests/hardware/storage_cuda.rs"
 required-features = ["cuda", "io-uring"]
+
+[[example]]
+name = "gds"
+path = "tests/hardware/gds.rs"
+required-features = ["gds"]

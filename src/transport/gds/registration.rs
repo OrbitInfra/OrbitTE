@@ -1,0 +1,233 @@
+use super::*;
+use crate::RegisteredMemory;
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::sync::atomic::AtomicU8;
+
+pub(crate) struct FileHandle {
+    driver: Arc<Driver>,
+    fd: Arc<File>,
+    pub(crate) raw: usize,
+    pub(crate) mode: GdsMode,
+    pub(crate) pid: u32,
+    attempted: bool,
+    failed: bool,
+}
+
+impl FileHandle {
+    pub(crate) fn new(driver: &Arc<Driver>, fd: Arc<File>, mode: GdsMode) -> Result<Self> {
+        let raw = driver.api.register_file(fd.as_raw_fd()).inspect_err(|e| {
+            if matches!(e, Error::Unquiesced { .. }) {
+                std::mem::forget((fd.clone(), driver.clone()));
+            }
+        })?;
+        Ok(Self {
+            driver: driver.clone(),
+            fd,
+            raw,
+            mode,
+            pid: driver.api.pid(),
+            attempted: false,
+            failed: false,
+        })
+    }
+    pub(crate) fn close(&mut self) -> Result<()> {
+        if self.failed {
+            return Err(Error::Unquiesced {
+                operation: "cuFileHandleDeregister",
+                code: -1,
+            });
+        }
+        if self.attempted || self.pid != self.driver.api.pid() {
+            return Ok(());
+        }
+        self.attempted = true;
+        self.driver.api.deregister_file(self.raw).map_err(|e| {
+            self.failed = true;
+            std::mem::forget((self.fd.clone(), self.driver.clone()));
+            uncertain("cuFileHandleDeregister", &e)
+        })
+    }
+}
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
+struct NativeBuffer {
+    driver: Arc<Driver>,
+    memory: Arc<crate::cuda::CudaMemory>,
+    base: usize,
+    pid: u32,
+}
+
+#[derive(Default)]
+pub(crate) struct BufferSlot {
+    native: Option<NativeBuffer>,
+    users: usize,
+    retired: bool,
+    failed: bool,
+}
+
+impl BufferSlot {
+    fn registered(&self) -> bool {
+        !self.retired
+            && !self.failed
+            && self
+                .native
+                .as_ref()
+                .is_some_and(|n| n.pid == n.driver.api.pid())
+    }
+
+    pub(crate) fn supports(memory: &RegisteredMemory) -> bool {
+        memory.memory_type() != crate::MemoryType::Cuda
+            || memory.0.gds.lock().is_ok_and(|slot| slot.registered())
+    }
+
+    pub(crate) fn close(&mut self) -> Result<()> {
+        if self.failed {
+            return Err(Error::Unquiesced {
+                operation: "cuFileBufDeregister",
+                code: -1,
+            });
+        }
+        let Some(native) = self.native.take() else {
+            return Ok(());
+        };
+        if native.pid != native.driver.api.pid() {
+            return Ok(());
+        }
+        native
+            .memory
+            .gds_current(|| native.driver.api.deregister_buffer(native.base))
+            .map_err(|e| {
+                self.failed = true;
+                native.memory.fence_gds();
+                std::mem::forget(native);
+                uncertain("cuFileBufDeregister", &e)
+            })
+    }
+}
+
+impl GdsTransport {
+    pub(crate) fn register(&self, memory: &RegisteredMemory) -> Result<()> {
+        if memory.memory_type() != crate::MemoryType::Cuda || self.mode().is_err() {
+            return Ok(());
+        }
+        let (gpu, _) = memory.cuda_range(0, memory.len())?;
+        let base = memory.base_address() as usize;
+        let mut slot = memory
+            .0
+            .gds
+            .lock()
+            .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
+        let mut attempted = false;
+        let result = gpu.gds_current(|| {
+            attempted = true;
+            self.driver.api.register_buffer(base, memory.len())
+        });
+        if let Err(error) = result {
+            if attempted {
+                if !matches!(error, Error::Unquiesced { .. }) {
+                    self.buffer_registration_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok(());
+                }
+                slot.failed = true;
+                gpu.fence_gds();
+                std::mem::forget((memory.clone(), self.driver.clone()));
+            }
+            return Err(error);
+        }
+        slot.native = Some(NativeBuffer {
+            driver: self.driver.clone(),
+            memory: gpu,
+            base,
+            pid: self.driver.api.pid(),
+        });
+        Ok(())
+    }
+}
+
+pub(crate) struct BufferLease {
+    memory: RegisteredMemory,
+    // BORROWED, RELEASED or RETAINED. Repeated checks report only this lease's cleanup.
+    state: AtomicU8,
+}
+impl BufferLease {
+    const BORROWED: u8 = 0;
+    const RELEASED: u8 = 1;
+    const RETAINED: u8 = 2;
+    pub(crate) fn acquire(memory: &RegisteredMemory) -> Result<Option<Self>> {
+        if memory.memory_type() != crate::MemoryType::Cuda {
+            return Ok(None);
+        }
+        let mut slot = memory
+            .0
+            .gds
+            .lock()
+            .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
+        if !slot.registered() {
+            return Err(Error::Unavailable(
+                "CUDA buffer is not registered with this GDS process",
+            ));
+        }
+        slot.users = slot.users.checked_add(1).ok_or(Error::ResourceExhausted)?;
+        Ok(Some(Self {
+            memory: memory.clone(),
+            state: AtomicU8::new(Self::BORROWED),
+        }))
+    }
+    pub(crate) fn retire(memory: &RegisteredMemory) -> Result<()> {
+        let mut slot = memory
+            .0
+            .gds
+            .lock()
+            .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
+        if slot.failed {
+            return Err(Error::Unquiesced {
+                operation: "cuFileBufDeregister",
+                code: -1,
+            });
+        }
+        slot.retired = true;
+        if slot.users == 0 {
+            return slot
+                .close()
+                .inspect_err(|_| std::mem::forget(memory.clone()));
+        }
+        Ok(())
+    }
+    pub(crate) fn release(&self) -> Result<()> {
+        if self.state.load(Ordering::Acquire) == Self::RELEASED {
+            return Ok(());
+        }
+        let mut slot = self.memory.0.gds.lock().unwrap_or_else(|p| p.into_inner());
+        match self.state.load(Ordering::Relaxed) {
+            Self::RELEASED => return Ok(()),
+            Self::RETAINED => {
+                return Err(Error::Unquiesced {
+                    operation: "cuFileBufDeregister",
+                    code: -1,
+                });
+            }
+            _ => {}
+        }
+        slot.users -= 1;
+        if slot.users == 0 && slot.retired {
+            if let Err(error) = slot.close() {
+                self.state.store(Self::RETAINED, Ordering::Release);
+                std::mem::forget(self.memory.clone());
+                return Err(error);
+            }
+        }
+        self.state.store(Self::RELEASED, Ordering::Release);
+        Ok(())
+    }
+}
+impl Drop for BufferLease {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}

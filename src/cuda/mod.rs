@@ -239,6 +239,63 @@ impl fmt::Debug for CudaMemory {
     }
 }
 
+#[cfg(feature = "gds")]
+pub(crate) struct GdsLoan {
+    memory: Arc<CudaMemory>,
+    range: Range<usize>,
+}
+
+#[cfg(feature = "gds")]
+impl Drop for GdsLoan {
+    fn drop(&mut self) {
+        self.memory
+            .allocation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .dma
+            .retain(|r| r != &self.range);
+    }
+}
+
+#[cfg(feature = "gds")]
+impl CudaMemory {
+    pub(crate) fn gds_loan(self: &Arc<Self>, offset: usize, length: usize) -> Result<GdsLoan> {
+        let range = checked_range(offset, length, self.length)?;
+        let mut a = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA allocation poisoned"))?;
+        a.prepare_access(&range)?;
+        a.dma.try_reserve(1).map_err(|_| Error::ResourceExhausted)?;
+        a.dma.push(range.clone());
+        Ok(GdsLoan {
+            memory: self.clone(),
+            range,
+        })
+    }
+    pub(crate) fn fence_gds(&self) {
+        self.allocation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .uncertain = true;
+    }
+    pub(crate) fn gds_current<T>(&self, call: impl FnOnce() -> Result<T>) -> Result<T> {
+        let allocation = self.allocation.lock().map_err(|_| Error::Unquiesced {
+            operation: "CUDA allocation lock",
+            code: -1,
+        })?;
+        if allocation.uncertain {
+            return Err(Error::Unquiesced {
+                operation: "CUDA file ownership",
+                code: -1,
+            });
+        }
+        let context = allocation.context.clone();
+        drop(allocation);
+        context.current(call)
+    }
+}
+
 impl CudaMemory {
     /// Inspect a checked range using registration-time attributes. This does not
     /// probe the driver again, wait for producers, or authorize payload access.
