@@ -19,6 +19,8 @@ impl Producer {
             context
                 .current(|| {
                     let mut stream = std::ptr::null_mut();
+                    // SAFETY: The producer context is current, and stream is writable storage for
+                    // the handle it will own.
                     check("producer stream", unsafe {
                         (context.driver.stream_create)(&mut stream, 1)
                     })?;
@@ -36,6 +38,8 @@ impl Producer {
     fn enqueue(&self, host: &HostMemory, offset: usize, length: usize) {
         self.context
             .current(|| {
+                // SAFETY: The producer retains its source and stream and the pinned destination
+                // stays allocated through completion.
                 check("producer DtoH", unsafe {
                     (self.context.driver.to_host)(
                         (host.base_address() + offset as u64) as usize as *mut _,
@@ -50,6 +54,8 @@ impl Producer {
 
     fn record(self: &Arc<Self>, host: &HostMemory) -> Result<()> {
         self.context
+            // SAFETY: The producer owns this live stream and the cloned owner retains its copy
+            // inputs through completion.
             .current(|| unsafe { host.record_producer_stream(self.stream as *mut _, self.clone()) })
     }
 
@@ -186,6 +192,8 @@ fn pinned_producer_readiness_precedes_cpu_staging_ipc_dma_and_tcp_payloads() {
                     )
                     .unwrap();
                 if route == "ipc-write" {
+                    // SAFETY: The fixture owns this fixed buffer and observes it only before a
+                    // copy, after completion, or while its writer is held.
                     assert_eq!(&unsafe { &*remote.bytes.get() }[8..12], &[0x57; 4]);
                 }
                 mapping.close().unwrap();
@@ -251,15 +259,12 @@ fn pinned_producer_readiness_precedes_cpu_staging_ipc_dma_and_tcp_payloads() {
                     .submit_and_wait(
                         op,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            transport: Transport::Tcp,
-                            remote_staging: false,
-                            local_address: local_view.base_address() + 8,
-                            remote_address: source_view.base_address() + 8,
-                            length: 16,
-                        }],
+                        &[TransferRequest::new(
+                            Transport::Tcp,
+                            local_view.base_address() + 8,
+                            source_view.base_address() + 8,
+                            16,
+                        )],
                         Duration::from_secs(2),
                     )
                     .unwrap();
@@ -297,6 +302,8 @@ fn pinned_producer_admission_preserves_existing_host_dma_and_ipc_ownership() {
     let producer = Producer::new(&device, false);
     let host = producer.pinned();
     let ordinary = Arc::new(HostMemory::new(vec![0; 64].into_boxed_slice()).unwrap());
+    // SAFETY: The retained HostMemory owns this exact stable range; the test does not access it
+    // through competing aliases.
     let external = unsafe {
         HostMemory::from_raw_parts(
             NonNull::new(ordinary.base_address() as usize as *mut u8).unwrap(),
@@ -368,6 +375,8 @@ fn pinned_producer_failure_retains_native_pin_and_inputs_until_proven_completion
         let recorded = if fault == "foreign-context" {
             let foreign = allocation(&[0; 64]);
             let foreign_producer = Producer::new(&foreign, false);
+            // SAFETY: The foreign producer keeps this stream live during context validation; the
+            // rejected stream is never enqueued.
             unsafe {
                 host.record_producer_stream(foreign_producer.stream as *mut _, producer.clone())
             }

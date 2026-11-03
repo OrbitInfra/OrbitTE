@@ -65,15 +65,13 @@ fn remote_chunks_cross_real_transports_with_one_handler_and_one_parent_slot() {
                     Duration::from_secs(2),
                 )
                 .unwrap();
-            let request = TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: true,
+            let request = TransferRequest::new(
                 transport,
-                local_address: local.base_address() + 2,
-                remote_address: remote.base_address() + 1,
-                length: 8,
-            };
+                local.base_address() + 2,
+                remote.base_address() + 1,
+                8,
+            )
+            .with_remote_staging(true);
             let pattern = [3, 19, 21, 29, 37, 43, 51, 61];
             for op in [TransferOp::Read, TransferOp::Write] {
                 if op == TransferOp::Write {
@@ -350,15 +348,13 @@ fn remote_cuda_failures_keep_confirmed_drain_separate_from_success() {
                         TransferOp::Read
                     },
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Tcp,
-                        local_address: local.base_address(),
-                        remote_address: remote.base_address() + 1,
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Tcp,
+                        local.base_address(),
+                        remote.base_address() + 1,
+                        8,
+                    )
+                    .with_remote_staging(true)],
                     Duration::from_secs(2),
                 )
                 .unwrap();
@@ -438,15 +434,13 @@ fn self_peer_gpu_ranges_require_two_slots_and_reject_overlap_before_copy() {
                     .submit_and_wait(
                         operation,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: true,
-                            transport: Transport::Tcp,
-                            local_address: memory.base_address() + if overlap { 4 } else { 12 },
-                            remote_address: memory.base_address(),
-                            length: 8,
-                        }],
+                        &[TransferRequest::new(
+                            Transport::Tcp,
+                            memory.base_address() + if overlap { 4 } else { 12 },
+                            memory.base_address(),
+                            8,
+                        )
+                        .with_remote_staging(true)],
                         Duration::from_secs(2),
                     )
                     .unwrap();
@@ -582,15 +576,13 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
                         .submit_and_wait(
                             operation,
                             &peer,
-                            &[TransferRequest {
-                                qos: None,
-                                priority: Default::default(),
-                                remote_staging: true,
-                                transport: Transport::Rdma,
-                                local_address: local.base_address() + 2,
-                                remote_address: remote.base_address() + 1,
-                                length: 8,
-                            }],
+                            &[TransferRequest::new(
+                                Transport::Rdma,
+                                local.base_address() + 2,
+                                remote.base_address() + 1,
+                                8,
+                            )
+                            .with_remote_staging(true)],
                             Duration::from_secs(5),
                         )
                         .unwrap();
@@ -635,6 +627,8 @@ fn private_mr_cleanup_failure_retains_actual_stage_and_responsible_admission() {
                             let mut resident =
                                 vec![0u8; length / crate::platform::numa::page_round(1).unwrap()];
                             assert_eq!(
+                                // SAFETY: The fixture supplies a page-aligned mapping address and
+                                // a writable residency byte per queried page.
                                 unsafe {
                                     libc::mincore(address as *mut _, length, resident.as_mut_ptr())
                                 },
@@ -787,15 +781,13 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                 .submit_and_wait(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Tcp,
-                        local_address: local.base_address() + 1,
-                        remote_address: remote.base_address() + 1,
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Tcp,
+                        local.base_address() + 1,
+                        remote.base_address() + 1,
+                        8,
+                    )
+                    .with_remote_staging(true)],
                     Duration::from_secs(2),
                 )
                 .unwrap();
@@ -918,15 +910,13 @@ fn opposite_direction_sessions_hold_disjoint_gpu_ranges_without_network_locks() 
                 .submit_and_wait(
                     TransferOp::Read,
                     peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Tcp,
-                        local_address: local.base_address() + 12,
-                        remote_address: remote.base_address(),
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Tcp,
+                        local.base_address() + 12,
+                        remote.base_address(),
+                        8,
+                    )
+                    .with_remote_staging(true)],
                     Duration::from_secs(2),
                 )
                 .unwrap();

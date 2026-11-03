@@ -52,6 +52,8 @@ impl ConnectionResources {
             pd: self.handles.private_pd,
             ..Default::default()
         };
+        // SAFETY: The connection owns the grant PD handle until this exclusive deallocation
+        // attempt.
         let code = unsafe { (verbs.dealloc_pd)(&mut device) };
         if code != 0 {
             return Err(("ibv_dealloc_pd GPU grant", code));
@@ -79,6 +81,8 @@ impl ConnectionResources {
             return Err((operation, code));
         }
         let had_qp = !self.handles.qp.is_null();
+        // SAFETY: This connection owns the QP handles and keeps their dependencies live during
+        // destroy.
         let code = unsafe { (verbs.destroy_qp)(&mut self.handles) };
         if code != 0 {
             return Err(("ibv_destroy_qp", code));
@@ -256,7 +260,7 @@ impl Descriptor {
     }
 }
 
-// Native connection and memory owners are serialized by the progress record.
+// SAFETY: Native connection and memory owners are serialized by the progress record.
 unsafe impl Send for ConnectionResources {}
 
 #[derive(Clone, Copy, Eq, PartialEq)]

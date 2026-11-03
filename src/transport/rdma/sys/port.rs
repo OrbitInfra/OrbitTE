@@ -21,6 +21,8 @@ pub(super) unsafe fn query_port(
     let mut attr = shim::orbitte_port_attr::default();
     // The C compiler uses the system's verbs inline and provider layout. Only
     // our generated, fixed-width result crosses back into Rust.
+    // SAFETY: The caller retains the verbs context and the C shim writes into its generated
+    // output type.
     let code = unsafe { shim::orbitte_query_port(context.cast(), port, &mut attr) };
     if code == 0 { Ok(attr) } else { Err(code) }
 }
@@ -57,6 +59,8 @@ struct PortSpeedQuery {
 impl PortSpeedQuery {
     fn from_library(library: Library) -> Option<Self> {
         // Optional since rdma-core 62. Keep the library alive with its function.
+        // SAFETY: The named symbol has the QueryPortSpeed ABI and the returned owner retains
+        // its Library.
         let query = *unsafe { library.get::<QueryPortSpeed>(b"ibv_query_port_speed\0") }.ok()?;
         Some(Self {
             query,
@@ -71,10 +75,14 @@ pub(super) unsafe fn query_port_speed(
 ) -> Result<Option<u64>> {
     static QUERY: OnceLock<Option<PortSpeedQuery>> = OnceLock::new();
     let query = QUERY.get_or_init(|| {
+        // SAFETY: Load the system verbs provider with its C ABI and retain the handle with the
+        // resolved query.
         let library = unsafe { Library::new("libibverbs.so.1") }.ok()?;
         PortSpeedQuery::from_library(library)
     });
     match query {
+        // SAFETY: The caller owns the open device and PortSpeedQuery retains the library
+        // defining the function.
         Some(query) => unsafe {
             effective_speed(query.query, (*device).context.cast(), port).map(Some)
         },
@@ -88,6 +96,8 @@ unsafe fn effective_speed(
     port: u8,
 ) -> Result<u64> {
     let mut speed = 0;
+    // SAFETY: The retained context and port are passed to the loaded ABI with writable u64
+    // output.
     let code = unsafe { query(context, u32::from(port), &mut speed) };
     if code != 0 {
         return Err(Error::Backend {

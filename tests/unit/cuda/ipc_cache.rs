@@ -187,15 +187,12 @@ fn register(engine: &TransferEngine, memory: &Arc<CudaMemory>) -> crate::Registe
         .remove(0)
 }
 fn request(local: &crate::RegisteredMemory, remote: &crate::RegisteredMemory) -> TransferRequest {
-    TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: Transport::Nvlink,
-        local_address: local.base_address() + 7,
-        remote_address: remote.base_address() + 11,
-        length: 17,
-    }
+    TransferRequest::new(
+        Transport::Nvlink,
+        local.base_address() + 7,
+        remote.base_address() + 11,
+        17,
+    )
 }
 fn event_count(device: &Device, name: &str) -> usize {
     device

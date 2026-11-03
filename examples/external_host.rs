@@ -32,15 +32,12 @@ fn main() -> orbit_te::Result<()> {
         source.source_epoch(),
         Duration::from_secs(1),
     )?;
-    let transfer = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: orbit_te::Transport::Tcp,
-        local_address: destination.base_address(),
-        remote_address: memory.base_address() + 16,
-        length: 5,
-    };
+    let transfer = TransferRequest::new(
+        orbit_te::Transport::Tcp,
+        destination.base_address(),
+        memory.base_address() + 16,
+        5,
+    );
     let report =
         requester.submit_and_wait(TransferOp::Read, &peer, &[transfer], Duration::from_secs(1))?;
     if let Some(failure) = report.failure {

@@ -38,6 +38,8 @@ fn discover(config: &RdmaConfig) -> Result<(Topology, Vec<discovery::RdmaAddress
 }
 
 unsafe extern "C" fn open(h: *mut sys::DeviceHandles, _: *const c_char) -> i32 {
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { super::open_device(h, c"copy".as_ptr()) }
 }
 

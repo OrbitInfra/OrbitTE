@@ -308,15 +308,12 @@ pub(crate) fn requester_case(
                 .unwrap();
         }
     });
-    let request = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: Transport::Nvlink,
-        local_address: registered.base_address() + 7,
-        remote_address: peer.regions[0].address + 11,
-        length: 17,
-    };
+    let request = TransferRequest::new(
+        Transport::Nvlink,
+        registered.base_address() + 7,
+        peer.regions[0].address + 11,
+        17,
+    );
     let (failed, drained, effect) = if asynchronous {
         let mut batch = engine.allocate_batch(1).unwrap();
         batch

@@ -25,6 +25,8 @@ unsafe fn query_address(
     address: &RdmaAddress,
     gid_index: Option<u8>,
 ) -> Result<RdmaAddress> {
+    // SAFETY: The locked device owner retains its context and selected address for the
+    // synchronous query.
     let mut observed = unsafe { (sys::REAL.query_address)(handles, address, gid_index) }?;
     if PAUSED.load(Ordering::Acquire) {
         observed.active = false;
@@ -62,6 +64,7 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
         .open(std::env::var("ORBITTE_RDMA_LOCK").unwrap())
         .unwrap();
     assert_eq!(
+        // SAFETY: The fixture File owns this descriptor while the kernel acquires its lock.
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0,
         "the selected RNIC lock must be held through native close"

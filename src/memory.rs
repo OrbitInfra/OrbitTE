@@ -152,10 +152,10 @@ impl HostBacking {
     }
 }
 
+#[allow(unsafe_code)]
 // SAFETY: all CPU dereferences hold HostAccess's lock and reject overlapping
 // native loans. External owners additionally promise stable host access on any
 // thread. Raw owned backing avoids forming Rust slices across disjoint DMA.
-#[allow(unsafe_code)]
 unsafe impl Send for HostBacking {}
 
 impl Drop for HostBacking {
@@ -314,9 +314,8 @@ impl HostMemory {
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
         backing.prepare_access(&range)?;
-        // SAFETY: the staging range is checked and exclusively locked;
-        // neither a CPU writer nor a native DMA loan overlaps this slice.
         let bytes =
+            // SAFETY: the checked range is exclusively locked and has no overlapping DMA loan.
             unsafe { std::slice::from_raw_parts_mut(backing.bytes.address().as_ptr(), length) };
         operation(bytes)
     }

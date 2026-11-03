@@ -689,14 +689,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let remote: u64 = args[11].parse()?;
         let requests: Vec<_> = entries
             .iter()
-            .map(|(local, source, length)| TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging,
-                transport,
-                local_address: memory.base_address() + *local as u64,
-                remote_address: remote + *source as u64,
-                length: *length,
+            .map(|(local, source, length)| {
+                TransferRequest::new(
+                    transport,
+                    memory.base_address() + *local as u64,
+                    remote + *source as u64,
+                    *length,
+                )
+                .with_remote_staging(remote_staging)
             })
             .collect();
         let mut batch = engine.allocate_batch(requests.len())?;

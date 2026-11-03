@@ -161,15 +161,9 @@ fn tent_layers_override_fields_and_compile_bounded_shared_slots() {
 }
 
 fn request(local: u64, remote: u64, policy: Option<EffectiveQosPolicy>) -> TransferRequest {
-    TransferRequest {
-        qos: policy,
-        priority: Priority::Low,
-        remote_staging: false,
-        transport: Transport::Tcp,
-        local_address: local,
-        remote_address: remote,
-        length: 1,
-    }
+    TransferRequest::new(Transport::Tcp, local, remote, 1)
+        .with_qos(policy)
+        .with_priority(Priority::Low)
 }
 
 #[test]

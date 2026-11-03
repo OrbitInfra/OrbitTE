@@ -150,6 +150,8 @@ impl CompletionEvents {
                 return Err((operation, code));
             }
             if !resources.handles.channel.is_null() {
+                // SAFETY: The monitor registration has stopped; this owner holds the channel
+                // through its single close attempt.
                 let code = unsafe { (resources.verbs.close)(&mut resources.handles) };
                 if code != 0 {
                     return Err(("ibv_destroy_comp_channel", code));
@@ -250,6 +252,8 @@ impl RdmaCq {
             let native = verbs
                 .completion
                 .ok_or(Error::Internal("missing RDMA CQ event verbs"))?;
+            // SAFETY: The CQ and its event channel remain live on the lane while arming
+            // notifications.
             check("ibv_req_notify_cq", unsafe {
                 (native.arm)(self.handles.cq)
             })?;
@@ -268,6 +272,8 @@ impl RdmaCq {
         if let Err(Error::Unquiesced { operation, code }) = self._device.asynchronous.check() {
             return Err((operation, code));
         }
+        // SAFETY: The lane exclusively owns these CQ handles through destruction and retains
+        // them if it fails.
         let code = unsafe { (verbs.destroy_cq)(&mut self.handles) };
         if code != 0 {
             return Err(("ibv_destroy_cq", code));
@@ -276,7 +282,7 @@ impl RdmaCq {
     }
 }
 
-// The sole progress thread arms, polls and closes this CQ.
+// SAFETY: The sole progress thread arms, polls and closes this CQ.
 unsafe impl Send for RdmaCq {}
 
 impl Drop for RdmaCq {

@@ -28,15 +28,22 @@ unsafe extern "C" fn post(
     writing: i32,
     result: *mut sys::PostResult,
 ) -> i32 {
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     let code = unsafe {
         gated_post(
             handles, memory, requests, count, local, length, remote, rkey, writing, result,
         )
     };
     assert_eq!(code, 0);
+    // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+    // before this observation.
     assert_eq!(unsafe { (*result).accepted }, count);
+    // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
     let qpn = unsafe { (*(*handles).qp.cast::<ibverbs_sys::ibv_qp>()).qp_num };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
+    // SAFETY: The posting caller lends count initialized descriptors throughout this synchronous
+    // callback.
     for request in unsafe { std::slice::from_raw_parts(requests, count) } {
         trace.payload.push((qpn, request.id));
     }
@@ -65,10 +72,14 @@ unsafe extern "C" fn poll(
             trace.payload_polling = true;
         }
     }
+    // SAFETY: The lane retains the CQ and provides writable completion output for the provider
+    // call.
     let count = unsafe { (sys::REAL.poll)(handles, completion) };
     if count != 1 {
         return count;
     }
+    // SAFETY: The poll supplied writable output and a completion was initialized before this
+    // observation.
     let wc = unsafe { &*completion };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     if wc.status == 0 && matches!(wc.opcode, 1 | 2) {
@@ -95,7 +106,10 @@ unsafe extern "C" fn poll(
 }
 
 unsafe extern "C" fn destroy_qp(handles: *mut sys::ConnectionHandles) -> i32 {
+    // SAFETY: The connection supplies a live QP handle slot for the callback.
     let existed = unsafe { !(*handles).qp.is_null() };
+    // SAFETY: The retiring connection exclusively owns these QP handles through the destroy
+    // attempt.
     let code = unsafe { (sys::REAL.destroy_qp)(handles) };
     if existed && code == 0 {
         TRACE.get().unwrap().lock().unwrap().closed_qps += 1;
@@ -128,6 +142,7 @@ unsafe extern "C" fn destroy_cq(handles: *mut sys::CqHandles) -> i32 {
         trace.barrier_checks += trace.records.len();
     }
     drop(trace);
+    // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy attempt.
     unsafe { (sys::REAL.destroy_cq)(handles) }
 }
 

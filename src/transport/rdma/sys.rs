@@ -45,7 +45,7 @@ impl Default for DeviceHandles {
     }
 }
 
-// libibverbs contexts and PDs support calls from multiple threads. RdmaContext owns
+// SAFETY: libibverbs contexts and PDs support calls from multiple threads. RdmaContext owns
 // these handles behind a mutex and retains them through every child endpoint.
 unsafe impl Send for DeviceHandles {}
 
@@ -96,7 +96,7 @@ impl Default for ChannelHandles {
     }
 }
 
-// Access is serialized by the completion-channel owner; its consumer is joined first.
+// SAFETY: Access is serialized by the completion-channel owner; its consumer is joined first.
 unsafe impl Send for ChannelHandles {}
 
 #[derive(Clone, Copy)]

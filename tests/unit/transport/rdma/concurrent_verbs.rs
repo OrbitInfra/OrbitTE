@@ -126,6 +126,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .unwrap()
                 .handles
                 .qp as usize;
+            // SAFETY: The connection owns the native ibv_qp while the fixture inspects its
+            // fields.
             let qpn = unsafe { (*(qp as *const ffi::ibv_qp)).qp_num };
             let cq = record
                 .lock()
@@ -149,6 +151,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 .unwrap()
                 .handles
                 .receive_cq as usize;
+            // SAFETY: The connection owns the native ibv_qp while the fixture inspects its
+            // fields.
             let pd = unsafe { (*(qp as *const ffi::ibv_qp)).pd } as usize;
             Owner {
                 nic,
@@ -157,6 +161,8 @@ pub(super) fn admitted(records: Vec<(usize, Arc<Record>)>) {
                 qpn,
                 cq,
                 receive_cq,
+                // SAFETY: The recorded dependent resource keeps its provider handle and parent
+                // context live at this observation.
                 channel: unsafe { (*(receive_cq as *const ffi::ibv_cq)).channel } as usize,
                 record,
             }
@@ -225,6 +231,8 @@ pub(super) fn injected_parent() -> usize {
 }
 
 unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char) -> c_int {
+    // SAFETY: The context constructor supplies initialized handle storage and a live device-name
+    // C string.
     let code = unsafe { (sys::REAL.open_device)(h, name) };
     if code == 0 {
         TRACE.get().unwrap().lock().unwrap().opened += 1;
@@ -239,9 +247,14 @@ unsafe extern "C" fn register(
     length: usize,
     bind: bool,
 ) -> c_int {
+    // SAFETY: The registration owner retains the address range and PD through deregistration and
+    // supplies writable MR handles.
     let code = unsafe { (sys::REAL.register_memory)(h, device, address, length, bind) };
     if code == 0 {
+        // SAFETY: The registration retains this native ibv_mr until the deregistration call
+        // returns.
         let mr = unsafe { &*(*h).mr.cast::<ffi::ibv_mr>() };
+        // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(mr.pd.cast::<std::ffi::c_void>(), unsafe { (*device).pd });
         let mut trace = TRACE.get().unwrap().lock().unwrap();
         trace.registered += 1;
@@ -262,8 +275,12 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
     let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
+    // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
     assert_eq!(qp.pd, unsafe { (*(*memory).mr.cast::<ffi::ibv_mr>()).pd });
+    // SAFETY: The live verbs context retains its device and the provider-owned NUL-terminated
+    // name during inspection.
     let name = unsafe { CStr::from_ptr(ffi::ibv_get_device_name((*qp.context).device)) }
         .to_str()
         .unwrap();
@@ -299,6 +316,8 @@ unsafe extern "C" fn post(
                 .find(|owner| {
                     owner.qp == qp as *const _ as usize
                         && owner.record.send_namespace.load(Ordering::Acquire)
+                            // SAFETY: The nonempty post keeps its first work descriptor and the
+                            // connection handles live throughout observation.
                             == unsafe { (*requests).id } / crate::transport::rdma::WR_ID_STRIDE
                 })
                 .unwrap();
@@ -312,6 +331,8 @@ unsafe extern "C" fn post(
         if inject {
             trace.injected = 1;
             trace.injected_qp = qp as *const _ as usize;
+            // SAFETY: The nonempty post keeps its first work descriptor and the connection
+            // handles live throughout observation.
             trace.injected_wr = Some((unsafe { (*h).cq } as usize, qp.qp_num, unsafe {
                 (*requests).id
             }));
@@ -324,11 +345,14 @@ unsafe extern "C" fn post(
                     .find(|owner| {
                         owner.qp == trace.injected_qp
                             && owner.record.send_namespace.load(Ordering::Acquire)
+                                // SAFETY: The nonempty post keeps its first work descriptor and
+                                // the connection handles live throughout observation.
                                 == unsafe { (*requests).id } / crate::transport::rdma::WR_ID_STRIDE
                     })
                     .unwrap()
                     .record,
             ));
+            // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
             trace.failed_cqs = [unsafe { (*h).cq } as usize, unsafe { (*h).receive_cq }
                 as usize]
             .into();
@@ -350,6 +374,8 @@ unsafe extern "C" fn post(
             ..Default::default()
         };
         assert_eq!(
+            // SAFETY: The connection retains the native QP and the fixture supplies initialized
+            // attribute storage for this call.
             unsafe {
                 ffi::ibv_modify_qp(
                     (*h).qp.cast(),
@@ -362,6 +388,8 @@ unsafe extern "C" fn post(
         let mut observed = ffi::ibv_qp_attr::default();
         let mut initial = ffi::ibv_qp_init_attr::default();
         assert_eq!(
+            // SAFETY: The connection retains the native QP and the fixture supplies initialized
+            // attribute storage for this call.
             unsafe {
                 ffi::ibv_query_qp(
                     (*h).qp.cast(),
@@ -383,6 +411,8 @@ unsafe extern "C" fn post(
             .unwrap()
             .mode
             .ends_with("cq-error");
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     let code = unsafe {
         (sys::REAL.post)(
             h,
@@ -398,6 +428,8 @@ unsafe extern "C" fn post(
         )
     };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
+    // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+    // before this observation.
     let accepted = unsafe { (*result).accepted };
     if inject && trace.mode.ends_with("qp-error") {
         assert_eq!(
@@ -405,6 +437,8 @@ unsafe extern "C" fn post(
             "the ERR QP must accept the actual flush window"
         );
     }
+    // SAFETY: The provider reports an accepted prefix bounded by the posted descriptor count; the
+    // caller retains the whole array.
     for request in unsafe { std::slice::from_raw_parts(requests, accepted) } {
         assert_eq!(
             request.offset as usize, trace.accepted[parent][slice],
@@ -420,6 +454,8 @@ unsafe extern "C" fn post(
         assert!(
             trace
                 .accepted_wr
+                // SAFETY: The lane or connection keeps its CQ handle slot live during
+                // observation.
                 .insert((unsafe { (*h).cq } as usize, qp.qp_num, request.id)),
             "native payload WR replay"
         );
@@ -435,9 +471,16 @@ unsafe extern "C" fn post_receive(
     length: usize,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The receive owner retains the message MR and QP and supplies a writable post
+    // result.
     let code = unsafe { (sys::REAL.post_receive)(h, memory, id, address, length, result) };
+    // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+    // before this observation.
     if unsafe { (*result).accepted } != 0 {
+        // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+        // before this observation.
         assert_eq!(unsafe { (*result).accepted }, 1);
+        // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
         let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
         assert!(
             TRACE
@@ -446,6 +489,7 @@ unsafe extern "C" fn post_receive(
                 .lock()
                 .unwrap()
                 .accepted_receive
+                // SAFETY: The connection retains its receive CQ throughout this post.
                 .insert((unsafe { (*h).receive_cq } as usize, qp.qp_num, id))
         );
     }
@@ -462,16 +506,25 @@ unsafe extern "C" fn send_completion(
     invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The grant retains the registered completion buffer and QP through the send; result
+    // is writable.
     let code = unsafe {
         (sys::REAL.send_completion)(h, memory, id, address, length, rkey, invalidate, result)
     };
+    // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+    // before this observation.
     if unsafe { (*result).accepted } != 0 {
+        // SAFETY: The posting caller owns the result slot; the provider initialized its outcome
+        // before this observation.
         assert_eq!(unsafe { (*result).accepted }, 1);
         let mut trace = TRACE.get().unwrap().lock().unwrap();
+        // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
         let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
         assert!(
             trace
                 .accepted_wr
+                // SAFETY: The lane or connection keeps its CQ handle slot live during
+                // observation.
                 .insert((unsafe { (*h).cq } as usize, qp.qp_num, id)),
             "native SEND WR replay"
         );
@@ -480,22 +533,33 @@ unsafe extern "C" fn send_completion(
 }
 
 unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> c_int {
+    // SAFETY: The polling lane supplies live CQ handles; the observer borrows them within the
+    // poll callback.
     unsafe { worker_pool::observe(h) };
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     let cq = unsafe { (*h).cq } as usize;
     {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
         if trace.requester && trace.released {
             if let Some(completion) = trace.held_cqes.entry(cq).or_default().pop_front() {
+                // SAFETY: The polling caller provides writable completion storage for this single
+                // result.
                 unsafe { out.write(completion) };
                 trace.delivered_held += 1;
+                // SAFETY: The poll supplied writable output and a completion was initialized
+                // before this observation.
                 if lose_completion(&mut trace, cq, unsafe { &*out }) {
                     return 0;
                 }
+                // SAFETY: The poll supplied writable output and a completion was initialized
+                // before this observation.
                 delivered(&mut trace, cq, unsafe { &*out });
                 return 1;
             }
         }
     }
+    // SAFETY: The lane retains the CQ and provides writable completion output for the provider
+    // call.
     let code = unsafe { (sys::REAL.poll)(h, out) };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     if code == 1 && trace.requester && trace.held && !trace.released {
@@ -503,13 +567,19 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
             .held_cqes
             .entry(cq)
             .or_default()
+            // SAFETY: The poll supplied writable output and a completion was initialized before
+            // this observation.
             .push_back(unsafe { out.read() });
         0
     } else {
         if code == 1 {
+            // SAFETY: The poll supplied writable output and a completion was initialized before
+            // this observation.
             if lose_completion(&mut trace, cq, unsafe { &*out }) {
                 return 0;
             }
+            // SAFETY: The poll supplied writable output and a completion was initialized before
+            // this observation.
             delivered(&mut trace, cq, unsafe { &*out });
         }
         code
@@ -611,13 +681,18 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
 }
 
 unsafe extern "C" fn destroy_qp(h: *mut sys::ConnectionHandles) -> c_int {
+    // SAFETY: The connection supplies a live QP handle slot for the callback.
     let qp = unsafe { (*h).qp } as usize;
     let code = {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
         let mut retirement = trace.retirement.take();
         let code = retirement
             .as_mut()
+            // SAFETY: The retirement observer borrows the same live handles provided to the
+            // native teardown callback.
             .and_then(|r| unsafe { r.destroy_qp(&trace, h) })
+            // SAFETY: The retiring connection exclusively owns these QP handles through the
+            // destroy attempt.
             .unwrap_or_else(|| unsafe { (sys::REAL.destroy_qp)(h) });
         trace.retirement = retirement;
         code
@@ -635,6 +710,7 @@ unsafe extern "C" fn destroy_qp(h: *mut sys::ConnectionHandles) -> c_int {
 }
 
 unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     let cq = unsafe { (*h).cq } as usize;
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     let observed = trace.failed_cqs.contains(&cq);
@@ -887,7 +963,11 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     let mut retirement = trace.retirement.take();
     let code = retirement
         .as_mut()
+        // SAFETY: The retirement observer borrows the same live handles provided to the native
+        // teardown callback.
         .and_then(|r| unsafe { r.destroy_cq(&trace, h) })
+        // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy
+        // attempt.
         .unwrap_or_else(|| unsafe { (sys::REAL.destroy_cq)(h) });
     trace.retirement = retirement;
     if code == 0 {
@@ -900,7 +980,10 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
 }
 
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
+    // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
     let mr = unsafe { (*h).mr } as usize;
+    // SAFETY: The registration owner retains the MR and backing through the deregistration
+    // attempt.
     let code = unsafe { (sys::REAL.deregister)(h) };
     if code == 0 && mr != 0 {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
@@ -916,7 +999,11 @@ unsafe extern "C" fn dealloc_pd(h: *mut sys::DeviceHandles) -> c_int {
     let mut retirement = trace.retirement.take();
     let code = retirement
         .as_mut()
+        // SAFETY: The retirement observer borrows the same live handles provided to the native
+        // teardown callback.
         .and_then(|r| unsafe { r.dealloc_pd(&trace, h) })
+        // SAFETY: The retiring owner keeps its protection domain handles live through
+        // deallocation.
         .unwrap_or_else(|| unsafe { (sys::REAL.dealloc_pd)(h) });
     trace.retirement = retirement;
     code
@@ -924,8 +1011,10 @@ unsafe extern "C" fn dealloc_pd(h: *mut sys::DeviceHandles) -> c_int {
 
 unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
     if let Some(retirement) = &TRACE.get().unwrap().lock().unwrap().retirement {
+        // SAFETY: the context owner supplies its live handles before forwarding the close.
         retirement.before_context_close(unsafe { &*h });
     }
+    // SAFETY: The retiring context supplies its own live handles for this close attempt.
     let code = unsafe { (sys::REAL.close_device)(h) };
     if code == 0 {
         TRACE.get().unwrap().lock().unwrap().closed += 1;
@@ -938,7 +1027,10 @@ unsafe extern "C" fn close_channel(h: *mut sys::ChannelHandles) -> c_int {
     let mut retirement = trace.retirement.take();
     let code = retirement
         .as_mut()
+        // SAFETY: The retirement observer borrows the same live handles provided to the native
+        // teardown callback.
         .and_then(|r| unsafe { r.close_channel(&trace, h) })
+        // SAFETY: The channel owner supplies its exclusively owned handles on this close attempt.
         .unwrap_or_else(|| unsafe { (sys::REAL.completion.unwrap().close)(h) });
     trace.retirement = retirement;
     code

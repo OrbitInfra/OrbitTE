@@ -21,9 +21,13 @@ pub(super) fn reset() {
 }
 
 pub(super) unsafe fn observe(handles: *const sys::ConnectionHandles) {
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     let cq = unsafe { (*handles).cq.cast::<ibverbs_sys::ibv_cq>() };
     assert!(!cq.is_null());
+    // SAFETY: The CQ or other registered native resource still holds the device context.
     let context = unsafe { (*cq).context };
+    // SAFETY: The live verbs context retains its device and the provider-owned NUL-terminated
+    // name during inspection.
     let device = unsafe { CStr::from_ptr((*(*context).device).name.as_ptr()) }
         .to_str()
         .unwrap();

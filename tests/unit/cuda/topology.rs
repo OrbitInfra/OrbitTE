@@ -4,12 +4,14 @@ use std::ffi::{c_char, c_int};
 use std::os::unix::fs::symlink;
 
 unsafe extern "C" fn count(out: *mut c_int) -> driver::Status {
+    // SAFETY: The discovery caller provides a writable device-count output.
     unsafe {
         *out = 2;
     }
     SUCCESS
 }
 unsafe extern "C" fn get(out: *mut c_int, ordinal: c_int) -> driver::Status {
+    // SAFETY: The ordinal is a scalar and the caller provides a writable device slot.
     unsafe {
         *out = ordinal + 10;
     }
@@ -19,6 +21,7 @@ unsafe extern "C" fn get_failure(out: *mut c_int, ordinal: c_int) -> driver::Sta
     if ordinal == 1 {
         driver::Status::CUDA_ERROR_ILLEGAL_ADDRESS
     } else {
+        // SAFETY: The wrapper forwards the same writable device slot and ordinal to get.
         unsafe { get(out, ordinal) }
     }
 }
@@ -31,6 +34,8 @@ unsafe extern "C" fn bus(out: *mut c_char, len: c_int, device: c_int) -> driver:
     if (len as usize) < value.to_bytes_with_nul().len() {
         return driver::Status::CUDA_ERROR_INVALID_VALUE;
     }
+    // SAFETY: The caller supplies the checked output capacity and the literal includes its NUL
+    // terminator.
     unsafe {
         std::ptr::copy_nonoverlapping(value.as_ptr(), out, value.to_bytes_with_nul().len());
     }
@@ -103,6 +108,8 @@ fn cuda_inventory_maps_ordinals_to_pci_tiers_and_publishes_only_complete_snapsho
     // The external allocation reports an ordinal; native PCI queries use the
     // distinct cuDeviceGet handle. Both must identify the same topology row.
     let owner = allocation(&[0x51; 8]);
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let address = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
     let memory = CudaMemory::register(address, 8, owner, driver.clone()).unwrap();
     assert!(matches!(
@@ -179,15 +186,12 @@ fn public_gpu_read_write_slices_use_owner_locations_at_both_peers() {
                 .submit_and_wait(
                     op,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 3,
-                        length: 13,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 3,
+                        13,
+                    )],
                     Duration::from_secs(2),
                 )
                 .unwrap();
@@ -219,6 +223,8 @@ fn primary_context_keeps_visible_ordinal_separate_from_native_device_ownership()
         if device != 10 {
             return driver::Status::CUDA_ERROR_INVALID_DEVICE;
         }
+        // SAFETY: The caller provides a writable handle slot; the shim returns an opaque sentinel
+        // it never dereferences.
         unsafe {
             *out = NonNull::dangling().as_ptr();
         }

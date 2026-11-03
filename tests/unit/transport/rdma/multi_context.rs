@@ -22,10 +22,16 @@ unsafe extern "C" fn register(
     length: usize,
     bind: bool,
 ) -> i32 {
+    // SAFETY: The registration owner retains the address range and PD through deregistration and
+    // supplies writable MR handles.
     let code = unsafe { (sys::REAL.register_memory)(memory, device, address, length, bind) };
     if code == 0 {
+        // SAFETY: The registration retains this native ibv_mr until the deregistration call
+        // returns.
         let mr = unsafe { &*(*memory).mr.cast::<ffi::ibv_mr>() };
+        // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(mr.pd.cast::<std::ffi::c_void>(), unsafe { (*device).pd });
+        // SAFETY: The device owner keeps this context handle slot valid through the callback.
         assert_eq!(mr.context.cast::<std::ffi::c_void>(), unsafe {
             (*device).context
         });
@@ -38,7 +44,10 @@ unsafe extern "C" fn register(
 }
 
 unsafe extern "C" fn deregister(memory: *mut sys::MemoryHandles) -> i32 {
+    // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
     let handle = unsafe { (*memory).mr } as usize;
+    // SAFETY: The registration owner retains the MR and backing through the deregistration
+    // attempt.
     let code = unsafe { (sys::REAL.deregister)(memory) };
     if code == 0 && handle != 0 {
         let mut native = NATIVE.get().unwrap().lock().unwrap();

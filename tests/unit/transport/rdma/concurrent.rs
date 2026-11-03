@@ -175,27 +175,23 @@ fn transfer(
         .submit_and_wait(
             operation,
             peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: base
-                    + (parent * shape.bank
-                        + if operation == TransferOp::Read {
-                            shape.destination
-                        } else {
-                            GUARD
-                        }) as u64,
-                remote_address: remote
+            &[TransferRequest::new(
+                Transport::Rdma,
+                base + (parent * shape.bank
+                    + if operation == TransferOp::Read {
+                        shape.destination
+                    } else {
+                        GUARD
+                    }) as u64,
+                remote
                     + (parent * shape.bank
                         + if operation == TransferOp::Read {
                             GUARD
                         } else {
                             shape.destination
                         }) as u64,
-                length: shape.payload,
-            }],
+                shape.payload,
+            )],
             if deadline_fault(&env::var("ORBITTE_RAIL_MODE").unwrap()) {
                 Duration::from_secs(5)
             } else {

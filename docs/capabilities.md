@@ -7,6 +7,7 @@ for the exact artifacts and profiles behind each result.
 
 | Path or capability | Current source | Qualification boundary |
 | --- | --- | --- |
+| Rust request construction | Implemented | `TransferRequest::new` works in the CPU-only build. The `rdma` and `cuda` features require a Linux target |
 | CPU DRAM over TCP | Implemented | Loopback and independent-process byte, restart and lifetime controls. Shared TcpTask owns partial framing and payload snapshots; ordinary active-batch cancellation remains unchanged |
 | Owned/external host registration | Implemented | Transactional batches, duplicate references, allocation aliases and retained backing |
 | Async batches and notifications | Implemented | CPU cancellation, detached handles, bounded admission and receipt controls |

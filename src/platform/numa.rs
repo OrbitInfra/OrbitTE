@@ -58,6 +58,8 @@ fn memory_nodes(sys: &Path, mask: &[libc::c_ulong]) -> Vec<u32> {
 fn allowed_nodes() -> Result<Vec<u32>> {
     let mut mask = vec![0 as libc::c_ulong; 65536 / libc::c_ulong::BITS as usize];
     // MPOL_F_MEMS_ALLOWED reads the current cpuset, without changing mempolicy.
+    // SAFETY: The mask has storage for all 65536 requested bits; MPOL_F_MEMS_ALLOWED accepts
+    // null policy and address.
     let status = unsafe {
         libc::syscall(
             libc::SYS_get_mempolicy,
@@ -75,6 +77,7 @@ fn allowed_nodes() -> Result<Vec<u32>> {
 }
 
 pub(crate) fn page_round(length: usize) -> Result<usize> {
+    // SAFETY: sysconf takes only the valid page-size selector and no pointers.
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page <= 0 {
         return Err(Error::Unavailable("host page size"));
@@ -102,6 +105,8 @@ fn bind(address: NonNull<u8>, length: usize, node: u32) -> Result<()> {
     let mask = node_mask(node)?;
     // MPOL_BIND | MPOL_F_STATIC_NODES; fail if already populated pages violate it.
     // maxnode is the number of meaningful mask bits, not bytes or word count.
+    // SAFETY: The mapping owner supplies the live range and the nodemask covers the specified
+    // maximum node.
     let code = unsafe {
         libc::syscall(
             libc::SYS_mbind,
@@ -120,6 +125,8 @@ fn bind(address: NonNull<u8>, length: usize, node: u32) -> Result<()> {
 }
 
 fn unmap(address: NonNull<u8>, length: usize) -> Result<()> {
+    // SAFETY: The mapping owner supplies the base and extent returned by mmap and releases them
+    // once.
     if unsafe { libc::munmap(address.as_ptr().cast(), length) } != 0 {
         return Err(Error::Io(std::io::Error::last_os_error()));
     }
@@ -137,6 +144,8 @@ pub(crate) struct MappedMemory {
 impl MappedMemory {
     pub(crate) fn new(length: usize, node: u32, numa: &'static Numa) -> Result<Self> {
         let length = page_round(length)?;
+        // SAFETY: The anonymous private mapping uses no input buffer or file descriptor;
+        // MAP_FAILED is checked below.
         let raw = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -163,6 +172,8 @@ impl MappedMemory {
             return Err(error);
         }
         // Fault fresh private pages only after their range policy is installed.
+        // SAFETY: The newly mapped length is private, writable and still exclusively owned for
+        // first touch.
         unsafe {
             std::ptr::write_bytes(address.as_ptr(), 0, length);
         }

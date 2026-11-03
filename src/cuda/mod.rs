@@ -78,6 +78,8 @@ struct Context {
 // SAFETY: Driver API contexts can be pushed on engine threads. Each operation
 // restores that thread's stack and allocations serialize their accesses.
 unsafe impl Send for Context {}
+// SAFETY: Threads push the retained context on their own context stacks; allocation locks
+// serialize memory access.
 unsafe impl Sync for Context {}
 
 impl Context {
@@ -294,7 +296,10 @@ impl CudaMemory {
                 (context.driver.allocate)(&mut allocation.address, physical_length)
             })?;
             let initialized =
+                // SAFETY: cuMemAlloc just allocated physical_length bytes in this context.
                 unsafe { (context.driver.memset)(allocation.address, 0, physical_length) };
+            // SAFETY: The retained context is current and the allocation remains owned until
+            // synchronization returns.
             let synced = unsafe { (context.driver.synchronize)() };
             allocation.uncertain = synced != SUCCESS;
             if synced != SUCCESS {

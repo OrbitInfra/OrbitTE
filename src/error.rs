@@ -4,6 +4,7 @@ use std::io;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     InvalidConfig(&'static str),
     /// JSON syntax/schema diagnostics, including the offending QoS field.

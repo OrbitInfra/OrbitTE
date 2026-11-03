@@ -1,7 +1,8 @@
 # Build Guide
 
 OrbitTE builds as a Rust library. Provider features are optional and independent.
-The supported source baseline is Linux and Rust 1.85 or later.
+Rust 1.85 is the minimum supported version. CPU/TCP builds need no native
+feature. Enabling `rdma` or `cuda` requires a Linux compilation target.
 
 ## CPU and TCP
 

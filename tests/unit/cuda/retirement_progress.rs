@@ -95,15 +95,13 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
             Duration::from_secs(3),
         )
         .unwrap();
-    let requests = [TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: true,
-        transport: Transport::Rdma,
-        local_address: local.base_address() + 2,
-        remote_address: remote.base_address() + 1,
-        length: 41,
-    }];
+    let requests = [TransferRequest::new(
+        Transport::Rdma,
+        local.base_address() + 2,
+        remote.base_address() + 1,
+        41,
+    )
+    .with_remote_staging(true)];
     let mut batch = requester
         .submit_async(
             operation,
@@ -181,7 +179,11 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         // No DONE/copy-back/POST or Unpin may outrun native QP/MR retirement.
         assert_eq!(source.stats().unwrap().staging.remote_crosses, 0);
         assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
+        // SAFETY: The shim holds the pending copy at its test barrier; the observed bytes cannot
+        // change before release.
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &a_bytes);
+        // SAFETY: The shim holds the pending copy at its test barrier; the observed bytes cannot
+        // change before release.
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &b_bytes);
     }
     native.release();
@@ -208,7 +210,11 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         } else {
             expected_a[1..42].copy_from_slice(&b_bytes[2..43]);
         }
+        // SAFETY: The successful batch finished its copies before the fixture reads the
+        // backing.
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &expected_a);
+        // SAFETY: The successful batch finished its copies before the fixture reads the
+        // backing.
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
         for engine in [&*requester, &source] {
             let stats = engine.stats().unwrap().rdma.unwrap();
@@ -235,7 +241,11 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         );
         assert_eq!(failure.remote_effect, RemoteEffect::None);
         assert_eq!(report.transferred_bytes, 0);
+        // SAFETY: Retirement failed before copy-back, so the retained handles cannot write
+        // these mock bytes.
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &a_bytes);
+        // SAFETY: Retirement failed before copy-back, so the retained handles cannot write
+        // these mock bytes.
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &b_bytes);
     }
     source.close(Duration::from_secs(3)).unwrap();

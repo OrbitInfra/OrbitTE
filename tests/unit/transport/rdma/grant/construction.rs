@@ -51,15 +51,12 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
                     .submit_and_wait(
                         TransferOp::Read,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: false,
-                            transport: Transport::Rdma,
-                            local_address: local.base_address(),
-                            remote_address: remote.base_address(),
-                            length: 8,
-                        }],
+                        &[TransferRequest::new(
+                            Transport::Rdma,
+                            local.base_address(),
+                            remote.base_address(),
+                            8
+                        )],
                         Duration::from_secs(3)
                     )
                     .unwrap()

@@ -26,15 +26,12 @@ The complete program is [tcp_roundtrip.rs](../examples/tcp_roundtrip.rs).
 The central transfer uses registered allocation addresses:
 
 ```rust
-let request = TransferRequest {
-    qos: None,
-    priority: Default::default(),
-    remote_staging: false,
-    transport: orbit_te::Transport::Tcp,
-    local_address: destination.base_address(),
-    remote_address: remote.base_address(),
-    length: exported.len(),
-};
+let request = TransferRequest::new(
+    orbit_te::Transport::Tcp,
+    destination.base_address(),
+    remote.base_address(),
+    exported.len(),
+);
 let report = requester.submit_and_wait(
     TransferOp::Read,
     &peer,

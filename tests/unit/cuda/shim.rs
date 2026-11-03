@@ -91,6 +91,8 @@ pub(super) struct PendingCopy {
 // SAFETY: CudaMemory access locks and exclusive range loans exclude conflicting
 // device-byte access. Pinned buffers are private; maps serialize their lifecycle.
 unsafe impl Send for Device {}
+// SAFETY: The boxed bytes never move; mock transfers are ordered by the fixture and shared driver
+// state is synchronized.
 unsafe impl Sync for Device {}
 thread_local! { pub(super) static STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
 static DEVICES: OnceLock<Mutex<BTreeMap<u64, Weak<Device>>>> = OnceLock::new();
@@ -112,6 +114,8 @@ fn current() -> &'static Device {
     let pointer = STACK.with(|stack| *stack.borrow().last().unwrap());
     // The Context retains its actual owner until a successful pop, or forever
     // on an unproven restore. The test shim never exposes this reference publicly.
+    // SAFETY: The context stack stores the address of a Device kept alive by the fixture for this
+    // call.
     unsafe { &*(pointer as *const Device) }
 }
 fn event(name: &'static str) {
@@ -131,12 +135,14 @@ unsafe extern "C" fn init(_: c_uint) -> Status {
 }
 #[cfg(feature = "rdma")]
 unsafe extern "C" fn count(output: *mut c_int) -> Status {
+    // SAFETY: The driver caller supplies a writable count slot.
     unsafe {
         *output = 0;
     }
     SUCCESS
 }
 unsafe extern "C" fn get(output: *mut c_int, ordinal: c_int) -> Status {
+    // SAFETY: The driver caller supplies a writable device slot.
     unsafe {
         *output = ordinal;
     }
@@ -159,6 +165,8 @@ unsafe extern "C" fn pop(output: *mut driver::Context) -> Status {
     if error != 0 {
         return status(error);
     }
+    // SAFETY: The caller supplies a writable context slot; the thread-local stack holds the
+    // active fixture handles.
     unsafe {
         *output = STACK.with(|s| s.borrow_mut().pop().unwrap()) as driver::Context;
     }
@@ -191,6 +199,7 @@ unsafe extern "C" fn stream_context(stream: sys::CUstream, output: *mut driver::
     let Some(context) = context else {
         return Status::CUDA_ERROR_INVALID_CONTEXT;
     };
+    // SAFETY: The caller owns the stream and provides a writable context output.
     unsafe {
         *output = context as driver::Context;
     }
@@ -200,6 +209,7 @@ unsafe extern "C" fn stream_capture(
     _: sys::CUstream,
     output: *mut sys::CUstreamCaptureStatus,
 ) -> Status {
+    // SAFETY: The driver caller passed writable capture-status storage for this stream.
     unsafe {
         *output = if current().capture_active.load(Ordering::Acquire) {
             sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE
@@ -222,6 +232,7 @@ unsafe extern "C" fn stream_create(output: *mut sys::CUstream, flags: c_uint) ->
             .lock()
             .unwrap()
             .insert(handle, STACK.with(|s| *s.borrow().last().unwrap()));
+        // SAFETY: The caller passed writable stream-handle storage; the shim owns the new entry.
         unsafe {
             *output = handle as sys::CUstream;
         }
@@ -239,6 +250,7 @@ unsafe extern "C" fn event_create(output: *mut sys::CUevent, flags: c_uint) -> S
     if error == 0 {
         let handle = current().next_handle.fetch_add(1, Ordering::Relaxed);
         current().completions.lock().unwrap().insert(handle, None);
+        // SAFETY: The caller passed writable event-handle storage; the shim owns the new entry.
         unsafe {
             *output = handle as sys::CUevent;
         }
@@ -309,6 +321,8 @@ fn drain(stream: usize, through: usize) -> Status {
             .take_while(|copy| copy.sequence <= through)
             .count();
         for copy in pending.drain(..count) {
+            // SAFETY: The queued copy retains both backing ranges until stream progress;
+            // ptr::copy permits overlap.
             unsafe {
                 std::ptr::copy(
                     copy.source as *const u8,
@@ -490,6 +504,8 @@ unsafe extern "C" fn host_allocate(output: *mut *mut c_void, length: usize, _: c
         .lock()
         .unwrap()
         .insert(pointer as usize, bytes);
+    // SAFETY: The writable output slot receives a pointer to the allocation retained in the shim
+    // registry.
     unsafe {
         *output = pointer.cast();
     }
@@ -538,6 +554,8 @@ unsafe extern "C" fn attributes(
         return status(error);
     }
     for i in 0..count as usize {
+        // SAFETY: Both arrays contain count entries and each output points to storage for its
+        // requested attribute.
         let result = unsafe { attribute(*outputs.add(i), *attrs.add(i), address) };
         if result != SUCCESS {
             return result;
@@ -547,6 +565,8 @@ unsafe extern "C" fn attributes(
 }
 unsafe fn attribute(output: *mut c_void, attribute: PointerAttribute, address: u64) -> Status {
     let device = device_at(address);
+    // SAFETY: The caller chooses output storage matching the attribute; the device and its
+    // backing remain live.
     unsafe {
         match attribute {
             PointerAttribute::CU_POINTER_ATTRIBUTE_CONTEXT => {
@@ -568,7 +588,10 @@ unsafe fn attribute(output: *mut c_void, attribute: PointerAttribute, address: u
 }
 unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> Status {
     let device = device_at(address);
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let bytes = unsafe { &*device.bytes.get() };
+    // SAFETY: The caller provides writable base and length slots for the registered allocation.
     unsafe {
         *base = bytes.as_ptr() as u64;
         *length = bytes.len();
@@ -685,6 +708,8 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
         managed: AtomicI32::new(0),
         events: Mutex::default(),
     });
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let address = unsafe { &*device.bytes.get() }.as_ptr() as u64;
     DEVICES
         .get_or_init(Mutex::default)
@@ -694,6 +719,8 @@ pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
     device
 }
 pub(super) fn memory(device: &Arc<Device>) -> Arc<CudaMemory> {
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let bytes = unsafe { &*device.bytes.get() };
     Arc::new(
         CudaMemory::register(bytes.as_ptr() as u64, bytes.len(), device.clone(), driver()).unwrap(),
@@ -716,6 +743,7 @@ unsafe extern "C" fn device_attribute(
         }
         _ => return Status::CUDA_ERROR_INVALID_VALUE,
     };
+    // SAFETY: The CUDA query ABI supplies one writable integer output.
     unsafe {
         *output = value;
     }
@@ -731,6 +759,7 @@ unsafe extern "C" fn set_pointer_attribute(
         attribute,
         PointerAttribute::CU_POINTER_ATTRIBUTE_SYNC_MEMOPS
     );
+    // SAFETY: SYNC_MEMOPS reads one aligned unsigned integer provided by the registration caller.
     assert_eq!(unsafe { *value.cast::<u32>() }, 1);
     let device = device_at(address);
     assert!(std::ptr::eq(current(), Arc::as_ptr(&device)));
@@ -758,6 +787,7 @@ unsafe extern "C" fn ipc_export(output: *mut sys::CUipcMemHandle, address: u64) 
     event("ipc-export");
     let mut bytes = [0u8; 64];
     bytes[..8].copy_from_slice(&address.to_ne_bytes());
+    // SAFETY: The export API provides writable storage for a complete CUipcMemHandle.
     unsafe {
         *output = sys::CUipcMemHandle {
             reserved: bytes.map(|b| b as _),
@@ -799,6 +829,8 @@ unsafe extern "C" fn ipc_open(
             .unwrap()
             .entry(address)
             .or_default() += 1;
+        // SAFETY: The importer supplies a writable device-pointer slot; the exporter retains the
+        // mapped bytes.
         unsafe {
             *output = address;
         }
@@ -865,6 +897,8 @@ pub(super) unsafe extern "C" fn copy_batch(
 ) -> Status {
     event("copy-batch");
     assert!(count > 0 && num_attrs == 1);
+    // SAFETY: The caller supplies count source, destination and length entries and one
+    // attribute/index pair; queued copies retain their buffers.
     unsafe {
         assert_eq!(*indices, 0);
         assert_eq!(
@@ -951,6 +985,8 @@ unsafe extern "C" fn host_unregister(pointer: *mut c_void) -> Status {
     event("host-unregister");
     let mut resident = 0u8;
     assert_eq!(
+        // SAFETY: The fixture supplies a page-aligned mapping address and a writable residency
+        // byte per queried page.
         unsafe {
             libc::mincore(
                 pointer,
@@ -995,6 +1031,8 @@ unsafe extern "C" fn pci_bus_id(
     current().pci_device.store(device, Ordering::Release);
     let id = format!("0000:{device:02x}:00.0\0");
     assert!(id.len() <= length as usize);
+    // SAFETY: The capacity check covers the literal and terminator; the caller owns the disjoint
+    // output buffer.
     unsafe {
         std::ptr::copy_nonoverlapping(id.as_ptr(), out.cast(), id.len());
     }

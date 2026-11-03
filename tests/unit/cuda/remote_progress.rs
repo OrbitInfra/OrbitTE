@@ -53,15 +53,13 @@ fn pending_remote_copy_does_not_block_another_submitted_cross() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 41,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    41,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(8),
             )
@@ -90,7 +88,11 @@ fn pending_remote_copy_does_not_block_another_submitted_cross() {
         } else {
             expected_a[8..15].copy_from_slice(&original_b[9..16]);
         }
+        // SAFETY: The first event is held by the shim and the other chunk passed its copy
+        // event before this observation.
         assert_eq!(unsafe { &**a.bytes.get() }, &expected_a);
+        // SAFETY: The first event is held by the shim and the other chunk passed its copy
+        // event before this observation.
         assert_eq!(unsafe { &**b.bytes.get() }, &expected_b);
         a.query_hold_address.store(0, Ordering::Release);
         let report = batch.wait(Duration::from_secs(8)).unwrap();
@@ -307,15 +309,13 @@ fn remote_query_failure_closes_active_cross_and_retains_uncertain_cuda_owners() 
                     .submit_async(
                         operation,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: true,
-                            transport: Transport::Rdma,
-                            local_address: local.base_address() + 2,
-                            remote_address: remote.base_address() + 1,
-                            length: 41,
-                        }],
+                        &[TransferRequest::new(
+                            Transport::Rdma,
+                            local.base_address() + 2,
+                            remote.base_address() + 1,
+                            41,
+                        )
+                        .with_remote_staging(true)],
                         None,
                         Duration::from_secs(8),
                     )

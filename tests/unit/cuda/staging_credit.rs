@@ -91,15 +91,13 @@ fn automatic_staging_credit_uses_negotiated_depth_and_committed_groups_finish_af
             assert_eq!(source.stats().unwrap().staging.allocations, 0);
             drop(raw);
             let requests = [(0, 0, 5), (5, 8, 1)].map(|(local_offset, remote_offset, length)| {
-                TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
+                TransferRequest::new(
                     transport,
-                    local_address: local.base_address() + local_offset,
-                    remote_address: remote.base_address() + remote_offset,
+                    local.base_address() + local_offset,
+                    remote.base_address() + remote_offset,
                     length,
-                }
+                )
+                .with_remote_staging(true)
             });
             a.query_hold.store(true, Ordering::Release);
             let mut batch = requester
@@ -188,15 +186,13 @@ fn partial_native_pin_retains_only_constructed_staging_and_the_consumer() {
         .submit_and_wait(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: true,
-                transport: Transport::Tcp,
-                local_address: local.base_address(),
-                remote_address: remote.base_address(),
-                length: 5,
-            }],
+            &[TransferRequest::new(
+                Transport::Tcp,
+                local.base_address(),
+                remote.base_address(),
+                5,
+            )
+            .with_remote_staging(true)],
             TIMEOUT,
         )
         .unwrap();

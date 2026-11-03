@@ -68,15 +68,13 @@ fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
                         Duration::from_secs(3),
                     )
                     .unwrap();
-                let request = TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
+                let request = TransferRequest::new(
                     transport,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
                     length,
-                };
+                )
+                .with_remote_staging(true);
                 let write: Vec<u8> = (0..length).map(|i| (i * 19 + 53) as u8).collect();
                 for operation in [TransferOp::Read, TransferOp::Write] {
                     if operation == TransferOp::Write {

@@ -152,15 +152,7 @@ fn issuer_windows_are_conserved_across_cumulative_retry_close_and_late_open() {
 }
 
 fn request(local: u64, remote: u64, length: usize) -> TransferRequest {
-    TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: Transport::Tcp,
-        local_address: local,
-        remote_address: remote,
-        length,
-    }
+    TransferRequest::new(Transport::Tcp, local, remote, length)
 }
 
 #[test]

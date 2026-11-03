@@ -76,7 +76,7 @@ grants, GPU allocation and recovery policy remain with OrbitKV.
   epoch from the authoritative source owner. It cannot learn replacement
   authority from a new process at the same address. Every operation checks
   that epoch again at the source. Refresh by calling open with the same epoch.
-- `TransferRequest { local_address, remote_address, length }` accepts the absolute
+- `TransferRequest::new(transport, local_address, remote_address, length)` accepts the absolute
   addresses used by TENT and OrbitKV transfer slices. These integers carry no
   ownership or authority. Submission resolves active local ranges and the
   supplied peer snapshot, retaining every local registration before I/O.

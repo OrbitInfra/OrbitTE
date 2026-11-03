@@ -49,11 +49,15 @@ fn discover(
 }
 
 unsafe extern "C" fn open(handles: *mut sys::DeviceHandles, name: *const c_char) -> i32 {
+    // SAFETY: The context constructor supplies a NUL-terminated device name that lives through
+    // the open callback.
     let name = unsafe { CStr::from_ptr(name) };
     if name.to_bytes() == b"device_missing" {
         return libc::ENODEV;
     }
     // Both independent CPU context fixtures execute the existing copy controls.
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { fixture::open_device(handles, c"copy".as_ptr()) }
 }
 
@@ -88,15 +92,12 @@ fn exchange(
         .submit_and_wait(
             op,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address() + 4,
-                remote_address: remote.base_address() + 4,
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + 4,
+                remote.base_address() + 4,
+                8,
+            )],
             TIMEOUT,
         )
         .unwrap();
@@ -468,9 +469,13 @@ fn slice_window_intersects_remote_mask_and_single_cq_capacity_before_grants() {
 }
 
 unsafe extern "C" fn open_paused(h: *mut sys::DeviceHandles, name: *const c_char) -> i32 {
+    // SAFETY: The context constructor supplies a NUL-terminated device name that lives through
+    // the open callback.
     if unsafe { CStr::from_ptr(name) }.to_bytes() == b"device_missing" {
         return libc::ENODEV;
     }
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { fixture::open_device(h, c"pause_copy".as_ptr()) }
 }
 
@@ -664,10 +669,14 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
 }
 
 unsafe extern "C" fn open_failed_rail(h: *mut sys::DeviceHandles, name: *const c_char) -> i32 {
+    // SAFETY: The context constructor supplies a NUL-terminated device name that lives through
+    // the open callback.
     let name = unsafe { CStr::from_ptr(name) }.to_bytes();
     if name == b"device_missing" {
         return libc::ENODEV;
     }
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe {
         fixture::open_device(
             h,
@@ -716,15 +725,12 @@ fn one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_repo
             .submit_and_wait(
                 op,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address() + 4,
-                    remote_address: remote.base_address() + 4,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 4,
+                    remote.base_address() + 4,
+                    8,
+                )],
                 TIMEOUT,
             )
             .unwrap();
@@ -766,10 +772,14 @@ unsafe fn open_publication_mode(
     name: *const c_char,
     mode: &CStr,
 ) -> i32 {
+    // SAFETY: The context constructor supplies a NUL-terminated device name that lives through
+    // the open callback.
     let name = unsafe { CStr::from_ptr(name) }.to_bytes();
     if name == b"device_missing" {
         return libc::ENODEV;
     }
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe {
         fixture::open_device(
             h,
@@ -785,18 +795,24 @@ unsafe extern "C" fn open_publication_fault(
     h: *mut sys::DeviceHandles,
     name: *const c_char,
 ) -> i32 {
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { open_publication_mode(h, name, c"copy_publication_fault") }
 }
 unsafe extern "C" fn open_publication_retained(
     h: *mut sys::DeviceHandles,
     name: *const c_char,
 ) -> i32 {
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { open_publication_mode(h, name, c"copy_publication_close1") }
 }
 unsafe extern "C" fn open_publication_parent(
     h: *mut sys::DeviceHandles,
     name: *const c_char,
 ) -> i32 {
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     unsafe { open_publication_mode(h, name, c"copy_publication_parent") }
 }
 unsafe extern "C" fn fail_later_registration(
@@ -806,6 +822,8 @@ unsafe extern "C" fn fail_later_registration(
     length: usize,
     window_bind: bool,
 ) -> i32 {
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     let device = unsafe { &*(*d).context.cast::<fixture::FakeDevice>() };
     let previous = device
         .events
@@ -820,6 +838,8 @@ unsafe extern "C" fn fail_later_registration(
         } else {
             previous != 0
         };
+    // SAFETY: The registration owner retains the address range and PD through deregistration and
+    // supplies writable MR handles.
     let code = unsafe { (fixture::VERBS.register_memory)(h, d, address, length, window_bind) };
     if code == 0 && fail {
         libc::ENOMEM
@@ -1107,15 +1127,12 @@ fn source_rejects_an_entire_slice_plan_before_either_peer_creates_qps_and_recove
                     )
                     .unwrap()
                 });
-                let request = TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address() + 4,
-                    remote_address: remote.base_address() + 4,
-                    length: 12,
-                };
+                let request = TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 4,
+                    remote.base_address() + 4,
+                    12,
+                );
                 let report = requester
                     .submit_and_wait(operation, &peer, std::slice::from_ref(&request), TIMEOUT)
                     .unwrap();
@@ -1215,15 +1232,12 @@ fn asymmetric_cq_lane_counts_share_context_mrs_and_reuse_bilateral_qps() {
                     .submit_and_wait(
                         operation,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: false,
-                            transport: Transport::Rdma,
-                            local_address: local.base_address() + 2,
-                            remote_address: remote.base_address() + 2,
-                            length: 12,
-                        }],
+                        &[TransferRequest::new(
+                            Transport::Rdma,
+                            local.base_address() + 2,
+                            remote.base_address() + 2,
+                            12,
+                        )],
                         TIMEOUT,
                     )
                     .unwrap();
@@ -1340,15 +1354,12 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
                 .submit_and_wait(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 2,
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 2,
                         length,
-                    }],
+                    )],
                     TIMEOUT,
                 )
                 .unwrap();
@@ -1630,15 +1641,12 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
                 .submit_and_wait(
                     op,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 4,
-                        remote_address: remote.base_address() + 4,
-                        length: 41,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 4,
+                        remote.base_address() + 4,
+                        41,
+                    )],
                     TIMEOUT,
                 )
                 .unwrap();

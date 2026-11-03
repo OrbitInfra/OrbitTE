@@ -19,15 +19,12 @@ fn main() -> orbit_te::Result<()> {
         batch.submit(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: orbit_te::Transport::Tcp,
-                local_address: destination.base_address() + local_offset,
-                remote_address: exported.base_address() + remote_offset,
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                orbit_te::Transport::Tcp,
+                destination.base_address() + local_offset,
+                exported.base_address() + remote_offset,
+                8,
+            )],
             None,
             timeout,
         )?;

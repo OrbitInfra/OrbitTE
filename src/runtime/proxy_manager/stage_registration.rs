@@ -130,9 +130,9 @@ impl PinnedStage {
         let length = lease.buffer()?.length;
         let address = lease.buffer()?.address;
         let lease = Arc::new(Mutex::new(lease));
+        #[allow(unsafe_code)]
         // SAFETY: this actual pinned lease backs the registration. HostAccess
         // excludes transport DMA while the range owner submits local CUDA work.
-        #[allow(unsafe_code)]
         let host = Arc::new(unsafe { HostMemory::from_raw_parts(address, length, lease.clone())? });
         Ok(Self {
             registration: StageRegistration::new(host, source, transport)?,

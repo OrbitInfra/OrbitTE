@@ -84,15 +84,13 @@ fn pending_native_finish(send_pending: bool) {
                 .submit_async(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 41,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        41,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(10),
                 )
@@ -180,7 +178,11 @@ fn pending_native_finish(send_pending: bool) {
             }
             drop(gate);
             source.close(Duration::from_secs(3)).unwrap();
+            // SAFETY: The shim source is closed and the interrupted finish never submitted a
+            // device copy.
             assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &[0x57; 64]);
+            // SAFETY: The shim source is closed and the interrupted finish never submitted a
+            // device copy.
             assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &[0xcc; 64]);
             if cleanup_failure {
                 assert_eq!(requester.stats().unwrap().staging.retained_chunks, 3);
@@ -259,15 +261,13 @@ fn fragmented_native_receipts_resume_once_and_validate_the_binding() {
                 .submit_async(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 41,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        41,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(10),
                 )

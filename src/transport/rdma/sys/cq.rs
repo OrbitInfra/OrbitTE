@@ -65,6 +65,8 @@ pub(super) unsafe extern "C" fn create_completion_channel(
     handles: *mut ChannelHandles,
     device: *const DeviceHandles,
 ) -> c_int {
+    // SAFETY: The caller owns writable channel handles and a live device context throughout
+    // creation.
     unsafe {
         (*handles).channel = ffi::ibv_create_comp_channel((*device).context.cast()).cast();
         if (*handles).channel.is_null() {
@@ -88,6 +90,7 @@ pub(super) unsafe extern "C" fn get_completion_event(
     channel: *mut c_void,
     cq: *mut *mut c_void,
 ) -> c_int {
+    // SAFETY: The monitor retains the channel and provides a writable CQ output for this event.
     unsafe {
         let mut native_cq = std::ptr::null_mut();
         let mut context = std::ptr::null_mut();
@@ -100,10 +103,12 @@ pub(super) unsafe extern "C" fn get_completion_event(
 }
 
 pub(super) unsafe extern "C" fn ack_completion_event(cq: *mut c_void) {
+    // SAFETY: The monitor obtained one unacknowledged event for this CQ from the open channel.
     unsafe { ffi::ibv_ack_cq_events(cq.cast(), 1) };
 }
 
 pub(super) unsafe extern "C" fn arm_completion(cq: *mut c_void) -> c_int {
+    // SAFETY: The lane owns the live CQ while its provider notification callback is invoked.
     unsafe {
         let cq = cq.cast::<ffi::ibv_cq>();
         let Some(arm) = (*(*cq).context).ops.req_notify_cq else {

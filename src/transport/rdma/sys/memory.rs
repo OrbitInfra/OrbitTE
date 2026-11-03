@@ -152,6 +152,8 @@ pub(super) unsafe extern "C" fn window(
     result: *mut PostResult,
 ) -> c_int {
     // The record retains the MW, parent MR and exact DMA loan through CQ or teardown.
+    // SAFETY: The grant owns the QP, MR and window; result is writable and the provider
+    // consumes the stack WR during post.
     unsafe {
         *result = PostResult::default();
         let h = &mut *handles;
@@ -199,6 +201,8 @@ pub(super) unsafe extern "C" fn window(
 }
 
 pub(super) unsafe extern "C" fn dealloc_window(handles: *mut MemoryHandles) -> c_int {
+    // SAFETY: The grant exclusively owns the window handle and keeps its PD live through
+    // deallocation.
     unsafe {
         let h = &mut *handles;
         if h.mw.is_null() {

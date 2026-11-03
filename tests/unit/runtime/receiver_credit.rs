@@ -249,15 +249,7 @@ fn engine(queue: bool) -> Arc<TransferEngine> {
 }
 
 fn request(local: u64, remote: u64) -> TransferRequest {
-    TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: Transport::Tcp,
-        local_address: local,
-        remote_address: remote,
-        length: 1,
-    }
+    TransferRequest::new(Transport::Tcp, local, remote, 1)
 }
 
 #[test]

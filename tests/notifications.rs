@@ -104,15 +104,12 @@ fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
         let peer = sender
             .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
             .unwrap();
-        let request = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: orbit_te::Transport::Tcp,
-            local_address: local.base_address(),
-            remote_address: peer.regions()[0].base_address(),
-            length: 8,
-        };
+        let request = TransferRequest::new(
+            orbit_te::Transport::Tcp,
+            local.base_address(),
+            peer.regions()[0].base_address(),
+            8,
+        );
         let done = notification("scope-1", "complete");
         let report = sender
             .submit_and_notify(

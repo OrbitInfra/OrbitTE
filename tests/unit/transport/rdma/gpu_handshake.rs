@@ -191,15 +191,12 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
             .submit_and_wait(
                 TransferOp::Read,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: memory.base_address(),
-                    remote_address: 0x1000,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    memory.base_address(),
+                    0x1000,
+                    8,
+                )],
                 TIMEOUT,
             )
             .unwrap();

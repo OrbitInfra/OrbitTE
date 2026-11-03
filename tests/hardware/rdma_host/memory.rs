@@ -21,6 +21,7 @@ struct Snapshot {
     sequence: u64,
 }
 type Command = unsafe extern "C" fn(u32, u32, u32, u64, *const c_char, *mut Snapshot) -> i32;
+// SAFETY: dlsym uses the platform loader ABI with an opaque handle and a NUL-terminated C name.
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
@@ -81,17 +82,13 @@ fn fail_window(
                 TransferOp::Write
             },
             peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: memory.base_address()
-                    + if case.read { case.destination() } else { GUARD } as u64,
-                remote_address: peer.regions()[0].base_address()
+            &[TransferRequest::new(
+                Transport::Rdma,
+                memory.base_address() + if case.read { case.destination() } else { GUARD } as u64,
+                peer.regions()[0].base_address()
                     + if case.read { GUARD } else { case.destination() } as u64,
-                length: case.payload,
-            }],
+                case.payload,
+            )],
             TIMEOUT,
         )?;
         if report.is_complete() || !report.locally_drained || report.failure.is_none() {
@@ -272,15 +269,12 @@ pub(super) fn run(case: &Case) -> Result<()> {
                 TransferOp::Write
             },
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: memory.base_address() + GUARD as u64,
-                remote_address: peer.regions()[0].base_address() + GUARD as u64,
-                length: case.payload,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                memory.base_address() + GUARD as u64,
+                peer.regions()[0].base_address() + GUARD as u64,
+                case.payload,
+            )],
             TIMEOUT,
         )?;
         if report.transferred_bytes != 0

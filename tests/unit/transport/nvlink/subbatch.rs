@@ -89,14 +89,13 @@ pub(crate) fn run_case(
         [43, 11, 67]
     };
     let requests: Vec<_> = (0..3)
-        .map(|i| TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Nvlink,
-            local_address: registrations[i].base_address() + 7,
-            remote_address: remote.base_address() + 5 + offsets[i],
-            length: 17,
+        .map(|i| {
+            TransferRequest::new(
+                Transport::Nvlink,
+                registrations[i].base_address() + 7,
+                remote.base_address() + 5 + offsets[i],
+                17,
+            )
         })
         .collect();
     let expected = match case {
@@ -252,15 +251,12 @@ pub(crate) fn run_case(
         let tcp_peer = engine
             .open_segment(tcp_source.endpoint(), tcp_source.source_epoch(), timeout)
             .unwrap();
-        let tcp_request = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Tcp,
-            local_address: tcp_local.base_address(),
-            remote_address: tcp_remote.base_address(),
-            length: 1,
-        };
+        let tcp_request = TransferRequest::new(
+            Transport::Tcp,
+            tcp_local.base_address(),
+            tcp_remote.base_address(),
+            1,
+        );
         let mut batch = engine.allocate_batch(5).unwrap();
         assert_eq!(
             batch

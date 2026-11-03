@@ -101,15 +101,13 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                         .submit_async(
                             op,
                             &peer,
-                            &[TransferRequest {
-                                qos: None,
-                                priority: Default::default(),
-                                remote_staging: true,
+                            &[TransferRequest::new(
                                 transport,
-                                local_address: local.base_address() + 1,
-                                remote_address: remote.base_address() + 2,
+                                local.base_address() + 1,
+                                remote.base_address() + 2,
                                 length,
-                            }],
+                            )
+                            .with_remote_staging(true)],
                             None,
                             Duration::from_secs(10),
                         )
@@ -339,15 +337,13 @@ fn pipeline_failed_query_is_sticky_but_every_other_slot_is_drained() {
             .submit_async(
                 op,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Tcp,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(3),
             )
@@ -597,15 +593,13 @@ fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
             .submit_and_wait(
                 op,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )
+                .with_remote_staging(true)],
                 Duration::from_secs(3),
             )
             .unwrap();

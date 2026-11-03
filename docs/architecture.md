@@ -13,6 +13,12 @@ open. Read [capabilities](capabilities.md) for support and
 
 ## Engine and transport boundary
 
+Rust callers construct a `TransferRequest` with an explicit transport and
+two absolute addresses. TENT's `Request` in `tent/common/types.h` also
+defaults to high priority. OrbitTE takes the READ/WRITE operation at submission
+and uses an engine-resolved QoS handle. The Rust request, transport and error
+types are non-exhaustive so their public API can grow independently of wire v23.
+
 `TransferEngine` owns registration, batches, admission and directional shutdown.
 `RegisteredMemory` retains actual backing; aliases share allocation-level
 access coordination. `runtime::control_plane::ControlService` owns peer lookup,

@@ -53,6 +53,8 @@ fn poke_all() {
         if entry.retiring.load(Ordering::Acquire) {
             continue;
         }
+        // SAFETY: The fixture lane retains the boxed FakeCq while its registered entry is
+        // accessed.
         let cq = unsafe { &*(entry.cq as *const FakeCq) };
         if !cq.completions.lock().unwrap().is_empty() {
             entry.emit();
@@ -64,6 +66,8 @@ unsafe extern "C" fn create_channel(
     h: *mut sys::ChannelHandles,
     d: *const sys::DeviceHandles,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     let device = unsafe { &*(*d).context.cast::<FakeDevice>() };
     let (read, write) = UnixStream::pair().unwrap();
     read.set_nonblocking(true).unwrap();
@@ -81,6 +85,7 @@ unsafe extern "C" fn create_channel(
         .lock()
         .unwrap()
         .push("create_completion_channel");
+    // SAFETY: The constructor owns the handle output and transfers one Arc reference into it.
     unsafe {
         (*h).channel = Arc::into_raw(channel).cast_mut().cast();
         (*h).fd = fd;
@@ -102,12 +107,20 @@ unsafe extern "C" fn create_cq(
         !channel.is_null(),
         "event mode must pass its real channel to both CQs"
     );
+    // SAFETY: The lane provides writable CQ handles and holds the referenced device through
+    // creation.
     let code = unsafe { (BASE.create_cq)(h, d, capacity, std::ptr::null_mut()) };
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     if !unsafe { (*h).cq }.is_null() {
+        // SAFETY: channel came from Arc::into_raw and the registration still owns a strong
+        // reference.
         unsafe {
             Arc::increment_strong_count(channel.cast::<Channel>());
         }
+        // SAFETY: The fixture consumes one strong reference previously transferred as this exact
+        // raw Arc pointer.
         let channel = unsafe { Arc::from_raw(channel.cast::<Channel>()) };
+        // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
         let cq = unsafe { (*h).cq } as usize;
         entries().lock().unwrap().insert(
             cq,
@@ -124,6 +137,8 @@ unsafe extern "C" fn create_cq(
 }
 
 unsafe extern "C" fn get(channel: *mut c_void, cq: *mut *mut c_void) -> c_int {
+    // SAFETY: The fixture retains the Arc-backed channel while the callback borrows its native
+    // handle.
     let channel = unsafe { &*channel.cast::<Channel>() };
     let mut byte = [0];
     if let Err(error) = channel.read.lock().unwrap().read_exact(&mut byte) {
@@ -134,6 +149,7 @@ unsafe extern "C" fn get(channel: *mut c_void, cq: *mut *mut c_void) -> c_int {
         return libc::EIO;
     }
     let next = channel.pending.lock().unwrap().pop_front().unwrap();
+    // SAFETY: The monitor supplies writable CQ output for one dequeued channel event.
     unsafe {
         *cq = next as *mut c_void;
     }
@@ -170,6 +186,8 @@ unsafe extern "C" fn arm(cq: *mut c_void) -> c_int {
 }
 
 unsafe extern "C" fn close_channel(h: *mut sys::ChannelHandles) -> c_int {
+    // SAFETY: The fixture retains the Arc-backed channel while the callback borrows its native
+    // handle.
     let channel = unsafe { &*(*h).channel.cast::<Channel>() };
     channel.log.lock().unwrap().push("close_completion_channel");
     if channel.mode == "completion_channel_close" {
@@ -183,6 +201,8 @@ unsafe extern "C" fn close_channel(h: *mut sys::ChannelHandles) -> c_int {
             .any(|e| std::ptr::eq(Arc::as_ptr(&e.channel), channel))
     );
     assert!(channel.pending.lock().unwrap().is_empty());
+    // SAFETY: The fixture consumes one strong reference previously transferred as this exact raw
+    // Arc pointer.
     unsafe {
         drop(Arc::from_raw((*h).channel.cast::<Channel>()));
         (*h).channel = std::ptr::null_mut();
@@ -192,9 +212,11 @@ unsafe extern "C" fn close_channel(h: *mut sys::ChannelHandles) -> c_int {
 }
 
 unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     if unsafe { (*h).cq }.is_null() {
         return 0;
     }
+    // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
     let key = unsafe { (*h).cq } as usize;
     let entry = {
         let map = entries().lock().unwrap();
@@ -224,6 +246,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
         return libc::EBUSY;
     }
     drop(debt);
+    // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy attempt.
     let code = unsafe { (BASE.destroy_cq)(h) };
     if code == 0 {
         entries().lock().unwrap().remove(&key);
@@ -243,6 +266,8 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     let code = unsafe {
         (BASE.post)(
             h, memory, wr, count, local, length, remote, rkey, write, result,
@@ -262,6 +287,8 @@ unsafe extern "C" fn window(
     bind: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The grant owns the QP, window and registration through the post, and lends a
+    // writable result slot.
     let code = unsafe { (BASE.window)(h, memory, id, address, length, permission, bind, result) };
     poke_all();
     code
@@ -277,6 +304,8 @@ unsafe extern "C" fn send(
     invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The grant retains the registered completion buffer and QP through the send; result
+    // is writable.
     let code =
         unsafe { (BASE.send_completion)(h, memory, id, address, length, rkey, invalidate, result) };
     poke_all();
@@ -290,12 +319,15 @@ unsafe extern "C" fn poll(
     let entry = entries()
         .lock()
         .unwrap()
+        // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
         .get(&(unsafe { (*h).cq } as usize))
         .cloned()
         .unwrap();
     if entry.channel.hold.load(Ordering::Acquire) {
         return 0;
     }
+    // SAFETY: The lane retains the CQ and provides writable completion output for the provider
+    // call.
     unsafe { (BASE.poll)(h, completion) }
 }
 

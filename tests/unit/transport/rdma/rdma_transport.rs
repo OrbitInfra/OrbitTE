@@ -392,15 +392,12 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             .submit_and_wait(
                 TransferOp::Read,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: 0x1000,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    0x1000,
+                    8,
+                )],
                 TIMEOUT,
             )
             .unwrap();
@@ -493,6 +490,8 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
         let grant = Descriptor::decode(&bytes).unwrap();
         // CPU provider control: stage bytes as though a peer had written payload.
         // No native transport ordering or DMA receipt is inferred from this write.
+        // SAFETY: The live grant authorizes at least eight bytes and the fixture writes while it
+        // holds that registration.
         unsafe {
             std::ptr::write_bytes(grant.address as *mut u8, 0xc3, 8);
         }

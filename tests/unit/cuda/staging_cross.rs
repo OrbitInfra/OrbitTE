@@ -80,15 +80,13 @@ fn second_cross_finishes_on_shared_qp_while_first_payload_completion_is_held() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 41,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    41,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(8),
             )
@@ -127,10 +125,14 @@ fn second_cross_finishes_on_shared_qp_while_first_payload_completion_is_held() {
         assert!(matches!(batch.free(), Err(Error::BatchBusy)));
         if operation == TransferOp::Read {
             wait_until(|| b.event_query_successes.load(Ordering::Acquire) == 1);
+            // SAFETY: The shim holds the pending copy at its test barrier; the observed bytes
+            // cannot change before release.
             let observed = unsafe { &*b.bytes.get() };
             assert_eq!(&observed[9..16], &source_bytes[8..15]);
             assert_eq!(&observed[2..9], &local_bytes[2..9]);
         } else {
+            // SAFETY: The shim holds the pending copy at its test barrier; the observed bytes
+            // cannot change before release.
             assert_eq!(unsafe { &*a.bytes.get() }[1..8], source_bytes[1..8]);
         }
         hold.0.lock().unwrap().1 = true;
@@ -202,15 +204,13 @@ fn failed_second_cross_drains_first_or_retains_every_uncertain_owner() {
                 .submit_async(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 41,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        41,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(5),
                 )
@@ -241,6 +241,8 @@ fn failed_second_cross_drains_first_or_retains_every_uncertain_owner() {
             let mut observed = [0; 64];
             source_gpu.read(0, &mut observed).unwrap();
             assert_eq!(observed, [0x57; 64]);
+            // SAFETY: The failing cross never reached copy-back, and source shutdown has
+            // joined its handlers.
             assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &[0xcc; 64]);
             let stats = requester.stats().unwrap();
             if cleanup_failure {
@@ -315,15 +317,13 @@ fn deadline_after_reordered_success_preserves_effects_and_all_native_owners() {
                 .submit_async(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 41,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        41,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(5),
                 )
@@ -377,6 +377,8 @@ fn deadline_after_reordered_success_preserves_effects_and_all_native_owners() {
             assert_eq!(observed, expected_a);
             // An uncertain engine fences public access. Inspect only this CPU
             // provider's owned bytes, after its pending CUDA work has drained.
+            // SAFETY: The CPU provider has drained its pending copies; the Device retains the
+            // backing inspected here.
             assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
             let stats = requester.stats().unwrap();
             if cleanup_failure {

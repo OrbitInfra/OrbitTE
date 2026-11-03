@@ -52,6 +52,8 @@ use shim::*;
 #[test]
 fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
     let owner = allocation(&[0x5a; 16]);
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let address = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
     owner.memory_type.store(1, Ordering::Release);
     assert!(matches!(
@@ -132,15 +134,12 @@ fn cuda_registered_ranges_use_actual_owners_and_tcp_read_write_paths() {
             Duration::from_secs(2),
         )
         .unwrap();
-    let request = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: Transport::Tcp,
-        local_address: local.base_address() + 5,
-        remote_address: source_memory[0].base_address() + 7,
-        length: 13,
-    };
+    let request = TransferRequest::new(
+        Transport::Tcp,
+        local.base_address() + 5,
+        source_memory[0].base_address() + 7,
+        13,
+    );
     let report = requester
         .submit_and_wait(
             TransferOp::Read,
@@ -214,15 +213,12 @@ fn unproven_cuda_copy_keeps_batch_backing_capacity_and_requester_admission() {
         .submit_async(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Tcp,
-                local_address: memory.base_address(),
-                remote_address: remote.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Tcp,
+                memory.base_address(),
+                remote.base_address(),
+                8,
+            )],
             None,
             Duration::from_secs(2),
         )
@@ -288,15 +284,12 @@ fn source_cuda_sync_failure_retains_source_owner_and_prevents_false_drain() {
         .submit_and_wait(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Tcp,
-                local_address: local.base_address(),
-                remote_address: memory.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Tcp,
+                local.base_address(),
+                memory.base_address(),
+                8,
+            )],
             Duration::from_secs(2),
         )
         .unwrap();

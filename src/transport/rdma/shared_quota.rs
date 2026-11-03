@@ -44,6 +44,8 @@ impl SharedSlotManager {
         let clock = File::open("/proc/self/ns/time")?;
         let domain = clock.metadata()?;
         // shm_open sets CLOEXEC. Never truncate an existing coordination object.
+        // SAFETY: The CString remains NUL-terminated through shm_open, which returns a new
+        // descriptor on success.
         let fd = unsafe {
             libc::shm_open(
                 name.as_ptr(),
@@ -54,9 +56,11 @@ impl SharedSlotManager {
         if fd < 0 {
             return Err(io::Error::last_os_error().into());
         }
+        // SAFETY: shm_open succeeded and transfers sole ownership of this descriptor to File.
         let object = unsafe { File::from_raw_fd(fd) };
         let metadata = object.metadata()?;
         if !metadata.is_file()
+            // SAFETY: geteuid takes no arguments and returns the effective UID of this process.
             || metadata.uid() != unsafe { libc::geteuid() }
             || metadata.mode() & 0o022 != 0
         {
@@ -64,6 +68,7 @@ impl SharedSlotManager {
         }
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
+            // SAFETY: object owns fd throughout the nonblocking lock attempt.
             if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 break;
             }
@@ -105,6 +110,7 @@ impl SharedSlotManager {
                 "RDMA shared quota version, interval or clock namespace mismatch",
             ));
         }
+        // SAFETY: object still owns the descriptor whose initialization lock is being released.
         if unsafe { libc::flock(object.as_raw_fd(), libc::LOCK_UN) } != 0 {
             return Err(io::Error::last_os_error().into());
         }
@@ -122,6 +128,8 @@ impl SharedSlotManager {
             tv_sec: 0,
             tv_nsec: 0,
         };
+        // SAFETY: time is writable timespec storage and CLOCK_MONOTONIC needs no user pointers
+        // besides that output.
         if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } != 0 {
             return Err(io::Error::last_os_error().into());
         }
