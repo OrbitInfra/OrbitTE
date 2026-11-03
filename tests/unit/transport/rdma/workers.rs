@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::context::RdmaContext;
 use crate::transport::rdma::tests::VERBS;
 use crate::transport::rdma::{RdmaConfig, events};
@@ -310,7 +311,7 @@ fn concurrent_dispatch_balances_admitted_slices_and_counts_completed_grant_owner
                 &endpoint.descriptor(),
                 crate::TransferOp::Read,
                 crate::Priority::High,
-                Instant::now() + Duration::from_secs(3),
+                Instant::now() + EVENTUAL_PROGRESS,
             )
             .unwrap();
     }
@@ -323,9 +324,7 @@ fn concurrent_dispatch_balances_admitted_slices_and_counts_completed_grant_owner
         endpoint.close().unwrap();
     }
     assert_eq!(runtime.workers.inflight_slices(), [0, 0, 0]);
-    runtime
-        .close(Instant::now() + Duration::from_secs(3))
-        .unwrap();
+    runtime.close(Instant::now() + EVENTUAL_PROGRESS).unwrap();
 }
 
 pub(super) fn observe_affinity(affinity: &crate::platform::cpu_probe::CpuAffinity) {

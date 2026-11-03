@@ -750,11 +750,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                     .unwrap()
             };
             let mut peer = requester
-                .open_segment(
-                    source.endpoint(),
-                    source.source_epoch(),
-                    Duration::from_secs(2),
-                )
+                .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                 .unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             peer.endpoint = listener.local_addr().unwrap();
@@ -762,9 +758,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
             let relay = std::thread::spawn(move || {
                 let (mut client, _) = listener.accept().unwrap();
                 let mut server = TcpStream::connect(target).unwrap();
-                server
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                server.set_read_timeout(Some(EVENTUAL_PROGRESS)).unwrap();
                 let mut input = client.try_clone().unwrap();
                 let mut output = server.try_clone().unwrap();
                 let upstream = std::thread::spawn(move || {
@@ -815,7 +809,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
                         8,
                     )
                     .with_remote_staging(true)],
-                    Duration::from_secs(2),
+                    EVENTUAL_PROGRESS,
                 )
                 .unwrap();
             relay.join().unwrap();
@@ -860,7 +854,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
             }
             assert_eq!(observed, expected);
             let mut bytes = [0; 8];
-            source.close(Duration::from_secs(2)).unwrap();
+            source.close(EVENTUAL_PROGRESS).unwrap();
             let stats = source.stats().unwrap().staging;
             assert_eq!(
                 (
@@ -886,7 +880,7 @@ fn lost_remote_receipts_keep_actual_effects_but_cannot_report_success() {
             }
             assert_eq!(bytes, expected);
             for engine in [&requester, &source] {
-                engine.close(Duration::from_secs(2)).unwrap();
+                engine.close(EVENTUAL_PROGRESS).unwrap();
             }
             assert!(b.pins.lock().unwrap().is_empty());
         }

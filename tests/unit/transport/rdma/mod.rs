@@ -1786,7 +1786,7 @@ impl RdmaTransport {
             0,
             length,
             permission,
-            Instant::now() + Duration::from_secs(2),
+            Instant::now() + crate::test_support::EVENTUAL_PROGRESS,
             None,
         )
     }

@@ -45,11 +45,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                 .unwrap()
                 .remove(0);
             let peer = requester
-                .open_segment(
-                    source.endpoint(),
-                    source.source_epoch(),
-                    Duration::from_secs(5),
-                )
+                .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                 .unwrap();
             let width = local_cap.min(length.div_ceil(physical));
             let chunks = length.div_ceil(3);
@@ -75,7 +71,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                         )
                         .with_remote_staging(true)],
                         None,
-                        Duration::from_secs(5),
+                        EVENTUAL_PROGRESS,
                     )
                     .unwrap();
                 wait_pending(&b, width);
@@ -137,7 +133,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                 };
                 assert_eq!(stats.remote_unpins, round as u64);
                 b.query_hold.store(false, Ordering::Release);
-                let report = batch.wait(Duration::from_secs(5)).unwrap();
+                let report = batch.wait(EVENTUAL_PROGRESS).unwrap();
                 assert!(
                     report.state == BatchState::Completed && report.locally_drained,
                     "{transport:?}/{operation:?}/L={width}: {report:?}"
@@ -167,8 +163,8 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
             );
             assert_eq!(stats.completed_chunks, (2 * chunks) as u64);
             assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
-            requester.close(Duration::from_secs(5)).unwrap();
-            source.close(Duration::from_secs(5)).unwrap();
+            requester.close(EVENTUAL_PROGRESS).unwrap();
+            source.close(EVENTUAL_PROGRESS).unwrap();
             assert!(a.pins.lock().unwrap().is_empty() && b.pins.lock().unwrap().is_empty());
         }
     }
