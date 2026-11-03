@@ -39,7 +39,7 @@ impl TransferEngine {
                 let charges: Vec<_> = mapping
                     .owners
                     .iter()
-                    .map(|o| [o.length as u64, 1])
+                    .map(|o| [o.length as u64, 1, 0, 0])
                     .collect();
                 ledger.prepare_owners(peer, &charges)?
             }

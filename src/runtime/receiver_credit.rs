@@ -23,10 +23,27 @@ use super::admission_queue::LocalTransferAdmissionQueue;
 pub enum CreditResource {
     DataBytes = 1,
     RequestSlots = 2,
-    /// Automatic remote-Pin source leases; manual updates are not supported.
+    /// A named manual ledger resource; automatic remote Pin charges its source leases separately.
     StagingSlots = 3,
-    /// Automatic remote-Pin sessions, retained through all native cleanup.
+    /// A named manual ledger resource; automatic remote Pin retains sessions through native cleanup.
     ConsumerSlots = 4,
+}
+
+const RESOURCES: usize = 4;
+pub(crate) type CreditVector = [u64; RESOURCES];
+impl CreditResource {
+    fn index(self) -> usize {
+        self as usize - 1
+    }
+}
+
+/// One resource's cumulative balance in the sender ledger.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CreditBalance {
+    pub granted: u64,
+    pub consumed: u64,
+    /// Zero until an update is fresh and the binding remains open.
+    pub available: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +96,13 @@ pub struct ReceiverCreditStats {
     /// Includes reservations not yet handed to a transport.
     pub consumed_bytes: u64,
     pub consumed_requests: u64,
+    balances: [CreditBalance; RESOURCES],
+}
+impl ReceiverCreditStats {
+    /// Snapshot a named ledger grant. Automatic Pin capacity lives at the receiver.
+    pub fn resource(&self, resource: CreditResource) -> CreditBalance {
+        self.balances[resource.index()]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -102,10 +126,10 @@ struct Entry {
     sequence: u64,
     open: bool,
     expires: Option<Instant>,
-    grants: [u64; 2],
-    consumed: [u64; 2],
-    committed: [u64; 2],
-    completed: [u64; 2],
+    grants: CreditVector,
+    consumed: CreditVector,
+    committed: CreditVector,
+    completed: CreditVector,
     automatic: Option<sync::AutomaticCredit>,
     active: usize,
     reserved: usize,
@@ -119,21 +143,36 @@ impl Entry {
             sequence: 0,
             open: true,
             expires: None,
-            grants: [0; 2],
-            consumed: [0; 2],
-            committed: [0; 2],
-            completed: [0; 2],
+            grants: [0; RESOURCES],
+            consumed: [0; RESOURCES],
+            committed: [0; RESOURCES],
+            completed: [0; RESOURCES],
             automatic: None,
             active: 0,
             reserved: 0,
         }
     }
 
+    fn undrained(&self) -> bool {
+        self.active != 0 || self.committed != self.completed
+    }
+    fn balances(&self) -> [CreditBalance; RESOURCES] {
+        let available = self.open && self.fresh();
+        std::array::from_fn(|i| CreditBalance {
+            granted: self.grants[i],
+            consumed: self.consumed[i],
+            available: if available {
+                self.grants[i] - self.consumed[i]
+            } else {
+                0
+            },
+        })
+    }
     fn fresh(&self) -> bool {
         self.sequence != 0 && self.expires.is_none_or(|expires| Instant::now() < expires)
     }
 
-    fn fits(&self, charge: [u64; 2]) -> bool {
+    fn fits(&self, charge: CreditVector) -> bool {
         self.fresh()
             && charge
                 .iter()
@@ -146,7 +185,7 @@ impl Entry {
 struct CreditOwner {
     key: CreditKey,
     epoch: u64,
-    charge: [u64; 2],
+    charge: CreditVector,
     reserved: bool,
     committed: bool,
     completed: bool,
@@ -257,7 +296,7 @@ impl SenderCreditLedger {
                     Err(Error::Cancelled)
                 };
             }
-            if entry.active != 0 {
+            if entry.undrained() {
                 return Err(Error::BatchBusy);
             }
         } else if state.entries.len() >= self.max_entries {
@@ -285,7 +324,7 @@ impl SenderCreditLedger {
             return Err(Error::EpochMismatch);
         }
         entry.open = false;
-        let busy = entry.active != 0;
+        let busy = entry.undrained();
         if !busy {
             state.entries.remove(&key);
         }
@@ -309,13 +348,12 @@ impl SenderCreditLedger {
         if update.receiver_session_id != peer.source_epoch() {
             return Err(Error::EpochMismatch);
         }
-        let mut totals = [None; 2];
+        if update.grants.len() > RESOURCES {
+            return Err(Error::Protocol("too many receiver credit resources"));
+        }
+        let mut totals = [None; RESOURCES];
         for amount in &update.grants {
-            let index = match amount.resource {
-                CreditResource::DataBytes => 0,
-                CreditResource::RequestSlots => 1,
-                _ => return Err(Error::Unavailable("manual staging/consumer credit updates")),
-            };
+            let index = amount.resource.index();
             if totals[index].replace(amount.grant_total).is_some() {
                 return Err(Error::Protocol("duplicate receiver credit resource"));
             }
@@ -382,7 +420,7 @@ impl SenderCreditLedger {
         bytes: usize,
         requests: usize,
     ) -> Result<CreditPermit> {
-        self.prepare_owners(peer, &[[bytes as u64, requests as u64]])?
+        self.prepare_owners(peer, &[[bytes as u64, requests as u64, 0, 0]])?
             .pop()
             .ok_or(Error::Internal("credit permit missing"))
     }
@@ -390,7 +428,7 @@ impl SenderCreditLedger {
     pub(crate) fn prepare_owners(
         self: &Arc<Self>,
         peer: &RemoteSegment,
-        charges: &[[u64; 2]],
+        charges: &[CreditVector],
     ) -> Result<Vec<CreditPermit>> {
         let key = CreditKey::from(peer);
         let mut state = self.lock();
@@ -417,6 +455,9 @@ impl SenderCreditLedger {
             return Err(Error::Unavailable(
                 "receiver credit connection is not ready",
             ));
+        }
+        if charges.iter().any(|charge| charge.iter().all(|&n| n == 0)) {
+            return Err(Error::InvalidRange);
         }
         if charges.iter().any(|&charge| entry.exceeds_window(charge)) {
             return Err(Error::ResourceExhausted);
@@ -452,27 +493,27 @@ impl SenderCreditLedger {
     }
 
     #[cfg(feature = "metrics")]
-    pub(crate) fn metric_owners(&self) -> (usize, usize) {
+    pub(crate) fn metric_usage(&self) -> (usize, usize, [CreditBalance; RESOURCES]) {
         let state = self.lock();
-        state
-            .entries
-            .values()
-            .fold((0, 0), |(active, reserved), e| {
-                (active + e.active, reserved + e.reserved)
-            })
+        let mut balances = [CreditBalance::default(); RESOURCES];
+        let mut active = 0;
+        let mut reserved = 0;
+        for entry in state.entries.values() {
+            active += entry.active;
+            reserved += entry.reserved;
+            for (sum, balance) in balances.iter_mut().zip(entry.balances()) {
+                sum.available = sum.available.saturating_add(balance.available);
+                sum.granted = sum.granted.saturating_add(balance.granted);
+                sum.consumed = sum.consumed.saturating_add(balance.consumed);
+            }
+        }
+        (active, reserved, balances)
     }
     pub(crate) fn stats(&self, peer: &RemoteSegment) -> Option<ReceiverCreditStats> {
         let state = self.lock();
         let entry = state.entries.get(&CreditKey::from(peer))?;
         let fresh = entry.fresh();
-        let available = if entry.open && fresh {
-            [
-                entry.grants[0] - entry.consumed[0],
-                entry.grants[1] - entry.consumed[1],
-            ]
-        } else {
-            [0; 2]
-        };
+        let balances = entry.balances();
         Some(ReceiverCreditStats {
             automatic: entry.automatic.is_some(),
             completed_bytes: entry.completed[0],
@@ -484,10 +525,11 @@ impl SenderCreditLedger {
             fresh,
             active_owners: entry.active,
             reserved_owners: entry.reserved,
-            available_bytes: available[0],
-            available_requests: available[1],
+            available_bytes: balances[0].available,
+            available_requests: balances[1].available,
             consumed_bytes: entry.consumed[0],
             consumed_requests: entry.consumed[1],
+            balances,
         })
     }
 

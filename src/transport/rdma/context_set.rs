@@ -12,6 +12,8 @@ pub(super) struct ContextSet {
     pub(super) topology: Option<crate::Topology>,
     pub(super) slots: Vec<ContextSlot>,
     pub(super) selector: Option<Arc<quota::DeviceSelector>>,
+    #[cfg(feature = "metrics")]
+    pub(super) retired_allocated_bytes: u64,
     pub(super) failure: Option<(&'static str, i32)>,
 }
 

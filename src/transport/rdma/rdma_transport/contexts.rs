@@ -411,6 +411,10 @@ impl RdmaTransport {
             .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
         contexts.slots.clear();
         contexts.topology = None;
+        #[cfg(feature = "metrics")]
+        if let Some(selector) = &contexts.selector {
+            contexts.retired_allocated_bytes = selector.quota_totals().1;
+        }
         contexts.selector = None;
         Ok(())
     }

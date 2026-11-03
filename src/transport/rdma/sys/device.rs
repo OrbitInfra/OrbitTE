@@ -26,7 +26,7 @@ pub(in crate::transport::rdma) fn devices() -> Result<Vec<(String, String)>> {
                 .dev_name
                 .iter()
                 .take_while(|ch| **ch != 0)
-                .map(|ch| *ch as u8)
+                .map(|ch| ch.to_ne_bytes()[0])
                 .collect();
             if let (Ok(name), Ok(node)) = (CStr::from_ptr(name).to_str(), String::from_utf8(node)) {
                 if !node.is_empty() && !node.contains('/') {

@@ -95,8 +95,9 @@ pub use {
             QosTenantContract, QosUsage,
         },
         receiver_credit::{
-            CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditConfig,
-            ReceiverCreditIssuerStats, ReceiverCreditStats, ReceiverCreditUpdateV1,
+            CreditAmount, CreditBalance, CreditResource, CreditUpdateDisposition,
+            ReceiverCreditConfig, ReceiverCreditIssuerStats, ReceiverCreditStats,
+            ReceiverCreditUpdateV1,
         },
         transport_selector::{
             IntentType, PolicyName, QpPool, SegmentType, SelectionPolicy, TransportSelectorConfig,

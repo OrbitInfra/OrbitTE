@@ -44,6 +44,10 @@ impl PostQueue {
         }
     }
 
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(super) fn clear(&mut self) {
         self.entries.clear();
     }

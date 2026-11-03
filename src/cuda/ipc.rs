@@ -42,7 +42,7 @@ impl IpcExport {
         drop(allocation);
         Ok(Self {
             memory: Some(memory),
-            handle: handle.reserved.map(|b| b as u8),
+            handle: handle.reserved.map(|b| b.to_ne_bytes()[0]),
             extent,
             exposed: false,
         })

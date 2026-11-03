@@ -178,9 +178,18 @@ The 2 ms slots repeat High-only, High+Medium, then all priorities, matching
 TENT's `SharedSlotManager::canSend`. Only payload posts are gated. This is a
 worker-pass gate, not a bandwidth cap or exclusive turn. All participants need
 the same name, interval, effective UID, `/dev/shm` mount and time namespace.
-OrbitTE derives slots from the monotonic clock instead of TENT's rotation thread,
-and uses its own object format rather than TENT's ABI. The object persists after
-exit: stop **all** participants before removing
+An empty or absent path leaves scheduling local. With a name configured, one
+publisher per RDMA worker pool updates the mapped slot from the monotonic
+clock every millisecond. A nonblocking kernel lock releases when its owner
+exits. Readers also check the clock boundary so a stalled publisher cannot
+extend a Low slot. The fixed OrbitTE header validates the interval, clock
+domain and format before mapping. A foreign or damaged object fails closed.
+
+NIC bytes live in each process's selector. Smart selection charges the exact
+slice length through retirement, including short and folded tails. Round-robin
+keeps inflight selection bytes at zero. Both modes count lifetime assigned
+bytes in `NicLoadStats::allocated_bytes`. A process exiting cannot return
+another process's charge. Stop **all** participants before removing
 `/dev/shm/<name-without-leading-slash>`. See
 [qualification](qualification.md#rdma-promotion-and-shared-slots).
 

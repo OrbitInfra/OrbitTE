@@ -60,6 +60,7 @@ fn cumulative_updates_reserve_atomically_and_refresh_only_on_a_new_sequence() {
     assert!(permit.reservation.try_reserve().unwrap());
     assert!(permit.reservation.try_reserve().unwrap());
     permit.reservation.commit().unwrap();
+    permit.reservation.complete();
     drop(permit);
     let consumed = ledger.stats(&peer).unwrap();
     assert_eq!(
@@ -76,7 +77,7 @@ fn cumulative_updates_reserve_atomically_and_refresh_only_on_a_new_sequence() {
         );
         assert_eq!(ledger.stats(&peer).unwrap(), consumed);
     }
-    for invalid in 0..9 {
+    for invalid in 0..7 {
         let mut next = update(&peer, 4, 10, 2);
         match invalid {
             0 => next.schema_version = 2,
@@ -86,14 +87,6 @@ fn cumulative_updates_reserve_atomically_and_refresh_only_on_a_new_sequence() {
             4 => next.qos_class = 8,
             5 => next.grants[1].grant_total = 0,
             6 => next.grants.push(next.grants[0]),
-            7 => next.grants.push(CreditAmount {
-                resource: CreditResource::StagingSlots,
-                grant_total: 1,
-            }),
-            8 => next.grants.push(CreditAmount {
-                resource: CreditResource::ConsumerSlots,
-                grant_total: 1,
-            }),
             _ => unreachable!(),
         }
         assert!(
@@ -124,6 +117,7 @@ fn cumulative_updates_reserve_atomically_and_refresh_only_on_a_new_sequence() {
     ledger.activate(&peer, 1, 7).unwrap();
     assert!(!ledger.stats(&peer).unwrap().fresh);
     reserved.reservation.commit().unwrap(); // Freshness does not revoke a reservation.
+    reserved.reservation.complete();
     drop(reserved);
     let waiting = ledger.prepare(&peer, 1, 1).unwrap();
     assert!(!waiting.reservation.try_reserve().unwrap());
@@ -489,4 +483,208 @@ fn cancel_expiry_and_fence_release_unstarted_credit_but_handoff_never_refunds() 
         remote.read(0, &mut bytes).unwrap();
         assert_eq!(bytes, [42, 0]);
     }
+}
+
+#[test]
+fn four_resource_grants_reserve_and_rollback_as_one_charge() {
+    let peer = peer();
+    let ledger = SenderCreditLedger::new(1, None);
+    ledger.activate(&peer, 1, 7).unwrap();
+    use CreditResource::*;
+    let mut grant = update(&peer, 1, 8, 2);
+    grant.grants.push(CreditAmount {
+        resource: StagingSlots,
+        grant_total: 3,
+    });
+    ledger.apply_update(&peer, &grant).unwrap();
+    let prepare = || {
+        ledger
+            .prepare_owners(&peer, &[[8, 1, 2, 1]])
+            .unwrap()
+            .pop()
+            .unwrap()
+    };
+    assert!(matches!(
+        ledger.prepare_owners(&peer, &[[0; 4]]),
+        Err(Error::InvalidRange)
+    ));
+    let permit = prepare();
+    assert!(!permit.reservation.try_reserve().unwrap());
+    let before = ledger.stats(&peer).unwrap();
+    for tag in [DataBytes, RequestSlots, StagingSlots, ConsumerSlots] {
+        assert_eq!(before.resource(tag).consumed, 0);
+    }
+    grant.sequence = 2;
+    grant.grants = vec![CreditAmount {
+        resource: ConsumerSlots,
+        grant_total: 4,
+    }];
+    ledger.apply_update(&peer, &grant).unwrap();
+    assert!(permit.reservation.try_reserve().unwrap());
+    let reserved = ledger.stats(&peer).unwrap();
+    for (tag, granted, consumed) in [
+        (DataBytes, 8, 8),
+        (RequestSlots, 2, 1),
+        (StagingSlots, 3, 2),
+        (ConsumerSlots, 4, 1),
+    ] {
+        assert_eq!(
+            reserved.resource(tag),
+            CreditBalance {
+                granted,
+                consumed,
+                available: granted - consumed
+            }
+        );
+    }
+    grant.sequence = 3;
+    grant.grants = vec![
+        CreditAmount {
+            resource: ConsumerSlots,
+            grant_total: 9,
+        },
+        CreditAmount {
+            resource: StagingSlots,
+            grant_total: 1,
+        },
+    ];
+    assert!(matches!(
+        ledger.apply_update(&peer, &grant),
+        Err(Error::Protocol(_))
+    ));
+    assert_eq!(ledger.stats(&peer).unwrap(), reserved);
+    drop(permit); // No handoff. A single owner returns exactly its original vector.
+    assert_eq!(
+        ledger
+            .stats(&peer)
+            .unwrap()
+            .resource(ConsumerSlots)
+            .available,
+        4
+    );
+    let permit = prepare();
+    assert!(permit.reservation.try_reserve().unwrap());
+    permit.reservation.commit().unwrap();
+    permit.reservation.complete();
+    drop(permit);
+    assert_eq!(
+        ledger.stats(&peer).unwrap().resource(StagingSlots).consumed,
+        2
+    );
+    ledger.deactivate(&peer, 1).unwrap();
+}
+
+#[test]
+fn concurrent_manual_reservations_never_exceed_cumulative_grants() {
+    let ledger = SenderCreditLedger::new(1, None);
+    let peer = peer();
+    ledger.activate(&peer, 1, 7).unwrap();
+    ledger
+        .apply_update(&peer, &update(&peer, 1, 100, 100))
+        .unwrap();
+    let started = std::sync::Barrier::new(16);
+    std::thread::scope(|scope| {
+        for _ in 0..16 {
+            scope.spawn(|| {
+                started.wait();
+                for _ in 0..20 {
+                    let p = ledger.prepare(&peer, 1, 1).unwrap();
+                    if p.reservation.try_reserve().unwrap() {
+                        p.reservation.commit().unwrap();
+                        p.reservation.complete();
+                    }
+                }
+            });
+        }
+    });
+    let stats = ledger.stats(&peer).unwrap();
+    assert_eq!(
+        (
+            stats.consumed_bytes,
+            stats.completed_bytes,
+            stats.consumed_requests,
+            stats.active_owners
+        ),
+        (100, 100, 100, 0)
+    );
+}
+
+#[cfg(feature = "metrics")]
+#[test]
+fn credit_metrics_scrape_the_real_sender_and_receiver_owners() {
+    let source = TransferEngine::new(EngineConfig {
+        receiver_credit: Some(Default::default()),
+        metrics: crate::metrics::MetricsConfig::default(),
+        ..Default::default()
+    })
+    .unwrap();
+    let engine = TransferEngine::new(EngineConfig {
+        max_receiver_credit_sessions: 1,
+        metrics: crate::metrics::MetricsConfig {
+            http_host: "127.0.0.1".into(),
+            report_interval_seconds: 0,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    let local = engine
+        .register_memory(vec![0xab, 0xcd, 0xef].into(), Permission::LocalOnly)
+        .unwrap();
+    let remote = source
+        .register_memory(vec![0x35, 0x46, 0x57].into(), Permission::RemoteRead)
+        .unwrap();
+    let peer = engine
+        .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+        .unwrap();
+    engine.activate_receiver_credit(&peer, 1, 7).unwrap();
+    let mut grant = update(&peer, 1, 1, 1);
+    grant.grants.extend([
+        CreditAmount {
+            resource: CreditResource::StagingSlots,
+            grant_total: 3,
+        },
+        CreditAmount {
+            resource: CreditResource::ConsumerSlots,
+            grant_total: 1,
+        },
+    ]);
+    engine.apply_receiver_credit(&peer, &grant).unwrap();
+    let read = TransferRequest::new(
+        Transport::Tcp,
+        local.base_address() + 1,
+        remote.base_address() + 1,
+        1,
+    );
+    assert!(
+        engine
+            .submit_and_wait(TransferOp::Read, &peer, &[read], TIMEOUT)
+            .unwrap()
+            .is_complete()
+    );
+    let mut bytes = [0; 3];
+    local.read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [0xab, 0x46, 0xef]);
+    let metrics = engine.metrics().unwrap().json();
+    for (name, value) in [
+        ("available_bytes", 0),
+        ("consumed_requests", 1),
+        ("available_staging_slots", 3),
+        ("available_consumer_slots", 1),
+        ("active_owners", 0),
+    ] {
+        assert_eq!(metrics[format!("orbitte_receiver_credit_{name}")], value);
+    }
+    engine.deactivate_receiver_credit(&peer, 1).unwrap();
+    engine.connect_receiver_credit(&peer, 7, TIMEOUT).unwrap();
+    let issued = source.metrics().unwrap().json();
+    assert_eq!(issued["orbitte_receiver_active_senders"], 1);
+    assert_eq!(
+        issued["orbitte_receiver_reserved_requests"],
+        crate::ReceiverCreditConfig::default().requests_per_sender
+    );
+    engine.disconnect_receiver_credit(&peer, TIMEOUT).unwrap();
+    let closed = source.metrics().unwrap().json();
+    assert_eq!(closed["orbitte_receiver_active_senders"], 0);
+    assert_eq!(closed["orbitte_receiver_retired_senders_total"], 1);
 }

@@ -254,3 +254,58 @@ fn json_rejects_ambiguous_or_unconsumed_qos_and_bounded_input() {
             .unwrap_err();
     assert!(error.to_string().contains("allowed_degraded_actions"));
 }
+
+#[test]
+fn unusable_fields_and_actions_name_the_offending_key_at_every_policy_layer() {
+    fn rejected(json: &str, needle: &str) {
+        assert!(
+            matches!(QosConfig::from_json(json),Err(Error::InvalidQosConfig(ref reason)) if reason.contains(needle)),
+            "expected {needle:?} in rejection of {json}: {:?}",
+            QosConfig::from_json(json)
+        );
+    }
+    for (field, value) in [
+        ("min_bandwidth_gbps", "20"),
+        ("max_bandwidth_gbps", "100"),
+        ("burst_bytes", "1024"),
+        ("weight", "8"),
+        ("deadline_profile", "true"),
+        ("max_inflight_requests", "-1"),
+        ("priority", "9"),
+        ("max_inflight_bytes", "false"),
+        ("allowed_degraded_actions", "123"),
+        ("name", "true"),
+    ] {
+        let bad = format!(r#"{{"{field}":{value}}}"#);
+        for config in [
+            format!(r#"{{"defaults":{bad}}}"#),
+            format!(r#"{{"tenants":[{{"name":"t","defaults":{bad}}}]}}"#),
+            format!(r#"{{"tenants":[{{"name":"t","intents":{{"foreground_get":{bad}}}}}]}}"#),
+        ] {
+            rejected(&format!(r#"{{"qos":{config}}}"#), field);
+        }
+    }
+    for action in [
+        "fallback_transport",
+        "local_recompute",
+        "compress",
+        "unrecognized",
+    ] {
+        let bad = format!(r#"{{"allowed_degraded_actions":["delay","{action}"]}}"#);
+        for config in [
+            format!(r#"{{"defaults":{bad}}}"#),
+            format!(r#"{{"tenants":[{{"name":"t","defaults":{bad}}}]}}"#),
+            format!(r#"{{"tenants":[{{"name":"t","intents":{{"staging_internal":{bad}}}}}]}}"#),
+        ] {
+            let json = format!(r#"{{"qos":{config}}}"#);
+            for needle in ["allowed_degraded_actions", action] {
+                rejected(&json, needle);
+            }
+        }
+    }
+    rejected(
+        r#"{"qos":{"strict_mode":true,"defaults":{}}}"#,
+        "strict_mode",
+    );
+    rejected(r#"{"qos":{"intent_defaults":{}}}"#, "intent_defaults");
+}

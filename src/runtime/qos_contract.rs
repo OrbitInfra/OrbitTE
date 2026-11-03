@@ -243,7 +243,9 @@ impl QosContractResolver {
                 .is_some_and(|actions| actions.delay)
         });
         if delay && queue.is_none() {
-            return Err(Error::InvalidConfig("QoS delay requires runtime_queue"));
+            return Err(Error::InvalidConfig(
+                "qos.allowed_degraded_actions: delay requires runtime_queue",
+            ));
         }
         let quota = limits
             .iter()

@@ -1612,10 +1612,12 @@ fn public_read_write_dispatches_to_the_faster_rail_and_publishes_payload_estimat
 
 #[test]
 fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails() {
+    let slots = crate::transport::rdma::shared_quota::tests::Object::new();
     for source_mask in [u64::MAX, 1, 4] {
         let configured = |mask| {
             let mut runtime = sliced_runtime(mask, 8, 16, RdmaHostMemory::Direct, false);
             runtime.config.block_size = 8;
+            runtime.config.shared_quota_shm_path = Some(slots.name().to_owned());
             runtime.config.scheduling.smart_selection = true;
             runtime.config.scheduling.bandwidth_learning_rate = 1.0;
             runtime
@@ -1646,7 +1648,8 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
                         local.base_address() + 4,
                         remote.base_address() + 4,
                         41,
-                    )],
+                    )
+                    .with_priority(crate::Priority::Low)],
                     TIMEOUT,
                 )
                 .unwrap();
@@ -1672,6 +1675,10 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
             stats.iter().map(|s| s.completed_bytes).collect::<Vec<_>>(),
             expected
         );
+        assert_eq!(
+            stats.iter().map(|s| s.allocated_bytes).collect::<Vec<_>>(),
+            expected
+        );
         for engine in [&requester, &source] {
             assert!(
                 engine
@@ -1694,6 +1701,11 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
         source.unregister_memory(&remote).unwrap();
         requester.close(TIMEOUT).unwrap();
         source.close(TIMEOUT).unwrap();
+        #[cfg(feature = "metrics")]
+        assert_eq!(
+            requester.metrics().unwrap().json()["orbitte_rdma_allocated_bytes_total"],
+            82
+        );
     }
 }
 

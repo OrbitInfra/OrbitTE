@@ -77,6 +77,21 @@ if [[ ${2:-} == metrics ]]; then
     transport::rdma::rdma_transport::tests::rails::a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receipt
   )
 fi
+if [[ ${2:-} == quotas ]]; then
+  controls=(
+    transport::rdma::workers::tests::priority::event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe
+    transport::rdma::quota::allocation::tests::baseline_parents_rotate_first_tier_and_concurrent_reservations_balance
+    transport::rdma::shared_quota::tests::independent_process_attach_and_killed_initializer_recovery
+    transport::rdma::shared_quota::tests::killed_publisher_releases_the_shared_lock_without_stealing_a_live_nic_charge
+    transport::rdma::shared_quota::tests::shared_slot_publication_is_visible_and_never_extends_a_stale_tier
+    transport::rdma::shared_quota::tests::slot_attachment_propagates_native_failures_and_releases_initialization_lock
+    transport::rdma::rdma_transport::tests::rails::weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails
+    runtime::receiver_credit::tests::concurrent_manual_reservations_never_exceed_cumulative_grants
+    runtime::receiver_credit::tests::credit_metrics_scrape_the_real_sender_and_receiver_owners
+    runtime::control_plane::tests::background_progress_publishes_a_lost_write_receipt_without_replay
+    engine::failover::tests::native::metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport
+  )
+fi
 for iteration in {1..50}; do
   echo "Iteration $iteration/50 with RUST_TEST_THREADS=$RUST_TEST_THREADS"
   output=$("$binary" --exact "${controls[@]}") || { echo "$output"; exit 1; }

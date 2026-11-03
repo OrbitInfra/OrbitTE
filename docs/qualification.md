@@ -31,6 +31,7 @@ external output directory; failed runs are kept.
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
 | Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
+| Host-shared priority slots, exact NIC slice accounting and automatic receiver credits | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/quota_run.py --artifact "$ART" --nic "$RNIC" --nic-lock "$RNIC_LOCK" --output "$RUN"` | Two packaged processes on a locked RNIC, guarded READ/WRITE, sender and NIC drain |
 | Named NIC masks, endpoint QP pools, merged owners and deadline drops on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
 | RDMA rail cooldown and recovery after physical RoCE data-link loss | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN" --fault-netdev "$DEDICATED_ROCE_NETDEV"` | [Rail health](rdma-cuda.md#rail-health) |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
@@ -2236,8 +2237,7 @@ Evidence is external at
 initial compilation diagnostics, source checks, package build and review.
 Native LAG/XDR behavior, installed DMA, throughput and matched TENT performance
 remain unqualified. No hardware task was requested. Request priority and basic
-worker arbitration are recorded below; shared quotas and complete F16/P6 parity
-remain open.
+worker arbitration and the installed verification scope are recorded below.
 
 
 ## RDMA rail health
@@ -2285,8 +2285,8 @@ No new hardware allocation was requested for this stage.
 Source implements frozen TENT's 10 ms priority aging, 1 ms checks, default
 head-only tier promotion and opt-in per-entry promotion. A persistent destination
 FIFO ordinal protects ordering across context rotation and queue reconstruction.
-Optional `SharedSlotManager` admission reproduces the three priority slots with
-a shared interval/domain header and no background rotation thread.
+Each configured RDMA worker pool publishes one of the three priority slots
+in shared memory. Participants join the same clock domain.
 
 Focused worker controls exercise both promotion policies, original-age behavior,
 stale namespaces, opposite context collection order and repeated reconstruction,
@@ -2294,8 +2294,11 @@ actual priority-gated native-post calls, and event-driven progress from a Low
 submission with no initial CQE. The long High-slot control isolates promotion;
 the short-slot run checks bounded completion, not a strict per-boundary timing
 negative control. Real local subprocess controls cover same-object attachment,
-conflicting intervals, a killed initializer and subsequent reopen. Clock-domain
-mismatch rejection uses an in-process header control. Native
+conflicting intervals and a killed initializer. Two child processes charge
+independent NIC leases on one tmpfs object. One is killed under the publish
+lock; the survivor recovers the lock and all priority tiers, retaining its
+own exact byte charge until release. Clock-domain, corrupt-slot and
+incompatible-size controls fail without modifying the object. Native
 verbs remain CPU controls; these processes do not establish RDMA hardware or
 installed-package fairness. Default/RDMA/CUDA source gates, Clippy and strict
 documentation checks remain the regression gates. Logs and independent review
@@ -2354,16 +2357,21 @@ Source connects frozen TENT's cumulative `SenderCreditLedger` accounting model
 to actual sync/async transport handoff and runtime queue eligibility. The frozen
 ledger has no transport consumer and ignores TTL; OrbitTE's consumer and
 freshness gate are explicit additions. Applications deliver grants through the
-local Rust API. No automatic receiver issuer, credit wire protocol, staging or
-consumer resource mapping, native pacing or receiver-capacity proof is claimed.
+local Rust API. The automatic issuer handles negotiated receiver windows
+separately. The manual ledger accepts partial grants of all four resources
+and exposes each balance. Physical transfers charge bytes and request slots.
+Remote Pin owns the actual staging and consumer resources at the receiver.
 
-Four focused CPU controls cover atomic two-resource reservation, invalid/partial
+CPU controls cover atomic four-resource reservation and pre-handoff rollback,
+concurrent consumption at the grant boundary, invalid/partial
 and old/gapped cumulative updates, freshness without duplicate renewal, epoch
 and source-session fencing, eligible large-head byte ordering and TTL-driven
 bypass without updates/releases, real two-peer TCP
 credit bypass and update wakeup, draining after close, cancel/expiry before I/O,
 unstarted refund and no refund after transport handoff (including a canceled
-multi-request suffix). The existing RDMA
+multi-request suffix). A real TCP peer applies a WRITE and loses the final
+acknowledgement. The sender retains the committed grant and rejects both
+deactivation and epoch replacement after local drain. The existing RDMA
 cleanup-failure control retains the actual uncertain native owners, dispatch
 window and credit binding; deactivation and epoch replacement stay busy. Native
 verbs in this control are a CPU ABI fixture, not hardware DMA evidence.
@@ -2379,7 +2387,7 @@ Source implements typed `QosContractResolver` overlays and immutable engine-boun
 `EffectiveQosPolicy` handles. Frozen TENT supplies the resolution model only;
 OrbitTE additionally feeds effective priority into existing transports and
 atomically reserves permits for physical owners against their compiled
-contract. Hierarchical tenant limits and cluster-wide isolation remain open.
+contract. The frozen resolver has no parent-charge tree or cluster allocator.
 
 Four focused CPU controls cover overlay/zero/normalization rules, bounded static
 slots, mixed-contract all-or-nothing admission with a later slot already full,
@@ -2394,9 +2402,8 @@ Native verbs in these controls are CPU ABI fixtures.
 
 Logs, source archive and independent review are external at
 `/root/orbitte-artifacts/qos-contract-20261102/`. Exact-commit source/CI results
-belong to its handoff. JSON config interoperability, automatic receiver issuance,
-degraded actions, hierarchical/cluster quotas and hardware fairness/throughput
-remain unqualified. No hardware job was requested and no performance advantage
+belong to its handoff. JSON policy fields, automatic credit and admission
+actions have CPU controls. Hardware fairness and throughput remain unqualified. No hardware job was requested and no performance advantage
 is claimed.
 
 
@@ -2425,8 +2432,9 @@ Logs, source archive and independent review are external at
 `/root/orbitte-artifacts/receiver-credit-issuer-20261102/`; its handoff records
 exact-commit gates. Fixed windows do not redistribute idle capacity. Failed or
 crashed senders retain authority until a separate reclaim proof exists; terminal
-tombstones remain bounded and do not reopen identities. Staging/consumer charges,
-QoS-class mapping, adaptive windows, hardware fairness and throughput remain open.
+tombstones remain bounded and do not reopen identities. Generic QoS-class
+mapping and adaptive sizing have no frozen receiver-ledger
+counterpart. Physical fairness and throughput remain unqualified.
 
 
 ## Staging and consumer owner credits
@@ -2437,7 +2445,7 @@ CreditSync/Close and Delegate/CROSS/Unpin bodies remain unchanged. Atomic source
 admission charges negotiated depth and one session, then transfers stage tokens
 before native construction. Only actual cleanup returns capacity; each Pin's
 child-owner count prevents a consumer from returning after hidden Drop retention.
-Manual resource updates and generic application-consumption credits remain open.
+Manual updates accept the four named grants. The frozen engine supplies no mapping from arbitrary application objects to those grants.
 
 Focused controls use real control sockets and CUDA/verbs ABI fixtures: negotiated
 depth differs from the requester's proposal; TCP and RDMA READ/WRITE ordered
@@ -2511,8 +2519,9 @@ cannot reacquire quota. Both discovered pre-fix failures remain in external evid
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies names and
 field overlay semantics, not execution policy: its resolver is
 `resolution_only`. OrbitTE's [defined behavior](async-batches.md#qos-admission-actions)
-is explicit. Transport fallback, recompute/compression, hierarchical/cluster
-budgets and complete QoS parity remain open.
+is explicit. Unsupported QoS fallback, recompute and compression actions
+return typed configuration errors. The frozen resolver combines fields into
+one effective budget.
 
 Exact source, CI and independent review are recorded outside Git at
 `/root/orbitte-artifacts/qos-actions-20261103/`. There is no new wire version,

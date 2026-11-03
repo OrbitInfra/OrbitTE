@@ -120,7 +120,10 @@ impl Driver {
             .iter()
             .position(|c| *c == 0)
             .ok_or(Error::Protocol("CUDA PCI bus id"))?;
-        let pci: String = pci[..end].iter().map(|c| *c as u8 as char).collect();
+        let pci: String = pci[..end]
+            .iter()
+            .map(|c| char::from(c.to_ne_bytes()[0]))
+            .collect();
         crate::platform::pci::bus_id(&pci).ok_or(Error::Protocol("CUDA PCI bus id"))
     }
 }

@@ -40,6 +40,7 @@ impl TransferEngine {
         let rdma = self.source.rdma.as_ref().map(Arc::downgrade);
         let queue = self.runtime_queue.clone();
         let credits = self.receiver_credits.clone();
+        let issuer = self.source.credit_issuer.clone();
         let qos = self.qos.as_ref().map(QosContractResolver::metrics_sampler);
         let allocations = self.allocations.clone();
         let batches = self.batches.clone();
@@ -80,14 +81,82 @@ impl TransferEngine {
                 ]);
             }
             if let Some(c) = &credits {
-                let (a, r) = c.metric_owners();
+                let (a, r, balances) = c.metric_usage();
+                for ((available, consumed), balance) in [
+                    (
+                        "orbitte_receiver_credit_available_bytes",
+                        "orbitte_receiver_credit_consumed_bytes",
+                    ),
+                    (
+                        "orbitte_receiver_credit_available_requests",
+                        "orbitte_receiver_credit_consumed_requests",
+                    ),
+                    (
+                        "orbitte_receiver_credit_available_staging_slots",
+                        "orbitte_receiver_credit_consumed_staging_slots",
+                    ),
+                    (
+                        "orbitte_receiver_credit_available_consumer_slots",
+                        "orbitte_receiver_credit_consumed_consumer_slots",
+                    ),
+                ]
+                .into_iter()
+                .zip(balances)
+                {
+                    snapshot
+                        .gauges
+                        .extend([(available, balance.available), (consumed, balance.consumed)]);
+                }
                 snapshot.gauges.extend([
                     ("orbitte_receiver_credit_active_owners", a as u64),
                     ("orbitte_receiver_credit_reserved_owners", r as u64),
                 ]);
             }
+            if let Some(issuer) = &issuer {
+                let s = issuer.stats();
+                snapshot.gauges.extend([
+                    ("orbitte_receiver_active_senders", s.active_senders as u64),
+                    ("orbitte_receiver_reserved_bytes", s.reserved_bytes),
+                    ("orbitte_receiver_reserved_requests", s.reserved_requests),
+                    (
+                        "orbitte_receiver_reserved_staging_slots",
+                        s.reserved_staging_slots,
+                    ),
+                    (
+                        "orbitte_receiver_reserved_consumer_slots",
+                        s.reserved_consumer_slots,
+                    ),
+                    (
+                        "orbitte_receiver_active_staging_slots",
+                        s.active_staging_slots,
+                    ),
+                    (
+                        "orbitte_receiver_active_consumer_slots",
+                        s.active_consumer_slots,
+                    ),
+                    (
+                        "orbitte_receiver_retained_staging_slots",
+                        s.retained_staging_slots,
+                    ),
+                    (
+                        "orbitte_receiver_retained_consumer_slots",
+                        s.retained_consumer_slots,
+                    ),
+                ]);
+                snapshot.counters.push((
+                    "orbitte_receiver_retired_senders_total",
+                    s.retired_senders as u64,
+                ));
+            }
             #[cfg(feature = "rdma")]
             if let Some(r) = rdma.as_ref().and_then(std::sync::Weak::upgrade) {
+                let (inflight, allocated) = r.quota_totals();
+                snapshot
+                    .gauges
+                    .push(("orbitte_rdma_inflight_bytes", inflight));
+                snapshot
+                    .counters
+                    .push(("orbitte_rdma_allocated_bytes_total", allocated));
                 let s = r.rail_health_stats();
                 snapshot
                     .gauges

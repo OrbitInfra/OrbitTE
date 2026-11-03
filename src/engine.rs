@@ -494,7 +494,8 @@ impl TransferEngine {
     }
 
     /// Activates one cooperative credit class for this peer/source epoch. Same
-    /// epoch replay does not reset totals; a newer epoch requires drained owners.
+    /// epoch replay does not reset totals. A newer epoch requires drained owners
+    /// and confirmation of every committed charge.
     /// A recreated binding after deactivation requires a fresh administrative
     /// epoch and fenced old updates. This API does not authenticate a receiver.
     pub fn activate_receiver_credit(
@@ -523,7 +524,8 @@ impl TransferEngine {
     }
 
     /// Fences unstarted owners. Busy preserves the binding until all actual
-    /// owners drain; repeat with the same epoch to retire it. Started groups may
+    /// owners drain and every committed charge has a completion receipt. Repeat
+    /// with the same epoch to retire it. Started groups may
     /// finish, and Unquiesced owners keep the binding busy.
     pub fn deactivate_receiver_credit(&self, peer: &RemoteSegment, epoch: u64) -> Result<()> {
         self.receiver_credits

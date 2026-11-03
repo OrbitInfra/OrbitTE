@@ -24,6 +24,7 @@ pub(super) struct Workers {
 struct Pool {
     workers: Vec<(Arc<WorkerContext>, JoinHandle<()>)>,
     stopped: bool,
+    slot_release: Option<super::shared_quota::SlotRelease>,
     next_worker: usize,
 }
 
@@ -109,15 +110,21 @@ impl Workers {
         }
         let count = progress.shared.config.num_lanes;
         if pool.workers.is_empty() {
+            // A failed startup must finish releasing its map before another attach.
+            if let Some(release) = &pool.slot_release {
+                release.check()?;
+            }
             let shared_slots = progress
                 .shared
                 .config
                 .shared_quota_shm_path
                 .as_deref()
+                .filter(|name| !name.is_empty())
                 .map(|name| {
-                    super::shared_quota::SharedSlotManager::attach(
+                    super::shared_quota::SharedSlotManager::install(
                         name,
                         progress.shared.config.slot_rotation_interval,
+                        &mut pool.slot_release,
                     )
                     .map(Arc::new)
                 })
@@ -332,6 +339,9 @@ impl Workers {
             }
         }
         self.monitor.close(deadline)?;
+        if let Some(release) = &pool.slot_release {
+            release.check()?;
+        }
         failure.map_or(Ok(()), Err)
     }
 }
@@ -439,7 +449,7 @@ impl WorkerContext {
                     self.promotion_per_entry,
                 );
                 let mut allowed = Some(crate::Priority::Low);
-                if posts.has_blocked(crate::Priority::High) {
+                if !posts.is_empty() {
                     if let Some(slots) = &self.shared_slots {
                         match slots.current_slot() {
                             Ok((priority, delay)) => {
@@ -455,7 +465,7 @@ impl WorkerContext {
                                 allowed = None;
                                 for lane in &exit.lanes {
                                     lane.state.fail(super::cq_lane::Fault::Backend(
-                                        "RDMA shared slot clock",
+                                        "RDMA shared priority slot",
                                         libc::EIO,
                                     ));
                                 }
