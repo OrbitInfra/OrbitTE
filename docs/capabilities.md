@@ -1,53 +1,80 @@
 # Capabilities
 
-This matrix describes the current source. The published `0.1.0-alpha.1` crate
-remains the original package reservation. **Implemented**, **qualified** and
-**independently accepted** are separate states; see [Qualification](qualification.md)
-for the exact artifacts and profiles behind each result.
+This page summarizes the current source on `main`. The `0.1.0-alpha.1` crate on
+crates.io only reserves the package name.
 
-| Path or capability | Current source | Qualification boundary |
+| Status | Meaning |
+| --- | --- |
+| **Accepted** | A bounded installed hardware profile passed and an independent reviewer accepted it. Only that recorded profile is covered |
+| **Qualified** | A bounded installed hardware profile passed; independent acceptance is still open |
+| **Implemented** | Source and CPU controls pass; the current source has no installed hardware result |
+| **Planned** | Not implemented yet; the stage is listed in the [completion plan](completion-plan.md) |
+
+[Qualification](qualification.md) records the exact artifacts, cases and limits
+behind every hardware result.
+
+## Transports
+
+| Path | Status | Limits |
 | --- | --- | --- |
-| Rust request construction | Implemented | `TransferRequest::new` works in the CPU-only build. The `rdma` and `cuda` features require a Linux target |
-| CPU DRAM over TCP | Implemented | Loopback and independent-process byte, restart and lifetime controls. Request and reply decoders reject unsupported versions. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries). Shared TcpTask owns partial framing and payload snapshots; ordinary active-batch cancellation remains unchanged |
-| Owned/external host registration | Implemented | Transactional batches, duplicate references, allocation aliases and retained backing |
-| Async batches and notifications | Implemented | CPU cancellation, detached handles, bounded admission and receipt controls |
-| Host DRAM over RDMA | Implemented | Scoped two-host IPv4/IPv6 RoCEv2 READ/WRITE profiles; InfiniBand remains unqualified |
-| Persistent host MRs and multi-context publication | Implemented | Scoped two-RNIC atomic publication, rollback and retirement; paused-context MR preparation and recovery pass the focused native PD/MR/QP gate |
-| Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, multiplexing on the public wire, exact WR/receipt dispatch and shared physical SQ/RQ limits |
-| Multirail slices and shared quotas | Implemented | Selected folded-tail and concurrent-parent profiles verify bytes, whole-parent admission and native drain. The installed two-physical-rail profile joins every payload WR/CQE and verifies shared-QP contention/accounting; bandwidth/fairness policy remains P6 |
-| Transport workers, CQ lanes and NUMA binding | Implemented | Scoped native worker/lane routing, CPU-mask and polling/event profiles; broader scheduling policy remains later work |
-| Transport policy selection | Implemented; source controls | Ordered memory/size/priority rules, source-owned type/IPC facts and strict hints feed actual sync/async submission. Named policies, intent/device/QP-pool filters, file selection and installed performance remain open; see [contract](transport-selection.md) |
-| Runtime FIFO/EDF admission | Implemented; CPU/source controls | Opt-in whole-submission scheduling, independent owner/byte dispatch windows, same-Batch dependencies, queue timeout/cancel and retained uncertain DMA charges. Physical-request scheduling, staging reserves, deadline-infeasible cancellation and native performance remain open; see [contract](async-batches.md#runtime-admission-and-dispatch-window) |
-| QoS contract consumption | Implemented; CPU/source controls | Typed or bounded TENT-format JSON global/tenant/intent inheritance, reusable engine-bound policies, effective RDMA priority and atomic per-contract retained byte/request caps. Unknown identities share compiled fallback buckets. Delay/reject actions join QoS, receiver credit and runtime-window admission without partial charges. Unsupported actions fail closed; hierarchical/cluster quotas and native fairness remain open; see [contract](async-batches.md#qos-contracts) and [actions](async-batches.md#qos-admission-actions) |
-| Receiver credits (sender) | Implemented; CPU/source controls | Opt-in cumulative peer byte/request grants gate sync/async transport handoff and queue eligibility. Applications may supply updates or connect to bounded automatic receiver windows. Demand-driven cumulative sync, lost-reply recovery and fenced retirement are implemented. Automatic source-owned remote Pin staging/consumer charges follow actual native cleanup; manual resource mapping, adaptive windows and full QoS remain open. This is request authorization, not proven receiver/RQ capacity or a rate limiter; see [contract](async-batches.md#receiver-credit-gating) |
-| Request priority and deadline/bandwidth arbitration | Implemented; source controls | TCP and NVLink accept all priorities as advisory. RDMA workers dispatch High/Medium/Low ready payloads across contexts, with opt-in same-NIC urgency ordering using actual posted debt. Ordinary and sliced requests retain priority. Aging and optional cross-process priority slots are implemented with CPU/process controls; global byte limits, tenant isolation, native fairness and throughput remain open; see [scope](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
-| Discovery and periodic recovery | Implemented | Scoped process-local query-failure recovery; initially paused contexts and automatic/strict GID recovery pass the focused one-RNIC native gate. Installed two-host automatic discovery matches a separate sysfs inventory, including strict-pin rejection and NUMA ranks. Independent review includes four fresh live RoCE repeats; physical loss remains open |
-| Native failure retention and live reconnect | Implemented | Scoped QP ERR, lost CQEs, QP/MR/MW syscall faults and CQ/channel/PD EBUSY. Failed owners remain retained; device-close errors have CPU ABI coverage only |
-| Packaged public host consumer | Scoped tests | Qualified profiles cover healthy traffic, restarts, lost CQEs, actual in-flight DMA interruption, QP/MR/MW/CQ/channel/PD cleanup, engine replacement, physical rail accounting and automatic discovery. Physical link/device loss and InfiniBand remain open |
-| NVIDIA allocation, pinned host memory and copy streams/events | Implemented | Serialized stream/event reuse passes the bounded two-host/four-H20 local-copy profile on stable and Rust 1.85. Failure retention has CPU controls. Staging is the default device policy |
-| GPU / pinned-host producer readiness | Implemented; source controls pass | Explicit actual-stream capture, allocation-owned event reuse and producer input retention. GPU and owned pinned-host access consumes readiness before CPU/copy, staging, DMA or IPC payloads. Pinned capture uses its allocation context; ordinary/external host wrappers are rejected. Consumption uses a scoped CPU event wait. Consumer-stream chaining is not exposed; native ordering/performance remain unqualified. See [pinned handoff](rdma-cuda.md#pinned-host-producer-handoff) |
-| Direct GPU registration / GPUDirect RDMA | Implemented; bounded H20/RoCE profile accepted with limits | Both installed toolchains pass host/GPU/GPU READ/WRITE, tiny and folded two-rail slices, real GPU MR/WR witnesses and owned-context drain. B host-wide context non-growth remains unqualified. Explicit Direct requires scatter-to-CQE disabled; GPU source MRs/QPs are per-grant |
-| Cooperative CUDA IPC / NVLink | Bounded GPU/GPU, subbatch and pinned host profiles accepted | Owned GPU/GPU and local owned pinned host/GPU; whole-allocation opt-in and quota, event completion and explicit import-close receipts. The initial path passes 48 installed H20/NV18 cases plus four independent repeats on stable/MSRV. Same-context subbatch reuse passes 28 additional installed cases and four independent repeats. Pinned host and mixed groups pass 30 additional installed cases plus four independent repeats; exporter-crash safety and broader TENT IPC parity remain open |
-| Grouped CUDA IPC completion | Implemented; source controls pass | Same-context GPU/pinned host slices use one reused stream/event and shared event-query progress. Eligible independent groups dispatch through optional CUDA 13 native batch copies; dependent groups keep ordered enqueue. Native errors never replay ambiguous members. Current installed DMA and performance remain unqualified. See [native batch dispatch](qualification.md#cuda-ipc-native-batch-copy) |
-| Cross-submission CUDA IPC import cache | Idle LRU reclamation and continuing flush implemented; earlier fixed-working-set profile accepted | Fresh source authorization, single-flight replacement and separate exporter lifetime. Reclamation/flush have source controls; current installed dynamic-working-set DMA and performance remain unqualified. No forced exporter-crash safety |
-| Local CUDA staging chunks | Bounded healthy profile accepted; P5.5a | Shared TCP/RDMA chunk owner; 24 installed H20 cases and four independent repeats verify bounded pins, copies and frees. CPU controls cover uncertain completion/cleanup retention. Opt-in serial remote sessions are implemented separately; see [staging](staging.md) |
-| Owner-backed pointer/location metadata | Implemented; source controls | Bounded registration/owner ranges, CPU versus CUDA device/context, batched external CUDA validation and cached GPU staging locality; unknown pointers never select CPU access. General pointer/CPU page probing remains open. See [API](rust-api.md#memory-type-and-location) |
-| CUDA GPU/RNIC topology | Implemented; source controls | Visible GPU PCI/NUMA inventory and precompiled NIC tiers drive owner-based RDMA selection on both peers; strict known-cross-NUMA rejection and explicit masks/hints are enforced. Installed routing and performance remain unqualified. See [selection](rdma-cuda.md#device-port-gid-and-memory-topology-discovery) |
-| Custom topology / priority matrix | Implemented; source controls | TENT inline two-rank matrices and native topology files resolve to discovered stable NIC IDs. Only listed candidates are eligible; physical locality, masks and grant charges remain authoritative. Installed routing and performance remain unqualified. See [configuration](rdma-cuda.md#custom-topology-and-priority-matrices) |
-| RDMA bandwidth-aware selection | Implemented; source controls | Negotiated port rates seed per-NIC selection EWMA; successful payload completion and posted busy-time estimates stay separate. Smart selection consumes physical grant charges and NUMA weights; baseline round robin and available-NIC snapshots are exposed. Whole-parent weighted slice reservations and every-100th-parent eligible-rail exploration are implemented. Optional effective LAG and header-supported extended XDR queries are implemented; native rate behavior and measured throughput remain unqualified. See [scheduling](rdma-cuda.md#bandwidth-aware-rdma-selection) |
-| Host staging location | Implemented; independent source review accepted | Opt-in Auto / explicit CPU NUMA location, mapped CUDA-registered backing and context/location pool reuse. Page padding counts toward the global bound. Hardware residency, DMA and performance remain unqualified; see [location contract](staging.md#host-staging-location) |
-| Remote CUDA staging | Healthy serial and bounded pipeline profiles accepted | Serial Pin/Delegate/Unpin passes 16 installed cases plus four independent repeats. The up-to-16-slot pipeline passes 24 fresh installed H20 TCP/RDMA cases plus four independent repeats. Native stream/event lifetimes, per-slot reuse and private MR cleanup are checked. Requester chunk-size negotiation and GPU range loans pass independent source review. Independent requester PRE/POST rings and failure ownership pass source review at `c87c403`. Bounded CROSS queues separate local CUDA progress from network/Delegate waits. Up to eight shared staging shards reuse threads, bound queued sessions and cancel them before Pin. Requester chunk progress queries CUDA events and refills slots independently; RDMA CROSS admission stays ordered on one connection while payload completion can reorder. Separate CROSS quotas, scoped FinishCross and aggregate drain preserve slot ownership. TCP payload and scoped staging control receipts now have bounded nonblocking progress. Connect owns one pending socket; worker stop reaches Pin and native handshake socket waits, with complete Pin validation before chunk publication and native drain before retirement. Requester RDMA finish now polls SEND and reusable-grant cleanup and retains partial ACK/READY frames while querying other submitted CROSS owners. Requester RDMA setup retains partial path/admission/OFFER/GRANT frames, observes other submitted CROSS payloads and validates every parent grant before payload submission. Cold requester acquisition now yields while another builder occupies the fixed-width QP array, retaining one grant lease across polls. Pending persistent MR publication also yields; one grant construction owner retains the original admission and connection claim, while explicit abort preserves native cleanup errors. Nonreusable requester QP retirement also polls the existing CQ worker; busy cleanup locks return pending, and terminal publication still requires native drain or complete retention. Pin, provider calls and resource creation, copyback, aggregate failure drain and source handlers remain synchronous. Independent source review accepts TCP/scoped-control progress at `736a16a` and cancellable Connect/Pin plus native socket waits at `a2d1b9e`. Independent source review accepts the CROSS boundary at `adc803f`. The subsequent implementation adds scoped Delegate completion queries, including depth one, and defers remote slot reuse/Unpin while copies remain pending; independent source review accepts this boundary at `3767dc5`. Hardware qualification remains pending. Full ProxyManager parity remains open |
-| Mixed GPU direct / local and remote staging batches | Implemented; source controls pass | Explicit per-request remote staging over TCP/RDMA coexists with GPU Direct; incoming Pin capability is independent. Private host grants follow host RDMA policy. Ordered completion, bounded chunk reuse and MR retirement have source controls; current installed DMA and throughput remain unqualified. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
-| DRAM/GPU to and from local SSD through io_uring / cuFile GDS | Planned, P7 core target | Opt-in storage transports for OrbitKV's SSD tier. DRAM/file io_uring, GPU staging through DRAM and native GDS each need separate direct-path qualification |
-| TENT C/Python/C++ API and mixed-peer wire compatibility | Open | Separate API/ABI/wire gates; the current protocol is OrbitTE-only |
+| CPU DRAM over TCP | Implemented | Loopback and multi-process byte, restart and lifetime controls; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
+| Host DRAM over RDMA | Accepted (RoCE) | Two-host RoCEv2 READ/WRITE with restart, cleanup and in-flight DMA faults. InfiniBand and physical link or device loss are unqualified. See [RDMA and CUDA](rdma-cuda.md) |
+| GPUDirect RDMA | Accepted (H20/RoCE, with limits) | Host/GPU READ/WRITE and two-rail slices. Host-wide context non-growth is unqualified; GPU source MRs and QPs are per grant |
+| CUDA IPC / NVLink on one host | Accepted (H20, cooperative profiles) | GPU/GPU, pinned host/GPU, subbatch reuse and a fixed-working-set import cache. Grouped completion, stream pool, native batch copy and cache reclamation are implemented only. See [CUDA IPC](cuda-ipc.md) |
+| Local CUDA staging over TCP/RDMA | Accepted (H20, healthy) | Shared pinned chunks; physical CUDA faults are unqualified. See [staging](staging.md) |
+| Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Later nonblocking progress work is implemented only; full ProxyManager parity is open. See [remote pipeline](staging.md#bounded-remote-pipeline) |
+| Mixed GPU Direct and staged batches | Implemented | Per-request remote staging next to GPU Direct in one ordered batch. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
+| DRAM/GPU ↔ local SSD (io_uring, GDS) | Planned (P7) | Core target for OrbitKV's SSD tier, delivered as opt-in builds |
+| HP-TCP, SHM | Planned (P3) | |
+| MNNVL / EGM | Planned (P5) | |
+| MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
+
+## Memory and batches
+
+| Capability | Status | Limits |
+| --- | --- | --- |
+| Request construction | Implemented | `TransferRequest::new` with builders. The `rdma` and `cuda` features require Linux. See [Rust API](rust-api.md) |
+| Owned and external host registration | Implemented | Transactional batches, duplicate references, aliases and retained backing |
+| Async batches and notifications | Implemented | Bounded admission, cancellation and detached handles. See [async batches](async-batches.md) |
+| NVIDIA allocations, pinned host memory and copy streams | Qualified (H20 local copy) | Stream and event reuse; failure retention has CPU controls only |
+| GPU and pinned-host producer readiness | Implemented | Caller-stream capture before payload access, with a CPU-blocking wait. See [pinned handoff](rdma-cuda.md#pinned-host-producer-handoff) |
+| Memory type and location | Implemented | Owner-backed CPU/CUDA locations; unknown pointers never select CPU access. See [memory location](rust-api.md#memory-type-and-location) |
+| Host staging location | Implemented | GPU-near or explicit NUMA staging buffers; residency and performance are unqualified. See [staging location](staging.md#host-staging-location) |
+
+## Routing and scheduling
+
+| Capability | Status | Limits |
+| --- | --- | --- |
+| Transport selection | Implemented | First-match memory, size and priority rules with strict hints. Named policies, intents, device and QP-pool filters and file segments are open. See [transport selection](transport-selection.md) |
+| Discovery, port recovery and multirail slicing | Accepted (RoCE) | Automatic discovery matches a separate host inventory; two-rail accounting verifies exact bytes. Physical loss is unqualified |
+| CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
+| Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
+| Runtime FIFO/EDF admission | Implemented | Whole-submission dispatch windows. Staging reserves and deadline-infeasible cancellation are open. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
+| QoS contracts | Implemented | TENT-format global, tenant and intent policies with byte/request caps and delay/reject. Hierarchical quotas are open. See [QoS](async-batches.md#qos-contracts) |
+| Receiver credits | Implemented | Cumulative peer grants and automatic receiver windows. They authorize requests; they are not a rate limiter. See [credits](async-batches.md#receiver-credit-gating) |
+| Failover, explicit progress, metrics endpoints | Planned (P6) | |
+
+## Failure handling
+
+| Capability | Status | Limits |
+| --- | --- | --- |
+| Native failure retention | Accepted (RoCE fault profiles) | QP errors, lost CQEs, QP/MR/MW faults and CQ/channel/PD cleanup failures keep their owners and charges. Device-close errors have CPU controls only. See [native cleanup](native-cleanup.md) |
+
+## APIs and compatibility
+
+| Capability | Status | Limits |
+| --- | --- | --- |
+| Rust API | Implemented | See [Rust API](rust-api.md) |
+| TENT C, C++ and Python APIs | Planned (P9) | |
+| TENT configuration and metadata stores | Planned (P9) | `MC_TENT_CONF`, etcd, Redis and HTTP |
+| TENT wire interoperability | Planned (P9) | OrbitTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection
 
-Explicit CPU/TCP routing remains available without configuration.
-`Transport::Unspec` uses [eligible transport selection](transport-selection.md).
-`rdma` and `cuda` are independent Cargo features.
-Enabling a feature makes its provider code available; runtime use requires the
-actual device, driver and resources.
+Explicit CPU/TCP routing works without configuration. `Transport::Unspec` uses
+[eligible transport selection](transport-selection.md). `rdma` and `cuda` are
+independent Cargo features. Enabling a feature makes its provider code
+available; runtime use still requires the actual device, driver and resources.
 
 `RdmaConfig::new("mlx5_0")` strictly pins that device, port 1 and GID index 0.
 `RdmaConfig::default()` enables automatic discovery with optional strict pins
@@ -64,17 +91,7 @@ build loads no storage libraries. Other accelerators are outside the selected
 scope. Architectural correspondence with frozen TENT does not establish full
 behavior or wire compatibility.
 
-The [P4 exit queue](completion-plan.md#p4-remaining-delivery) contains the remaining
-host-RDMA physical/fabric gates. Source and the bounded RoCE profile are
-independently accepted with fresh live repeats; P5 proceeds with available hardware.
-Complete the host-RDMA acceptance boundary before
-renewing OrbitKV integration; the other parity rows remain in their own stages.
-
-Optional `nvlink_cache_entries` adds transport-owned cross-submission CUDA IPC
-reuse. Source/CPU controls, 34 installed H20 cases and four independent repeats
-pass for the declared fixed-working-set profile.
-That historical profile keeps the whole source allocation loan until requester
-shutdown. Current source also reclaims idle LRU imports at capacity and exposes
-`flush_nvlink_cache` without closing outgoing admission. Both require native
-close and a source release acknowledgement before freeing the cache slot.
-See [CUDA IPC](cuda-ipc.md) for lifecycle and qualification limits.
+Hardware gates are paused while no GPU or RDMA machine is available. New work
+is implemented with CPU controls, and its installed gates wait in the
+[qualification](qualification.md) verification queue. OrbitKV integration
+resumes in [P11](completion-plan.md#p11--consumers-performance-and-release).
