@@ -2406,6 +2406,9 @@ Existing parser controls cover action normalization, inherited replacement and
 unsupported actions. The existing RDMA shared-CQ cleanup-failure control now
 uses a delay-enabled contract and verifies that actual retained native owners
 still retain QoS, credit and dispatch charges. It uses CPU/verbs ABI fixtures.
+A focused owner-retirement control reproduces an external wake in the gap between
+real permit Drop and queue-metadata removal, and verifies that a retired owner
+cannot reacquire quota. Both discovered pre-fix failures remain in external evidence.
 
 Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies names and
 field overlay semantics, not execution policy: its resolver is

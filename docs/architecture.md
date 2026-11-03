@@ -99,8 +99,10 @@ at its Batch head, so a later group cannot reserve its predecessor's quota.
 `PreparedSubmission` retains the real `QosPermit`. Backing drops first, then QoS,
 then queue metadata and credit. Returning quota before advancing the Batch head
 prevents false rejection of a reject-only successor. Only actual-owner Drop
-returns charged quota, then wakes the queue after unlocking.
-Unquiesced owners retain their charges.
+returns charged quota, then wakes the queue after unlocking. The same quota
+mutex serializes Pending/Charged/Retired transitions: even an uncharged owner
+retires before its queue metadata disappears, so concurrent wakes cannot
+reacquire quota for it. Unquiesced owners retain their charges.
 
 Dispatch locks queue -> QoS -> receiver-credit ledger. One decision obtains all
 contract slots, credit and window capacity, or obtains none. A QoS-blocked head

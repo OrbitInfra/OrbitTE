@@ -265,7 +265,9 @@ wait in the same queue; no new worker or polling loop is added.
 
 Once acquired, quota remains owned through backing cleanup, even after logical
 completion. Actual prepared-owner Drop returns it and wakes the queue;
-Unquiesced retains it. Receiver credit sync runs only when QoS is eligible and
+Unquiesced retains it. Every exiting owner atomically retires its reservation,
+including one cancelled before acquiring quota; remaining queue metadata cannot
+reacquire capacity during Drop. Receiver credit sync runs only when QoS is eligible and
 keeps network I/O outside admission locks. Wire v23 is unchanged.
 
 Frozen TENT parses and overlays these action names but labels the resolver

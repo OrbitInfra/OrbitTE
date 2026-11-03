@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::{CompiledContract, QosPolicyFields, QosUsage};
 use crate::runtime::admission_queue::LocalTransferAdmissionQueue;
@@ -119,7 +120,7 @@ impl QosQuota {
             Ok(QosPermit::Queued(Arc::new(QosReservation {
                 quota: Arc::clone(self),
                 charges,
-                charged: OnceLock::new(),
+                state: AtomicU8::new(PENDING),
             })))
         } else {
             Self::charge(&mut usage, &charges);
@@ -172,34 +173,48 @@ impl QosQuota {
         }
     }
 
-    fn release(&self, charges: &[QosCharge]) {
-        let mut usage = self.lock();
+    fn uncharge(usage: &mut [QosUsage], charges: &[QosCharge]) {
         for charge in charges {
             let current = &mut usage[charge.slot];
             current.inflight_bytes -= charge.bytes;
             current.inflight_requests -= charge.requests;
             current.owners -= 1;
         }
-        // Scheduling takes queue -> QoS -> credit; never wake under this lock.
-        drop(usage);
+    }
+
+    fn release(&self, charges: &[QosCharge]) {
+        Self::uncharge(&mut self.lock(), charges);
+        self.wake_queue();
+    }
+
+    // Scheduling takes queue -> QoS -> credit; call only after unlocking quota.
+    fn wake_queue(&self) {
         if let Some(queue) = self.queue.as_ref().and_then(Weak::upgrade) {
             queue.wake();
         }
     }
 }
 
-/// Shared scheduling metadata. Only QosPermit returns the actual owner's quota.
+const PENDING: u8 = 0;
+const CHARGED: u8 = 1;
+const RETIRED: u8 = 2;
+
+/// Shared scheduling metadata. Only QosPermit retires the actual owner's quota.
 pub(crate) struct QosReservation {
     quota: Arc<QosQuota>,
     charges: Vec<QosCharge>,
-    charged: OnceLock<()>,
+    // Every transition/read is serialized by quota.usage. Atomic storage lets
+    // the queue share metadata without introducing a second admission lock.
+    state: AtomicU8,
 }
 
 impl QosReservation {
     pub(crate) fn availability(&self) -> Result<bool> {
         let usage = self.quota.lock();
-        if self.charged.get().is_some() {
-            return Ok(true);
+        match self.state.load(Ordering::Relaxed) {
+            RETIRED => return Ok(false),
+            CHARGED => return Ok(true),
+            _ => {}
         }
         self.quota.available(&usage, &self.charges)
     }
@@ -208,15 +223,31 @@ impl QosReservation {
     /// The callback must not take a queue lock or perform I/O.
     pub(crate) fn try_reserve(&self, credit_ready: impl FnOnce() -> bool) -> Result<bool> {
         let mut usage = self.quota.lock();
-        if self.charged.get().is_some() {
-            return Ok(credit_ready());
+        match self.state.load(Ordering::Relaxed) {
+            RETIRED => return Ok(false),
+            CHARGED => return Ok(credit_ready()),
+            _ => {}
         }
         if !self.quota.available(&usage, &self.charges)? || !credit_ready() {
             return Ok(false);
         }
         QosQuota::charge(&mut usage, &self.charges);
-        let _ = self.charged.set(());
+        self.state.store(CHARGED, Ordering::Relaxed);
         Ok(true)
+    }
+
+    fn retire(&self) {
+        let mut usage = self.quota.lock();
+        let charged = self.state.swap(RETIRED, Ordering::Relaxed) == CHARGED;
+        if charged {
+            QosQuota::uncharge(&mut usage, &self.charges);
+        }
+        // Queue metadata may outlive the real permit during Drop. Even an
+        // uncharged owner must retire before another wake can reserve it.
+        drop(usage);
+        if charged {
+            self.quota.wake_queue();
+        }
     }
 }
 
@@ -241,10 +272,7 @@ impl Drop for QosPermit {
     fn drop(&mut self) {
         match self {
             Self::Admitted { quota, charges } => quota.release(charges),
-            Self::Queued(reservation) if reservation.charged.get().is_some() => {
-                reservation.quota.release(&reservation.charges);
-            }
-            Self::Queued(_) => {}
+            Self::Queued(reservation) => reservation.retire(),
         }
     }
 }

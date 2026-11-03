@@ -307,3 +307,39 @@ fn public_qos_delay_combines_credit_reject_cancel_and_deadline_admission() {
     assert_eq!(r.usage().unwrap(), QosUsage::default());
     assert_eq!(requester.stats().unwrap().inflight_batches, 0);
 }
+
+#[test]
+fn retired_qos_owner_cannot_be_recharged_before_queue_metadata_drops() {
+    let queue = crate::runtime::admission_queue::LocalTransferAdmissionQueue::new(
+        RuntimeQueueConfig::default(),
+    );
+    let config = config(0).qos.unwrap();
+    let resolver = QosContractResolver::new(&config, Some(&queue)).unwrap();
+    let policy = QosContractResolver::resolve(
+        Some(&resolver),
+        SourceEpoch([1; 16]),
+        &QosRequestContext::default(),
+    )
+    .unwrap();
+    let mut charges = Vec::new();
+    QosCharge::add(&mut charges, resolver.default_contract(), 1).unwrap();
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let running = resolver.admit(charges.clone()).unwrap().unwrap();
+    let running_queue = queue
+        .try_admit(1, deadline, None, None, running.reservation())
+        .unwrap();
+    let pending = resolver.admit(charges).unwrap().unwrap();
+    let pending_queue = queue
+        .try_admit(1, deadline, None, None, pending.reservation())
+        .unwrap();
+    assert_eq!(policy.usage().unwrap().owners, 1);
+    // Reproduce an external quota/credit wake between the real permit's Drop
+    // and removal of its queue metadata after cancellation or expiry.
+    drop(pending);
+    drop(running);
+    assert_eq!(policy.usage().unwrap(), QosUsage::default());
+    assert_eq!(queue.stats().dispatching_owners, 1);
+    drop((pending_queue, running_queue));
+    assert_eq!(policy.usage().unwrap(), QosUsage::default());
+    assert_eq!(queue.stats(), crate::RuntimeQueueStats::default());
+}
