@@ -258,6 +258,34 @@ impl Entry {
 }
 
 impl CreditReservation {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn pin_binding(&self) -> Result<Option<protocol::PinCredit>> {
+        let state = self.ledger.lock();
+        let owner = state
+            .owners
+            .get(&self.id)
+            .ok_or(Error::Internal("credit owner missing"))?;
+        let entry = state
+            .entries
+            .get(&owner.key)
+            .ok_or(Error::Internal("credit session missing"))?;
+        if entry.epoch != owner.epoch {
+            return Err(Error::EpochMismatch);
+        }
+        // Fencing stops new groups; an already committed group must finish its
+        // later Pin requests before the same binding can be retired.
+        if !entry.open && !owner.committed {
+            return Err(Error::Cancelled);
+        }
+        Ok(entry
+            .automatic
+            .as_ref()
+            .map(|automatic| protocol::PinCredit {
+                sender: automatic.sender,
+                epoch: entry.epoch,
+            }))
+    }
+
     /// The caller checks this while holding its wait mutex, then performs sync
     /// outside that mutex and rechecks before parking. A completing owner wakes
     /// both wait domains only after releasing the ledger lock.

@@ -21,6 +21,7 @@ fn config() -> ReceiverCreditConfig {
         max_requests: 4,
         bytes_per_sender: 4,
         requests_per_sender: 2,
+        ..ReceiverCreditConfig::default()
     }
 }
 
@@ -110,7 +111,8 @@ fn issuer_windows_are_conserved_across_cumulative_retry_close_and_late_open() {
             active_senders: 1,
             retired_senders: 1,
             reserved_bytes: 4,
-            reserved_requests: 2
+            reserved_requests: 2,
+            ..ReceiverCreditIssuerStats::default()
         }
     );
     assert!(matches!(
@@ -583,4 +585,98 @@ fn completion_during_single_flight_is_resynchronized_before_waiting() {
     assert_eq!(relay.received.load(Ordering::Acquire), 3);
     drop(waiting);
     assert_eq!(ledger.stats(&relay.peer).unwrap().available_requests, 2);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn staging_credit_owners_fence_close_and_require_each_child_to_drain() {
+    use crate::CreditResource::{ConsumerSlots, StagingSlots};
+    use crate::runtime::receiver_credit::protocol::PinCredit;
+
+    let issuer = ReceiverCreditIssuer::new(ReceiverCreditConfig {
+        max_staging_slots: 2,
+        max_consumer_slots: 1,
+        staging_slots_per_sender: 2,
+        consumer_slots_per_sender: 1,
+        ..config()
+    });
+    let mut sender = report(1);
+    sender.epoch = issuer.synchronize(sender, false, true).unwrap().epoch;
+    let binding = PinCredit {
+        sender: sender.sender,
+        epoch: sender.epoch,
+    };
+    assert!(matches!(
+        issuer.synchronize(report(2), false, true),
+        Err(Error::ResourceExhausted)
+    ));
+    for binding in [
+        None,
+        Some(PinCredit {
+            epoch: binding.epoch + 1,
+            ..binding
+        }),
+    ] {
+        assert!(issuer.reserve_staging(binding, 2).is_err());
+    }
+    assert_eq!(issuer.stats().active_staging_slots, 0);
+    let reservation = issuer.reserve_staging(Some(binding), 2).unwrap().unwrap();
+    assert!(matches!(
+        issuer.reserve_staging(Some(binding), 1),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(issuer.stats().active_staging_slots, 2);
+    assert_eq!(issuer.stats().active_consumer_slots, 1);
+    assert!(matches!(
+        issuer.synchronize(sender, true, false),
+        Err(Error::BatchBusy)
+    ));
+    assert!(matches!(
+        issuer.reserve_staging(Some(binding), 1),
+        Err(Error::Cancelled)
+    ));
+    drop(reservation);
+    issuer.synchronize(sender, true, false).unwrap();
+    assert_eq!(issuer.stats().reserved_staging_slots, 0);
+    assert_eq!(issuer.stats().reserved_consumer_slots, 0);
+
+    let mut sender = report(2);
+    sender.epoch = issuer.synchronize(sender, false, true).unwrap().epoch;
+    let binding = PinCredit {
+        sender: sender.sender,
+        epoch: sender.epoch,
+    };
+    for retain in [false, true] {
+        let mut reservation = issuer.reserve_staging(Some(binding), 2).unwrap().unwrap();
+        let mut consumer = reservation.take(ConsumerSlots).unwrap();
+        consumer.bind();
+        let mut child = reservation.take(StagingSlots).unwrap();
+        child.bind();
+        drop(reservation); // The second stage never touched native state.
+        assert_eq!(issuer.stats().active_staging_slots, 1);
+        if retain {
+            drop(child); // Unproven child Drop cannot silently return the session.
+            assert!(matches!(consumer.release(), Err(Error::Unquiesced { .. })));
+        } else {
+            child.release().unwrap();
+            consumer.release().unwrap();
+            assert_eq!(issuer.stats().active_consumer_slots, 0);
+        }
+    }
+    sender.committed = [4, 2];
+    sender.completed = sender.committed;
+    issuer.synchronize(sender, false, true).unwrap();
+    let stats = issuer.stats();
+    assert_eq!(
+        (stats.active_staging_slots, stats.retained_staging_slots),
+        (1, 1)
+    );
+    assert_eq!(
+        (stats.active_consumer_slots, stats.retained_consumer_slots),
+        (1, 1)
+    );
+    assert!(matches!(
+        issuer.synchronize(sender, true, false),
+        Err(Error::BatchBusy)
+    ));
 }

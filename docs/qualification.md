@@ -1,9 +1,10 @@
 # Qualification
 
-Current production wire is **v22**. Historical sections below retain the
+Current production wire is **v23**. Historical sections below retain the
 protocol version and revision of their recorded evidence; they do not qualify
-current installed v22 hardware execution. The receiver-window source gate is
-recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows).
+current installed v23 hardware execution. The receiver-window and resource-owner
+source gates are recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows)
+and [staging/consumer owner credits](#staging-and-consumer-owner-credits).
 
 Qualification belongs to an exact source, artifact and execution profile.
 The [capability matrix](capabilities.md) describes current behavior; the
@@ -2329,3 +2330,31 @@ exact-commit gates. Fixed windows do not redistribute idle capacity. Failed or
 crashed senders retain authority until a separate reclaim proof exists; terminal
 tombstones remain bounded and do not reopen identities. Staging/consumer charges,
 QoS-class mapping, adaptive windows, hardware fairness and throughput remain open.
+
+
+## Staging and consumer owner credits
+
+This source substage connects automatic remote Pin admission to the actual
+ProxyManager staging owners. Wire v23 adds sender session/issuer epoch to Pin;
+CreditSync/Close and Delegate/CROSS/Unpin bodies remain unchanged. Atomic source
+admission charges negotiated depth and one session, then transfers stage tokens
+before native construction. Only actual cleanup returns capacity; each Pin's
+child-owner count prevents a consumer from returning after hidden Drop retention.
+Manual resource updates and generic application-consumption credits remain open.
+
+Focused controls use real control sockets and CUDA/verbs ABI fixtures: negotiated
+depth differs from the requester's proposal; TCP and RDMA READ/WRITE ordered
+groups finish after a requester fence; missing bindings cannot bypass admission;
+partial native allocation retains its one constructed stage and the consumer;
+unassigned reservation rollback, aggregate windows and busy-Close fencing preserve
+capacity. Sender payload reports cannot release source resource owners. Existing
+staging and cleanup gates remain part of CI. These controls do not measure GPU
+execution, NIC behavior, native contention or throughput.
+
+Evidence, failed attempts, exact source and independent review are outside Git at
+`/root/orbitte-artifacts/staging-credit-owners-20261102/`; the handoff records
+checksums and CI links. Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`
+supplies resource tags and ProxyManager ownership, not this automatic receiver
+protocol. Physical pool reservation, failed-sender reclamation, matched throughput
+and installed v23 hardware qualification remain unqualified. No hardware job was
+requested for this substage.

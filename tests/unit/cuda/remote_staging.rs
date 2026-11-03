@@ -173,6 +173,7 @@ pub(super) fn pin(
     channel.write_all(&[0, 1]).unwrap();
     channel.write_all(&3u64.to_be_bytes()).unwrap();
     channel.write_all(&[1]).unwrap();
+    channel.write_all(&[0; 24]).unwrap();
     let reply = Reply::read(&mut channel, source.source_epoch()).unwrap();
     assert_eq!((reply.status, reply.length), (0, 3));
     let mut nonce = [0; 16];
@@ -496,6 +497,7 @@ fn self_peer_gpu_ranges_require_two_slots_and_reject_overlap_before_copy() {
         channel.write_all(&[0, 1]).unwrap();
         channel.write_all(&3u64.to_be_bytes()).unwrap();
         channel.write_all(&[1]).unwrap();
+        channel.write_all(&[0; 24]).unwrap();
         assert!(matches!(
             Reply::read(&mut channel, engine.source_epoch()),
             Err(Error::ResourceExhausted)
@@ -1021,6 +1023,7 @@ fn pin_rejects_non_cuda_opt_out_and_source_permission_before_allocation() {
         channel.write_all(&[0, 1]).unwrap();
         channel.write_all(&3u64.to_be_bytes()).unwrap();
         channel.write_all(&[1]).unwrap();
+        channel.write_all(&[0; 24]).unwrap();
         let error = match Reply::read(&mut channel, source.source_epoch()) {
             Err(error) => error,
             Ok(_) => panic!("unexpected Pin grant: {scenario}"),

@@ -21,7 +21,7 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v22 messages; moving them into their own module does not make this
+OrbitTE v23 messages; moving them into their own module does not make this
 protocol compatible with TENT's native RPC or metadata.
 
 ## Runtime queue ownership
@@ -72,7 +72,12 @@ release and wakes both wait domains. Manual completions do not grant new credit.
 Disabled engines allocate no ledger; checks stay per submission, not per slice/WR.
 The frozen ledger has no runtime consumer and does not consume its TTL field;
 OrbitTE's freshness gating and dispatch integration are explicit extensions.
-See [credit administration and limits](async-batches.md#receiver-credit-gating).
+Automatic source windows also charge negotiated remote Pin staging slots and
+sessions. Per-lease credits live with `StageBufferLease`; one `PinCreditOwner`
+proves all child slots have drained before consumer capacity can return. The
+issuer outlives retained native owners. See
+[credit administration](async-batches.md#receiver-credit-gating) and
+[resource ownership](async-batches.md#staging-and-consumer-owner-credits).
 
 `runtime/qos_contract.rs::QosContractResolver` uses frozen TENT's global,
 tenant-default and tenant-intent field overlays. Initialization compiles a
@@ -208,7 +213,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v22 handshake can attach independent grants to a
+QP creation lock. The public v23 handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction

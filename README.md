@@ -44,7 +44,10 @@ recovery policy and replica placement.
   resolved contract. Reusable policy handles avoid name lookup during submission.
   Optional [automatic receiver windows](docs/async-batches.md#automatic-receiver-windows)
   issue bounded peer grants and coalesce successful-owner completion updates;
-  credit sync runs only on demand through existing waiters.
+  credit sync runs only on demand through existing waiters. Optional
+  [staging/consumer windows](docs/async-batches.md#staging-and-consumer-owner-credits)
+  charge negotiated remote Pin slots and return capacity after actual native
+  cleanup, reusing Pin/Unpin without per-chunk credit RPCs.
   Optional [sender credit gating](docs/async-batches.md#receiver-credit-gating)
   consumes application-delivered cumulative peer grants before transport handoff;
   credit-starved peers wait without occupying a dispatch window.

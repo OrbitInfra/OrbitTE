@@ -18,7 +18,7 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 22;
+const VERSION: u16 = 23;
 pub(crate) const REQUEST_SIZE: usize = 52;
 pub(crate) const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;

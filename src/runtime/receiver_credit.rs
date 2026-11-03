@@ -4,6 +4,8 @@ mod sync;
 
 pub(crate) use issuer::ReceiverCreditIssuer;
 pub use issuer::{ReceiverCreditConfig, ReceiverCreditIssuerStats};
+#[cfg(feature = "cuda")]
+pub(crate) use issuer::{ReceiverResourceLease, StagingCreditReservation};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -21,9 +23,9 @@ use super::admission_queue::LocalTransferAdmissionQueue;
 pub enum CreditResource {
     DataBytes = 1,
     RequestSlots = 2,
-    /// Reserved schema tag; no runtime charge mapping yet.
+    /// Automatic remote-Pin source leases; manual updates are not supported.
     StagingSlots = 3,
-    /// Reserved schema tag; no runtime charge mapping yet.
+    /// Automatic remote-Pin sessions, retained through all native cleanup.
     ConsumerSlots = 4,
 }
 
@@ -312,7 +314,7 @@ impl SenderCreditLedger {
             let index = match amount.resource {
                 CreditResource::DataBytes => 0,
                 CreditResource::RequestSlots => 1,
-                _ => return Err(Error::Unavailable("staging/consumer credit charge mapping")),
+                _ => return Err(Error::Unavailable("manual staging/consumer credit updates")),
             };
             if totals[index].replace(amount.grant_total).is_some() {
                 return Err(Error::Protocol("duplicate receiver credit resource"));

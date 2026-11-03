@@ -167,7 +167,7 @@ fn cuda_producer_readiness_is_consumed_by_copy_staging_ipc_and_dma_owners() {
             }
             "staging-loan" => {
                 let manager = ProxyManager::new(16, 1, crate::StagingLocation::Any).unwrap();
-                gpu.with_staging(8, 16, &manager, 1, |copy, mut slots| {
+                gpu.with_staging(8, 16, &manager, 1, None, |copy, mut slots| {
                     copy.copy(&mut slots[0], 0, 16, false)?;
                     assert_eq!(&slots[0].buffer()?.bytes()[..16], &[0x57; 16]);
                     Ok(())

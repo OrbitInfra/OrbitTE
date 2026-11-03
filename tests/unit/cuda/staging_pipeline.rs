@@ -204,6 +204,7 @@ fn pin(
     channel.write_all(&[0, depth]).unwrap();
     channel.write_all(&3u64.to_be_bytes()).unwrap();
     channel.write_all(&[1]).unwrap();
+    channel.write_all(&[0; 24]).unwrap();
     Reply::read(&mut channel, source.source_epoch()).unwrap();
     let mut nonce = [0; 16];
     channel.read_exact(&mut nonce).unwrap();
@@ -423,7 +424,7 @@ fn pipeline_stream_construction_and_destroy_failures_keep_physical_slot_budget()
         } else {
             a.stream_destroy_error.store(1, Ordering::Release);
         }
-        let result = gpu.with_staging(0, 3, &manager, 2, |copy, mut stages| {
+        let result = gpu.with_staging(0, 3, &manager, 2, None, |copy, mut stages| {
             copy.begin(&mut stages[0], 0, 3, false)?;
             copy.complete(&mut stages[0], 3)
         });
@@ -475,14 +476,14 @@ fn pipeline_slot_restore_failure_fences_a_new_gpu_context_wrapper() {
     let second = memory(&a);
     let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     first
-        .with_staging(0, 3, &manager, 2, |copy, mut stages| {
+        .with_staging(0, 3, &manager, 2, None, |copy, mut stages| {
             copy.begin(&mut stages[0], 0, 3, false)?;
             copy.complete(&mut stages[0], 3)
         })
         .unwrap();
     a.pop_after_completion.store(true, Ordering::Release);
     let result = std::thread::spawn(move || {
-        let result = second.with_staging(0, 3, &manager, 2, |copy, mut stages| {
+        let result = second.with_staging(0, 3, &manager, 2, None, |copy, mut stages| {
             copy.begin(&mut stages[0], 0, 3, false)?;
             copy.complete(&mut stages[0], 3)
         });
@@ -510,12 +511,14 @@ fn pipeline_depth_and_partial_pool_admission_remain_bounded() {
     let context = gpu.allocation.lock().unwrap().context.clone();
     let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
     let held = manager
-        .pin_stage_buffer(context.raw.as_ptr() as usize, None, |size| {
+        .pin_stage_buffer(context.raw.as_ptr() as usize, None, None, |size| {
             PinnedAllocation::new(&context, size)
         })
         .unwrap();
     assert!(matches!(
-        gpu.with_staging::<()>(0, 8, &manager, 2, |_, _| panic!("partial Pin accepted")),
+        gpu.with_staging::<()>(0, 8, &manager, 2, None, |_, _| panic!(
+            "partial Pin accepted"
+        )),
         Err(Error::ResourceExhausted)
     ));
     let stats = manager.stats().unwrap();
@@ -528,7 +531,7 @@ fn pipeline_depth_and_partial_pool_admission_remain_bounded() {
         (2, 1, 1)
     );
     held.release().unwrap();
-    gpu.with_staging(0, 8, &manager, 2, |_, stages| {
+    gpu.with_staging(0, 8, &manager, 2, None, |_, stages| {
         assert_eq!(stages.len(), 2);
         Ok(())
     })

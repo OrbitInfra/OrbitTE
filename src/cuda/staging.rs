@@ -25,9 +25,10 @@ impl CudaMemory {
         allocation.prepare_access(&range)?;
         let context = Arc::clone(&allocation.context);
         let node = context.staging_node(manager.location, manager.numa)?;
-        let mut stage = manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, |size| {
-            PinnedAllocation::new_at(&context, size, node, manager.numa)
-        })?;
+        let mut stage =
+            manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, None, |size| {
+                PinnedAllocation::new_at(&context, size, node, manager.numa)
+            })?;
         if allocation.copy_stream.is_none() {
             match CopyStream::new(&context) {
                 Ok(stream) => allocation.copy_stream = Some(stream),
@@ -105,6 +106,7 @@ impl CudaMemory {
         length: usize,
         manager: &Arc<crate::runtime::proxy_manager::ProxyManager>,
         depth: usize,
+        mut credits: Option<crate::runtime::receiver_credit::StagingCreditReservation>,
         operation: impl FnOnce(
             &mut StagingCopy,
             Vec<crate::runtime::proxy_manager::StageBufferLease>,
@@ -135,9 +137,15 @@ impl CudaMemory {
         let mut stages = Vec::with_capacity(depth);
         for _ in 0..depth {
             stages.push(
-                manager.pin_stage_buffer(context.raw.as_ptr() as usize, node, |size| {
-                    PinnedAllocation::new_at(&context, size, node, manager.numa)
-                })?,
+                manager.pin_stage_buffer(
+                    context.raw.as_ptr() as usize,
+                    node,
+                    credits
+                        .as_mut()
+                        .map(|credits| credits.take(crate::CreditResource::StagingSlots))
+                        .transpose()?,
+                    |size| PinnedAllocation::new_at(&context, size, node, manager.numa),
+                )?,
             );
         }
         operation(&mut copy, stages)

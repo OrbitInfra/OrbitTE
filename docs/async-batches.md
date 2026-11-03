@@ -232,7 +232,7 @@ grant totals, not increments. Both must cover the whole next submission:
 | --- | --- |
 | `DataBytes` | Sum of payload request lengths, excluding notification bytes |
 | `RequestSlots` | Number of public requests in the submission |
-| `StagingSlots`, `ConsumerSlots` | Reserved TENT schema tags; updates are rejected until a runtime charge mapping exists |
+| `StagingSlots`, `ConsumerSlots` | Automatic source-owned remote Pin slots/sessions, described below; manual updates remain rejected |
 
 Partial updates preserve omitted totals; a decreasing total or repeated resource
 rejects the whole update. Old/duplicate sequences have no effect. Sequence gaps
@@ -280,8 +280,8 @@ drain.
 Frozen TENT's `SenderCreditLedger` provides the cumulative accounting model but
 is not wired into its transport/admission path. OrbitTE now consumes it at
 whole-submission granularity. The optional receiver issuer and cumulative wire
-synchronization are described below. Staging/consumer credits and full QoS/pacing
-remain open.
+synchronization and automatic staging/consumer owner charges are described below.
+Manual staging credit mapping and full QoS/pacing remain open.
 [Source controls](qualification.md#receiver-credit-gating) do not qualify native
 fairness, receiver protection or performance.
 
@@ -383,12 +383,67 @@ receiver buffer/RQ occupancy, authorization or a native rate guarantee. Fixed
 windows do not redistribute idle capacity or map QoS intent into credit classes.
 
 OrbitTE wire **v22** adds fixed-size `CreditSync`/`CreditClose` metadata frames;
-both peers must use v22, including when automatic credits are disabled. Existing
-payload framing is otherwise unchanged. Frozen TENT supplies the sender ledger
+the current wire is **v23**, and both peers must use it even when automatic
+credits are disabled. Pin adds its session binding; other payload framing is unchanged. Frozen TENT supplies the sender ledger
 and resource/epoch/sequence model, but has no receiver issuer or network consumer.
-This bounded issuer is an OrbitTE extension. Staging/consumer-specific charges,
-adaptive windows, failed-sender reclamation and native fairness/performance remain
-open. See [source qualification](qualification.md#automatic-receiver-credit-windows).
+This bounded issuer is an OrbitTE extension. Automatic staging/consumer owner
+charges are described below; manual resource mapping, adaptive windows,
+failed-sender reclamation and native fairness/performance remain open. See [source qualification](qualification.md#automatic-receiver-credit-windows).
+
+## Staging and consumer owner credits
+
+With `--features cuda`, a source can enable four additional
+`ReceiverCreditConfig` fields: `max_staging_slots`, `max_consumer_slots`,
+`staging_slots_per_sender`, and `consumer_slots_per_sender`. All four default to
+zero (disabled); enabling requires positive values and per-sender windows that
+fit their respective totals. Connecting an automatic sender reserves these
+windows along with the existing byte/request windows. Example: totals of 16
+staging slots and 4 consumers, with 4 and 1 per sender, authorize at most four
+concurrent sender windows. Configure the physical pool separately.
+
+| Resource | Actual source owner | Return condition |
+| --- | --- | --- |
+| `StagingSlots` | One negotiated remote Pin ring slot, including native construction | Its `StageBufferLease` safely returns Idle/Vacant after CUDA and private transport cleanup |
+| `ConsumerSlots` | One active remote Pin session | Every child slot has returned and the GPU range, CUDA copies and private MR/transport owners have finished |
+
+The source atomically acquires the negotiated slot depth and one consumer before
+native construction. This uses the source's actual chunk size and depth, not
+the requester's proposed ring width. Unassigned slots roll back; each assigned
+token follows the real lease, including a failed constructor with retained
+backing. A per-Pin child count prevents an implicit Drop failure from returning
+the consumer early. Uncertain cleanup retains both the affected stage charge
+and the session charge. Returning a reusable Idle slot does not destroy its
+pooled allocation or stream.
+
+An automatic request carries its sender session and issuer epoch in the existing
+Pin exchange. A source with owner credits enabled rejects missing, stale or
+closing bindings before allocation. The identifiers are cooperative session
+binding, not authentication. Successful Unpin returns resources before its ACK;
+a lost ACK cannot undo proven local cleanup. EOF with clean drain also returns
+physical charges, while the existing byte/request ledger still withholds fresh
+payload grants for unsuccessful groups. Closing a source credit binding fences
+new Pins and remains busy until its actual resource charges drain. A requester
+fence permits an already committed group to finish later Pin requests.
+
+`receiver_credit_issuer_stats()` exposes reserved windows, active resource charges
+(including retained owners), and explicitly retained subsets. A leaked native
+owner can remain active without incrementing the explicit-retention subset;
+active counts, not the subset alone, govern retirement. Sender success reports
+never release these physical charges. `ConsumerSlots` means the whole Pin session,
+not an external application consumption ACK.
+
+The gate adds no RPC, per-chunk credit work or progress thread. It acquires once
+per Pin and returns on existing cleanup paths. It authorizes remote Pin owners;
+the shared physical pool still serves ordinary/local staging and can independently
+return `ResourceExhausted`. It neither reserves physical buffers nor delays Pin
+until space becomes available. Manual resource updates, adaptive redistribution,
+crashed-sender recovery and generic consumer credits remain open.
+
+Frozen TENT defines the four credit resource tags and a private sender ledger,
+but does not connect that ledger to network admission. Its `ProxyManager` owns
+bitmap chunks and per-chunk locks. OrbitTE keeps that resource boundary and adds
+this automatic owner mapping; its v23 framing and consumer semantics are OrbitTE
+extensions. See [source controls](qualification.md#staging-and-consumer-owner-credits).
 
 ## Results, cancellation and quiescence
 
@@ -462,7 +517,7 @@ Per-request `remote_staging=true` also permits remote Pin/Delegate/Unpin over
 TCP/RDMA in the same engine and batch; only the source needs its incoming Pin
 capability enabled. The source validates the actual CUDA allocation. Private
 host staging grants follow host RDMA policy independently of GPU Direct. See
-[remote selection](staging.md#serial-remote-staging). Installed v22 DMA,
+[remote selection](staging.md#serial-remote-staging). Installed v23 DMA,
 concurrent transport dispatch and end-to-end throughput remain separate work.
 
 Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and

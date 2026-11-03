@@ -8,6 +8,41 @@ use crate::{Error, Result, SourceEpoch};
 const REPORT_SIZE: usize = 64;
 const SNAPSHOT_SIZE: usize = 72;
 
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+pub(crate) struct PinCredit {
+    pub(crate) sender: SourceEpoch,
+    pub(crate) epoch: u64,
+}
+
+#[cfg(feature = "cuda")]
+impl PinCredit {
+    pub(crate) fn encode(binding: Option<Self>) -> [u8; 24] {
+        let mut bytes = [0; 24];
+        if let Some(binding) = binding {
+            bytes[..16].copy_from_slice(&binding.sender.0);
+            bytes[16..].copy_from_slice(&binding.epoch.to_be_bytes());
+        }
+        bytes
+    }
+
+    pub(crate) fn decode(bytes: &[u8; 24]) -> Result<Option<Self>> {
+        if *bytes == [0; 24] {
+            return Ok(None);
+        }
+        let epoch = u64_at(bytes, 16);
+        if bytes[..16] == [0; 16] || epoch == 0 {
+            return Err(Error::Protocol("invalid Pin credit binding"));
+        }
+        let mut sender = [0; 16];
+        sender.copy_from_slice(&bytes[..16]);
+        Ok(Some(Self {
+            sender: SourceEpoch(sender),
+            epoch,
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CreditReport {
     pub(super) sender: SourceEpoch,

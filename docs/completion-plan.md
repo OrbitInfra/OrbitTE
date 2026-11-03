@@ -702,7 +702,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   worker, with busy cleanup locks yielding and retained output awaiting a complete
   lane receipt. Independent source review accepts `b2a0aba`; see
   [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
-  Reconcile remaining resource/source control boundaries with frozen TENT and current v22 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Reconcile remaining resource/source control boundaries with frozen TENT and current v23 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -762,8 +762,10 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   an existing network implementation. Bounded receiver issuance and on-demand
   cumulative sync now consume successful actual-owner completion. Per-sender
   windows, single-flight sync, endpoint-alias rejection and terminal retirement
-  preserve authority across lost responses. Staging/consumer credit charges,
-  adaptive windows, uncertain-sender reclamation, full QoS/pacing and native
+  preserve authority across lost responses. Automatic source-owned remote Pin
+  staging/consumer charges now follow negotiated slot and session owners through
+  native cleanup; v23 binds each Pin to its automatic sender session. Manual
+  resource mapping, adaptive windows, uncertain-sender reclamation, full QoS/pacing and native
   fairness remain open; see [automatic windows](async-batches.md#automatic-receiver-windows). Typed global/tenant/intent QoS resolution now feeds
   effective RDMA priority and atomic per-contract retained byte/request caps.
   Immutable engine-bound handles reuse compiled slots; fallback names cannot
@@ -1082,7 +1084,7 @@ independent incoming Pin capability and actual source authorization. Prepared
 owners retain staging intent; payload CROSS stays in TCP/RDMA and private host
 MRs follow host policy. See [remote selection](qualification.md#per-request-remote-staging).
 Producer readiness remains an explicit caller handoff; automatic routing/QoS
-remains P6. Current v22 installed qualification and full P5 remain open.
+remains P6. Current v23 installed qualification and full P5 remain open.
 
 P5.4d idle LRU reclaim and continuing flush are implemented at `fd55f15`.
 Changing working sets can continue within the entry limit; a replacement
@@ -1200,10 +1202,17 @@ Open outcomes retain identity; endpoint aliases cannot clone authority; close
 requires successful drain and preserves terminal tombstones. This does not
 qualify physical receiver capacity, adaptive sharing or crashed-sender recovery.
 See [source controls](qualification.md#automatic-receiver-credit-windows).
-The next functional delivery is staging/consumer resource charging against the
-existing ProxyManager slot owners. JSON QoS loading, degraded actions,
-hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
-physical-owner queue granularity, staging reserves and deadline-infeasible
+Automatic staging/consumer resource charging is implemented at source scope in
+wire v23. Pin binds an automatic sender session; the source charges its actual
+negotiated ring depth and one session. Stage leases return credits only after
+cleanup, and the consumer requires every child stage to drain. Native constructor
+failure and retained owners preserve charges. This extends the frozen credit
+schema with actual ProxyManager ownership; manual resource mapping and generic
+consumer credits remain open. See [scope](qualification.md#staging-and-consumer-owner-credits).
+The next functional delivery is the TENT-format JSON QoS loader feeding the
+existing compiled contracts, followed by defined degraded-action consumption.
+Hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
+physical-owner queue granularity, physical staging reserves and deadline-infeasible
 cancellation remain open parts of P6.
 Installed shared-slot behavior and native fairness remain unqualified.
 Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.

@@ -154,7 +154,7 @@ fn staging_range_loans_interlock_with_cpu_rdma_and_whole_allocation_ipc() {
     let a = allocation(&[0x57; 64]);
     let gpu = super::ipc::owned(&a, true);
     let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
-    gpu.with_staging(4, 8, &manager, 1, |copy, mut stages| {
+    gpu.with_staging(4, 8, &manager, 1, None, |copy, mut stages| {
         assert!(gpu.allocation.try_lock().is_ok());
         assert!(matches!(
             gpu.read(5, &mut [0; 1]),
@@ -166,10 +166,11 @@ fn staging_range_loans_interlock_with_cpu_rdma_and_whole_allocation_ipc() {
             Err(Error::Unavailable(_))
         ));
         assert!(matches!(
-            gpu.with_staging(0, 5, &manager, 1, |_, _| Ok(())),
+            gpu.with_staging(0, 5, &manager, 1, None, |_, _| Ok(())),
             Err(Error::Unavailable(_))
         ));
-        gpu.with_staging(12, 3, &manager, 1, |_, _| Ok(())).unwrap();
+        gpu.with_staging(12, 3, &manager, 1, None, |_, _| Ok(()))
+            .unwrap();
         #[cfg(feature = "rdma")]
         {
             assert!(matches!(
@@ -192,7 +193,7 @@ fn staging_range_loans_interlock_with_cpu_rdma_and_whole_allocation_ipc() {
     assert!(gpu.allocation.lock().unwrap().dma.is_empty());
     let export = IpcExport::new(gpu.clone()).unwrap();
     assert!(matches!(
-        gpu.with_staging(40, 3, &manager, 1, |_, _| Ok(())),
+        gpu.with_staging(40, 3, &manager, 1, None, |_, _| Ok(())),
         Err(Error::Unavailable(_))
     ));
     export.finish();
@@ -200,7 +201,7 @@ fn staging_range_loans_interlock_with_cpu_rdma_and_whole_allocation_ipc() {
     {
         gpu.acquire_dma(4..12).unwrap();
         assert!(matches!(
-            gpu.with_staging(11, 3, &manager, 1, |_, _| Ok(())),
+            gpu.with_staging(11, 3, &manager, 1, None, |_, _| Ok(())),
             Err(Error::Unavailable(_))
         ));
         gpu.complete_dma().unwrap();
@@ -218,8 +219,8 @@ fn successful_sibling_drain_cannot_clear_failed_range_or_release_actual_owner() 
     let gpu = memory(&a);
     let weak = Arc::downgrade(&gpu);
     let manager = ProxyManager::new(3, 2, crate::StagingLocation::Any).unwrap();
-    gpu.with_staging(0, 3, &manager, 1, |first, mut first_slots| {
-        gpu.with_staging(6, 3, &manager, 1, |second, mut second_slots| {
+    gpu.with_staging(0, 3, &manager, 1, None, |first, mut first_slots| {
+        gpu.with_staging(6, 3, &manager, 1, None, |second, mut second_slots| {
             first.begin(&mut first_slots[0], 0, 3, false).unwrap();
             second.begin(&mut second_slots[0], 0, 3, false).unwrap();
             assert!(!gpu.allocation.lock().unwrap().uncertain);

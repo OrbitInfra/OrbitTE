@@ -332,7 +332,7 @@ impl TransferEngine {
         self.source
             .credit_issuer
             .as_ref()
-            .map(ReceiverCreditIssuer::stats)
+            .map(|issuer| issuer.stats())
     }
 
     pub fn endpoint(&self) -> SocketAddr {
@@ -817,15 +817,11 @@ impl TransferEngine {
             };
             let result = match request.transport {
                 #[cfg(feature = "cuda")]
-                Transport::Tcp | Transport::Rdma if request.remote_staging => {
-                    single(self.source.proxy.transfer_remote(
-                        *operation,
-                        peer,
-                        request,
-                        &self.source,
-                        *deadline,
-                    ))
-                }
+                Transport::Tcp | Transport::Rdma if request.remote_staging => single(
+                    self.source
+                        .proxy
+                        .transfer_remote(submission, request, &self.source),
+                ),
                 Transport::Tcp => single(TcpTransport::transfer(
                     *operation,
                     peer,
@@ -1178,7 +1174,7 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
-    pub(crate) credit_issuer: Option<ReceiverCreditIssuer>,
+    pub(crate) credit_issuer: Option<Arc<ReceiverCreditIssuer>>,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
     #[cfg(feature = "cuda")]
@@ -1240,7 +1236,7 @@ pub(crate) struct PreparedSubmission {
     // Field drop order returns dispatch and admission charges after backing.
     queue: Option<QueuePermit>,
     // Remove queue metadata before rollback can wake/refill that same queue.
-    credit: Option<CreditPermit>,
+    pub(crate) credit: Option<CreditPermit>,
     _qos: Option<QosPermit>,
     _admission: BatchPermit,
 }
