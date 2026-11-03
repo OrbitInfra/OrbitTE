@@ -2189,8 +2189,8 @@ worker post ordering and bounded greedy deadline/bandwidth formula are the
 reference. [The dispatch contract](rdma-cuda.md#request-priority-and-bandwidth-arbitration)
 records scope and deliberate differences.
 
-Focused controls cover ordinary/sliced public requests retaining Medium/Low,
-TCP/NVLink preflight rejection, actual worker dispatch across two contexts under
+The recorded controls covered ordinary/sliced public requests retaining Medium/Low,
+the former TCP/NVLink preflight rejection, actual worker dispatch across two contexts under
 one shared CQ credit in polling and event-driven modes, FIFO versus enabled
 urgency ordering, posted backlog,
 incremental candidate backlog and the bounded tail. These use CPU verbs controls
@@ -2198,6 +2198,11 @@ and real Rust owners; they are not native DMA or performance evidence.
 Existing RDMA completion, event, failure and drain gates remain the regression
 consumer. Artifacts and independent review are stored outside the checkout in
 `/root/orbitte-artifacts/rdma-priority-arbitration-20261101/`.
+
+The current TCP and NVLink paths accept Medium and Low as advisory. Loopback
+tests check full bytes for explicit TCP requests and a QoS-resolved Low
+prefetch with no RDMA candidate. The CUDA IPC shim checks mixed-priority
+NVLink copies, completion, guard bytes and resource release.
 
 Current installed native contention, fairness, throughput and scheduler overhead
 remain unqualified. At this delivery, priority aging and shared-process slots

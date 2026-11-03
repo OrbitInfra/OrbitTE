@@ -93,8 +93,8 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
         .unwrap();
     let remote = region(&peer, export.id());
     let requests = [
-        request(&destination, remote, 8, 16, 32),
-        request(&destination, remote, 64, 0, 48),
+        request(&destination, remote, 8, 16, 32).with_priority(orbit_te::Priority::Low),
+        request(&destination, remote, 64, 0, 48).with_priority(orbit_te::Priority::Medium),
         request(&destination, region(&peer, exports[1].id()), 120, 0, 8),
     ];
     let report = requester

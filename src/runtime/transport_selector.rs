@@ -21,9 +21,6 @@ pub(crate) struct SelectionContext<'a> {
 
 impl SelectionContext<'_> {
     fn available(&self, transport: Transport) -> bool {
-        if self.priority != Priority::High && transport != Transport::Rdma {
-            return false;
-        }
         if self.remote_staging
             && (!cfg!(feature = "cuda")
                 || !self.remote_segment.remote_staging

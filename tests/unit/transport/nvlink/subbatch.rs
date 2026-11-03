@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::cuda::CudaMemory;
 use crate::memory::Allocation;
-use crate::{RemoteRegion, TaskState, TransferRequest, Transport};
+use crate::{Priority, RemoteRegion, TaskState, TransferRequest, Transport};
 
 pub(crate) fn run_case(
     local: Vec<Allocation>,
@@ -99,18 +99,26 @@ pub(crate) fn run_case(
     } else {
         [43, 11, 67]
     };
-    let requests: Vec<_> = (0..3)
-        .map(|i| {
+    let routes = if case == "success" {
+        [
+            (Transport::Unspec, Priority::Low),
+            (Transport::Nvlink, Priority::Medium),
+            (Transport::Unspec, Priority::High),
+        ]
+    } else {
+        [(Transport::Nvlink, Priority::High); 3]
+    };
+    let requests: Vec<_> = routes
+        .into_iter()
+        .enumerate()
+        .map(|(i, (transport, priority))| {
             TransferRequest::new(
-                if case == "success" {
-                    Transport::Unspec
-                } else {
-                    Transport::Nvlink
-                },
+                transport,
                 registrations[i].base_address() + 7,
                 remote.base_address() + 5 + offsets[i],
                 17,
             )
+            .with_priority(priority)
         })
         .collect();
     let expected = match case {

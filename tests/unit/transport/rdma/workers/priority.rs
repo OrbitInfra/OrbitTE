@@ -234,14 +234,6 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
                 .resolve_qos(&crate::QosRequestContext::default())
                 .unwrap()
         }));
-        for transport in [Transport::Tcp, Transport::Nvlink] {
-            let mut unsupported = request.clone();
-            unsupported.transport = transport;
-            assert!(matches!(
-                requester.submit_and_wait(TransferOp::Read, &peer, &[unsupported], timeout),
-                Err(Error::Unavailable("request priority requires RDMA"))
-            ));
-        }
         thread::scope(|scope| {
             *GATE.get_or_init(Default::default).0.lock().unwrap() = Gate {
                 hold: true,

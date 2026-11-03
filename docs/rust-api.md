@@ -181,9 +181,9 @@ to use the new process's allocations.
 ## Requests and reports
 
 `TransferRequest` names the transport, priority, local address, remote address
-and length. The constructor defaults to `Priority::High`. Medium and Low
-currently require RDMA and affect ready payloads competing
-on a worker; they do not reorder the batch. Optional
+and length. The constructor defaults to `Priority::High`. TCP and NVLink accept
+Medium and Low as advisory. On RDMA, priority orders ready payloads competing
+on a worker. Requests within a batch retain their order. Optional
 `RdmaConfig::deadline_bw_arbitration` consumes the existing transmit meter.
 `priority_promotion_timeout` defaults to 10 ms and `priority_promotion_per_entry`
 selects individual aging instead of TENT's default head-only tier promotion.

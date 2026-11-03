@@ -358,13 +358,14 @@ fn implicit_default_intent_enforces_hard_zero_and_effective_transport_priority()
         let mut request = request(local.base_address(), remote.base_address(), None);
         request.priority = Priority::High;
         let result = requester.submit_and_wait(TransferOp::Write, &peer, &[request], TIMEOUT);
+        let mut actual = [0];
+        remote.read(0, &mut actual).unwrap();
         if priority == Priority::Low {
-            assert!(matches!(
-                result,
-                Err(Error::Unavailable("request priority requires RDMA"))
-            ));
+            assert!(result.unwrap().is_complete());
+            assert_eq!(actual, [9]);
         } else {
             assert!(matches!(result, Err(Error::ResourceExhausted)));
+            assert_eq!(actual, [0]);
         }
         assert_eq!(requester.stats().unwrap().inflight_batches, 0);
         let policy = requester
@@ -376,9 +377,6 @@ fn implicit_default_intent_enforces_hard_zero_and_effective_transport_priority()
             bytes.or(requests).map(|_| QosUsage::default())
         );
     }
-    let mut bytes = [0];
-    remote.read(0, &mut bytes).unwrap();
-    assert_eq!(bytes, [0]);
 }
 
 #[test]

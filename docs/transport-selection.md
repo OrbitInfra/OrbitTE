@@ -54,7 +54,7 @@ before payload I/O, task publication or admission charges.
 | `segment_type` | `memory`; `file` is rejected until file execution exists |
 | `local_memory`, `remote_memory` | `cpu`, `cuda`, or `*`; omission/`*` matches either. Pinned host allocations remain CPU |
 | `min_size`, `max_size` | Inclusive byte bounds; minimum must not exceed maximum |
-| `priority` | Effective QoS-resolved priority, otherwise request priority; high/medium/low or integers 0/1/2 |
+| `priority` | Exact match on effective QoS priority, otherwise request priority. Accepts high/medium/low or integers 0/1/2 |
 | `transports` | Ordered, unique `tcp`, `rdma`, `nvlink` candidates; omission/empty uses defaults |
 
 The typed equivalents are `TransportSelectorConfig` and `SelectionPolicy`.
@@ -77,8 +77,12 @@ readiness. Closing or failing a provider does not authorize replay elsewhere.
 | RDMA | Both engines configure RDMA. Each side's existing host/CUDA Direct or Staged policy remains authoritative; this capability does not promise GPUDirect or current RNIC health |
 | NVLink | Both engines opt in; equal host boot identity and different process nonces; remote `allocate_ipc` export consent; local owned CUDA or owned CUDA-pinned host backing |
 
-Medium/Low priority only admits RDMA because only its workers consume these
-priorities. `remote_staging: true` separately requires a remote CUDA range and
+Priority selects matching rules but does not make a transport ineligible.
+When the matching rule permits it, a Low prefetch can use TCP without RDMA
+or NVLink when both endpoints qualify for IPC. TCP and NVLink treat priority
+as advisory. RDMA workers use it to dispatch ready payloads.
+
+`remote_staging: true` requires a remote CUDA range and
 source Pin capability, and restricts selection to TCP/RDMA. It does not silently
 turn an ordinary transfer into Pin/Delegate/Unpin. Policy memory filters always
 inspect the original registered ranges, including when staging is selected.

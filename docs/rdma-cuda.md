@@ -207,12 +207,12 @@ and [multipath evidence](qualification.md#rdma-weighted-multipath).
 ## Request priority and bandwidth arbitration
 
 Use `request.with_priority(...)` to select `Priority::High`, `Medium` or `Low`.
-`TransferRequest::new` defaults to `High`, as in TENT. Medium and Low
-require `Transport::Rdma`. TCP and NVLink reject them during preflight.
-The priority propagates through ordinary grants, multirail slices and remote
-CUDA staging CROSS work. It is local dispatch metadata and changes no wire format.
+`TransferRequest::new` defaults to `High`, as in TENT. TCP and NVLink accept
+all three priorities without scheduling by priority. On RDMA, the effective
+priority follows ordinary grants, multirail slices and remote CUDA staging
+CROSS work into the local worker queues.
 
-Each transport worker collects ready payloads from all its contexts and posts
+Each RDMA worker collects ready payloads from all its contexts and posts
 High, Medium, then Low, with FIFO enqueue order inside a tier. Requests within
 a batch retain their ordered execution contract. A full QP does not prevent
 trying another ready QP; existing SQ/CQ reservations remain authoritative.

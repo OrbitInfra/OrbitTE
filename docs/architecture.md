@@ -40,7 +40,9 @@ identity also used by CUDA IPC. Allocation owners retain immutable IPC capabilit
 facts; registrations publish these without entering payload locks.
 
 `TransferEngine::prepare` resolves memory and QoS before selecting one concrete
-transport. `PreparedTransfer` carries that result, so queue admission, staging,
+transport. Priority filters match the resolved value exactly. TCP and NVLink
+ignore priority during payload execution. RDMA workers use it for dispatch.
+`PreparedTransfer` carries the selected transport, so queue admission, staging,
 RDMA slice planning and CUDA groups use their existing execution owners. The
 selector neither wraps payload transports in TCP nor runs during completion.
 Selection does not change explicit staging policy, retry a failed transfer or
