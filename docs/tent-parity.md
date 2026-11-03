@@ -169,9 +169,12 @@ than classified as missing hardware qualification. In-scope provider stubs
 qualify unavailable/error handling and state-machine controls only; they cannot
 qualify real transfers.
 
-`BufIoTransport` has source and a build target but no frozen public transport
-enum/loader registration. Audit and retain its actual reachable behavior or
-document it as unselected source; do not invent a selectable `BUFIO` capability.
+Frozen TENT builds `BufIoTransport` as a static target. It caches buffered fds,
+runs synchronous `pread`/`pwrite` at the request's file offset and stages CUDA
+through host memory. `loadTransports()` installs only IOURING and GDS for
+files and never constructs BufIo. None of its behavior is reachable through
+the frozen loader. OrbitTE therefore has no public `BUFIO` transport.
+[BufIo implementation][bufio] · [Frozen loader][loader]
 The fault-proxy transport is a test mechanism, not a nineteenth production type.
 
 HP-TCP's frozen scope excludes GPU memory, TLS, per-WRITE striping, dynamic rail
@@ -197,9 +200,9 @@ topology, configuration and actual route observations matter. The NVIDIA
 describes compatibility mode and supported memory/configuration rules.
 
 Local [file segments](storage.md) are part of the default build. The Linux
-io_uring transport is opt-in, as will be cuFile/GDS. The network/memory core runs
-without loading storage libraries. The storage transports own byte I/O and its
-resources; OrbitKV retains KV indexing, placement, eviction, extents, cache
+`io-uring` and `gds` features enable the file executors. The network/memory
+core runs without loading storage libraries. The storage transports own byte
+I/O and its resources. OrbitKV retains KV indexing, placement, eviction, extents, cache
 policy and recovery semantics. OrbitKV's SSD tier is expected to move its
 DRAM↔SSD and GPU↔SSD byte movement onto these modules; that switch is consumer
 integration with its own P10/P11 qualification. A compatibility profile enables
@@ -287,4 +290,5 @@ the engine until separately integrated and qualified.
 [platforms]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/platform
 [rpc]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/rpc/rpc.h
 [uring]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp
+[bufio]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/bufio/bufio_transport.cpp
 [gds]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/gds/gds_transport.cpp

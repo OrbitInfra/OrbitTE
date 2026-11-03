@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 450" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" role="img" aria-labelledby="title desc">
 <title id="title">OrbitTE architecture</title>
-<desc id="desc">A shared transfer engine owns memory and batches. TCP payload transport and RDMA payload transport are siblings, with a separate control service. RDMA contexts own protection domains, queues and endpoint stores. GPU staging, eager all-context MR publication and cross-rail slices are implemented. Two-RNIC CPU DRAM/RoCEv2 slicing and scoped fault/drain validation pass; broader physical faults and independent P4 acceptance remain open. Direct GPU RDMA and cooperative same-host GPU IPC are implemented with scoped qualification.</desc>
+<desc id="desc">A shared transfer engine owns memory and batches. TCP and RDMA have a separate control service. RDMA contexts own protection domains, queues and endpoint stores. A solid two-way arrow connects CPU DRAM and NVIDIA GPU memory to local SSDs through io_uring, pinned CUDA staging and GDS. Broader IPC and stream scheduling are planned.</desc>
 <style>
 .canvas{fill:#fff}.box{fill:#f7f9fc;stroke:#bcc9d8;stroke-width:1.5;rx:8}.label{font:600 18px Arial,sans-serif;fill:#1e293b}.small{font:14px Arial,sans-serif;fill:#475569}.edge{fill:none;stroke:#426a97;stroke-width:2}.future{fill:none;stroke:#64748b;stroke-width:1.5;stroke-dasharray:6 4}
 @media(prefers-color-scheme:dark){.canvas{fill:#14181e}.box{fill:#202735;stroke:#627289}.label{fill:#e2e8f0}.small{fill:#b9c5d6}.edge{stroke:#91b7df}.future{stroke:#a6b3c6}}
 </style>
-<rect class="canvas" width="880" height="450" rx="8"/>
+<rect class="canvas" width="880" height="470" rx="8"/>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#426a97"/></marker></defs>
 <rect class="box" x="270" y="18" width="340" height="72"/>
 <text class="label" x="440" y="48" text-anchor="middle">TransferEngine</text>
@@ -27,7 +27,12 @@
 <rect class="box" x="20" y="260" width="550" height="86"/>
 <text class="label" x="295" y="292" text-anchor="middle">CPU DRAM · NVIDIA staging / IPC / GDR</text>
 <text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>
-<rect class="future" x="20" y="374" width="840" height="54" rx="8"/>
-<text class="small" x="440" y="366" text-anchor="middle">Two-RNIC RoCEv2 validation · broader faults and P4 acceptance open</text>
-<text class="small" x="440" y="406" text-anchor="middle">Planned: broader IPC / stream scheduling · DRAM/GPU ↔ SSD storage transports</text>
+<path class="edge" d="M295 348V377" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<rect class="box" x="20" y="379" width="550" height="56"/>
+<text class="label" x="295" y="403" text-anchor="middle">Local SSD</text>
+<text class="small" x="295" y="424" text-anchor="middle">io_uring · CUDA staging through DRAM · GDS/cuFile</text>
+<rect class="future" x="600" y="379" width="260" height="56" rx="8"/>
+<text class="small" x="730" y="402" text-anchor="middle">Planned: broader IPC</text>
+<text class="small" x="730" y="423" text-anchor="middle">and stream scheduling</text>
+<text class="small" x="440" y="459" text-anchor="middle">Two-RNIC RoCEv2 validation · broader faults and P4 acceptance open</text>
 </svg>

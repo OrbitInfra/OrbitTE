@@ -51,16 +51,21 @@ The test checks the entire original and replacement files, then verifies fd
 release and slot reuse after drain. The same tests run in the Linux feature
 matrix. All `io-uring` feature sets require a live kernel
 ring (`ORBITTE_REQUIRE_IO_URING=1`), ext4 direct I/O and tmpfs buffered I/O.
-The file tests check all bytes and guards, EOF/truncation, short submission,
-syscall failure, queued cancellation, QoS, deadlines and concurrent close.
+**DRAM/file io_uring is qualified on Linux CI.** At `b9fb99a` (#128),
+`real_files_move_full_bytes_on_ext4_and_tmpfs` checked READ and WRITE
+payloads and guards on both filesystems. The suite also covered EOF/truncation,
+short submission, syscall failure, queued cancellation, QoS, deadlines and
+concurrent close. [Stable job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520140) · [Rust 1.85 job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520599)
+
+**CUDA/file staging is implemented. Its installed GPU/NVMe gate is unrun.**
 The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
 with real files to check multi-chunk bytes, short READs, producer events,
 copy failures, retained owners and queued cancellation. Build the installed
 consumer with `python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain stable --output "$ART"`.
 The queued driver checks the selected GPU UUID and local PCIe NVMe ext4 mount,
-holds both existing resource locks and uses a fresh scratch file. The physical
-GPU/file path, GDS and storage performance remain unqualified.
+holds both existing resource locks and uses a fresh scratch file.
 
+**Native GDS is implemented. Its installed gate is unrun.**
 Build the cuFile consumer with `python3 tests/hardware/build_installed.py --consumer gds --toolchain stable --output "$ART"`.
 On an otherwise idle GDS host the queued driver disables compatibility I/O,
 checks GPU and file guards, and requires nvidia-fs successful read/write counts

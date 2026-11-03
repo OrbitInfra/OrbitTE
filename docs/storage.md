@@ -1,4 +1,27 @@
-# Local file segments
+# Local file transfers
+
+File segments are available in every build. Linux offers three paths for
+registered memory to read or write a local file.
+
+| Path | Cargo features | Qualification |
+| --- | --- | --- |
+| DRAM ↔ file | `io-uring` | Qualified on real ext4 and tmpfs files in CI |
+| CUDA ↔ pinned DRAM ↔ file | `cuda,io-uring` | Implemented. Installed GPU/NVMe gate unrun |
+| CUDA or DRAM ↔ file through cuFile | `gds` | Implemented. Installed native GDS gate unrun |
+
+With both executors enabled, `Transport::Unspec` prefers eligible GDS, then
+io_uring. With neither feature, opening and inspecting a segment still works.
+File READ and WRITE return `Unavailable` before payload I/O.
+[Qualification and gate commands](qualification.md#local-file-segments)
+
+CI runs `cargo tree --locked --features "$FEATURES" -e normal,build` for
+builds without `io-uring` and checks that the io-uring crate is absent.
+The GNU/Linux runtime control checks shared-library lookups, threads and live
+ring fds after engine construction and file inspection. An idle engine has no
+storage worker or live ring. The io_uring install probe drops its temporary
+ring before construction returns.
+
+## File segments
 
 `TransferEngine::open_file_segment` reserves an engine-local name. The
 literal text after `file://` is a filesystem path. An absolute path starts
@@ -48,9 +71,9 @@ let request = TransferRequest::new(Transport::Unspec, local.base_address(), 8, 4
 let report = engine.submit_and_wait(TransferOp::Read, &segment, &[request], timeout)?;
 ```
 
-Engine construction probes ring setup. An unavailable kernel rejects file
-submissions. QoS, the runtime window and the submission deadline apply to
-files. Local files require no receiver credit and reject attached notifications.
+An unavailable kernel makes io_uring ineligible. QoS, the runtime window
+and the submission deadline apply to files. Local files require no receiver
+credit and reject attached notifications.
 
 The caller or existing batch worker owns one ring per submission. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,

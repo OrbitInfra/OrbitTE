@@ -24,8 +24,9 @@ behind every hardware result.
 | Local CUDA staging over TCP/RDMA | Accepted (H20, healthy) | Shared pinned chunks; physical CUDA faults are unqualified. See [staging](staging.md) |
 | Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Later nonblocking progress work is implemented only; full ProxyManager parity is open. See [remote pipeline](staging.md#bounded-remote-pipeline) |
 | Mixed GPU Direct and staged batches | Implemented | Per-request remote staging next to GPU Direct in one ordered batch. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
-| DRAM or CUDA ↔ local file (io_uring) | Implemented (Linux) | Real ext4/tmpfs DRAM transfers and CUDA shim staging through pinned host chunks. Installed GPU/NVMe profile unqualified. See [file transfers](storage.md) |
-| GDS / cuFile | Implemented, installed profile unqualified | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
+| DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 I/O and buffered tmpfs I/O with full READ/WRITE byte checks. See [qualification evidence](qualification.md#local-file-segments) |
+| CUDA ↔ local file (io_uring) | Implemented, installed gate unrun | CUDA shim and real files exercise staging through pinned host chunks. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
+| GDS / cuFile | Implemented, installed native gate unrun | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
 | HP-TCP, SHM | Planned (P3) | |
 | MNNVL / EGM | Planned (P5) | |
 | MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
@@ -47,7 +48,7 @@ behind every hardware result.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Transport selection | Implemented | First-match memory, size and priority rules with strict hints. Named policies, intents, device and QP-pool filters and file segments are open. See [transport selection](transport-selection.md) |
+| Transport selection | Implemented | First-match memory, file, size and priority rules with strict hints. Named request selection, intents, device and QP-pool filters remain open. See [transport selection](transport-selection.md) |
 | Discovery, port recovery and multirail slicing | Accepted (RoCE) | Automatic discovery matches a separate host inventory; two-rail accounting verifies exact bytes. Physical loss is unqualified |
 | CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
 | Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
@@ -88,7 +89,7 @@ for selection and resource ownership.
 
 The target is CPU DRAM, NVIDIA GPUs and local SSDs: OrbitKV hands every
 end-to-end cache transfer, including GPU↔DRAM and GPU↔SSD, to OrbitTE. Storage
-transports will be opt-in builds like `rdma` and `cuda`, so a network/memory-only
+transports use the opt-in Linux `io-uring` and `gds` features. A network/memory-only
 build loads no storage libraries. Other accelerators are outside the selected
 scope. Architectural correspondence with frozen TENT does not establish full
 behavior or wire compatibility.

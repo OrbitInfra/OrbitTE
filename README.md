@@ -26,13 +26,13 @@ The design follows Mooncake TENT's engine, transport, context, buffer, endpoint
 and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 <div align="center">
-  <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE engine, control service and sibling TCP/RDMA transports; planned paths are dashed">
+  <img src="docs/_static/architecture.svg" width="95%" alt="OrbitTE network transports and the implemented DRAM and GPU paths to local SSD">
 </div>
 
 ## Updates
 
-- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
-  per request; local SSD paths through io_uring and GDS become core targets.
+- **Nov 3, 2026** — TENT-style transport selection picks NVLink, RDMA or TCP
+  per request.
 - **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
@@ -43,6 +43,7 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Highlights
 
+- **Local SSD transfers** move registered DRAM and CUDA buffers through io_uring or cuFile. [Storage guide](docs/storage.md)
 - **Owned memory, explicit completion.** Registrations keep their real
   allocations, and nothing is released until the backend proves it can no
   longer touch the memory, including after failed native cleanup.
@@ -65,7 +66,7 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | TCP | DRAM; CUDA through staging | Implemented |
 | RDMA | DRAM; CUDA through GPUDirect or staging | Implemented; bounded RoCE profiles accepted |
 | NVLink / CUDA IPC | CUDA and pinned DRAM on one host | Implemented; bounded H20 profiles accepted |
-| io_uring, GDS | DRAM/CUDA ↔ local SSD | Planned (P7) |
+| io_uring, GDS | DRAM/CUDA ↔ local SSD | Implemented (P7) |
 | HP-TCP, SHM | DRAM | Planned (P3) |
 | MNNVL | CUDA fabric memory | Planned (P5) |
 | MPComm, libfabric | Optional network providers | Planned (P8) |

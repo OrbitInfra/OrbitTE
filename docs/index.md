@@ -23,14 +23,17 @@ Mooncake TENT's engine, transport, context, buffer, endpoint and worker
 boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 :::{image} _static/architecture.svg
-:alt: OrbitTE engine and sibling TCP/RDMA transports; dashed paths are planned
+:alt: OrbitTE network transports and the implemented DRAM and GPU paths to local SSD
 :class: dark-light
 :::
 
 ## Updates
 
-- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
-  per request; local SSD paths through io_uring and GDS become core targets.
+- **Nov 3, 2026** — Local file segments support DRAM transfers through io_uring,
+  CUDA staging through pinned DRAM, and GDS through cuFile. The DRAM path is
+  qualified on ext4 and tmpfs in CI. [Local storage](storage.md)
+- **Nov 3, 2026** — TENT-style transport selection picks NVLink, RDMA or TCP
+  per request.
 - **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
