@@ -15,54 +15,39 @@
 
 ## Overview
 
-OrbitTE is the transfer engine for OrbitKV's KV cache. It provides owned,
-batched data movement across CPU memory, NVIDIA GPUs and network transports,
-and its planned storage transports extend that to local SSDs, so every
-end-to-end cache path runs through one engine. Its design follows Mooncake
-TENT's resource and runtime boundaries, implemented in Rust without a Mooncake
-C++ dependency.
-
-The engine owns registration, batches and completion. TCP, RDMA and opt-in CUDA IPC are separate
-payload transports, with a shared control service for peer discovery, grants
-and receipts. Allocations remain owned until native work has drained.
+OrbitTE is the transfer engine for OrbitKV's KV cache, replacing its earlier
+Mooncake TENT dependency. It moves bytes between CPU memory, NVIDIA GPUs and
+local SSDs, within and across machines, so every end-to-end cache path,
+including GPU↔DRAM and GPU↔SSD, runs through one engine. The design follows
+Mooncake TENT's engine, transport, context, buffer, endpoint and worker
+boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 :::{image} _static/architecture.svg
 :alt: OrbitTE engine and sibling TCP/RDMA transports; dashed paths are planned
 :class: dark-light
 :::
 
-## Getting started
+## Updates
 
-Run the [CPU example](getting-started.md), select optional providers with the
-[build guide](build.md), and use the [Rust API guide](rust-api.md) to register
-memory and submit transfers. The [RDMA/CUDA guide](rdma-cuda.md) explains device
-selection, persistent resources, completion and shutdown.
+- **Nov 3, 2026**: Requests are built with `TransferRequest::new`; local SSD
+  paths through io_uring and GDS become core targets.
+- **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
+  receiver credit windows.
+- **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
+  and TENT priority matrices; CUDA 13 native batch copies for NVLink groups.
+- **Oct 28, 2026**: Bounded GPUDirect RDMA, CUDA IPC and remote CUDA staging
+  profiles pass installed H20/RoCE tests.
+- **Oct 27, 2026**: The bounded host RDMA RoCE profile is independently accepted.
 
-## Development status
+## Status
 
-CPU/TCP, persistent host RDMA, multirail slicing and synchronized NVIDIA host
-staging with owned copy streams/events, and explicit GPU direct RDMA are implemented. Native qualification applies to the exact profiles
-in [qualification](qualification.md). The published alpha reserves the crate
-name; the source implementation remains under development.
+OrbitTE is in alpha. TCP, RDMA and CUDA IPC are implemented; storage, HP-TCP,
+SHM, MNNVL and the optional network providers are planned.
+[Capabilities](capabilities.md) lists each path and its limits,
+[qualification](qualification.md) records the evidence, and the
+[completion plan](completion-plan.md) is the work queue.
 
-The host RDMA implementation and declared installed cleanup fixtures are complete.
-[Physical rail accounting](qualification.md#installed-physical-rail-accounting)
-verifies concurrent parents, shared QP limits and exact native payload bytes.
-[Automatic discovery](qualification.md#installed-automatic-discovery) now passes
-two-host READ/WRITE against a separately captured PCI, NUMA and route inventory.
-The [P4 exit queue](completion-plan.md#p4-remaining-delivery) tracks physical-fault,
-fabric qualification before full acceptance. Source and the bounded RoCE profile
-passed independent review with four fresh live repeats; P5 CUDA work now proceeds
-with available hardware. The [GPU Direct profile](qualification.md#gpudirect-rdma)
-passes 72 installed H20/RoCE cases with an explicit host-wide context inventory
-limit. The cooperative [CUDA IPC/NVLink path](cuda-ipc.md) is implemented, with
-48 installed H20 cases passing. Bounded subbatch import reuse passes 28
-additional installed cases on two H20 hosts. Current source groups CUDA copies
-under one completion event; [current-artifact qualification](qualification.md#cuda-ipc-group-completion)
-is still open. OrbitKV integration remains deferred.
-[Capabilities](capabilities.md) distinguishes current paths from later work,
-including broader GPU/IPC qualification and full TENT compatibility. For code
-navigation, use the [architecture reading order](architecture.md#source-reading-order).
+## Documentation
 
 :::{toctree}
 :caption: Getting Started
