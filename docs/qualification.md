@@ -2358,3 +2358,30 @@ supplies resource tags and ProxyManager ownership, not this automatic receiver
 protocol. Physical pool reservation, failed-sender reclamation, matched throughput
 and installed v23 hardware qualification remain unqualified. No hardware job was
 requested for this substage.
+
+
+## JSON QoS configuration
+
+The supported TENT `qos` JSON section now loads from a string or bounded file
+into `QosConfig`. Parsing validates known fields and objects, disabled semantics,
+normalized unique identities, integer/byte-unit limits and the existing contract
+count bound. Unknown/unconsumed policy keys, including `allowed_degraded_actions`,
+are rejected. Root engine settings outside `qos` remain the caller's responsibility.
+
+Two focused CPU controls cover input shape, inheritance, numeric/byte units,
+disabled behavior, duplicates, limits and bounded file loading. The existing
+public mixed-contract admission/retention test now consumes JSON; the existing
+ordinary/sliced RDMA worker-priority control does likewise. These preserve real
+policy consumers without duplicating their state machines. CUDA/verbs coverage
+uses ABI fixtures; no new hardware task or performance measurement is involved.
+
+Frozen reference `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies the
+`QosContractResolver::loadFromConfig`, priority and binary byte parsing behavior.
+Unlike its resolution-only metadata, OrbitTE accepts only fields consumed by its
+runtime. Rejecting duplicate normalized keys and non-object empty nodes is a
+deliberate strictness difference. Native schema/action/API parity remains open.
+
+Exact source, CI, independent review and logs are maintained outside Git at
+`/root/orbitte-artifacts/qos-json-20261103/`. JSON loading adds no transfer-time
+lookup, lock or network work; this is a design property, not a measured throughput
+advantage. Installed v23 hardware and performance remain unqualified.

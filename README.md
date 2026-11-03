@@ -41,7 +41,9 @@ recovery policy and replica placement.
   bounds concurrent submission owners and bytes while preserving batch order.
   [QoS contracts](docs/async-batches.md#qos-contracts) resolve global, tenant and
   intent priorities once and enforce retained payload byte/request budgets per
-  resolved contract. Reusable policy handles avoid name lookup during submission.
+  resolved contract. Load these fields from [TENT-format JSON](docs/async-batches.md#json-qos-configuration)
+  or typed Rust configuration; reusable policy handles avoid parsing and name
+  lookup during submission.
   Optional [automatic receiver windows](docs/async-batches.md#automatic-receiver-windows)
   issue bounded peer grants and coalesce successful-owner completion updates;
   credit sync runs only on demand through existing waiters. Optional

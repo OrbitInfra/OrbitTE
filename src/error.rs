@@ -6,6 +6,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     InvalidConfig(&'static str),
+    /// JSON syntax/schema diagnostics, including the offending QoS field.
+    InvalidQosConfig(String),
     BatchBusy,
     BatchClosed,
     BatchOpen,
@@ -41,6 +43,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid configuration: {message}"),
+            Self::InvalidQosConfig(message) => write!(f, "invalid QoS configuration: {message}"),
             Self::BatchBusy => f.write_str("batch work is not physically drained"),
             Self::BatchClosed => f.write_str("batch is sealed or freed"),
             Self::BatchOpen => {
