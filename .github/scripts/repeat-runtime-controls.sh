@@ -64,6 +64,7 @@ if [[ ${2:-} == metrics ]]; then
     runtime::control_plane::tests::one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit
     metrics::tests::recording::concurrent_cells_keep_exact_transport_counts_and_inclusive_buckets
     metrics::tests::recording::real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats
+    metrics::tests::recording::http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats
     metrics::tests::recording::busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers
     metrics::tests::recording::stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable
     engine::failover::tests::native::metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport

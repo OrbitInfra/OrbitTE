@@ -307,3 +307,36 @@ fn a_retired_initial_route_and_a_rejected_retry_preserve_real_attempt_counts() {
     assert!(p.contains("tent_task_failures_total{transport=\"tcp\",reason=\"submit\"} 1\n"));
     assert!(!p.contains("tent_transport_attempts_total{transport=\"gds\""));
 }
+
+#[test]
+fn http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats() {
+    let engine = engine();
+    let m = engine.metrics().unwrap();
+    let port = m.http_port();
+    // A listener restricted to 127.0.0.1 leaves the other loopback address free.
+    #[cfg(target_os = "linux")]
+    let _other_address = TcpListener::bind(("127.0.0.2", port)).unwrap();
+    for t in [Transport::Unspec, Transport::Tcp] {
+        for _ in 0..3 {
+            m.recorder().observe(M::QueueWait, schema::slot(t), 0);
+        }
+    }
+    let text = scrape(port, "/metrics");
+    for label in ["unspec", "tcp"] {
+        assert!(text.contains(&format!(
+            "tent_stage_queue_wait_us_count{{transport=\"{label}\"}} 3\n"
+        )));
+        assert!(text.contains(&format!(
+            "tent_stage_queue_wait_us_sum{{transport=\"{label}\"}} 0\n"
+        )));
+        assert!(text.contains(&format!(
+            "tent_stage_queue_wait_us_bucket{{transport=\"{label}\",le=\"+Inf\"}} 3\n"
+        )));
+    }
+    let j: Value = serde_json::from_str(&scrape(port, "/metrics/json")).unwrap();
+    let hist = &j["tent_stage_queue_wait_us"];
+    assert_eq!(hist["count"], 6);
+    assert_eq!(hist["sum"], 0);
+    assert_eq!(hist["buckets"]["10"], 6);
+    assert!(j.get("tent_task_failures_total").is_none());
+}
