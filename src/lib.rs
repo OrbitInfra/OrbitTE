@@ -37,7 +37,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(unsupported_native_target)]
-compile_error!("OrbitTE's `cuda` and `rdma` features require a Linux target");
+compile_error!("OrbitTE's `cuda`, `rdma` and `io-uring` features require a Linux target");
 
 #[cfg(not(unsupported_native_target))]
 mod batch;
@@ -94,7 +94,9 @@ pub use {
         },
         transport_selector::{SegmentType, SelectionPolicy, TransportSelectorConfig},
     },
-    segment::{FileSegment, FileSegmentInfo, RemoteRegion, RemoteSegment, SourceEpoch},
+    segment::{
+        FileSegment, FileSegmentInfo, RemoteRegion, RemoteSegment, SourceEpoch, TransferTarget,
+    },
 };
 
 #[cfg(all(test, not(unsupported_native_target)))]

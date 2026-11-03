@@ -192,10 +192,8 @@ fn data_request(
     }
 }
 
-const ENDPOINT_DESTROY_TIMEOUT: Duration = Duration::from_secs(30);
-
 fn close_slices(slices: &mut [RdmaSlice], mut result: Result<()>, requester: bool) -> Result<()> {
-    let retirement_deadline = Instant::now() + ENDPOINT_DESTROY_TIMEOUT;
+    let retirement_deadline = Instant::now() + crate::transport::DESTRUCTION_TIMEOUT;
     for slice in slices {
         slice.grant.deadline = retirement_deadline;
         #[cfg(test)]

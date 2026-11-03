@@ -18,11 +18,11 @@ impl ProxyManager {
     pub(crate) fn transfer_remote(
         self: &Arc<Self>,
         submission: &PreparedSubmission,
+        peer: &crate::RemoteSegment,
         request: &PreparedTransfer,
         source: &Arc<Source>,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let operation = submission.operation;
-        let peer = &submission.peer;
         let deadline = submission.deadline;
         let mut effect = RemoteEffect::None;
         let result = (|| {

@@ -70,7 +70,7 @@ struct HostAccess {
     cuda_uncertain: bool,
     #[cfg(feature = "cuda")]
     cuda_inflight: bool,
-    #[cfg(feature = "rdma")]
+    #[cfg(any(feature = "rdma", feature = "io-uring"))]
     dma: Vec<Range<usize>>,
 }
 
@@ -113,15 +113,17 @@ impl HostAccess {
                 return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
             }
         }
-        #[cfg(feature = "rdma")]
+        #[cfg(any(feature = "rdma", feature = "io-uring"))]
         if self
             .dma
             .iter()
             .any(|loan| range.start < loan.end && loan.start < range.end)
         {
-            return Err(Error::Unavailable("host range is owned by RDMA"));
+            return Err(Error::Unavailable(
+                "host range has an active native I/O loan",
+            ));
         }
-        #[cfg(not(feature = "rdma"))]
+        #[cfg(not(any(feature = "rdma", feature = "io-uring")))]
         let _ = range;
         #[cfg(feature = "cuda")]
         if let HostBacking::CudaPinned(allocation) = &self.bytes {
@@ -212,7 +214,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(feature = "rdma")]
+                #[cfg(any(feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         }
@@ -371,7 +373,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(feature = "rdma")]
+                #[cfg(any(feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         })
@@ -418,7 +420,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(feature = "rdma")]
+                #[cfg(any(feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         })
@@ -478,7 +480,7 @@ impl HostMemory {
     }
 }
 
-#[cfg(feature = "rdma")]
+#[cfg(any(feature = "rdma", feature = "io-uring"))]
 pub(crate) struct DmaLease {
     _registration: RegisteredMemory,
     allocation: Allocation,
@@ -486,11 +488,13 @@ pub(crate) struct DmaLease {
     address: NonNull<u8>,
 }
 
-#[cfg(feature = "rdma")]
+#[cfg(any(feature = "rdma", feature = "io-uring"))]
 impl DmaLease {
+    #[cfg(feature = "rdma")]
     pub(crate) fn registration(&self) -> RegisteredMemory {
         self._registration.clone()
     }
+    #[cfg(feature = "rdma")]
     pub(crate) fn complete(&self) -> Result<()> {
         match &self.allocation {
             Allocation::Host(_) => Ok(()),
@@ -507,7 +511,7 @@ impl DmaLease {
     }
 }
 
-#[cfg(feature = "rdma")]
+#[cfg(any(feature = "rdma", feature = "io-uring"))]
 impl Drop for DmaLease {
     fn drop(&mut self) {
         match &self.allocation {
@@ -517,8 +521,10 @@ impl Drop for DmaLease {
                 .unwrap_or_else(|p| p.into_inner())
                 .dma
                 .retain(|range| *range != self.range),
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", feature = "rdma"))]
             Allocation::Cuda(memory) => memory.release_dma(&self.range),
+            #[cfg(all(feature = "cuda", not(feature = "rdma")))]
+            Allocation::Cuda(_) => {}
         }
     }
 }
@@ -538,6 +544,18 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn is_file_dram(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            matches!(&self.0.allocation, Allocation::Host(host) if !host.cuda_pinned)
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            true
+        }
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn ipc_requester(&self) -> bool {
         match &self.0.allocation {
@@ -596,7 +614,7 @@ impl RegisteredMemory {
         self.memory_type() == MemoryType::Cuda
     }
 
-    #[cfg(feature = "rdma")]
+    #[cfg(any(feature = "rdma", feature = "io-uring"))]
     pub(crate) fn dma_lease(&self, offset: usize, length: usize) -> Result<DmaLease> {
         checked_range(offset, length, self.len())?;
         let offset = self
@@ -621,8 +639,10 @@ impl RegisteredMemory {
                     .map_err(|_| Error::ResourceExhausted)?;
                 backing.dma.push(range.clone());
             }
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", feature = "rdma"))]
             Allocation::Cuda(memory) => memory.acquire_dma(range.clone())?,
+            #[cfg(all(feature = "cuda", not(feature = "rdma")))]
+            Allocation::Cuda(_) => return Err(Error::Unavailable("file I/O requires DRAM")),
         }
         Ok(DmaLease {
             _registration: self.clone(),

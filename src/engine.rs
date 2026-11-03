@@ -18,6 +18,7 @@ use crate::{
     CreditUpdateDisposition, EngineConfig, Error, FileSegment, FileSegmentInfo, HostMemory,
     Notification, NotificationFailure, NotificationStatus, Permission, ReceiverCreditStats,
     ReceiverCreditUpdateV1, RegisteredMemory, RemoteRegion, RemoteSegment, Result, SourceEpoch,
+    TransferTarget,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +34,8 @@ pub enum Transport {
     Tcp,
     Rdma,
     Nvlink,
+    /// Linux io_uring for DRAM and local regular files.
+    IoUring,
     /// Choose an eligible transport before any payload I/O. No failure replay.
     Unspec,
 }
@@ -47,7 +50,7 @@ pub enum Priority {
     Low = 2,
 }
 
-/// Absolute host/device addresses within active local and epoch-fenced peer ranges.
+/// A registered local address and a peer address or zero-based file byte offset.
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -137,16 +140,16 @@ pub enum RemoteEffect {
 #[derive(Debug)]
 pub struct TransferFailure {
     pub request_index: usize,
-    /// Consecutive requests sharing this failure, beginning at request_index.
-    /// These may have executed; only requests after this span were skipped.
+    /// Consecutive requests affected by the failure, beginning at request_index.
+    /// For concurrent file I/O the span includes later requests submitted to the kernel.
     pub affected_requests: usize,
     pub error: Error,
     pub remote_effect: RemoteEffect,
 }
 
-/// Requests run in order and stop on the first failure. Earlier completed
-/// requests remain committed. A shared transport failure covers its explicit
-/// affected span; only later requests were never attempted.
+/// Counts and bytes cover the consecutive fully successful requests before the
+/// first failure. A later file SQE may have completed inside the affected span.
+/// Async task status reports its individual result and exact transferred bytes.
 #[derive(Debug)]
 pub struct BatchReport {
     pub completed_requests: usize,
@@ -202,6 +205,8 @@ pub struct TransferEngine {
     qos: Option<QosContractResolver>,
     selector: Option<TransportSelector>,
     pub(crate) files: FileSegments,
+    #[cfg(feature = "io-uring")]
+    pub(crate) io_uring: Option<crate::transport::io_uring::IoUringTransport>,
 }
 
 impl TransferEngine {
@@ -296,6 +301,8 @@ impl TransferEngine {
         Ok(Self {
             runtime_queue,
             files: FileSegments::default(),
+            #[cfg(feature = "io-uring")]
+            io_uring: crate::transport::io_uring::IoUringTransport::probe(),
             receiver_credits,
             qos,
             selector,
@@ -655,10 +662,10 @@ impl TransferEngine {
     /// WRITE bytes before a final receipt, including on failure. Inspect locally_drained
     /// and remote_effect before releasing owners or considering a retry.
     /// WRITE success requires source acknowledgement. No automatic retries.
-    pub fn submit_and_wait(
+    pub fn submit_and_wait<'a>(
         &self,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         timeout: Duration,
     ) -> Result<BatchReport> {
@@ -668,10 +675,10 @@ impl TransferEngine {
     /// Sends one notification to this peer after every request completes.
     /// Empty or failed batches do not notify. Data and notification completion
     /// share one deadline, but their results are reported separately.
-    pub fn submit_and_notify(
+    pub fn submit_and_notify<'a>(
         &self,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         notification: &Notification,
         timeout: Duration,
@@ -679,10 +686,10 @@ impl TransferEngine {
         self.submit(operation, peer, requests, Some(notification), timeout)
     }
 
-    pub(crate) fn prepare(
+    pub(crate) fn prepare<'a>(
         &self,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
@@ -692,16 +699,45 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let deadline = deadline(timeout)?;
+        let target = peer.into();
+        let mut payload = match target {
+            TransferTarget::Memory(peer) => PreparedTarget::Memory {
+                peer: peer.clone(),
+                requests: Vec::new(),
+            },
+            TransferTarget::File(_) if notification.is_some() => {
+                return Err(Error::Unavailable(
+                    "file transfers do not support notifications",
+                ));
+            }
+            #[cfg(feature = "io-uring")]
+            TransferTarget::File(segment) => PreparedTarget::File {
+                segment: segment.clone(),
+                transport: self
+                    .io_uring
+                    .clone()
+                    .ok_or(Error::Unavailable("io_uring is not available"))?,
+                requests: Vec::new(),
+            },
+            #[cfg(not(feature = "io-uring"))]
+            TransferTarget::File(_) => return Err(Error::Unavailable("io_uring is not available")),
+        };
         let notification_bytes = match notification {
             Some(notification) => self.validate_notification(notification)?,
             None => 0,
         };
         let mut total_bytes = notification_bytes;
         let mut qos_charges = Vec::new();
-        let mut prepared = Vec::new();
-        prepared
-            .try_reserve_exact(requests.len())
-            .map_err(|_| Error::ResourceExhausted)?;
+        match &mut payload {
+            PreparedTarget::Memory {
+                requests: prepared, ..
+            } => prepared.try_reserve_exact(requests.len()),
+            #[cfg(feature = "io-uring")]
+            PreparedTarget::File {
+                requests: prepared, ..
+            } => prepared.try_reserve_exact(requests.len()),
+        }
+        .map_err(|_| Error::ResourceExhausted)?;
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
         for request in requests {
@@ -727,6 +763,49 @@ impl TransferEngine {
                 .source
                 .registry
                 .resolve_address(request.local_address, request.length)?;
+            total_bytes = total_bytes
+                .checked_add(request.length)
+                .ok_or(Error::ResourceExhausted)?;
+            if let Some(contract) = contract {
+                QosCharge::add(&mut qos_charges, contract, request.length)?;
+            }
+            let (peer, prepared) = match &mut payload {
+                PreparedTarget::Memory { peer, requests } => (peer, requests),
+                #[cfg(feature = "io-uring")]
+                PreparedTarget::File {
+                    segment,
+                    requests: files,
+                    ..
+                } => {
+                    if request.remote_staging || !local.is_file_dram() {
+                        return Err(Error::Unavailable("file I/O requires unstaged DRAM"));
+                    }
+                    TransportSelector::select_file(
+                        self.selector.as_ref(),
+                        local.memory_type(),
+                        request.length,
+                        priority,
+                        request.transport,
+                    )?;
+                    let (lease, offset) = self.files.admit(
+                        segment,
+                        operation,
+                        request.remote_address,
+                        request.length,
+                    )?;
+                    files.push(crate::transport::io_uring::FileRequest {
+                        local,
+                        local_offset,
+                        lease,
+                        offset,
+                        length: request.length,
+                    });
+                    continue;
+                }
+            };
+            if request.transport == Transport::IoUring {
+                return Err(Error::Unavailable("io_uring requires a file target"));
+            }
             let (remote, remote_offset) =
                 peer.resolve_address(request.remote_address, request.length)?;
             if !remote.permission.allows(operation == TransferOp::Write) {
@@ -792,12 +871,6 @@ impl TransferEngine {
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
             }
-            total_bytes = total_bytes
-                .checked_add(request.length)
-                .ok_or(Error::ResourceExhausted)?;
-            if let Some(contract) = contract {
-                QosCharge::add(&mut qos_charges, contract, request.length)?;
-            }
             prepared.push(PreparedTransfer {
                 #[cfg(feature = "rdma")]
                 priority,
@@ -816,12 +889,12 @@ impl TransferEngine {
             Some(resolver) => resolver.admit(qos_charges)?,
             None => None,
         };
-        let credit = self
-            .receiver_credits
-            .as_ref()
-            .filter(|_| !requests.is_empty())
-            .map(|ledger| ledger.prepare(peer, total_bytes - notification_bytes, requests.len()))
-            .transpose()?;
+        let credit = match (target, &self.receiver_credits) {
+            (TransferTarget::Memory(peer), Some(ledger)) if !requests.is_empty() => {
+                Some(ledger.prepare(peer, total_bytes - notification_bytes, requests.len())?)
+            }
+            _ => None,
+        };
         let queue = self
             .runtime_queue
             .as_ref()
@@ -840,8 +913,7 @@ impl TransferEngine {
             .transpose()?;
         Ok(PreparedSubmission {
             operation,
-            peer: peer.clone(),
-            requests: prepared,
+            payload,
             notification: notification.cloned(),
             deadline,
             queue,
@@ -851,10 +923,10 @@ impl TransferEngine {
         })
     }
 
-    fn submit(
+    fn submit<'a>(
         &self,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
@@ -875,8 +947,7 @@ impl TransferEngine {
     ) -> BatchReport {
         let PreparedSubmission {
             operation,
-            peer,
-            requests,
+            payload,
             notification,
             deadline,
             ..
@@ -909,6 +980,18 @@ impl TransferEngine {
             });
             return report;
         }
+        let (peer, requests) = match payload {
+            PreparedTarget::Memory { peer, requests } => (peer, requests),
+            #[cfg(feature = "io-uring")]
+            PreparedTarget::File {
+                transport,
+                requests,
+                ..
+            } => {
+                transport.execute(*operation, requests, *deadline, progress, &mut report);
+                return report;
+            }
+        };
         let mut index = 0;
         while index < requests.len() {
             let request = &requests[index];
@@ -947,7 +1030,7 @@ impl TransferEngine {
                     })
             };
             let result = match request.transport {
-                Transport::Unspec => single(Err((
+                Transport::IoUring | Transport::Unspec => single(Err((
                     Error::Internal("unresolved transport"),
                     RemoteEffect::None,
                 ))),
@@ -955,7 +1038,7 @@ impl TransferEngine {
                 Transport::Tcp | Transport::Rdma if request.remote_staging => single(
                     self.source
                         .proxy
-                        .transfer_remote(submission, request, &self.source),
+                        .transfer_remote(submission, peer, request, &self.source),
                 ),
                 Transport::Tcp => single(TcpTransport::transfer(
                     *operation,
@@ -971,7 +1054,7 @@ impl TransferEngine {
                         match &self.source.nvlink {
                             Some(transport) => transport.transfer(
                                 submission,
-                                index,
+                                (peer, &requests[index..]),
                                 self.source.epoch,
                                 self.config.max_transfer_bytes,
                                 |next| {
@@ -1069,10 +1152,10 @@ impl TransferEngine {
 
     /// Creates and seals a single asynchronous submission. Polling and waiting
     /// observe worker progress; a dropped handle cannot release active owners.
-    pub fn submit_async(
+    pub fn submit_async<'a>(
         self: &Arc<Self>,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
@@ -1364,10 +1447,22 @@ impl Drop for SourcePermit<'_> {
     }
 }
 
+enum PreparedTarget {
+    Memory {
+        peer: RemoteSegment,
+        requests: Vec<PreparedTransfer>,
+    },
+    #[cfg(feature = "io-uring")]
+    File {
+        segment: FileSegment,
+        transport: crate::transport::io_uring::IoUringTransport,
+        requests: Vec<crate::transport::io_uring::FileRequest>,
+    },
+}
+
 pub(crate) struct PreparedSubmission {
     pub(crate) operation: TransferOp,
-    pub(crate) peer: RemoteSegment,
-    pub(crate) requests: Vec<PreparedTransfer>,
+    payload: PreparedTarget,
     pub(crate) notification: Option<Notification>,
     pub(crate) deadline: Instant,
     // Backing drops first. Return QoS before advancing the Batch head so a

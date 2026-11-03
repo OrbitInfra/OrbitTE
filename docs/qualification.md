@@ -47,7 +47,11 @@ EOF and integer overflow, positioned reads and read-only denial. A worker
 holds an admitted write while the pathname is replaced and close times out.
 The test checks the entire original and replacement files, then verifies fd
 release and slot reuse after drain. The same tests run in the Linux feature
-matrix. IOURING and GDS payload qualification remain open.
+matrix. With `io-uring` and `rdma,cuda,io-uring`, CI requires a live kernel
+ring (`ORBITTE_REQUIRE_IO_URING=1`), ext4 direct I/O and tmpfs buffered I/O.
+The file tests check all bytes and guards, EOF/truncation, short submission,
+syscall failure, queued cancellation, QoS, deadlines and concurrent close.
+CUDA file staging, native GDS and physical storage performance remain open.
 
 ## Per-request remote staging
 
