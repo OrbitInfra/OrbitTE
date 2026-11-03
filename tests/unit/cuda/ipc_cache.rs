@@ -109,7 +109,9 @@ fn relay(
         let gate = close_gate.lock().unwrap().take();
         if let Some((entered, resume)) = gate {
             entered.send(()).unwrap();
-            resume.recv_timeout(TIMEOUT).unwrap();
+            resume
+                .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+                .unwrap();
         }
         if reply[10] == 0
             && fault

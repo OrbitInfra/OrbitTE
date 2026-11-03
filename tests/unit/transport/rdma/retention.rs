@@ -13,7 +13,7 @@ pub(in super::super) fn retained(
     kind: &str,
 ) -> RdmaStats {
     let debt = kind != "pd";
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     loop {
         let rdma = engine.stats().unwrap().rdma.unwrap();
         if match kind {

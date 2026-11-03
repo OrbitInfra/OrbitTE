@@ -50,7 +50,9 @@ fn caller_unwind_disconnects_full_completion_queue_before_waiting_for_terminal()
             completed,
             worker,
         };
-        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        ready
+            .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+            .unwrap();
         panic!("injected caller unwind");
     }));
     assert!(result.is_err());

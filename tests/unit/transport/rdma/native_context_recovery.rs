@@ -41,7 +41,7 @@ static VERBS: sys::Verbs = sys::Verbs {
 };
 
 fn wait(runtime: &RdmaTransport, predicate: impl Fn(&crate::transport::rdma::RdmaStats) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     loop {
         let stats = runtime.stats().unwrap();
         if predicate(&stats) {

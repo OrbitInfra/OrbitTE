@@ -11,7 +11,7 @@ use crate::transport::rdma::{
 };
 
 fn wait(runtime: &RdmaTransport, predicate: impl Fn(RdmaStats) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while !predicate(runtime.stats().unwrap()) {
         assert!(
             Instant::now() < deadline,

@@ -82,7 +82,8 @@ peer's pinned chunks (Pin/Delegate/Unpin), with TCP or RDMA carrying the bytes.
 
 The requester need not accept Pin itself, and one engine can enable both CUDA
 Direct and incoming Pin. Opting out does not force GPUDirect: ordinary RDMA still
-chooses Direct or local staging. The source checks epoch, registration, range,
+chooses Direct or local staging. The source reads the complete fixed-size Pin
+hello before replying to a rejection. It checks epoch, registration, range,
 permission and the actual allocation type, so a remote host range or opted-out
 source is rejected there. Remote staging over NVLink or without `cuda` fails
 during whole-submission preparation. One ordered batch can mix GPU Direct RDMA,

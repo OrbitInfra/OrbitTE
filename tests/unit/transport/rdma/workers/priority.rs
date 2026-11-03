@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::{discovery::RdmaAddress, sys, tests as fixture};
 use crate::{Priority, Topology, TransferOp};
 
@@ -123,7 +124,7 @@ fn shared_worker_dispatches_priority_then_optional_deadline_across_contexts() {
         grants[0].progress.shared.wake();
         let state = lock.lock().unwrap();
         let (state, timeout) = changed
-            .wait_timeout_while(state, Duration::from_secs(3), |gate| !gate.entered)
+            .wait_timeout_while(state, EVENTUAL_PROGRESS, |gate| !gate.entered)
             .unwrap();
         assert!(!timeout.timed_out());
         drop(state);
@@ -245,7 +246,7 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
                     .submit_and_wait(TransferOp::Read, &peer, &[request], timeout)
                     .unwrap()
             });
-            let deadline = Instant::now() + Duration::from_secs(3);
+            let deadline = Instant::now() + EVENTUAL_PROGRESS;
             let observed = loop {
                 let lanes: Vec<_> = source_runtime(&requester)
                     .context_set
@@ -328,7 +329,7 @@ fn promotion_preserves_tier_fifo_across_context_rotation_and_recollection() {
         let release = Release;
         grants[0].progress.shared.wake();
         let (gate, timeout) = changed
-            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |g| !g.entered)
+            .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |g| !g.entered)
             .unwrap();
         assert!(!timeout.timed_out());
         drop(gate);
@@ -515,7 +516,7 @@ fn event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe() {
         let release = Release;
         grant.progress.shared.wake();
         let (gate, timeout) = changed
-            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |g| !g.entered)
+            .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |g| !g.entered)
             .unwrap();
         assert!(!timeout.timed_out());
         drop(gate);

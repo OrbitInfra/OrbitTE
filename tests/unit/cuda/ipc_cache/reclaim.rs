@@ -128,7 +128,9 @@ fn cached_ipc_replacement_reserves_target_until_receipt_without_blocking_hot_key
                 .unwrap()
         })
     };
-    reached.recv_timeout(TIMEOUT).unwrap();
+    reached
+        .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+        .unwrap();
     assert_eq!(event_count(&dst, "ipc-close"), 1);
     assert_eq!(event_count(&remotes[2].0, "ipc-export"), 0);
     // The old physical permit is released, but the cache slot is still charged.

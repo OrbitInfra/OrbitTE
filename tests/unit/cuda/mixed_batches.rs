@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::sync::mpsc;
 
 use super::*;
@@ -108,7 +109,7 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
         )
         .unwrap();
     pending
-        .recv_timeout(Duration::from_secs(3))
+        .recv_timeout(EVENTUAL_PROGRESS)
         .expect("middle TCP GPU copy was not reached");
     assert_eq!(
         batch
@@ -355,7 +356,7 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                     Duration::from_secs(8),
                 )
                 .unwrap();
-            let until = std::time::Instant::now() + Duration::from_secs(3);
+            let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
             while b.event_queries.load(Ordering::Acquire) == 0 {
                 assert!(
                     std::time::Instant::now() < until,

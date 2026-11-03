@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::io::{Read, Write, copy};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -151,18 +152,18 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
                 Duration::from_secs(10),
             )
             .unwrap();
-        gate.reached.recv_timeout(Duration::from_secs(3)).unwrap();
+        gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
         assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
         assert_eq!(requester.stats().unwrap().staging.active_tasks, 1);
         assert_eq!(source_gpu.allocation.lock().unwrap().dma, vec![1..18]);
         assert_eq!(local_gpu.allocation.lock().unwrap().dma, vec![2..19]);
         assert!(matches!(batch.free(), Err(Error::BatchBusy)));
         if operation == TransferOp::Read {
-            waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+            waiting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             b.copy_error.store(1, Ordering::Release);
             resume.send(()).unwrap();
         } else {
-            let until = Instant::now() + Duration::from_secs(3);
+            let until = Instant::now() + EVENTUAL_PROGRESS;
             while b.event_not_ready.load(Ordering::Acquire) == 0 {
                 assert!(Instant::now() < until);
                 std::thread::yield_now();
@@ -194,7 +195,7 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
         assert_eq!(requester.stats().unwrap().staging.active_tasks, 0);
         assert_eq!(requester.stats().unwrap().staging.cancelled_tasks, 1);
         gate.closed
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(EVENTUAL_PROGRESS)
             .expect("worker retained its socket after terminal publication");
         assert_eq!(
             source.stats().unwrap().active_source_operations,

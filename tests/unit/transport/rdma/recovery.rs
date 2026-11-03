@@ -1,9 +1,10 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::RdmaStats;
 use std::sync::atomic::Ordering;
 
 fn wait(runtime: &RdmaTransport, predicate: impl Fn(RdmaStats) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(6);
+    let deadline = Instant::now() + EVENTUAL_PROGRESS;
     loop {
         let stats = runtime.stats().unwrap();
         if predicate(stats) {
@@ -57,7 +58,7 @@ fn monitor_keeps_acking_during_native_drain_and_recovers_without_new_requests() 
     let gate = pause_device(&owner);
     let release = Release(Arc::clone(&gate));
     emit_async(&runtime, ibverbs_sys::IBV_EVENT_PORT_ERR as u8);
-    let end = Instant::now() + Duration::from_secs(2);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while !gate.0.lock().unwrap().0 {
         assert!(Instant::now() < end);
         thread::yield_now();
@@ -386,7 +387,7 @@ fn active_port_rate_refresh_reseeds_selection_without_replacing_connections() {
     let original = grant.incarnation().unwrap();
     for mbps in [Some(100_000), Some(200_000), None] {
         change_route(&runtime, |address| address.link_speed_mbps = mbps);
-        let end = Instant::now() + Duration::from_secs(6);
+        let end = Instant::now() + EVENTUAL_PROGRESS;
         loop {
             let stats = runtime.nic_load_stats().unwrap();
             if stats[0].link_speed_gbps == mbps.map(|v| v as f64 / 1000.0) {
@@ -487,7 +488,7 @@ fn effective_rate_refresh_keeps_degraded_lag_on_query_fault_and_never_rebuilds_q
             state.0 = rate;
             state.1 = code;
         });
-        let end = Instant::now() + Duration::from_secs(6);
+        let end = Instant::now() + EVENTUAL_PROGRESS;
         loop {
             let address = owner.address().unwrap();
             let stats = runtime.nic_load_stats().unwrap();

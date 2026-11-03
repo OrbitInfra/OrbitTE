@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
@@ -614,9 +615,9 @@ fn a_late_cqe_times_out_only_its_own_task_and_keeps_its_bytes() -> Result<()> {
     let batch = f
         .engine
         .submit_async(TransferOp::Read, &f.segment, &r, None, timeout)?;
-    starting.recv_timeout(TIMEOUT).unwrap();
+    starting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     release.send(()).unwrap();
-    starting.recv_timeout(TIMEOUT).unwrap();
+    starting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     let interim = batch.status()?;
     assert_eq!((interim.completed_tasks, interim.transferred_bytes), (1, 2));
     assert!(!interim.locally_drained);
@@ -667,12 +668,12 @@ fn a_missing_cqe_at_the_drain_deadline_quarantines_the_submitted_span() -> Resul
         f.engine
             .submit_async(TransferOp::Write, &f.segment, &requests, None, timeout)?;
     let after = Instant::now();
-    let first = starting.recv_timeout(TIMEOUT).unwrap();
+    let first = starting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert!((before + timeout + window..=after + timeout + window).contains(&first.until));
     // One CQE arrives late but within the destruction window. Hide the other.
     std::thread::sleep((first.until - window).saturating_duration_since(Instant::now()));
     release.send(()).unwrap();
-    let second = starting.recv_timeout(TIMEOUT).unwrap();
+    let second = starting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert_eq!(second.until, first.until);
     drop(release);
 
@@ -766,7 +767,7 @@ fn file_io_shares_qos_queue_deadline_and_close_but_needs_no_receiver_credit() ->
     let running = f
         .engine
         .submit_async(TransferOp::Read, &f.segment, &r, None, TIMEOUT)?;
-    starting.recv_timeout(TIMEOUT).unwrap();
+    starting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     let queued = f
         .engine
         .submit_async(TransferOp::Write, &f.segment, &r, None, TIMEOUT)?;

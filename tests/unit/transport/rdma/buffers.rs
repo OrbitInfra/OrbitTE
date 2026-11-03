@@ -1,6 +1,7 @@
 #[path = "buffers/publication.rs"]
 pub(crate) mod publication;
 
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -270,7 +271,7 @@ fn creating_mr_can_be_retired_without_blocking_unregister_or_resurrecting_an_idl
         let (lock, changed) = &*pause;
         let guard = lock.lock().unwrap();
         let (guard, timed) = changed
-            .wait_timeout_while(guard, std::time::Duration::from_secs(2), |state| !state.0)
+            .wait_timeout_while(guard, EVENTUAL_PROGRESS, |state| !state.0)
             .unwrap();
         assert!(!timed.timed_out());
         drop(guard);
@@ -368,7 +369,7 @@ fn concurrent_request_ranges_share_one_creating_mr_and_keep_independent_dma_leas
         let (lock, changed) = &*pause;
         let guard = lock.lock().unwrap();
         let (mut guard, timed) = changed
-            .wait_timeout_while(guard, std::time::Duration::from_secs(2), |state| !state.0)
+            .wait_timeout_while(guard, EVENTUAL_PROGRESS, |state| !state.0)
             .unwrap();
         assert!(!timed.timed_out());
         guard.1 = true;
@@ -572,7 +573,7 @@ fn engine_close_waits_for_native_close_already_started_by_unregister() {
     let (lock, changed) = &*pause;
     let guard = lock.lock().unwrap();
     let (guard, timed) = changed
-        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |state| !state.0)
+        .wait_timeout_while(guard, EVENTUAL_PROGRESS, |state| !state.0)
         .unwrap();
     assert!(!timed.timed_out());
     drop(guard);
@@ -604,7 +605,7 @@ fn engine_close_waits_for_native_close_already_started_by_unregister() {
         }));
     }
     start.wait();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + EVENTUAL_PROGRESS;
     while !runtime.registrations.state.lock().unwrap().closed {
         assert!(std::time::Instant::now() < deadline);
         thread::yield_now();
@@ -1176,9 +1177,7 @@ fn creating_mrs_in_different_contexts_do_not_share_a_registration_wait() {
     });
     let (lock, changed) = &*pause;
     let (state, timed) = changed
-        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |state| {
-            !state.0
-        })
+        .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |state| !state.0)
         .unwrap();
     assert!(!timed.timed_out() && state.0);
     drop(state);

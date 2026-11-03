@@ -88,7 +88,7 @@ impl<'a> StagingTask<'a> {
             }
             .encode(),
         )?;
-        let mut hello = [0; 35];
+        let mut hello = [0; crate::runtime::control_plane::PIN_HELLO_SIZE];
         hello[0] = match request.transport {
             Transport::Tcp => 0,
             Transport::Rdma => 1,

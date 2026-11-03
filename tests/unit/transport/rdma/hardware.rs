@@ -1,5 +1,6 @@
 //! Explicit two-host shared-CQ correctness gate. The post gate delays dispatch;
 //! all WRs, CQEs, MR registrations and byte movement use the native provider.
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::env;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -393,7 +394,7 @@ fn shared_cq_peer() {
                 first
             });
             let (state, timed) = changed
-                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |s| !s.entered)
+                .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.entered)
                 .unwrap();
             assert!(
                 !timed.timed_out() && state.entered,
@@ -411,7 +412,7 @@ fn shared_cq_peer() {
                     })
                 })
                 .collect::<Vec<_>>();
-            let gate_end = Instant::now() + Duration::from_secs(5);
+            let gate_end = Instant::now() + EVENTUAL_PROGRESS;
             while !records.iter().all(|r| r.lock().unwrap().work.is_some()) {
                 assert!(Instant::now() < gate_end, "other QPs did not queue");
                 thread::yield_now();

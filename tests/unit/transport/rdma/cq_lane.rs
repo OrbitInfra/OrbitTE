@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::grant::GrantLease;
 use crate::transport::rdma::qp::ConnectionLease;
 use crate::transport::rdma::tests::{events, pause, runtime};
@@ -11,7 +12,7 @@ fn deadline() -> Instant {
 }
 
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let end = deadline();
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while !ready() {
         assert!(Instant::now() < end, "progress control timed out");
         thread::yield_now();
@@ -21,7 +22,7 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
 fn wait_blocked(pause: &Arc<(Mutex<(bool, bool)>, Condvar)>) {
     let (lock, changed) = &**pause;
     let (state, timed) = changed
-        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |s| !s.0)
+        .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.0)
         .unwrap();
     assert!(!timed.timed_out() && state.0);
 }
@@ -629,7 +630,7 @@ fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() 
     });
     let (lock, changed) = &*pause;
     let (state, timed) = changed
-        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+        .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.0)
         .unwrap();
     assert!(!timed.timed_out());
     drop(state);
@@ -645,7 +646,7 @@ fn control_and_data_work_share_one_cq_slot_while_source_revocation_is_pending() 
             .unwrap();
         requester.close().unwrap();
     });
-    let end = Instant::now() + Duration::from_secs(2);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while record.lock().unwrap().work.is_none() {
         assert!(Instant::now() < end);
         std::thread::yield_now();
@@ -697,12 +698,12 @@ fn lost_async_consumer_fences_next_native_destroy_in_the_same_close_pass() {
     let close_first = thread::spawn(move || first.close());
     let (lock, changed) = &*pause;
     let (state, timed) = changed
-        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+        .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.0)
         .unwrap();
     assert!(!timed.timed_out());
     drop(state);
     let close_second = thread::spawn(move || second.close());
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + EVENTUAL_PROGRESS;
     while record.actions.load(Ordering::Acquire) & CLOSE == 0 {
         assert!(Instant::now() < deadline);
         thread::yield_now();
@@ -1295,7 +1296,7 @@ fn idle_detachment_and_charge_debit_are_atomic_against_lane_failure() {
             });
             let (lock, changed) = IDLE_DEBIT.get().unwrap();
             let (state, timed) = changed
-                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+                .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.0)
                 .unwrap();
             assert!(!timed.timed_out());
             let atomic = progress.shared.control.try_lock().is_err();

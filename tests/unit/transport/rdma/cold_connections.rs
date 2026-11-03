@@ -67,7 +67,7 @@ fn simultaneous_first_parents_wait_for_fixed_width_then_share_without_reopening(
                     }));
                 }
                 if round == 0 {
-                    let until = Instant::now() + WAIT;
+                    let until = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
                     loop {
                         let stats = runtime.stats().unwrap();
                         if stats.active_grants == PARENTS && stats.active_endpoints == width {

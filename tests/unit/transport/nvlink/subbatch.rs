@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -176,7 +177,7 @@ pub(crate) fn run_case(
             assert_eq!(hello[36..], requester_epoch.0);
             if group == 0 {
                 ready_tx.send(()).unwrap();
-                release_rx.recv_timeout(timeout).unwrap();
+                release_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             }
             if reject {
                 socket
@@ -230,7 +231,7 @@ pub(crate) fn run_case(
                 export.finish();
                 if case_owned == "ack-hold" {
                     ready_tx.send(()).unwrap();
-                    release_rx.recv_timeout(timeout).unwrap();
+                    release_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
                 }
                 if matches!(case_owned.as_str(), "ack-loss" | "cancel-ack-loss")
                     || (case_owned == "prefix-ack-loss" && group == 1)
@@ -312,13 +313,13 @@ pub(crate) fn run_case(
             4..5
         );
         batch.seal().unwrap();
-        ready_rx.recv_timeout(timeout).unwrap();
+        ready_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
         if cancelled {
             batch.cancel(2).unwrap();
         }
         release_tx.send(()).unwrap();
         if case == "ack-hold" {
-            ready_rx.recv_timeout(timeout).unwrap();
+            ready_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             assert!(
                 batch.task_statuses().unwrap()[1..4]
                     .iter()

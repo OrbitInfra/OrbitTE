@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::time::Instant;
 
 use super::*;
@@ -30,7 +31,7 @@ fn engine(mode: &str, depth: usize) -> (TransferEngine, PayloadHold) {
 }
 
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let end = Instant::now() + Duration::from_secs(3);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while !ready() {
         assert!(
             Instant::now() < end,
@@ -157,14 +158,27 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
     if !matches!(outcome, Outcome::Complete) {
         let observed = native
             .observed
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(EVENTUAL_PROGRESS)
             .expect("native retirement hid another CROSS error, task stop or original deadline");
         assert!(
             match outcome {
                 Outcome::Error | Outcome::Retain =>
                     observed.contains("Backend") || observed.contains("Unavailable"),
                 Outcome::Stop => observed.contains("Cancelled"),
-                Outcome::Deadline => observed.contains("Timeout") || observed.contains("Cancelled"),
+                Outcome::Deadline => {
+                    // The retiring grant can reach its own deadline first. Only this
+                    // cleanup error describes the deliberately held native operation.
+                    observed == "Timeout"
+                        || observed == "Cancelled"
+                        || observed
+                            == format!(
+                                "{:?}",
+                                Error::Unquiesced {
+                                    operation: "RDMA close deadline before quiescence",
+                                    code: libc::ETIMEDOUT,
+                                }
+                            )
+                }
                 Outcome::Complete => unreachable!(),
             },
             "{operation:?}/{outcome:?}: {observed}"

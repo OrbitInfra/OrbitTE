@@ -1,5 +1,6 @@
 use super::requester_staging::engine;
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 fn pending(device: &Device) -> usize {
     device
@@ -122,7 +123,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
                     } else {
                         completed
                     }) as u64;
-                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
                 let stats = loop {
                     let stats = source.stats().unwrap().staging;
                     if stats.remote_crosses == expected_crosses {
@@ -285,7 +286,7 @@ fn expired_final_post_drains_every_slot_before_releasing_local_owners() {
         requester.close_requester(Duration::from_millis(5)),
         Err(Error::Timeout)
     ));
-    waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+    waiting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert!(matches!(batch.free(), Err(Error::BatchBusy)));
     assert_eq!(gpu.allocation.lock().unwrap().dma, vec![2..10]);
     b.query_hold.store(false, Ordering::Release);

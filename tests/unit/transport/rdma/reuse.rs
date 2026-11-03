@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::tests::{events, on_requester_close};
 use std::sync::{Arc, Mutex};
 
@@ -669,7 +670,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
                 .unwrap();
             endpoint.send_completion(&binding.0, grant.rkey).unwrap();
             endpoint.finish_sent(&binding.0).unwrap();
-            let end = std::time::Instant::now() + TIMEOUT;
+            let end = std::time::Instant::now() + EVENTUAL_PROGRESS;
             while source.stats().unwrap().rdma.unwrap().completed_receives != 1 {
                 assert!(std::time::Instant::now() < end);
                 thread::yield_now();
@@ -1017,7 +1018,7 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
         drop(channel);
         // CACHE_MISS can reach the requester before the handler drops its
         // temporary admission lease. Observe handler completion before charges.
-        let end = Instant::now() + TIMEOUT;
+        let end = Instant::now() + EVENTUAL_PROGRESS;
         while source.stats().unwrap().active_source_operations != 0 {
             assert!(Instant::now() < end, "cache-miss handler did not finish");
             thread::sleep(Duration::from_millis(1));

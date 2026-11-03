@@ -1,4 +1,5 @@
 //! Native observers and process-private faults; payloads still use mlx5 verbs.
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_int};
 
@@ -61,7 +62,7 @@ pub(super) fn arm(engine: &Arc<crate::TransferEngine>, memory: &crate::Registere
 
 pub(super) fn wait_paused() {
     let (lock, changed) = TRACE.get().unwrap();
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     let mut trace = lock.lock().unwrap();
     while !trace.entered || !trace.healthy_posted {
         let remaining = end
@@ -248,7 +249,7 @@ unsafe extern "C" fn post(
         .into();
         trace.offset = (local - trace.memory.as_ref().unwrap().base_address()) as usize;
         changed.notify_all();
-        let end = Instant::now() + Duration::from_secs(15);
+        let end = Instant::now() + EVENTUAL_PROGRESS;
         while !trace.healthy_posted || (trace.mode == "paused-close" && !trace.released) {
             let remaining = end
                 .checked_duration_since(Instant::now())

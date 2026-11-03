@@ -57,7 +57,7 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                         Duration::from_secs(5),
                     )
                     .unwrap();
-                let until = std::time::Instant::now() + Duration::from_secs(2);
+                let until = std::time::Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
                 loop {
                     let advanced = b.submitted_copies.lock().unwrap().iter().any(
                         |&(source, destination, _)| {
