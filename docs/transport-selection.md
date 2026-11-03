@@ -78,9 +78,9 @@ readiness. Closing or failing a provider does not authorize replay elsewhere.
 | NVLink | Both engines opt in; equal host boot identity and different process nonces; remote `allocate_ipc` export consent; local owned CUDA or owned CUDA-pinned host backing |
 
 Priority selects matching rules but does not make a transport ineligible.
-When the matching rule permits it, a Low prefetch can use TCP without RDMA
-or NVLink when both endpoints qualify for IPC. TCP and NVLink treat priority
-as advisory. RDMA workers use it to dispatch ready payloads.
+When the matching rule permits it, a Low prefetch can use TCP when RDMA is
+unavailable, or NVLink when both endpoints qualify for IPC. TCP and NVLink
+treat priority as advisory. RDMA workers use it to dispatch ready payloads.
 
 `remote_staging: true` requires a remote CUDA range and
 source Pin capability, and restricts selection to TCP/RDMA. It does not silently

@@ -31,8 +31,8 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Updates
 
-- **Nov 3, 2026**: Requests are built with `TransferRequest::new`; local SSD
-  paths through io_uring and GDS become core targets.
+- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
+  per request; local SSD paths through io_uring and GDS become core targets.
 - **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
@@ -54,8 +54,9 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 - **Bounded admission and QoS.** High/Medium/Low priority, FIFO/EDF dispatch
   windows, per-tenant QoS budgets and receiver credits limit what each peer
   can hold in flight.
-- [Transport selection](docs/transport-selection.md) chooses an eligible NVLink,
-  RDMA or TCP path once per request and honors explicit hints.
+- **Policy-based transport selection.** TENT-style ordered rules choose an
+  eligible NVLink, RDMA or TCP path once per request and honor explicit
+  [hints](docs/transport-selection.md).
 
 ## Supported paths
 
