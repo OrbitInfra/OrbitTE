@@ -88,6 +88,12 @@ fn shared_slot_publication_is_visible_and_never_extends_a_stale_tier() {
     );
     NOW.store(4_000_000, Ordering::Release);
     assert_eq!(second.current_slot().unwrap().0, Priority::Low);
+    slot.store(9, Ordering::Release);
+    assert!(matches!(
+        second.current_slot(),
+        Err(Error::InvalidConfig(_))
+    ));
+    slot.store(0, Ordering::Release);
     (sys::OS.unlock)(&held).unwrap();
 }
 
@@ -345,11 +351,28 @@ fn an_uncertain_unmap_is_attempted_once_and_retains_the_descriptor() {
     };
     let object = Object::new();
     let owner = SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS).unwrap();
+    let release = owner.release_receipt();
+    assert!(matches!(
+        release.check(),
+        Err(Error::Unquiesced {
+            code: libc::EBUSY,
+            ..
+        })
+    ));
     let map = &owner.publisher.mapping;
     let fd = map.object.as_raw_fd();
     let base = map.base;
     let ino = map.object.metadata().unwrap().ino();
     drop(owner);
+    for _ in 0..2 {
+        assert!(matches!(
+            release.check(),
+            Err(Error::Unquiesced {
+                operation: "RDMA shared slot munmap",
+                code: libc::EIO
+            })
+        ));
+    }
     assert_eq!(UNMAPS.load(Ordering::Relaxed), 1);
     assert_eq!(
         std::fs::metadata(format!("/proc/self/fd/{fd}"))

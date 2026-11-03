@@ -266,6 +266,8 @@ file locks and an aligned atomic slot. A process killed under the lock cannot
 strand its peers. A stale Low slot cannot extend eligibility past its clock
 boundary. The Linux controls kill a publisher with a live device lease, check
 the surviving NIC charge and reject a foreign header without modifying it.
+Pool shutdown joins the publisher and consults the single unmap receipt. An
+unconfirmed unmap retains the mapping and fd and returns `Unquiesced`.
 
 TENT's receiver ledger names four resources and assumes its caller has fenced
 the old epoch. OrbitTE checks its physical permits and their completion

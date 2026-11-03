@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::{FileExt, MetadataExt},
     ptr::NonNull,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
@@ -51,6 +51,26 @@ fn slot_at(now: u64, interval: u64) -> (Priority, Duration) {
     };
     (p, Duration::from_nanos(interval - now % interval))
 }
+// The pool can report a cleanup failure after the last worker releases its map.
+#[derive(Clone, Default)]
+pub(super) struct SlotRelease(Arc<OnceLock<i32>>);
+
+impl SlotRelease {
+    pub(super) fn check(&self) -> Result<()> {
+        match self.0.get() {
+            Some(0) => Ok(()),
+            Some(&code) => Err(Error::Unquiesced {
+                operation: "RDMA shared slot munmap",
+                code,
+            }),
+            None => Err(Error::Unquiesced {
+                operation: "RDMA shared slot still owned",
+                code: libc::EBUSY,
+            }),
+        }
+    }
+}
+
 struct Mapping {
     base: NonNull<u8>,
     object: ManuallyDrop<File>,
@@ -58,6 +78,7 @@ struct Mapping {
     _clock: File,
     calls: &'static sys::Calls,
     interval: u64,
+    release: SlotRelease,
 }
 // SAFETY: the owned fixed-size shared mapping outlives every Arc. The slot is
 // the only mutable field. Every reader and writer uses an aligned atomic.
@@ -90,11 +111,13 @@ impl Drop for Mapping {
     fn drop(&mut self) {
         // SAFETY: the last Arc owns the mapping and there are no remaining readers.
         if let Err(e) = unsafe { (self.calls.unmap)(self.base) } {
+            let _ = self.release.0.set(e.raw_os_error().unwrap_or(libc::EIO));
             log::error!("RDMA slot munmap failed; retaining its descriptor: {e}");
             return;
         }
         // SAFETY: unmap succeeded and this is the sole destruction of the fd.
         unsafe { ManuallyDrop::drop(&mut self.object) };
+        let _ = self.release.0.set(0);
     }
 }
 
@@ -179,14 +202,22 @@ impl SharedSlotManager {
             thread::sleep(TICK);
         }
         let base = (calls.map)(&object)?;
+        let release = SlotRelease::default();
         let mapping = Arc::new(Mapping {
             base,
             object: ManuallyDrop::new(object),
             _clock: clock,
             calls,
             interval: interval.as_nanos() as u64,
+            release: release.clone(),
         });
-        (calls.unlock)(&mapping.object)?;
+        Self::start(mapping).map_err(|error| release.check().err().unwrap_or(error))
+    }
+    pub(super) fn release_receipt(&self) -> SlotRelease {
+        self.publisher.mapping.release.clone()
+    }
+    fn start(mapping: Arc<Mapping>) -> Result<Self> {
+        (mapping.calls.unlock)(&mapping.object)?;
         mapping.refresh()?;
         let publisher = Arc::new(Publisher {
             mapping,

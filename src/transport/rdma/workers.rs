@@ -24,6 +24,7 @@ pub(super) struct Workers {
 struct Pool {
     workers: Vec<(Arc<WorkerContext>, JoinHandle<()>)>,
     stopped: bool,
+    slot_release: Option<super::shared_quota::SlotRelease>,
     next_worker: usize,
 }
 
@@ -109,6 +110,10 @@ impl Workers {
         }
         let count = progress.shared.config.num_lanes;
         if pool.workers.is_empty() {
+            // A failed startup must finish releasing its map before another attach.
+            if let Some(release) = &pool.slot_release {
+                release.check()?;
+            }
             let shared_slots = progress
                 .shared
                 .config
@@ -122,7 +127,13 @@ impl Workers {
                     )
                     .map(Arc::new)
                 })
-                .transpose()?;
+                .transpose()
+                .inspect_err(|error| {
+                    if matches!(error, Error::Unquiesced { .. }) {
+                        pool.stopped = true;
+                    }
+                })?;
+            pool.slot_release = shared_slots.as_ref().map(|owner| owner.release_receipt());
             let affinities = crate::platform::cpu_probe::worker_affinities()?;
             for id in 0..count {
                 let context = Arc::new(WorkerContext {
@@ -333,6 +344,9 @@ impl Workers {
             }
         }
         self.monitor.close(deadline)?;
+        if let Some(release) = &pool.slot_release {
+            release.check()?;
+        }
         failure.map_or(Ok(()), Err)
     }
 }
@@ -440,7 +454,7 @@ impl WorkerContext {
                     self.promotion_per_entry,
                 );
                 let mut allowed = Some(crate::Priority::Low);
-                if posts.has_blocked(crate::Priority::High) {
+                if !posts.is_empty() {
                     if let Some(slots) = &self.shared_slots {
                         match slots.current_slot() {
                             Ok((priority, delay)) => {
