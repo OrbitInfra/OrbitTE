@@ -7,7 +7,7 @@ performance parity. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
 
 :::{image} _static/architecture.svg
-:alt: OrbitTE engine and sibling TCP/RDMA transports; dashed paths are planned
+:alt: OrbitTE network transports and the implemented DRAM and GPU paths to local SSD
 :class: dark-light
 :::
 
@@ -37,7 +37,8 @@ change the file an admitted operation uses. A lease keeps the fd until its I/O
 finishes; close fences all aliases before waiting, and a timeout keeps the entry
 charged until close is retried. See [file segments](storage.md).
 
-For DRAM/file payloads the existing submission worker owns the io_uring,
+An idle engine retains no storage thread or ring after the setup probe.
+For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. CUDA/file submissions use the same
 worker and ring for successive rounds of pinned chunks from `ProxyManager`.

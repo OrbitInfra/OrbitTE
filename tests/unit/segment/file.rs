@@ -31,6 +31,38 @@ impl Drop for TempFile {
     }
 }
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[path = "file/isolation.rs"]
+mod isolation;
+
+#[cfg(not(any(feature = "io-uring", feature = "gds")))]
+#[test]
+fn file_hints_without_storage_features_reject_before_opening_the_fd() -> Result<()> {
+    use crate::{TransferRequest, Transport};
+
+    let temp = TempFile::new(b"file");
+    let engine = TransferEngine::new(EngineConfig::default())?;
+    let segment = engine.open_file_segment(&temp.uri(), Permission::RemoteReadWrite)?;
+    let memory = engine.register_memory(b"host".to_vec().into(), Permission::LocalOnly)?;
+    for hint in [Transport::IoUring, Transport::Gds, Transport::Unspec] {
+        let request = [TransferRequest::new(hint, memory.base_address(), 0, 4)];
+        for op in [TransferOp::Read, TransferOp::Write] {
+            assert!(matches!(
+                engine.submit_and_wait(op, &segment, &request, Duration::from_secs(5)),
+                Err(Error::Unavailable(_))
+            ));
+        }
+    }
+    assert!(segment.0.upgrade().unwrap().lock()?.file.is_none());
+    let info = engine.file_segment_info(&segment)?;
+    assert_eq!((info.segment_type, info.length), (SegmentType::File, 4));
+    let mut bytes = [0; 4];
+    memory.read(0, &mut bytes)?;
+    assert_eq!(&bytes, b"host");
+    assert_eq!(fs::read(&temp.path)?, b"file");
+    engine.close_file_segment(&segment, Duration::ZERO)
+}
+
 #[test]
 fn open_info_refresh_and_close_follow_the_file_descriptor() -> Result<()> {
     let temp = TempFile::new(b"abc");

@@ -45,7 +45,7 @@ artifacts and hardware profiles.
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, priority, admission, QoS and credits implemented; failover, progress and metrics open |
-| P7 | File, io_uring and GDS paths | P2; GDS also P5 | Local file segments, DRAM/file io_uring and staged CUDA/file transfers implemented. GDS batch I/O implemented. Installed CUDA/storage profiles unqualified |
+| P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
@@ -84,10 +84,9 @@ commands wait in the qualification verification queue for one later hardware
 pass. [AGENTS.md](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md)
 fixes the order (S0–S26) for this period; this plan remains the status record.
 
-Done in this period: S0 request API and safety hygiene, S0b frozen pre-release
-wire, the first S6 selector delivery, advisory priorities on TCP/NVLink and
-S1 file segments and S2 DRAM↔file io_uring. S3 implements CUDA↔file staging. S4 implements cuFile batches and awaits
-independent review and installed native-route verification. OrbitKV
+S0 and S0b delivered the request API and pre-release wire rules. The first S6
+selector delivery and advisory priorities on TCP/NVLink are in place. S1–S5
+complete P7 at source level. The remaining S6 selector work is next. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -325,7 +324,7 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.1 — local file segments (Implemented).** Engine-local `file://`
   segments with cached size and refresh, permissions, checked byte offsets and
   close that drains pending fd users. See [file segments](storage.md).
-- [x] **P7.2 — DRAM/file io_uring (Implemented).** One ring per submission,
+- [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** One ring per submission,
   exact short/error byte counts, partial submission, queued cancellation and
   CQE drain before releasing registered memory or file leases.
 - [x] **P7.3 — CUDA/file staging (Implemented).** Caller-driven rounds of
@@ -334,16 +333,12 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.4 — GDS/cuFile (Implemented).** Registered CUDA buffers and direct
   file handles, sliced READ/WRITE, cancellation and drain. The installed
   native-route profile is unqualified.
-- [ ] Qualify three distinct profiles: DRAM/file io_uring, CUDA/DRAM/file
-  staging and native CUDA/file GDS (compatibility mode disabled, with route
-  evidence).
-- [ ] Prove the network/memory-only build neither loads storage SDKs nor starts
-  storage workers; file segment handles stay core.
-- [ ] Audit BufIo reachability and document it without inventing a transport.
+- [x] **P7.5 — build isolation and BufIo audit (Implemented).** File handles
+  stay core. CI checks the dependency graph, unavailable hints and idle
+  storage resources. BufIo is unreachable through the frozen loader.
 
-Exit: real files with full-byte checks, truncation/short/error controls,
-concurrent unregister/close and cancellation. GDS needs supported hardware, a
-filesystem and a recorded direct path; an io_uring fallback is a different gate.
+The [qualification record](qualification.md#local-file-segments) links the
+ext4/tmpfs evidence and the queued GPU/NVMe and native GDS commands.
 
 ## P8 — Additional network providers
 
