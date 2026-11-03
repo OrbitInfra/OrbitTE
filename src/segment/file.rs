@@ -21,6 +21,9 @@ pub struct FileSegmentInfo {
     pub offset: u64,
     pub length: u64,
     pub permission: Permission,
+    /// Whether a direct fd is usable. None until the first file transfer.
+    #[cfg(feature = "io-uring")]
+    pub direct_io: Option<bool>,
 }
 
 #[derive(Default)]
@@ -41,6 +44,8 @@ struct State {
     active: usize,
     file: Option<Arc<File>>,
     size: Option<(Instant, u64)>,
+    #[cfg(feature = "io-uring")]
+    direct: Option<direct::DirectFile>,
 }
 
 impl Entry {
@@ -204,6 +209,12 @@ impl FileSegments {
             offset: 0,
             length,
             permission: entry.permission,
+            #[cfg(feature = "io-uring")]
+            direct_io: entry
+                .lock()?
+                .direct
+                .as_ref()
+                .map(|direct| direct.file.is_some()),
         })
     }
 
@@ -246,6 +257,8 @@ impl FileSegments {
                 .0;
         }
         state.file.take();
+        #[cfg(feature = "io-uring")]
+        state.direct.take();
         drop(state);
         let mut entries = self
             .entries
@@ -276,6 +289,9 @@ impl FileSegments {
         Ok(())
     }
 }
+
+#[cfg(feature = "io-uring")]
+mod direct;
 
 #[cfg(test)]
 #[path = "../../tests/unit/segment/file.rs"]

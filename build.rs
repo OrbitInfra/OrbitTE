@@ -3,7 +3,11 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         #[cfg(feature = "rdma")]
         build_port_shim();
-    } else if cfg!(any(feature = "cuda", feature = "rdma")) {
+    } else if cfg!(any(
+        feature = "cuda",
+        feature = "rdma",
+        feature = "io-uring"
+    )) {
         println!("cargo:rustc-cfg=unsupported_native_target");
     }
 }

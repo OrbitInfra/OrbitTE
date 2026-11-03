@@ -69,18 +69,17 @@ impl NVLinkTransport {
     pub(crate) fn transfer(
         &self,
         submission: &PreparedSubmission,
-        first: usize,
+        group: (&crate::RemoteSegment, &[crate::engine::PreparedTransfer]),
         requester: SourceEpoch,
         max_bytes: usize,
         mut begin: impl FnMut(usize) -> bool,
     ) -> std::result::Result<usize, TransferFailure> {
-        let requests = &submission.requests[first..];
+        let (peer, requests) = group;
         let mut count = subbatch_len(requests, max_bytes, submission.deadline);
         loop {
             let mut retry_single = false;
             let requests = &requests[..count];
             let operation = submission.operation;
-            let peer = &submission.peer;
             let deadline = submission.deadline;
             let start = requests.iter().map(|r| r.remote_offset).min().unwrap_or(0);
             let end = requests

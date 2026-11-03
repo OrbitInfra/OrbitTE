@@ -37,6 +37,11 @@ change the file an admitted operation uses. A lease keeps the fd until its I/O
 finishes; close fences all aliases before waiting, and a timeout keeps the entry
 charged until close is retried. See [file segments](storage.md).
 
+For DRAM/file payloads the existing submission worker owns the io_uring,
+iovecs, host range loans and bounce storage through CQE drain. File and peer
+targets share admission and batch progress. The [file guide](storage.md)
+records the alignment, short-submit and uncertain-drain differences from TENT.
+
 ## Transport selector ownership
 
 `runtime/transport_selector.rs` owns TENT-style first-match selection and

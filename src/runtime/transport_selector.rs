@@ -30,7 +30,7 @@ impl SelectionContext<'_> {
             return false;
         }
         match transport {
-            Transport::Unspec => false,
+            Transport::Unspec | Transport::IoUring => false,
             Transport::Tcp => true,
             Transport::Rdma => self.local_segment.rdma && self.remote_segment.rdma,
             Transport::Nvlink => {
@@ -65,51 +65,82 @@ impl TransportSelector {
         context: &SelectionContext<'_>,
         hint: Transport,
     ) -> Result<Transport> {
-        let candidates = if self.policies.is_empty() {
-            &DEFAULT_TRANSPORTS[..]
-        } else {
-            let policy = self
-                .policies
-                .iter()
-                .find(|policy| {
-                    policy.segment_type == SegmentType::Memory
-                        && policy
-                            .local_memory
-                            .is_none_or(|kind| kind == context.local_memory)
-                        && policy
-                            .remote_memory
-                            .is_none_or(|kind| kind == context.remote.memory_type)
-                        && policy
-                            .min_size
-                            .is_none_or(|size| context.transfer_size >= size)
-                        && policy
-                            .max_size
-                            .is_none_or(|size| context.transfer_size <= size)
-                        && policy
-                            .priority
-                            .is_none_or(|priority| priority == context.priority)
-                })
-                .ok_or(Error::Unavailable("no matching transport selection policy"))?;
-            if policy.transports.is_empty() {
-                &DEFAULT_TRANSPORTS[..]
-            } else {
-                &policy.transports
-            }
+        let candidates = self.candidates(
+            SegmentType::Memory,
+            context.local_memory,
+            context.remote.memory_type,
+            context.transfer_size,
+            context.priority,
+        )?;
+        Self::select_candidate(candidates, hint, |t| context.available(t))
+    }
+
+    fn candidates(
+        &self,
+        segment: SegmentType,
+        local: MemoryType,
+        remote: MemoryType,
+        size: usize,
+        priority: Priority,
+    ) -> Result<&[Transport]> {
+        let defaults: &[Transport] = match segment {
+            SegmentType::Memory => &DEFAULT_TRANSPORTS,
+            SegmentType::File => &[Transport::IoUring],
         };
-        Self::select_candidate(context, candidates, hint)
+        if self.policies.is_empty() {
+            return Ok(defaults);
+        }
+        let policy = self
+            .policies
+            .iter()
+            .find(|policy| {
+                policy.segment_type == segment
+                    && policy.local_memory.is_none_or(|kind| kind == local)
+                    && policy.remote_memory.is_none_or(|kind| kind == remote)
+                    && policy.min_size.is_none_or(|min| size >= min)
+                    && policy.max_size.is_none_or(|max| size <= max)
+                    && policy.priority.is_none_or(|level| level == priority)
+            })
+            .ok_or(Error::Unavailable("no matching transport selection policy"))?;
+        Ok(if policy.transports.is_empty() {
+            defaults
+        } else {
+            &policy.transports
+        })
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn select_file(
+        selector: Option<&Self>,
+        local: MemoryType,
+        size: usize,
+        priority: Priority,
+        hint: Transport,
+    ) -> Result<Transport> {
+        let candidates = match selector {
+            Some(selector) => {
+                selector.candidates(SegmentType::File, local, MemoryType::Cpu, size, priority)?
+            }
+            None => &[Transport::IoUring],
+        };
+        Self::select_candidate(candidates, hint, |t| {
+            t == Transport::IoUring && local == MemoryType::Cpu
+        })
     }
 
     pub(crate) fn select_default(context: &SelectionContext<'_>) -> Result<Transport> {
-        Self::select_candidate(context, &DEFAULT_TRANSPORTS, Transport::Unspec)
+        Self::select_candidate(&DEFAULT_TRANSPORTS, Transport::Unspec, |t| {
+            context.available(t)
+        })
     }
 
     fn select_candidate(
-        context: &SelectionContext<'_>,
         candidates: &[Transport],
         hint: Transport,
+        available: impl Fn(Transport) -> bool,
     ) -> Result<Transport> {
         if hint != Transport::Unspec {
-            return if candidates.contains(&hint) && context.available(hint) {
+            return if candidates.contains(&hint) && available(hint) {
                 Ok(hint)
             } else {
                 Err(Error::Unavailable(
@@ -120,7 +151,7 @@ impl TransportSelector {
         candidates
             .iter()
             .copied()
-            .find(|candidate| context.available(*candidate))
+            .find(|candidate| available(*candidate))
             .ok_or(Error::Unavailable(
                 "matching policy has no available transport",
             ))

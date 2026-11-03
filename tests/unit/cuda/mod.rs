@@ -49,6 +49,51 @@ mod stream_pool;
 mod topology;
 use shim::*;
 
+#[cfg(feature = "io-uring")]
+#[test]
+fn file_executor_rejects_cuda_backing_before_touching_the_file() {
+    let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    if engine.io_uring.is_none() {
+        assert_ne!(
+            std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref(),
+            Ok("1"),
+            "required ring unavailable"
+        );
+        eprintln!("skipping file/CUDA control: ring unavailable");
+        return;
+    }
+    let segment = engine
+        .open_file_segment("file://unused-cuda-file", Permission::RemoteReadWrite)
+        .unwrap();
+    let device = allocation(&[0x73; 8]);
+    let gpu = memory(&device);
+    let context = gpu.allocation.lock().unwrap().context.clone();
+    let pinned = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
+        PinnedAllocation::new(&context, 8).unwrap(),
+    )));
+    let host = engine
+        .register_host_memory_batch(&[(pinned, 0, 8)], Permission::LocalOnly)
+        .unwrap();
+    let local = engine
+        .register_cuda_memory_batch(&[(gpu, 0, 8)], Permission::LocalOnly)
+        .unwrap();
+    for (address, transport) in [
+        (local[0].base_address(), Transport::Unspec),
+        (host[0].base_address(), Transport::IoUring),
+    ] {
+        let request = TransferRequest::new(transport, address, 0, 8);
+        assert!(matches!(
+            engine.submit_and_wait(
+                TransferOp::Write,
+                &segment,
+                &[request],
+                Duration::from_secs(2)
+            ),
+            Err(Error::Unavailable("file I/O requires unstaged DRAM"))
+        ));
+    }
+}
+
 #[test]
 fn cuda_registration_checks_type_extent_and_restores_context_on_copy_errors() {
     let owner = allocation(&[0x5a; 16]);

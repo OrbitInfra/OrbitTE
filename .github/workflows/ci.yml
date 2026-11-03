@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'rdma,cuda,io-uring']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITTE_FEATURES: ${{ matrix.features }}
@@ -42,7 +42,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda; do
+          for features in rdma cuda rdma,cuda io-uring rdma,cuda,io-uring; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -53,6 +53,28 @@ jobs:
               exit 1
             fi
           done
+      - name: Check file provider isolation
+        if: "!contains(matrix.features, 'io-uring')"
+        run: |
+          cargo tree --locked --features "$ORBITTE_FEATURES" -e normal,build > "$RUNNER_TEMP/deps.txt"
+          if grep -F 'io-uring v' "$RUNNER_TEMP/deps.txt"; then exit 1; fi
+      - name: Require real io_uring on ext4 and tmpfs
+        if: contains(matrix.features, 'io-uring')
+        run: |
+          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          ext="$RUNNER_TEMP/orbitte-ext4"
+          mkdir -p "$ext"
+          if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
+            truncate -s 64M "$RUNNER_TEMP/ext4.img"
+            mkfs.ext4 -q -F "$RUNNER_TEMP/ext4.img"
+            sudo mount -o loop "$RUNNER_TEMP/ext4.img" "$ext"
+            sudo chown "$(id -u):$(id -g)" "$ext"
+          fi
+          test "$(findmnt -n -o FSTYPE -T "$ext")" = ext4
+          test "$(findmnt -n -o FSTYPE -T /dev/shm)" = tmpfs
+          echo "ORBITTE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
+          echo "ORBITTE_TMPFS_DIR=/dev/shm" >> "$GITHUB_ENV"
+          echo "ORBITTE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"
       - name: Clippy
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Test CPU TCP and ownership

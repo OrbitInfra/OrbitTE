@@ -5,9 +5,28 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-mod file;
+pub(crate) mod file;
 pub(crate) use file::FileSegments;
 pub use file::{FileSegment, FileSegmentInfo};
+
+/// Target for both synchronous and asynchronous transfer submissions.
+#[derive(Clone, Copy)]
+pub enum TransferTarget<'a> {
+    Memory(&'a RemoteSegment),
+    File(&'a FileSegment),
+}
+
+impl<'a> From<&'a RemoteSegment> for TransferTarget<'a> {
+    fn from(peer: &'a RemoteSegment) -> Self {
+        Self::Memory(peer)
+    }
+}
+
+impl<'a> From<&'a FileSegment> for TransferTarget<'a> {
+    fn from(file: &'a FileSegment) -> Self {
+        Self::File(file)
+    }
+}
 mod metadata;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) use metadata::ProcessIdentity;

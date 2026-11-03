@@ -18,6 +18,8 @@ and returns its stable task range. Addresses, permissions, bytes and source
 authority are validated before enqueue; a rejected group adds no tasks, and
 accepted groups are never replayed or rolled back. Groups in one batch run FIFO,
 one worker per batch; different batches progress concurrently.
+On a file target, SQEs within the group complete independently. Each task
+reports its own bytes, including a short prefix. See [file submission](storage.md).
 
 `seal()` stops appends. `status()`, `task_status()`, `task_statuses()` and
 `submissions()` only read published state. Before seal the overall state is

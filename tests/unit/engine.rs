@@ -176,6 +176,8 @@ pub(crate) fn rdma_fixture_with_config(
     });
     TransferEngine {
         files: FileSegments::default(),
+        #[cfg(feature = "io-uring")]
+        io_uring: None,
         receiver_credits,
         qos: config
             .qos
@@ -1106,6 +1108,8 @@ pub(crate) fn staging_fixture(
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     TransferEngine {
         files: FileSegments::default(),
+        #[cfg(feature = "io-uring")]
+        io_uring: None,
         receiver_credits: None,
         qos: config
             .qos

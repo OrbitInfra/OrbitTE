@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use crate::engine::{PreparedSubmission, deadline, remaining};
 use crate::{
-    BatchReport, Error, Notification, NotificationStatus, RemoteEffect, RemoteSegment, Result,
-    TransferEngine, TransferFailure, TransferOp, TransferRequest,
+    BatchReport, Error, Notification, NotificationStatus, RemoteEffect, Result, TransferEngine,
+    TransferFailure, TransferOp, TransferRequest, TransferTarget,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -146,10 +146,10 @@ impl Batch {
     /// Validates every range and reserves all physical owners before enqueue.
     /// A rejected group adds no task indices and does not replay earlier groups.
     /// The deadline begins here and includes queue time.
-    pub fn submit(
+    pub fn submit<'a>(
         &mut self,
         operation: TransferOp,
-        peer: &RemoteSegment,
+        peer: impl Into<TransferTarget<'a>>,
         requests: &[TransferRequest],
         notification: Option<&Notification>,
         timeout: Duration,
@@ -448,6 +448,44 @@ impl BatchProgress {
         task.state = TaskState::Running;
         true
     }
+    /// Commit a file group on the batch worker. A queued cancellation cuts off
+    /// that request and its suffix before any SQE is published.
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn begin_file_group(&self, first: usize, count: usize) -> usize {
+        let mut state = self.lock();
+        let tasks = &mut state.tasks[first..first + count];
+        let count = tasks
+            .iter()
+            .position(|task| task.cancel_requested)
+            .unwrap_or(count);
+        for task in &mut tasks[..count] {
+            task.state = TaskState::Running;
+        }
+        count
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn fail_file_task(
+        &self,
+        index: usize,
+        bytes: usize,
+        error: Error,
+        effect: RemoteEffect,
+        drained: bool,
+    ) {
+        let mut state = self.lock();
+        let task = &mut state.tasks[index];
+        task.state = TaskState::Failed;
+        task.transferred_bytes = bytes;
+        task.locally_drained = drained;
+        task.failure = Some(Arc::new(TransferFailure {
+            request_index: index,
+            affected_requests: 1,
+            error,
+            remote_effect: effect,
+        }));
+        self.changed.notify_all();
+    }
     pub(crate) fn complete_task(&self, index: usize, length: usize) {
         let mut state = self.lock();
         state.tasks[index].state = TaskState::Completed;
@@ -465,6 +503,11 @@ impl BatchProgress {
         if let Some(failure) = &failure {
             for task_index in failure.request_index..range.end {
                 let task = &mut state.tasks[task_index];
+                // File CQEs are independent. A later request may have its own
+                // successful or short completion after the first failed request.
+                if task.state.is_terminal() {
+                    continue;
+                }
                 task.state = if task_index < failure.request_index + failure.affected_requests {
                     if matches!(failure.error, Error::Cancelled) {
                         TaskState::Cancelled

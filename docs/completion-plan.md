@@ -45,7 +45,7 @@ artifacts and hardware profiles.
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, priority, admission, QoS and credits implemented; failover, progress and metrics open |
-| P7 | File, io_uring and GDS paths | P2; GDS also P5 | P7.1 file segments implemented; payload executors open |
+| P7 | File, io_uring and GDS paths | P2; GDS also P5 | Local file segments and DRAM/file io_uring implemented. CUDA staging and GDS remain open |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
@@ -86,7 +86,8 @@ fixes the order (S0–S26) for this period; this plan remains the status record.
 
 Done in this period: S0 request API and safety hygiene, S0b frozen pre-release
 wire, the first S6 selector delivery, advisory priorities on TCP/NVLink and
-S1 (P7.1) file segments. **Next: S2, io_uring DRAM↔file payloads.** OrbitKV
+S1 (P7.1) file segments. S2 implements DRAM↔file io_uring and awaits
+independent review. S3 covers CUDA↔file staging. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -324,9 +325,9 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.1 — local file segments (Implemented).** Engine-local `file://`
   segments with cached size and refresh, permissions, checked byte offsets and
   close that drains pending fd users. See [file segments](storage.md).
-- [ ] File payload READ/WRITE, short and error I/O and their completion state.
-- [ ] io_uring queue lifecycle, partial submission, cancellation and completion
-  drain before releasing file or memory.
+- [x] **P7.2 — DRAM/file io_uring (Implemented).** One ring per submission,
+  exact short/error byte counts, partial submission, queued cancellation and
+  CQE drain before releasing registered memory or file leases.
 - [ ] cuFile/GDS registration, host and device READ/WRITE, status propagation
   and explicit direct-versus-staged behavior.
 - [ ] Qualify three distinct profiles: DRAM/file io_uring, CUDA/DRAM/file

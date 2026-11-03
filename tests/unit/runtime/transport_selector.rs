@@ -219,6 +219,7 @@ fn transport_selector_rejects_invalid_or_unconsumed_configuration() {
             "positional policy",
             r#"["x","memory","*","*",0,8,0,["tcp"]]"#,
         ),
+        #[cfg(not(feature = "io-uring"))]
         ("file", r#"{"segment_type":"file"}"#),
         (
             "bad memory",
