@@ -9,6 +9,7 @@ controls=(
   runtime::progress_worker::tests::worker_wakes_are_bounded_coalesced_and_stop_joins
   runtime::progress_worker::tests::fallback_tick_runs_only_while_the_queue_owns_work
   runtime::control_plane::tests::deferred_free_races_progress_and_allocation_until_real_tcp_drain
+  runtime::control_plane::tests::free_fences_hook_retries_without_joining_a_peer_that_has_not_replied
   runtime::control_plane::tests::notify_ack_requires_a_registered_accepting_callback_and_well_formed_body
   runtime::qos_contract::tests::actions::public_qos_delay_preserves_batch_heads_and_actual_owner_release
   runtime::control_plane::tests::background_progress_publishes_a_lost_write_receipt_without_replay

@@ -1311,3 +1311,95 @@ fn background_progress_publishes_a_lost_write_receipt_without_replay() {
     assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
     b.free().unwrap();
 }
+
+#[test]
+fn free_fences_hook_retries_without_joining_a_peer_that_has_not_replied() {
+    use crate::{BatchState, NotificationStatus, Transport};
+    let timeout = common::EVENTUAL_PROGRESS;
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            enable_progress_worker: true,
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let target = engine
+        .register_memory(vec![11; 8].into(), Permission::RemoteRead)
+        .unwrap();
+    let local = engine
+        .register_memory(vec![0; 8].into(), Permission::LocalOnly)
+        .unwrap();
+    let own = engine
+        .open_segment(engine.endpoint(), engine.source_epoch(), timeout)
+        .unwrap();
+    let (listener, peer) = fault_peer();
+    let req = [TransferRequest::new(
+        Transport::Tcp,
+        local.base_address(),
+        target.base_address(),
+        8,
+    )];
+    let mut b = engine.allocate_batch(1).unwrap();
+    b.submit_with_notification_targets(
+        TransferOp::Read,
+        &own,
+        &req,
+        &Notification {
+            name: "n".into(),
+            message: "m".into(),
+        },
+        std::slice::from_ref(&peer),
+        timeout,
+    )
+    .unwrap();
+    b.seal().unwrap();
+    let accept = || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(timeout)).unwrap();
+        let mut request = [0; REQUEST_SIZE];
+        stream.read_exact(&mut request).unwrap();
+        assert!(Request::decode(&request).unwrap().operation == Operation::Notify);
+        stream
+    };
+    let reply = |status| {
+        Reply {
+            status,
+            epoch: peer.epoch,
+            length: 0,
+        }
+        .encode()
+    };
+    accept().write_all(&reply(6)).unwrap();
+    let done = b.wait(timeout).unwrap();
+    assert_eq!(done.state, BatchState::Completed);
+    assert!(matches!(
+        *b.submissions().unwrap()[0].notification,
+        NotificationStatus::Failed(_)
+    ));
+    let id = b.id().unwrap();
+    engine.progress_batch(id).unwrap();
+    let mut held = accept();
+    // A pending retry has no right to change the already published data status.
+    assert_eq!(b.status().unwrap(), done);
+    b.free().unwrap();
+    assert!(matches!(engine.progress_batch(id), Err(Error::BatchClosed)));
+    assert_eq!(engine.stats().unwrap().deferred_batches, 1);
+    assert_eq!(engine.stats().unwrap().inflight_batches, 1);
+    assert!(matches!(
+        engine.close_requester(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    held.write_all(&reply(9)).unwrap();
+    let mut body = [0; 3];
+    held.read_exact(&mut body).unwrap();
+    assert_eq!(&body, b"nm\0");
+    held.write_all(&reply(0)).unwrap();
+    engine.close_requester(timeout).unwrap();
+    let end = Instant::now() + timeout;
+    while engine.stats().unwrap().allocated_batches != 0 {
+        assert!(Instant::now() < end);
+        thread::yield_now();
+    }
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(),Err(error) if error.kind()==io::ErrorKind::WouldBlock));
+}

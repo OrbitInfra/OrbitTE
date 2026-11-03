@@ -400,32 +400,23 @@ impl Batch {
     /// With the worker disabled a busy handle stays valid for retry.
     pub fn free(&mut self) -> Result<()> {
         let progress = self.progress()?;
-        if !progress.lock().can_free() {
-            if !progress.defer_free {
-                return Err(Error::BatchBusy);
+        let drained = progress.retire(progress.defer_free)?;
+        self.progress.take();
+        self.engine.take();
+        if drained {
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
             }
-            self.detach();
-            return Ok(());
-        }
-        self.seal()?;
-        self.detach();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
         }
         Ok(())
-    }
-
-    fn detach(&mut self) {
-        if let Some(progress) = self.progress.take() {
-            progress.abandon();
-        }
-        self.engine.take();
     }
 }
 
 impl Drop for Batch {
     fn drop(&mut self) {
-        self.detach();
+        if let Some(progress) = self.progress.take() {
+            let _ = progress.retire(true);
+        }
     }
 }
 
@@ -682,15 +673,21 @@ impl BatchProgress {
         }
     }
 
-    fn abandon(&self) {
+    fn retire(&self, allow_pending: bool) -> Result<bool> {
         let mut state = self.lock();
+        // Fence new retries in the same transition that decides whether free
+        // can join. A concurrent progress turn may already own a socket.
+        if !allow_pending && !state.can_free() {
+            return Err(Error::BatchBusy);
+        }
         state.abandoned = true;
         state.hooks.clear();
         if state.retry.take().is_some() {
             state.active = false;
         }
         state.sealed = true;
-        if !state.can_free() {
+        let drained = state.can_free();
+        if !drained {
             self.reservation
                 .budget
                 .lifecycle(self.reservation.id, Life::Deferred);
@@ -699,6 +696,7 @@ impl BatchProgress {
         drop(state);
         self.probe_retirement();
         self.kick();
+        Ok(drained)
     }
 
     fn probe_retirement(&self) {
