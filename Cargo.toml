@@ -16,7 +16,7 @@ publish = ["crates-io"]
 
 [features]
 default = []
-rdma = ["dep:cc", "dep:bindgen", "dep:ibverbs-sys", "dep:libc", "dep:libloading", "dep:serde", "dep:serde_json"]
+rdma = ["dep:cc", "dep:bindgen", "dep:ibverbs-sys", "dep:libc", "dep:libloading"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2", "dep:libc"]
 
 [dependencies]
@@ -27,8 +27,8 @@ ibverbs-sys = { version = "=0.3.2", optional = true }
 libc = { version = "0.2", optional = true }
 socket2 = { version = "=0.6.2", optional = true }
 
-serde = { version = "1", optional = true, features = ["derive"] }
-serde_json = { version = "1", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
 
 [build-dependencies]
 bindgen = { version = "=0.71.1", optional = true }

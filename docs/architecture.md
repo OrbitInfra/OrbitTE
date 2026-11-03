@@ -80,7 +80,10 @@ issuer outlives retained native owners. See
 [resource ownership](async-batches.md#staging-and-consumer-owner-credits).
 
 `runtime/qos_contract.rs::QosContractResolver` uses frozen TENT's global,
-tenant-default and tenant-intent field overlays. Initialization compiles a
+tenant-default and tenant-intent field overlays. Its `config` module parses the
+supported TENT JSON `qos` section into the existing typed configuration. Bounded
+file reads, JSON validation, unit conversion and normalization run before engine
+creation; the parser creates no policy table or quota ledger. Initialization compiles a
 bounded table of immutable contracts and stable numeric slots. The default/unspec
 contract is cached. `resolve_qos` produces an immutable, engine-bound
 `EffectiveQosPolicy`; requests clone it instead of normalizing/hashing names in

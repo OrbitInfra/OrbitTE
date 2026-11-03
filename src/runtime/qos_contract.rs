@@ -1,7 +1,11 @@
+mod config;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use crate::{Error, Priority, Result, SourceEpoch};
+
+const MAX_CONTRACTS: usize = 4096;
 
 /// None inherits the less specific layer. An effective None is unlimited;
 /// Some(0) is a hard zero budget. Counts cover retained public data requests.
@@ -184,7 +188,7 @@ impl QosContractResolver {
         let mut limits = Vec::new();
         let mut compile =
             |name: String, fields: QosPolicyFields| -> Result<Arc<CompiledContract>> {
-                if limits.len() == 4096 {
+                if limits.len() == MAX_CONTRACTS {
                     return Err(Error::InvalidConfig("at most 4096 QoS contracts"));
                 }
                 let slot = limits.len();

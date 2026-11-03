@@ -769,8 +769,10 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   fairness remain open; see [automatic windows](async-batches.md#automatic-receiver-windows). Typed global/tenant/intent QoS resolution now feeds
   effective RDMA priority and atomic per-contract retained byte/request caps.
   Immutable engine-bound handles reuse compiled slots; fallback names cannot
-  create new budgets, and Unquiesced retains charges. JSON loading, degraded
-  actions and hierarchical/cluster quota enforcement remain open. See
+  create new budgets, and Unquiesced retains charges. Bounded TENT-format JSON/file
+  loading now feeds these same compiled fields, with no submission-path parsing.
+  Unsupported actions/fields are rejected. Degraded actions and
+  hierarchical/cluster quota enforcement remain open. See
   [QoS contract consumption](async-batches.md#qos-contracts),
   [credit scope](async-batches.md#receiver-credit-gating) and
   [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
@@ -1209,8 +1211,15 @@ cleanup, and the consumer requires every child stage to drain. Native constructo
 failure and retained owners preserve charges. This extends the frozen credit
 schema with actual ProxyManager ownership; manual resource mapping and generic
 consumer credits remain open. See [scope](qualification.md#staging-and-consumer-owner-credits).
-The next functional delivery is the TENT-format JSON QoS loader feeding the
-existing compiled contracts, followed by defined degraded-action consumption.
+The supported TENT-format JSON QoS loader now feeds the existing compiled
+contracts. String/file entry points preserve disabled/default semantics, strict
+field validation, normalized identities and binary byte units. Bounded parsing
+stays outside engine compilation and transfer dispatch. Existing public quota
+and RDMA priority controls consume JSON input; see [scope](qualification.md#json-qos-configuration).
+The next functional delivery is defined degraded-action consumption, starting
+with delay/reject at QoS admission while preserving deadlines, cancellation and
+actual retained ownership. Transport fallback, local recompute and compression
+must remain rejected until their real execution owners exist.
 Hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
 physical-owner queue granularity, physical staging reserves and deadline-infeasible
 cancellation remain open parts of P6.

@@ -59,8 +59,10 @@ new dispatch requires both. The setting applies to sync and async submissions
 with or without a runtime queue. See [epochs, refunds, freshness and issuer
 obligations](async-batches.md#receiver-credit-gating).
 
-`EngineConfig::qos: Option<QosConfig>` compiles typed global/tenant/intent
-contracts. `resolve_qos(&QosRequestContext)` returns a reusable immutable
+`EngineConfig::qos: Option<QosConfig>` compiles global/tenant/intent contracts.
+`QosConfig::from_json` and `from_json_file` load the supported TENT `qos` section
+into this same typed configuration, with `None` for disabled QoS. Other engine
+settings still come from `EngineConfig`. See [JSON format](async-batches.md#json-qos-configuration). `resolve_qos(&QosRequestContext)` returns a reusable immutable
 `EffectiveQosPolicy` for `TransferRequest::qos`. `None` selects default/unspec;
 explicit handles use their captured fallback priority. Per-contract payload
 byte/request caps are reserved atomically for each mixed submission and retained

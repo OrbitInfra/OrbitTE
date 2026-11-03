@@ -200,13 +200,11 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
             rdma_fixture_with_config(
                 runtime,
                 crate::EngineConfig {
-                    qos: Some(crate::QosConfig {
-                        defaults: crate::QosPolicyFields {
-                            priority: Some(priority),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    qos: crate::QosConfig::from_json(&format!(
+                        "{{\"qos\":{{\"defaults\":{{\"priority\":{}}}}}}}",
+                        priority as u8
+                    ))
+                    .unwrap(),
                     ..Default::default()
                 },
             )

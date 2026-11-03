@@ -205,11 +205,91 @@ Frozen TENT's `QosContractResolver` resolves policy and reports
 `diagnostic_scope=resolution_only`; it has no runtime consumer in the frozen
 tree. OrbitTE now consumes priority and retained-resource limits. Typed Rust
 configuration, rejecting normalized duplicate intent keys and treating all-blank
-request identity as the default are deliberate differences. TENT JSON loading,
-degraded-action execution, parent/child and cluster-wide quotas, native fairness
+request identity as the default are deliberate differences. The supported JSON
+fields can also load into this same configuration, as described below.
+Degraded-action execution, parent/child and cluster-wide quotas, native fairness
 and full QoS remain open. Receiver-credit `qos_class` is still a separate peer
 binding and is not implicitly mapped from these contracts. See the
 [source qualification](qualification.md#qos-contract-consumption).
+
+### JSON QoS configuration
+
+`QosConfig::from_json(&str)` and `QosConfig::from_json_file(path)` read the top-level
+`qos` section of a TENT-format engine document. They return `Result<Option<QosConfig>>`
+for direct assignment to `EngineConfig::qos`. Loading does not create an engine or
+alter a live one. Configure other engine settings through `EngineConfig`; this
+loader ignores JSON fields outside `qos` and does not import transport settings.
+
+```json
+{
+  "qos": {
+    "version": 1,
+    "defaults": {
+      "priority": "medium",
+      "max_inflight_bytes": "64MiB",
+      "max_inflight_requests": 128
+    },
+    "tenants": [
+      {
+        "name": "tenant-a",
+        "defaults": {"max_inflight_bytes": "128MiB"},
+        "intents": {
+          "foreground_get": {"priority": "high"},
+          "background_prefetch": {"priority": "low", "max_inflight_requests": 16}
+        }
+      }
+    ]
+  }
+}
+```
+
+```rust
+use orbit_te::{EngineConfig, QosConfig, TransferEngine};
+
+let engine = TransferEngine::new(EngineConfig {
+    qos: QosConfig::from_json_file("transfer-engine.json")?,
+    ..EngineConfig::default()
+})?;
+# Ok::<(), orbit_te::Error>(())
+```
+
+Only version 1 is accepted; omission selects version 1. Missing/null `qos`, `{}`,
+and a version-only QoS object return `None`, matching frozen TENT's disabled
+resolver. Explicit `"defaults": {}` or `"tenants": []` enables an empty contract.
+Policy nodes and tenants must be objects; arrays and null policy values are
+rejected. Absent fields inherit, while zero bytes/requests remain hard zero caps.
+
+| Field | Accepted representation |
+| --- | --- |
+| `priority` | Integer 0/1/2, strings `high`/`medium`/`low`, or strings `0`/`1`/`2`; surrounding ASCII whitespace and case are normalized |
+| `max_inflight_bytes` | Nonnegative integer, or integer string with optional B, KiB, MiB, GiB or TiB; KB/MB/GB/TB also multiply by 1024, as in TENT |
+| `max_inflight_requests` | Nonnegative JSON integer; strings and floating-point values are rejected |
+
+All limits must fit the target's `usize`; conversion and multiplication are
+checked. Identifiers use the same 256-byte limit and ASCII normalization as typed
+configuration. At most 4096 compiled contracts, including global and tenant
+defaults, are accepted. Input is capped at 1 MiB; file reads consume at most one
+extra byte to detect overflow. No process environment, file watcher or reload
+thread is involved.
+
+Duplicate QoS fields, duplicate normalized tenant/intent names and unknown QoS
+keys are errors. The loader reports JSON schema diagnostics through
+`Error::InvalidQosConfig`, including the offending field where provided by the
+parser. Existing typed identifier/count checks may return `InvalidConfig`, and
+file access errors return `Io`. A failed load returns no partially usable config.
+
+`allowed_degraded_actions` is deliberately rejected, including an empty list,
+until its execution policy is implemented. Bandwidth, weight and deadline fields
+not consumed by the engine are also rejected. Frozen TENT's parser accepts its
+degraded-action metadata but marks resolution as `resolution_only`; OrbitTE
+accepts the priority and inflight limits that its runtime actually consumes.
+This is supported-field compatibility, not the full TENT engine configuration API.
+
+JSON/file processing runs once before engine creation, using the existing serde
+dependencies in every feature profile. The existing resolver compiles the resulting
+typed configuration once; submissions still reuse numeric slots and immutable
+policy handles. No parsing, extra lock or allocation is added to slice dispatch.
+See [source controls](qualification.md#json-qos-configuration).
 
 ## Receiver credit gating
 

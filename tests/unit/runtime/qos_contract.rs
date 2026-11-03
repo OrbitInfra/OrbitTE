@@ -174,28 +174,15 @@ fn public_mixed_contract_admission_is_atomic_and_repeated_resolution_cannot_bypa
     let source = TransferEngine::new(EngineConfig::default()).unwrap();
     let requester = Arc::new(
         TransferEngine::new(EngineConfig {
-            qos: Some(QosConfig {
-                defaults: QosPolicyFields {
-                    priority: Some(Priority::High),
-                    max_inflight_bytes: Some(2),
-                    max_inflight_requests: Some(1),
-                },
-                tenants: vec![
-                    QosTenantContract {
-                        name: "a".into(),
-                        defaults: QosPolicyFields {
-                            max_inflight_requests: Some(2),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    QosTenantContract {
-                        name: "b".into(),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }),
+            qos: QosConfig::from_json(r#"{
+                "qos": {
+                    "defaults": {"priority":"high", "max_inflight_bytes":"2B", "max_inflight_requests":1},
+                    "tenants": [
+                        {"name":"a", "defaults":{"max_inflight_requests":2}},
+                        {"name":"b"}
+                    ]
+                }
+            }"#).unwrap(),
             runtime_queue: Some(RuntimeQueueConfig {
                 max_dispatch_owners: 1,
                 max_dispatch_bytes: 8,
