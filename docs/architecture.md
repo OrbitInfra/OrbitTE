@@ -60,6 +60,9 @@ indices, native SL/TC and cache claims independently of CQ worker placement.
 The pool layout is immutable across admitted work. See
 [transport selection](transport-selection.md).
 
+Library diagnostics use the pinned `log` facade. OrbitTE installs no logger.
+Consumers can enable selector warnings and errors through their own logger.
+
 ## Runtime queue ownership
 
 | Owner | Responsibility | TENT counterpart |
