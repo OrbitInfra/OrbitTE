@@ -2,6 +2,7 @@
 set -euo pipefail
 
 binary=$1
+iterations=50
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$(nproc)}
 controls=(
   engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch
@@ -92,10 +93,28 @@ if [[ ${2:-} == quotas ]]; then
     engine::failover::tests::native::metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport
   )
 fi
-for iteration in {1..50}; do
-  echo "Iteration $iteration/50 with RUST_TEST_THREADS=$RUST_TEST_THREADS"
+if [[ ${2:-} == batch-release ]]; then
+  iterations=200
+  controls=(
+    runtime::control_plane::tests::deferred_free_races_progress_and_allocation_until_real_tcp_drain
+    batch::tests::a_progress_lookup_keeps_its_own_reservation_after_public_free
+    runtime::progress_worker::tests::worker_wakes_are_bounded_coalesced_and_stop_joins
+    batch::tests::independent_batches_progress_while_a_sibling_progress_lock_is_held
+  )
+fi
+if [[ ${2:-} == metrics-port ]]; then
+  iterations=200
+  controls=(
+    metrics::tests::recording::busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers
+    metrics::tests::recording::stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable
+    metrics::tests::recording::real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats
+    metrics::tests::recording::http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats
+  )
+fi
+for ((iteration=1; iteration<=iterations; iteration++)); do
+  echo "Iteration $iteration/$iterations with RUST_TEST_THREADS=$RUST_TEST_THREADS"
   output=$("$binary" --exact "${controls[@]}") || { echo "$output"; exit 1; }
   echo "$output"
   grep -Fq "test result: ok. ${#controls[@]} passed; 0 failed;" <<<"$output"
 done
-echo "All ${#controls[@]} controls passed 50/50 on Linux with RUST_TEST_THREADS=$RUST_TEST_THREADS."
+echo "All ${#controls[@]} controls passed $iterations/$iterations on Linux with RUST_TEST_THREADS=$RUST_TEST_THREADS."

@@ -1192,7 +1192,7 @@ fn deferred_free_races_progress_and_allocation_until_real_tcp_drain() {
     // Two explicit pollers observe the same worker-owned request. Free on a
     // third thread fences the ID without waiting for this peer to reply.
     let barrier = std::sync::Barrier::new(4);
-    thread::scope(|scope| {
+    let releases = thread::scope(|scope| {
         let poll = || {
             assert_eq!(engine.progress_batch(id).unwrap().completed_tasks, 0);
             barrier.wait();
@@ -1209,17 +1209,28 @@ fn deferred_free_races_progress_and_allocation_until_real_tcp_drain() {
         };
         scope.spawn(poll);
         scope.spawn(poll);
-        scope.spawn(|| {
+        let allocator = scope.spawn(|| {
             barrier.wait();
+            let mut releases = Vec::new();
             for _ in 0..20 {
-                engine.allocate_batch(1).unwrap().free().unwrap();
+                let mut other = engine.allocate_batch(1).unwrap();
+                releases.push(other.allocation_release_receipt());
+                other.free().unwrap();
             }
+            releases
         });
         scope.spawn(|| {
             barrier.wait();
             batch.free().unwrap();
         });
+        allocator.join().unwrap()
     });
+    // A worker may still hold a lookup for an empty, now-fenced batch. Wait
+    // for each distinct allocation debit to leave the ledger. The TCP reply
+    // is still withheld, so its deferred batch must remain fully charged.
+    for release in releases {
+        release.recv_timeout(t).unwrap();
+    }
     let held = engine.stats().unwrap();
     assert_eq!(
         (
