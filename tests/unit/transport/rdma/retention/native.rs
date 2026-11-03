@@ -194,10 +194,9 @@ impl Retirement {
             },
             ..Default::default()
         };
-        // SAFETY: The retained PD and CQ outlive the test QP and attributes is writable for the
-        // create call.
-        self.qp =
-            unsafe { ffi::ibv_create_qp(self.pd as *mut ffi::ibv_pd, &mut attributes) } as usize;
+        // SAFETY: The fixture retains the PD and both CQs; the provider can update attributes.
+        let qp = unsafe { ffi::ibv_create_qp(self.pd as *mut ffi::ibv_pd, &mut attributes) };
+        self.qp = qp as usize;
         assert_ne!(self.qp, 0, "native dependent QP creation failed");
         // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy
         // attempt.
@@ -240,10 +239,9 @@ impl Retirement {
         self.pd = pd;
         // SAFETY: The device owner keeps this context handle slot valid through the callback.
         self.context = unsafe { (*handles).context } as usize;
-        // SAFETY: The open provider context owns this initialized operations table and outlives
-        // the saved callback.
-        let allocate =
-            unsafe { (*(self.context as *const ffi::ibv_context)).ops.alloc_mw }.unwrap();
+        let context = self.context as *const ffi::ibv_context;
+        // SAFETY: The retiring device retains this context and its provider operations table.
+        let allocate = unsafe { (*context).ops.alloc_mw }.unwrap();
         // SAFETY: The function belongs to the retained context and the supplied PD stays live
         // with its dependent MW.
         self.mw = unsafe { allocate(pd as *mut ffi::ibv_pd, ffi::IBV_MW_TYPE_2) } as usize;
