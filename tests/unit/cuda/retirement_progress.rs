@@ -282,14 +282,15 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
     assert_eq!(stats.active_grants, usize::from(native_retained));
     assert_eq!(stats.active_endpoints, usize::from(native_retained));
     assert_eq!(stats.staging_bytes, if native_retained { 7 } else { 0 });
+    // The shim's CUDA copies are confirmed even when RDMA teardown retains
+    // the pinned chunks and the prepared submission keeps its CUDA backing.
+    assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
     if retained {
         let stats = requester.stats().unwrap();
         assert_eq!(stats.staging.retained_chunks, 3);
         assert_eq!(stats.inflight_bytes, 41);
-        assert_eq!(local_gpu.allocation.lock().unwrap().dma, vec![2..43]);
         assert!(matches!(batch.free(), Err(Error::BatchBusy)));
     } else {
-        assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
         if !matches!(outcome, Outcome::Complete) {
             batch.free().unwrap();
         }
