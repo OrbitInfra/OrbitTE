@@ -69,11 +69,17 @@ reasons are `submit`, `poll`, `timeout` and `canceled`.
 | `tent_task_failures_total` | Counter | `transport,reason`. Terminal task failures. TENT exposes this breakdown in Prometheus only. |
 | `tent_deadline_infeasible_total` | Counter | `transport`. An expired request deadline at submission or an S8 infeasibility drop. |
 | `tent_quarantined_batches_total` | Counter | Unlabelled. Abandoned batches entering quarantine. |
-| `tent_inflight_attempts`, `tent_registered_buffer_bytes` | Gauge | `transport`. Live attempts and bytes published to each usable transport. |
+| `tent_inflight_attempts`, `tent_registered_buffer_bytes` | Gauge | `transport`. Live attempts and bytes registered with each transport. |
 | `tent_{read,write}_latency_us`, `tent_{read,write}_size_bytes` | Histogram | `transport`. End-to-end latency and successful owner length. |
 | `tent_deadline_mlu_permille` | Histogram | `transport`. Successful transfer latency divided by the request's deadline window, multiplied by 1,000. |
 | `tent_stage_queue_wait_us`, `tent_stage_dispatch_us`, `tent_stage_transport_us` | Histogram | `transport`. Admission to dispatch, dispatch to first attempt, and execution through logical completion. |
 | `tent_transport_attempt_latency_us` | Histogram | `transport,operation`. Elapsed time for one attempt. |
+
+io_uring uses the published memory without registering it with the provider.
+Host memory can also take a GDS or pinned NVLink path without creating a cuFile
+buffer registration or CUDA IPC export. Those operations contribute transfer
+metrics. The buffer gauge counts direct RDMA registrations, NVLink-exportable
+device ranges, successful CUDA GDS registrations and TCP-published bytes.
 
 ### Histogram boundaries
 
@@ -94,6 +100,14 @@ and open rails. The scrape carries no peer identity, raw addresses or keys.
 TENT's `qos_metrics.cpp` calculates goodput, Jain fairness and isolation
 leakage from benchmark class samples. Those quantities need an experiment with
 class timings, weights and isolated throughput and have no live exporter series.
+
+For example, `orbitte_dispatching_owners` and `orbitte_dispatching_bytes`
+show the live dispatch window. `orbitte_qos_inflight_requests` and
+`orbitte_receiver_credit_reserved_owners` can distinguish a QoS charge from
+a sender waiting on a receiver grant. `orbitte_queue_deadline_drops_total`
+counts rejected queue dispatches. `orbitte_rdma_open_rails` is a gauge, while
+`orbitte_rdma_rail_errors_total`, `orbitte_rdma_rail_probes_total` and
+`orbitte_rdma_rail_recoveries_total` are cumulative.
 
 On an initialized handle, `set_enabled(false)` pauses counter and histogram
 sampling. Gauge pairs continue across the toggle, so unregistering a buffer or

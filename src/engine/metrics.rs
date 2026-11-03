@@ -18,15 +18,13 @@ impl TransferEngine {
                 mask |= transport_bit(Transport::Rdma);
             }
             #[cfg(feature = "cuda")]
-            if self.source.nvlink.is_some() && m.ipc_requester() {
+            if self.source.nvlink.is_some() && m.0.descriptor.ipc_exportable {
                 mask |= transport_bit(Transport::Nvlink);
             }
-            #[cfg(feature = "io-uring")]
-            if self.io_uring.is_some() {
-                mask |= transport_bit(Transport::IoUring);
-            }
             #[cfg(feature = "gds")]
-            if self.file_available(Transport::Gds, Some(m)) {
+            if m.memory_type() == crate::MemoryType::Cuda
+                && crate::transport::gds::BufferSlot::supports(m)
+            {
                 mask |= transport_bit(Transport::Gds);
             }
             m.0.metric_transports

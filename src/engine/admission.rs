@@ -96,9 +96,13 @@ impl TransferEngine {
                         #[cfg(any(feature = "io-uring", feature = "gds"))]
                         PreparedTarget::File { requests, .. } => &requests[i].selection,
                     };
-                    let first_route = selection
-                        .candidate(0)
-                        .map_or(selection.transport, |v| v.transport);
+                    let first_route = if selection.initial_attempts == 0 {
+                        selection.transport
+                    } else {
+                        selection
+                            .candidate(0)
+                            .map_or(selection.transport, |v| v.transport)
+                    };
                     let sample = crate::metrics::Observation::new(
                         metrics.recorder(),
                         observation.0,

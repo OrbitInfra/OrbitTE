@@ -257,3 +257,39 @@ fn stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joina
     drop(engine);
     assert!(TcpListener::bind(("127.0.0.1", port)).is_ok());
 }
+
+#[test]
+fn a_retired_initial_route_and_a_rejected_retry_preserve_real_attempt_counts() {
+    let c = Arc::new(Recorder::new());
+    let o = Observation::new(
+        &c,
+        TransferOp::Read,
+        Transport::Gds,
+        8,
+        None,
+        Some(Instant::now()),
+    );
+    o.dispatched();
+    o.begin(Transport::IoUring);
+    o.finish(Some(&Error::Unavailable("before posting")), false);
+    o.retry(Transport::Tcp);
+    o.begin(Transport::Tcp);
+    o.finish(Some(&Error::Unavailable("after posting")), true);
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
+    o.file_terminal(None);
+    #[cfg(not(any(feature = "io-uring", feature = "gds")))]
+    o.terminal(Some(&Error::Unavailable("after posting")));
+    let s = Scrape {
+        recorder: c,
+        owners: Box::new(Owners::default),
+    };
+    let j = s.json();
+    let p = s.prometheus();
+    assert_eq!(j["tent_transport_attempts_total"], 2);
+    assert_eq!(j["tent_transport_attempt_failures_total"], 2);
+    assert_eq!(j["tent_read_failures_total"], 1);
+    assert_eq!(j["tent_read_bytes_total"], 0);
+    assert!(p.contains("tent_transport_failover_total{from=\"gds\",to=\"io_uring\"} 1\n"));
+    assert!(p.contains("tent_task_failures_total{transport=\"tcp\",reason=\"submit\"} 1\n"));
+    assert!(!p.contains("tent_transport_attempts_total{transport=\"gds\""));
+}

@@ -113,7 +113,16 @@ impl Observation {
         #[cfg(any(feature = "io-uring", feature = "gds"))]
         self.file_posted.store(false, Relaxed);
         let route = slot(t);
-        self.route.store(route, Relaxed);
+        // File registration can retire after preparation but before the first
+        // attempt. An explicit retry already published its new route.
+        let previous = self.route.swap(route, Relaxed);
+        if enabled && previous != route {
+            self.cells.add(
+                M::Failover,
+                previous * super::schema::TRANSPORTS.len() + route,
+                1,
+            );
+        }
         self.cells.add(M::Inflight, route, 1);
         if enabled {
             self.cells.add(M::Attempts, attempt_slot(route, self.op), 1);

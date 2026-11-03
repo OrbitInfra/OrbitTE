@@ -188,6 +188,7 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
         #[cfg(feature = "metrics")]
         {
             let p = f.engine.metrics().unwrap().prometheus();
+            assert!(!p.contains("tent_registered_buffer_bytes{transport=\"io_uring\"}"));
             for op in ["read", "write"] {
                 assert!(p.contains(&format!(
                     "tent_{op}_bytes_total{{transport=\"io_uring\"}} 8223"

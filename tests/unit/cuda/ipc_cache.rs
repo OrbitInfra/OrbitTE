@@ -257,6 +257,14 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
                 (index + 1) * 17
             )));
             assert!(p.contains("tent_inflight_attempts{transport=\"nvlink\"} 0\n"));
+            assert!(!p.contains("tent_registered_buffer_bytes{transport=\"nvlink\"}"));
+            assert!(
+                source
+                    .metrics()
+                    .unwrap()
+                    .prometheus()
+                    .contains("tent_registered_buffer_bytes{transport=\"nvlink\"} 128\n")
+            );
         }
         let weak = Arc::downgrade(&host);
         requester.unregister_memory(&registered).unwrap();

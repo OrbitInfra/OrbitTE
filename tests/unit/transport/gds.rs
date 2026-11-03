@@ -342,6 +342,7 @@ fn open_mode_selection_and_synchronous_file_bytes() -> Result<()> {
             let p = f.engine.metrics().unwrap().prometheus();
             assert!(p.contains("tent_read_bytes_total{transport=\"gds\"} 7"));
             assert!(p.contains("tent_write_bytes_total{transport=\"gds\"} 7"));
+            assert!(!p.contains("tent_registered_buffer_bytes{transport=\"gds\"}"));
         }
         assert_eq!(f.engine.file_segment_info(&f.segment)?.gds_mode, Some(mode));
         assert_eq!(f.engine.stats()?.gds.mode, Some(mode));
