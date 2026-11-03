@@ -1010,10 +1010,15 @@ fn pin_rejects_non_cuda_opt_out_and_source_permission_before_allocation() {
                 .encode(),
             )
             .unwrap();
-        channel.write_all(&[0, 1]).unwrap();
-        channel.write_all(&3u64.to_be_bytes()).unwrap();
-        channel.write_all(&[1]).unwrap();
-        channel.write_all(&[0; 24]).unwrap();
+        // Only the host-type check consumes Pin's hello. The other scenarios
+        // reject the header and may close before a requester writes any body.
+        if scenario == "host" {
+            let mut hello = [0; 35];
+            hello[1] = 1;
+            hello[2..10].copy_from_slice(&3u64.to_be_bytes());
+            hello[10] = 1;
+            channel.write_all(&hello).unwrap();
+        }
         let error = match Reply::read(&mut channel, source.source_epoch()) {
             Err(error) => error,
             Ok(_) => panic!("unexpected Pin grant: {scenario}"),
