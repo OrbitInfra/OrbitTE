@@ -28,6 +28,8 @@ mod inflight;
 mod interruption;
 #[path = "rdma_host/memory.rs"]
 mod memory;
+#[path = "rdma_host/rail_health.rs"]
+mod rail_health;
 #[path = "rdma_host/resources.rs"]
 mod resources;
 #[path = "rdma_host/restart.rs"]
@@ -419,16 +421,31 @@ fn main() -> Result<()> {
         | "installed-cleanup-failure" => restart::run(&case),
         "installed-inflight-dma" => inflight::run(&case),
         "installed-memory-cleanup" => memory::run(&case),
-        "installed-host" | "installed-rail-accounting" | "installed-selector" => {
+        mode @ ("installed-host"
+        | "installed-rail-accounting"
+        | "installed-selector"
+        | "installed-rail-health") => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
             let mut stream = control(case.source, bind, None)?;
             let peer = open_peer(&case, &engine, &memory, &mut stream, engine.endpoint())?;
-            rounds(&case, &engine, &memory, &peer, &mut stream, 0)?;
+            if mode == "installed-rail-health" {
+                rail_health::run(&case, &engine, &memory, &peer, &mut stream)?;
+            } else {
+                rounds(&case, &engine, &memory, &peer, &mut stream, 0)?;
+            }
             maps()?;
             close(&engine, memory)?;
             barrier(&mut stream, "closed")?;
-            result(&case)
+            if mode == "installed-rail-health" {
+                println!(
+                    "ORBITTE_RAIL_DRAINED {}",
+                    if case.source { "source" } else { "requester" }
+                );
+                Ok(())
+            } else {
+                result(&case)
+            }
         }
         _ => Err("unsupported installed host mode".into()),
     }

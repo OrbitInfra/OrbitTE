@@ -24,6 +24,7 @@ mod protocol;
 mod qp;
 mod qp_store;
 mod quota;
+mod rail_monitor;
 mod rdma_transport;
 mod receive;
 mod shared_quota;

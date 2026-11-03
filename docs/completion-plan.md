@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS and credits implemented; failover and metrics open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS, credits and RDMA rail health implemented; engine failover and metrics open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -283,6 +283,9 @@ Done (source scope, CPU controls):
   identity. Strict hints, per-request NIC masks and endpoint QP pools reach
   the executing owner. Installed two-RNIC qualification is queued.
   See [transport selection](transport-selection.md).
+- **RDMA rail health (S9, F18).** A pair-level circuit under the existing
+  context monitor gates new slices. Recovery requires a native probe receipt.
+  Real link-loss qualification is queued. See [rail health](rdma-cuda.md#rail-health).
 - **Physical admission and merge (S8, F08/F14).** Registered contiguous ranges
   share a physical owner across public task IDs. FIFO/EDF tracks physical
   windows, internal staging reserves, credit and QoS permits. The optional
@@ -307,8 +310,7 @@ Open:
 
 - [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
   reclamation and manual resource mapping (F15).
-- [ ] Submit- and completion-stage failover, per-owner retry budgets and rail
-  cooldown/probe/half-open state, never replaying uncertain writes (F17/F18).
+- [ ] Engine submit/completion failover and per-owner retry budgets (F17).
 - [ ] Required metrics, failure attribution and disabled-mode overhead (F20).
 
 Exit: deterministic-clock and fault-provider state-machine tests, race detection

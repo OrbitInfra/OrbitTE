@@ -10,6 +10,10 @@ use super::SchedulingParams;
 /// These estimates describe local initiated payloads, not remote or wire proofs.
 #[derive(Clone, Debug)]
 pub struct NicLoadStats {
+    /// Failures and trial admissions on this local NIC, across peer pairs.
+    pub rail_errors: u64,
+    pub rail_probes: u64,
+    pub open_rails: usize,
     pub device_id: usize,
     pub device_name: String,
     pub link_speed_gbps: Option<f64>,
@@ -223,6 +227,9 @@ impl DeviceInfo {
     ) -> NicLoadStats {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         NicLoadStats {
+            rail_errors: 0,
+            rail_probes: 0,
+            open_rails: 0,
             device_id: id,
             device_name: name.into(),
             link_speed_gbps: state.link_speed_mbps.map(|rate| rate as f64 / 1000.0),

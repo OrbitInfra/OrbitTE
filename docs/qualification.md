@@ -32,6 +32,7 @@ external output directory; failed runs are kept.
 | Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
 | Named NIC masks, endpoint QP pools, merged owners and deadline drops on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
+| RDMA rail cooldown and recovery after physical RoCE data-link loss | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN" --fault-netdev "$DEDICATED_ROCE_NETDEV"` | [Rail health](rdma-cuda.md#rail-health) |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
@@ -2226,6 +2227,17 @@ remain unqualified. No hardware task was requested. Request priority and basic
 worker arbitration are recorded below; shared quotas and complete F16/P6 parity
 remain open.
 
+
+## RDMA rail health
+
+Two fake RNICs drive the real path picker, native posting and CQ retirement.
+The controls check masked cooldown rejection before a post, guarded payloads
+on the healthy NIC and exactly one successful recovery probe. A deterministic
+clock covers burst errors, failed trials, backoff and stale completions. The
+packaged gate requires two inventory-locked RNICs, a separate control route,
+and permission to bring the explicitly selected requester RoCE data link down
+and back up. The supervisor verifies restoration before releasing its locks.
+Physical link-loss and recovery remain unqualified.
 
 ## RDMA request priority
 

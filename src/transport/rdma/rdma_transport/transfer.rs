@@ -23,10 +23,16 @@ impl RdmaTransfer {
         }
         let mut completed = true;
         for slice in &self.slices {
-            completed &= slice
+            let result = slice
                 .grant
                 .progress
-                .query(&slice.grant.record, slice.grant.claim)?;
+                .query(&slice.grant.record, slice.grant.claim);
+            if let Err(e) = &result {
+                if let Some(rail) = &slice.rail {
+                    rail.fault(e);
+                }
+            }
+            completed &= result?;
         }
         Ok(completed)
     }
@@ -39,12 +45,17 @@ impl RdmaTransfer {
         let result = (|| {
             for slice in &mut self.slices {
                 if self.requester {
-                    slice.grant.progress.wait(
-                        &slice.grant.record,
-                        slice.grant.claim,
-                        channel.deadline,
-                    )?;
-                    transport.finish_requester_slice(channel, slice, &self.memory)?;
+                    let received = slice
+                        .grant
+                        .progress
+                        .wait(&slice.grant.record, slice.grant.claim, channel.deadline)
+                        .and_then(|()| {
+                            transport.finish_requester_slice(channel, slice, &self.memory)
+                        });
+                    if let Some(rail) = &slice.rail {
+                        rail.receipt(&received);
+                    }
+                    received?;
                 } else {
                     transport.finish_source_slice(channel, self.epoch, &self.memory, slice)?;
                 }
@@ -55,7 +66,15 @@ impl RdmaTransfer {
     }
 
     pub(crate) fn close(mut self, result: Result<()>) -> Result<()> {
-        close_slices(&mut self.slices, result, self.requester)
+        let result = close_slices(&mut self.slices, result, self.requester);
+        if result.is_ok() {
+            for slice in &self.slices {
+                if let Some(rail) = &slice.rail {
+                    rail.receipt(&result);
+                }
+            }
+        }
+        result
     }
 }
 

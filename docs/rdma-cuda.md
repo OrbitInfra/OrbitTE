@@ -295,6 +295,30 @@ physical completion or destruction is unproven, so batch capacity, registrations
 and DMA loans stay retained. See [native cleanup](native-cleanup.md) and
 [async batches](async-batches.md).
 
+## Rail health
+
+The requester tracks errors per peer epoch and local/remote NIC pair. The
+registered memory's path table, static `rail_topology` (`all` and `direct`),
+the policy device mask and current health determine which NIC can carry a
+slice. An empty allowed set fails before payload. Port generations from the
+existing monitor fence old observations. QP retirement and grant drain still
+belong to the original CQ lane.
+
+Defaults are three failures inside ten seconds, a 30-second cooldown and a
+one-second exploratory probe interval. Set `RdmaConfig::rail_error_threshold`,
+`rail_error_window`, `rail_cooldown` and `rail_probe_interval` to change them.
+Zero probe interval allows an immediate trial. Looking up a mask never arms a
+probe. Only one admitted trial can run on a paused pair. Early failure leaves
+the cooldown intact. Expiry admits one half-open trial. A failed half-open
+trial doubles the cooldown up to five minutes. Only a current trial’s positive
+receipt reopens the pair. Cancelling an unposted trial returns its slot.
+
+`RdmaStats` exposes errors, open pairs, probes and recoveries. NIC load stats
+include each local NIC’s rail errors, probes and open-pair count. A process
+retains at most `max_rail_pairs` pair identities. An exhausted table preserves
+active and unproven owners and returns `ResourceExhausted`. See the
+[installed verification queue](qualification.md#verification-queue).
+
 ## Periodic monitor recovery
 
 The monitor queries selected routes even without traffic. A changed or inactive

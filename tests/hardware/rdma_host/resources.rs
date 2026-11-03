@@ -96,7 +96,8 @@ fn clean(engine: &TransferEngine) -> Result<()> {
                 | "installed-lost-completion"
                 | "installed-cleanup-failure"
                 | "installed-inflight-dma"
-                | "installed-memory-cleanup")
+                | "installed-memory-cleanup"
+                | "installed-rail-health")
         ) && rdma.progress_failures != 0)
         || rdma.completion_errors
             > u64::from(env::var("ORBITTE_HOST_MODE").as_deref() == Ok("installed-inflight-dma"))
@@ -109,10 +110,9 @@ fn clean(engine: &TransferEngine) -> Result<()> {
 pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
     let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
     let config = EngineConfig {
-        selector: case
-            .selector
-            .then(|| super::selector::config(case))
-            .transpose()?,
+        selector: if env::var("ORBITTE_HOST_MODE")?.as_str()=="installed-rail-health" {
+            Some(super::rail_health::policy(case)?)
+        } else {case.selector.then(||super::selector::config(case)).transpose()?},
         runtime_queue: case.selector.then_some(orbit_te::RuntimeQueueConfig {
             max_outstanding_owners: 1,
             max_dispatch_owners: 1,
@@ -138,6 +138,8 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             TIMEOUT
         },
         rdma: Some(RdmaConfig {
+            rail_cooldown:Duration::from_secs(2),rail_probe_interval:Duration::from_secs(1),
+            rail_topology: (env::var("ORBITTE_HOST_MODE")?.as_str()=="installed-rail-health").then(||format!(r#"{{"all":[{{"local":"{0}","remote":"{0}"}},{{"local":"{1}","remote":"{1}"}}]}}"#,case.rails[0],case.rails[1])),
             rdma_whitelist: case.rails.clone(),
             rdma_blacklist: if automatic {
                 case.rails.clone()

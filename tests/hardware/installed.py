@@ -1,5 +1,6 @@
 """Validate the installed host consumer's profile and independent result ledger."""
 import json
+import re
 
 PROTOCOL = 'orbitte-installed-host-v4'
 
@@ -25,7 +26,7 @@ def validate_nodes(profile):
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-rail-health', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -63,6 +64,9 @@ def validate(case):
             raise ValueError('cleanup requires a supported native owner and progress mode')
     if 'cleanup_kind' in case and case['mode'] not in ('installed-memory-cleanup', 'installed-cleanup-failure'):
         raise ValueError('native fault selector escaped its mode')
+    if case['mode'] == 'installed-rail-health' and (not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}', case.get('fault_netdev', ''))
+            or case['operation'] != 'read' or case['mask'] != 3 or case['parents'] != 1 or not case['rdma_events']):
+        raise ValueError('rail health requires two locked RNICs, an explicit requester data netdev and RDMA events')
     if case['mode'] == 'installed-selector' and (case['mask'] != 3 or case['parents'] != 1 or case['num_lanes'] != 1 or case['payload'] <= case['block']):
         raise ValueError('selector requires two globally enabled NICs, one CQ lane and a sliced request')
     if case['mode'] == 'installed-rail-accounting' and (case['parents'], case['payload'], case['block'], case['num_lanes'], case['mask']) != (16, (4 << 20) + 1, 1 << 20, 1, 3):
@@ -97,6 +101,8 @@ def command(profile, case, node, role, root, readiness=None):
         environment['ORBITTE_CLEANUP_KIND'] = case.get('cleanup_kind', 'qp')
     if case['mode'] == 'installed-memory-cleanup':
         environment.update(ORBITTE_CLEANUP_KIND=case['cleanup_kind'], ORBITTE_CLEANUP_ROLE=case['fault_role'])
+    if case['mode'] == 'installed-rail-health' and role == 'requester':
+        environment['ORBITTE_FAULT_NETDEV'] = case['fault_netdev']
     if case.get('discovery') == 'auto':
         environment['ORBITTE_HOST_DISCOVERY'] = 'auto'
         environment.pop('ORBITTE_SHARED_GID')
@@ -136,6 +142,16 @@ def verify(profile, case, evidence):
         if (len(nics) != 2 or {n['name'] for n in nics} != set(profile['rails'])
                 or len({n['pci'] for n in nics}) != 2):
             raise ValueError('installed peer did not publish the two locked RNICs')
+        if case['mode'] == 'installed-rail-health':
+            rows = records('ORBITTE_RAIL_HEALTH ')
+            if len(rows) != 1 or rows[0].get('role') != role or rows[0].get('verified_bytes') != case['parents'] * (2 * case['payload'] + 192):
+                raise ValueError('missing guarded data check on installed rail fault')
+            if 'ORBITTE_RAIL_DRAINED ' + role not in record['stdout.log'].splitlines():
+                raise ValueError('rail health peer did not close all native owners')
+            if role == 'requester' and (not supervisor.get('data_link_restored')
+                    or [rows[0].get(k) for k in ('blocked_posts', 'probes', 'recoveries', 'fault_rail_bytes', 'spare_rail_bytes')] != [0, 1, 1, 64, 32]):
+                raise ValueError('rail fault lacks restoration, cooldown exclusion or a unique recovered probe')
+            continue
         rounds = records('ORBITTE_INSTALLED_ROUND ')
         if len(rounds) != 3 or [(r['phase'], r['round']) for r in rounds] != [(0, i) for i in range(3)]:
             raise ValueError('installed peer omitted or duplicated a round')

@@ -2,6 +2,12 @@
 /// still own pinned pages or RNIC resources after native teardown failed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RdmaStats {
+    /// Pair-level failures, trial admissions and confirmed recoveries.
+    pub rail_errors: u64,
+    pub rail_probes: u64,
+    pub rail_recoveries: u64,
+    pub open_rails: usize,
+    pub half_open_rails: usize,
     /// Isolated PeerDirect source PDs, owned through QP/MR/RQ cleanup.
     pub active_grant_pds: usize,
     pub opened_grant_pds: u64,

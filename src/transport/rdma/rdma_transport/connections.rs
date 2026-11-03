@@ -117,7 +117,13 @@ impl RdmaTransport {
                         .is_some_and(|owner| Arc::ptr_eq(owner, &device))
                 })
                 .ok_or(Error::Internal("RDMA peer endpoint context missing"))?;
-            slot.endpoints.get_or_insert(key, width)?
+            slot.endpoints.get_or_insert(
+                key,
+                width,
+                self.config
+                    .max_endpoints
+                    .saturating_add(self.config.max_grants),
+            )?
         };
         Ok(Connecting {
             endpoint,

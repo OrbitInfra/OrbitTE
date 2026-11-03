@@ -7,6 +7,7 @@ use crate::{Error, Result};
 
 #[derive(Default)]
 pub(super) struct EndpointStore {
+    fenced: bool,
     endpoints: Vec<Arc<RdmaEndpoint>>,
 }
 
@@ -38,7 +39,11 @@ impl EndpointStore {
         &mut self,
         key: EndpointKey,
         width: usize,
+        limit: usize,
     ) -> Result<Arc<RdmaEndpoint>> {
+        if self.fenced {
+            return Err(Error::Unavailable("RDMA endpoint store closed"));
+        }
         self.prune()?;
         for endpoint in &self.endpoints {
             if endpoint.key == key {
@@ -58,6 +63,9 @@ impl EndpointStore {
                 ));
             }
         }
+        if self.endpoints.len() >= limit {
+            return Err(Error::ResourceExhausted);
+        }
         let endpoint = Arc::new(RdmaEndpoint::new(key, width)?);
         self.endpoints
             .try_reserve(1)
@@ -66,6 +74,12 @@ impl EndpointStore {
         Ok(endpoint)
     }
 
+    pub(super) fn fence(&mut self) {
+        self.fenced = true;
+        for endpoint in &self.endpoints {
+            endpoint.fence();
+        }
+    }
     pub(super) fn snapshot(&mut self) -> Result<Vec<Arc<RdmaEndpoint>>> {
         self.prune()?;
         Ok(self.endpoints.clone())

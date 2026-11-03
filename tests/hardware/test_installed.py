@@ -33,6 +33,28 @@ class InstalledHostEvidence(unittest.TestCase):
                                                            resource_locks_released=True))}
         return result
 
+    def test_rail_health_requires_both_native_counters_guards_and_restored_link(self):
+        self.case.update(mode='installed-rail-health', parents=1, rdma_events=True, fault_netdev='data0')
+        installed.validate(self.case)
+        evidence = self.evidence()
+        for role, record in evidence.items():
+            row = dict(role=role, verified_bytes=2*self.case['payload']+192)
+            if role == 'requester':
+                row.update(blocked_posts=0, probes=1, recoveries=1, fault_rail_bytes=64, spare_rail_bytes=32)
+                state = json.loads(record['result.json'])
+                record['result.json'] = json.dumps(dict(state, data_link_restored=True))
+            record['stdout.log'] += '\nORBITTE_RAIL_HEALTH ' + json.dumps(row) + '\nORBITTE_RAIL_DRAINED ' + role
+        installed.verify(self.profile, self.case, evidence)
+        for old, new in [('rail_bytes": 32', 'rail_bytes": 0'), ('"probes": 1', '"probes": 2'), ('DRAINED requester', 'DRAINED source')]:
+            invalid = copy.deepcopy(evidence)
+            invalid['requester']['stdout.log'] = invalid['requester']['stdout.log'].replace(old, new)
+            with self.assertRaises(ValueError):
+                installed.verify(self.profile, self.case, invalid)
+        state = json.loads(evidence['requester']['result.json'])
+        evidence['requester']['result.json'] = json.dumps(dict(state, data_link_restored=False))
+        with self.assertRaises(ValueError):
+            installed.verify(self.profile, self.case, evidence)
+
     def test_complete_ledger_passes_and_missing_native_or_drain_proof_fails(self):
         good = self.evidence()
         installed.verify(self.profile, self.case, good)
