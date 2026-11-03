@@ -1,3 +1,4 @@
+mod accept;
 #[cfg(feature = "cuda")]
 mod connection;
 #[cfg(feature = "cuda")]
@@ -482,6 +483,7 @@ pub(crate) struct ControlService {
     endpoint: SocketAddr,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
+    accept_wake: mio::Waker,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -490,6 +492,11 @@ impl ControlService {
         let listener = TcpListener::bind(config.bind_addr)?;
         listener.set_nonblocking(true)?;
         let endpoint = listener.local_addr()?;
+        let mut listener = mio::net::TcpListener::from_std(listener);
+        let poll = mio::Poll::new()?;
+        poll.registry()
+            .register(&mut listener, mio::Token(0), mio::Interest::READABLE)?;
+        let accept_wake = mio::Waker::new(poll.registry(), mio::Token(1))?;
         let stopping = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<(TcpStream, Instant)>(config.handler_threads);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -501,6 +508,7 @@ impl ControlService {
             endpoint,
             stopping,
             acceptor: None,
+            accept_wake,
             workers: Vec::new(),
         };
         for index in 0..config.handler_threads {
@@ -541,29 +549,20 @@ impl ControlService {
         }
         let stopping = Arc::clone(&service.stopping);
         let timeout = config.handler_timeout;
+        let accept = move || listener.accept().map(|(stream, _)| stream.into());
+        #[cfg(test)]
+        let accept = accept::tests::instrument(accept);
         service.acceptor = Some(
             thread::Builder::new()
                 .name("orbitte-control-accept".into())
-                .spawn(move || {
-                    while !stopping.load(Ordering::Acquire) {
-                        match listener.accept() {
-                            Ok((stream, _)) => {
-                                if stream.set_nodelay(true).is_err() {
-                                    continue;
-                                }
-                                let Ok(deadline) = deadline(timeout) else {
-                                    continue;
-                                };
-                                // The queue and worker count bound sockets and payloads.
-                                let _ = sender.try_send((stream, deadline));
-                            }
-                            Err(error) if retryable(&error) => {
-                                thread::sleep(Duration::from_millis(2))
-                            }
-                            Err(_) => break,
+                .spawn(
+                    move || match accept::run(poll, accept, sender, &stopping, timeout) {
+                        Ok(()) => log::debug!("control acceptor at {endpoint} stopped"),
+                        Err(error) => {
+                            log::error!("control acceptor at {endpoint} stopped: {error}")
                         }
-                    }
-                })?,
+                    },
+                )?,
         );
         Ok(service)
     }
@@ -578,7 +577,13 @@ impl Drop for ControlService {
         self.stopping.store(true, Ordering::Release);
         self.source.notifications.set_receiver(None);
         if let Some(acceptor) = self.acceptor.take() {
-            let _ = acceptor.join();
+            if let Err(error) = self.accept_wake.wake() {
+                log::warn!("control listener shutdown wake failed: {error}");
+            }
+            acceptor.thread().unpark();
+            if acceptor.join().is_err() {
+                log::error!("control acceptor at {} panicked", self.endpoint);
+            }
         }
         for worker in self.workers.drain(..) {
             let _ = worker.join();
