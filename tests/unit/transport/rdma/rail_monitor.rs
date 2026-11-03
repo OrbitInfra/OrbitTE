@@ -56,7 +56,15 @@ fn pair_mapping_is_peer_specific_stable_on_refresh_and_bounded_by_the_target_pat
         );
         assert_eq!(rails.mask(PEER, &local, &[], now).unwrap().0, 0);
     }
-    let rails=monitor(RdmaConfig {rail_topology:Some(r#"{"all":[{"local":"left","remote":"two"},{"local":"right","remote":"one"}],"direct":[{"local":"left","remote":"two"}]}"#.into()),rail_error_threshold:1,..Default::default()});
+    let topology = r#"{
+        "all": [{"local":"left","remote":"two"}, {"local":"right","remote":"one"}],
+        "direct": [{"local":"left","remote":"two"}]
+    }"#;
+    let rails = monitor(RdmaConfig {
+        rail_topology: Some(topology.into()),
+        rail_error_threshold: 1,
+        ..Default::default()
+    });
     assert_eq!(rails.mask(PEER, &local, &remote, now).unwrap().0, 3);
     let (chosen, lease) = rails.admit(PEER, &local[0], &remote, now).unwrap();
     assert_eq!(chosen.nic_id, 1);
