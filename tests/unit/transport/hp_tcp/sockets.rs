@@ -91,6 +91,7 @@ fn empty_partial_headers_and_partial_rejected_writes_release_the_only_session() 
     c.hp_tcp.progress_timeout_ms = 180;
     let (src, _dst, remote, _local, peer) = setup(c, 10);
     for len in [0, 1, REQUEST] {
+        let retired = src.retired_hp_sessions_for_test();
         let mut s = connect(address(&peer));
         let mut req = frame(&peer, TransferOp::Write, 2, 4);
         req.registration ^= 1;
@@ -98,10 +99,21 @@ fn empty_partial_headers_and_partial_rejected_writes_release_the_only_session() 
         if len == REQUEST {
             s.write_all(&[0xd1]).unwrap();
         }
-        assert_eq!(
+        let until = Instant::now() + WAIT;
+        while src.retired_hp_sessions_for_test() == retired {
+            assert!(
+                Instant::now() < until,
+                "the accepted partial frame still owns its slot"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(src.retired_hp_sessions_for_test(), retired + 1);
+        // An incomplete frame gets no reply. Both FIN and RST are terminal for
+        // this client; the source's receipt above proves retirement of this exact session.
+        assert!(matches!(
             s.read_exact(&mut [0; 1]).unwrap_err().kind(),
-            std::io::ErrorKind::UnexpectedEof
-        );
+            std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+        ));
     }
     let mut next = connect(address(&peer));
     next.write_all(&frame(&peer, TransferOp::Read, 1, 4).encode())
@@ -403,6 +415,12 @@ fn backpressured_write_keeps_its_only_task_and_byte_charge_until_ack() {
 fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
     let mut c = cfg();
     let dst = TransferEngine::new(c.clone()).unwrap();
+    let (control, _control_guard) = crate::test_ports::guarded_port();
+    let (data, _data_guard) = crate::test_ports::guarded_port();
+    c.bind_addr = control.local_addr().unwrap();
+    c.hp_tcp.bind_address = "127.0.0.1".into();
+    c.hp_tcp.port = data.local_addr().unwrap().port();
+    drop((control, data));
     let backing = Arc::new(crate::HostMemory::new(vec![0xa5; 12].into()).unwrap());
     let (old_addr, old_epoch, old_frame) = {
         let engine = TransferEngine::new(c.clone()).unwrap();
@@ -412,8 +430,8 @@ fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
         let peer = dst
             .open_segment(engine.endpoint(), engine.source_epoch(), WAIT)
             .unwrap();
-        c.bind_addr = engine.endpoint();
-        c.hp_tcp.port = address(&peer).port();
+        assert_eq!(c.bind_addr, engine.endpoint());
+        assert_eq!(c.hp_tcp.port, address(&peer).port());
         (
             reg.base_address(),
             peer.epoch,

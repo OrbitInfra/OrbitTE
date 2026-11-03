@@ -21,15 +21,7 @@ fn config(port: u16) -> EngineConfig {
         ..Default::default()
     }
 }
-// A live accepted connection keeps the local port out of automatic port
-// allocation. Dropping the listener permits an explicit rebind at the same
-// address. Keep the pair alive across that handoff and any final rebind.
-fn guarded_port() -> (TcpListener, [TcpStream; 2]) {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let client = TcpStream::connect_timeout(&listener.local_addr().unwrap(), WAIT).unwrap();
-    let (accepted, _) = listener.accept().unwrap();
-    (listener, [client, accepted])
-}
+use crate::test_ports::guarded_port;
 
 fn engine() -> TransferEngine {
     let (listener, _guard) = guarded_port();

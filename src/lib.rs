@@ -111,5 +111,8 @@ pub use {
 };
 
 #[cfg(all(test, not(unsupported_native_target)))]
+#[path = "../tests/common/ports.rs"]
+mod test_ports;
+#[cfg(all(test, not(unsupported_native_target)))]
 #[path = "../tests/common/mod.rs"]
 mod test_support;

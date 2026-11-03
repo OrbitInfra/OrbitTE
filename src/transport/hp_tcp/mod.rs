@@ -19,6 +19,8 @@ use std::time::Instant;
 pub(crate) use task::Permit;
 
 pub(crate) struct HpTcpTransport {
+    #[cfg(test)]
+    pub(crate) retired_sessions: Arc<std::sync::atomic::AtomicUsize>,
     workers: workers::Workers,
     client: client::Client,
     budget: Arc<task::Budget>,
@@ -30,8 +32,19 @@ impl HpTcpTransport {
         source: Arc<Source>,
     ) -> Result<Self> {
         let workers = workers::Workers::start(cfg.worker_count)?;
-        server::start(&workers, listener, source, cfg)?;
+        #[cfg(test)]
+        let retired_sessions = Arc::default();
+        server::start(
+            &workers,
+            listener,
+            source,
+            cfg,
+            #[cfg(test)]
+            Arc::clone(&retired_sessions),
+        )?;
         Ok(Self {
+            #[cfg(test)]
+            retired_sessions,
             workers,
             client: client::Client::new(cfg.clone()),
             budget: task::Budget::new(cfg.max_outstanding_tasks, cfg.max_outstanding_bytes),

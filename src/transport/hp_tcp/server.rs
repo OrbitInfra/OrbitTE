@@ -17,6 +17,7 @@ pub(super) fn start(
     listener: std::net::TcpListener,
     source: Arc<Source>,
     config: &HpTcpConfig,
+    #[cfg(test)] retired_sessions: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Result<()> {
     let handles = workers.handles();
     let listener = {
@@ -71,11 +72,15 @@ pub(super) fn start(
             };
             let source = source.clone();
             let bytes = bytes.clone();
+            #[cfg(test)]
+            let retired = retired_sessions.clone();
             handles[worker].spawn(async move {
-                let _slot = slot;
                 if let Ok(stream) = TcpStream::from_std(stream) {
                     let _ = session(stream, source, bytes, limit, timeout).await;
                 }
+                drop(slot);
+                #[cfg(test)]
+                retired.fetch_add(1, std::sync::atomic::Ordering::Release);
             });
             worker = (worker + 1) % handles.len();
         }

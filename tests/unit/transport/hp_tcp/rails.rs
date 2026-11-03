@@ -46,6 +46,31 @@ fn concurrent_public_transfers_keep_all_sixteen_payloads_and_guards() {
 }
 
 #[cfg(target_os = "linux")]
+fn rail_listener(
+    peer: &mut crate::RemoteSegment,
+    ips: [Ipv4Addr; 2],
+) -> ([mpsc::Receiver<TcpStream>; 2], thread::JoinHandle<()>) {
+    // Like the provider, reserve the port once across all local addresses.
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    peer.metadata.hp = Some(Arc::new(
+        Endpoint::new(listener.local_addr().unwrap().port(), 1 << 28, &ips).unwrap(),
+    ));
+    let (at, ar) = mpsc::sync_channel(1);
+    let (bt, br) = mpsc::sync_channel(1);
+    let join = thread::spawn(move || {
+        let tx = [at, bt];
+        for _ in 0..2 {
+            let (s, from) = accept(&listener);
+            let local = s.local_addr().unwrap().ip();
+            let rail = ips.iter().position(|ip| local == *ip).unwrap();
+            assert_eq!(from.ip(), ips[rail]);
+            tx[rail].send(s).unwrap();
+        }
+    });
+    ([ar, br], join)
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn static_ipv4_pairing_balances_uneven_reads_rotates_small_requests_and_never_stripes_writes() {
     let ips = [Ipv4Addr::LOCALHOST, Ipv4Addr::new(127, 0, 0, 2)];
@@ -54,20 +79,17 @@ fn static_ipv4_pairing_balances_uneven_reads_rotates_small_requests_and_never_st
     c.hp_tcp.connections_per_peer = 2;
     let n = 2 * task::STEP + 3;
     let (_src, dst, remote, local, mut peer) = setup(c, n + 4);
-    let first = TcpListener::bind((ips[0], 0)).unwrap();
-    let second = TcpListener::bind((ips[1], first.local_addr().unwrap().port())).unwrap();
-    sockets::redirect(&mut peer, &[&first, &second]);
+    let (lanes, listener) = rail_listener(&mut peer, ips);
     let base = remote.base_address() + 1;
     let data: Vec<u8> = (0..n).map(|i| (i % 239) as u8).collect();
-    let handlers = [first, second]
+    let handlers = lanes
         .into_iter()
         .enumerate()
         .map(|(rail, l)| {
             let data = data.clone();
             thread::spawn(move || {
-                let (mut s, a) = accept(&l);
+                let mut s = l.recv_timeout(WAIT).unwrap();
                 s.set_read_timeout(Some(WAIT)).unwrap();
-                assert_eq!(a.ip(), ips[rail]);
                 let mut frames = Vec::new();
                 for _ in 0..(if rail == 0 { 3 } else { 2 }) {
                     let req = request(&mut s);
@@ -115,6 +137,7 @@ fn static_ipv4_pairing_balances_uneven_reads_rotates_small_requests_and_never_st
     assert_eq!(got[0], 0xee);
     assert_eq!(&got[n + 1..], &[0xee; 3]);
     assert_eq!(bytes(&remote), vec![0xa5; n + 4]);
+    listener.join().unwrap();
     let mut logs = handlers.into_iter().map(|h| h.join().unwrap());
     let a = logs.next().unwrap();
     let b = logs.next().unwrap();
@@ -203,12 +226,10 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
     c.hp_tcp.connections_per_peer = 2;
     let n = 2 * task::STEP + 1;
     let (_src, dst, remote, local, mut peer) = setup(c, n + 2);
-    let a = TcpListener::bind((ips[0], 0)).unwrap();
-    let b = TcpListener::bind((ips[1], a.local_addr().unwrap().port())).unwrap();
-    sockets::redirect(&mut peer, &[&a, &b]);
+    let ([a, b], listener) = rail_listener(&mut peer, ips);
     let (on_sibling, sibling) = mpsc::channel();
     let h = thread::spawn(move || {
-        let (mut s, _) = accept(&b);
+        let mut s = b.recv_timeout(WAIT).unwrap();
         s.set_read_timeout(Some(WAIT)).unwrap();
         let req = request(&mut s);
         s.write_all(
@@ -224,7 +245,7 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
         assert!(s.read_exact(&mut [0; 1]).is_err());
     });
     let stale = thread::spawn(move || {
-        let (mut s, _) = accept(&a);
+        let mut s = a.recv_timeout(WAIT).unwrap();
         let req = request(&mut s);
         sibling.recv_timeout(WAIT).unwrap();
         s.write_all(
@@ -250,6 +271,7 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
     assert!(rep.is_complete(), "{rep:?}");
     h.join().unwrap();
     stale.join().unwrap();
+    listener.join().unwrap();
     let mut expected = vec![0xa5; n + 2];
     expected[0] = 0xee;
     expected[n + 1] = 0xee;

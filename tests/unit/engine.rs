@@ -1352,3 +1352,13 @@ fn hp_worker_failure_preserves_an_already_completed_batch() -> Result<()> {
     dst.close(crate::test_support::EVENTUAL_PROGRESS)?;
     Ok(())
 }
+
+impl TransferEngine {
+    pub(crate) fn retired_hp_sessions_for_test(&self) -> usize {
+        self.hp_tcp
+            .as_ref()
+            .unwrap()
+            .retired_sessions
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+}
