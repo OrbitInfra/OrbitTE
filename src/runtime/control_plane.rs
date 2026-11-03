@@ -482,6 +482,7 @@ pub(crate) struct ControlService {
     endpoint: SocketAddr,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
+    accept_wake: mio::Waker,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -490,6 +491,11 @@ impl ControlService {
         let listener = TcpListener::bind(config.bind_addr)?;
         listener.set_nonblocking(true)?;
         let endpoint = listener.local_addr()?;
+        let mut listener = mio::net::TcpListener::from_std(listener);
+        let mut poll = mio::Poll::new()?;
+        poll.registry()
+            .register(&mut listener, mio::Token(0), mio::Interest::READABLE)?;
+        let accept_wake = mio::Waker::new(poll.registry(), mio::Token(1))?;
         let stopping = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<(TcpStream, Instant)>(config.handler_threads);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -501,6 +507,7 @@ impl ControlService {
             endpoint,
             stopping,
             acceptor: None,
+            accept_wake,
             workers: Vec::new(),
         };
         for index in 0..config.handler_threads {
@@ -545,10 +552,14 @@ impl ControlService {
             thread::Builder::new()
                 .name("orbitte-control-accept".into())
                 .spawn(move || {
+                    let mut events = mio::Events::with_capacity(2);
                     while !stopping.load(Ordering::Acquire) {
                         match listener.accept() {
                             Ok((stream, _)) => {
-                                if stream.set_nodelay(true).is_err() {
+                                let stream: TcpStream = stream.into();
+                                if stream.set_nonblocking(false).is_err()
+                                    || stream.set_nodelay(true).is_err()
+                                {
                                     continue;
                                 }
                                 let Ok(deadline) = deadline(timeout) else {
@@ -557,9 +568,17 @@ impl ControlService {
                                 // The queue and worker count bound sockets and payloads.
                                 let _ = sender.try_send((stream, deadline));
                             }
-                            Err(error) if retryable(&error) => {
-                                thread::sleep(Duration::from_millis(2))
+                            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                                // Only the listener and shutdown wake are registered. Either
+                                // event restarts the accept loop. The bound also covers a failed wake.
+                                if let Err(error) = poll.poll(&mut events, Some(IO_POLL)) {
+                                    if error.kind() != io::ErrorKind::Interrupted {
+                                        log::error!("control listener readiness failed: {error}");
+                                        break;
+                                    }
+                                }
                             }
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                             Err(_) => break,
                         }
                     }
@@ -578,6 +597,9 @@ impl Drop for ControlService {
         self.stopping.store(true, Ordering::Release);
         self.source.notifications.set_receiver(None);
         if let Some(acceptor) = self.acceptor.take() {
+            if let Err(error) = self.accept_wake.wake() {
+                log::warn!("control listener shutdown wake failed: {error}");
+            }
             let _ = acceptor.join();
         }
         for worker in self.workers.drain(..) {

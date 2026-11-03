@@ -1789,3 +1789,48 @@ fn describe_retries_only_read_only_io_on_a_fresh_connection_with_the_same_epoch(
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn accept_readiness_preserves_bounded_handoff_and_serves_the_next_connection() {
+    let timeout = common::EVENTUAL_PROGRESS;
+    let engine = TransferEngine::new(EngineConfig {
+        handler_threads: 1,
+        handler_timeout: timeout,
+        ..Default::default()
+    })
+    .unwrap();
+    let memory = engine
+        .register_memory(vec![0xea, 1, 2, 0xeb].into(), Permission::RemoteReadWrite)
+        .unwrap();
+    let epoch = engine.source_epoch();
+
+    // An acknowledged but incomplete WRITE holds the sole handler. One READ
+    // fits in the handoff queue and the next connection must be dropped.
+    let mut write = wire_request(&engine, Operation::TcpWrite, memory.id(), 1, 2);
+    write.deadline = deadline(timeout).unwrap();
+    assert_eq!(Reply::read(&mut write, epoch).unwrap().status, 9);
+    let mut queued = wire_request(&engine, Operation::TcpRead, memory.id(), 0, 4);
+    queued.deadline = deadline(timeout).unwrap();
+    let mut excess = TcpStream::connect_timeout(&engine.endpoint(), timeout).unwrap();
+    excess.set_read_timeout(Some(timeout)).unwrap();
+    match excess.read(&mut [0]) {
+        Ok(0) => {}
+        Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {}
+        other => panic!("full control queue did not close the excess socket: {other:?}"),
+    }
+    write.write_all(&[3, 4]).unwrap();
+    assert_eq!(Reply::read(&mut write, epoch).unwrap().status, 0);
+    let expected = [0xea, 3, 4, 0xeb];
+    let reply = Reply::read(&mut queued, epoch).unwrap();
+    assert_eq!((reply.status, reply.length), (0, 4));
+    let mut got = [0; 4];
+    queued.read_exact(&mut got).unwrap();
+    assert_eq!(got, expected);
+    let mut next = wire_request(&engine, Operation::TcpRead, memory.id(), 0, 4);
+    let reply = Reply::read(&mut next, epoch).unwrap();
+    assert_eq!((reply.status, reply.length), (0, 4));
+    next.read_exact(&mut got).unwrap();
+    assert_eq!(got, expected);
+    memory.read(0, &mut got).unwrap();
+    assert_eq!(got, expected);
+}

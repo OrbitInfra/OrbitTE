@@ -24,6 +24,14 @@ protocol, source admission and dispatch. TENT keeps its TCP payload handlers in
 a `ControlChannel` for setup without going through `TcpTransport`. Cache keys,
 replica grants and recovery policy stay with OrbitKV.
 
+Each ordinary TCP request opens a connection. The control acceptor waits for
+socket readiness and hands each accepted stream to the bounded handler queue.
+A full queue closes the new connection. Shutdown signals the same acceptor and
+joins it before the handlers. Both ends enable TCP_NODELAY. The previous
+2 ms sleep after an empty accept delayed short loopback READs by an idle
+polling interval. The S10 benchmark measures this path with a 64-byte payload
+and checks both guards.
+
 ## Rust contracts
 
 - **Owned memory.** `register_memory(Box<[u8]>, Permission)` consumes the backing,
