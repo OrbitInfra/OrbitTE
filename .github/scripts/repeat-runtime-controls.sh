@@ -93,6 +93,15 @@ if [[ ${2:-} == quotas ]]; then
     engine::failover::tests::native::metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport
   )
 fi
+if [[ ${2:-} == rail-recovery ]]; then
+  iterations=200
+  controls=(
+    transport::rdma::rdma_transport::tests::rails::a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receipt
+    transport::rdma::cq_lane::tests::retirement::poll_retirement_keeps_native_owners_until_close_or_retention_receipt
+    engine::failover::tests::native::partial_rdma_read_replays_only_after_the_real_close_receipt
+    engine::failover::tests::native::ambiguous_write_and_unquiesced_read_never_start_a_fallback
+  )
+fi
 if [[ ${2:-} == batch-release ]]; then
   iterations=200
   controls=(
