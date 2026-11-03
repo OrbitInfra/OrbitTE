@@ -7,14 +7,16 @@ listed in the [CPU contract](cpu-tcp.md). No complete requirement row below is
 qualified or accepted yet. The published `orbit-te 0.1.0-alpha.1` still establishes
 package identity and provides no transfer API.
 
-The selected purpose is a network and memory transfer engine for CPU DRAM and
-NVIDIA GPUs, with optional local file/SSD movement. CPU and CUDA are the two
+The selected purpose is a transfer engine for CPU DRAM, NVIDIA GPUs and local
+file/SSD storage that carries every end-to-end OrbitKV cache path, including
+GPU↔DRAM and GPU↔SSD. CPU and CUDA are the two
 implementation platforms. GPU vendor selection does not restrict ordinary
 CPUs, SSDs or compatible network devices to NVIDIA products. CPU-only operation
 remains supported. Each NVIDIA GPU model/topology needs its own qualification.
 
-The upstream inventory below makes this selection explicit: 11 transport types
-apply to CPU/NVIDIA; seven require excluded accelerator platforms. Optional
+The upstream inventory below makes this selection explicit: 10 transport types
+apply to CPU/NVIDIA; seven require excluded accelerator platforms and UB requires
+the excluded URMA/UnifiedBus platform. Optional
 means opt-in build/runtime dependencies, not permission to leave an in-scope
 requirement unfinished. This target does not claim every upstream platform.
 
@@ -76,10 +78,10 @@ versioned native FFI path; the existing C request struct lacks `policy_name`,
 Keep compatibility entrypoints at the binding boundary and one Rust behavior
 owner underneath. OrbitTE's runtime must not call the C++ TENT engine, legacy
 TE engine, Mooncake Store, PG, EP or resharding components. External device and
-OS interfaces such as verbs, CUDA, cuFile, URMA, MPComm and libfabric remain
+OS interfaces such as verbs, CUDA, cuFile, MPComm and libfabric remain
 explicit optional dependencies for their selected modules. HIP, Ascend, Sunrise,
-PJRT/TPU, XPU/SYCL and MLU SDKs are outside this build and implementation scope.
-Transport state machines and policy remain in Rust.
+PJRT/TPU, XPU/SYCL, MLU and URMA SDKs are outside this build and
+implementation scope. Transport state machines and policy remain in Rust.
 
 Safety defects are recorded as deliberate compatibility differences with
 reproductions, rather than copied into Rust. Unknown physical completion may
@@ -103,10 +105,10 @@ that every branch or provider has already been qualified upstream.
 | F04 | Single/batch memory allocation and registration; permissions/options; duplicate references, range geometry, warmup/prefault, unregister and partial-failure ownership | `transfer_engine_impl.cpp`, `segment_registry*`, `local_memory_lifecycle_test`, `coalesce_regions_test`, backend buffer tests | P1/P4/P5/P8 |
 | F05 | Memory/file segments, `file://` addressing, open/close/info, descriptor caching/refresh, update subscription/invalidation and retry coalescing | `segment*`, `control_plane*`, `segment_manager_test`, `segment_desc_retry_test` | P2/P7 |
 | F06 | P2P metadata plus etcd, Redis and HTTP stores; Redis username/password/DB behavior; publication and lookup failure handling | `runtime/metastore.cpp`, `metastore/*`, `control_plane*`, `redis_metastore_test` | P2/P9 |
-| F07 | RPC bootstrap, peer probe, data READ/WRITE, notifications, Delegate/Pin/Unpin, update subscriptions, UB bootstrap; reconnect and owned handler shutdown | `rpc/*`, `control_plane*`, `rpc_reconnect_test`, `rpc_handler_isolation_test`, `delegate_rpc_test` | P2/P5/P8/P10 |
+| F07 | RPC bootstrap, peer probe, data READ/WRITE, notifications, Delegate/Pin/Unpin, update subscriptions; reconnect and owned handler shutdown | `rpc/*`, `control_plane*`, `rpc_reconnect_test`, `rpc_handler_isolation_test`, `delegate_rpc_test` | P2/P5/P10 |
 | F08 | Batch capacity/IDs; READ/WRITE; partial submission; merge eligibility and public alias-to-owner mapping; per-task/list/overall status and transferred bytes | `transfer_engine_impl.cpp`, `request_merge_test`, `request_submit_bench`, `engine_failover_e2e_test` | P1/P2/P6 |
 | F09 | Observational polling option, explicit `progressBatch`, background progress worker, bounded wake/fallback timing, terminal-state stability and deferred batch retirement | `progress_worker*`, `progress_worker_test`, `runtime_queue_dispatch_test`, `poll_backoff_test` | P1/P6 |
-| F10 | Best-effort queued/posted cancellation with backend-specific support, partial progress and retention; distinguish accepted cancel from physical termination | `cancelTransfer`, `Transport::supportsCancellation`, RDMA/HP-TCP/UB cancel tests | Every backend/P10 |
+| F10 | Best-effort queued/posted cancellation with backend-specific support, partial progress and retention; distinguish accepted cancel from physical termination | `cancelTransfer`, `Transport::supportsCancellation`, RDMA/HP-TCP cancel tests | Every backend/P10 |
 | F11 | Attached completion notifications, explicit send/receive, local and transport/RPC fallback, exactly-once logical delivery accounting, empty-poll/free conventions | `local_notification_test`, `notification_fallback_test`, `transfer_engine_c.cpp` | P2/P6/P9 |
 | F12 | Policy ordering; priority HIGH/MEDIUM/LOW; named policy; segment, location and size filters; device masks; QP pools; explicit transport hint and unavailable-path behavior | `transport_selector*`, `transport_hint_test`, `qos_contract*`, `qp_pool_layout_test` | P4/P6 |
 | F13 | All request intents: unspecified, foreground get, prefetch, migration, checkpoint, weight loading and internal staging; policy binding and merge isolation | `common/types.h`, `qos_contract*`, `transport_selector_test` | P6 |
@@ -114,7 +116,7 @@ that every branch or provider has already been qualified upstream.
 | F15 | Per-worker priority queues, shared cross-process quotas, accounting and recovery, priority filtering, named QP pools and receiver credit/pacing | `rdma/quota*`, `shared_quota*`, `receiver_credit*`, `quota_accounting_test`, `receiver_credit_test` | P4/P6 |
 | F16 | Slicing/spraying; round-robin and bandwidth-aware choices; separate selection EWMA and transmit estimate; NUMA penalties, masks and strict-local rules | `rdma/workers*`, `bw_arbitration*`, `device_selector_test`, `bw_arbitration_test` | P4/P6 |
 | F17 | Submit- and completion-stage fallback; per-owner retry budgets; merged aliases; no terminal resurrection; explicit-progress versus poll semantics | `transfer_engine_impl.cpp`, `engine_failover_e2e_test` | P6/P10 |
-| F18 | RDMA and UB endpoint caches, bootstrap concurrency, per-rail health, cooldown/probe/half-open recovery, device loss, retirement and failed-cleanup quarantine | `rdma/endpoint*`, `rail_monitor*`, `ub/*`, endpoint/rail/async-event/UB teardown tests | P4/P6/P8/P10 |
+| F18 | RDMA endpoint caches, bootstrap concurrency, per-rail health, cooldown/probe/half-open recovery, device loss, retirement and failed-cleanup quarantine | `rdma/endpoint*`, `rail_monitor*`, endpoint/rail/async-event teardown tests | P4/P6/P10 |
 | F19 | Local and remote staging; delegate/pin/unpin registry; chunk buffers; mixed direct/staged requests; nested work admission, completion and proxy shutdown | `proxy_manager*`, `remote_stage_operation*`, `stage_buffer_concurrency_test`, `proxy_shutdown_timeout_test` | P5/P6/P8/P10 |
 | F20 | Transfer/attempt/queue/failure-stage and deadline observations; labels and histograms; HTTP/JSON/Prometheus output; configuration, disabled mode and available-NIC load snapshots | `metrics/*`, `common/qos_metrics*`, metrics tests, `getNicLoadStats` | P2/P6/P9 |
 | F21 | Native C++, C and Python surfaces; classic-TE-to-TENT shim, including its synchronous/wait helpers and explicit unavailable operations | public headers, `src/python/pybind.cpp`, parent `src/transfer_engine.cpp`, `test_python_guards.py` | P9 |
@@ -130,7 +132,7 @@ recompute: the frozen engine installs an empty local-decode suggestion hook.
 
 ## Upstream transport inventory and selected scope
 
-All 18 upstream types are accounted for; only the 11 marked core or optional
+All 18 upstream types are accounted for; only the 10 marked core or optional
 are implementation targets. Capability bits and compiled providers constrain
 supported transfer directions. Do not infer GPU support for a transport from
 another transport's platform support. Every selected row requires normal bytes,
@@ -144,17 +146,17 @@ negative cases, teardown, installed-artifact and applicable mixed-peer gates.
 | B04 `RDMA` | Host and CUDA device memory; MR/PD/CQ/QP lifecycle, bootstrap, retries, multirail, notifications, quota, GDR capability and physical drain | Two RNIC hosts; IB/RoCE profiles, multiple rails; CUDA combinations separately | Core, P4/P5/P6 |
 | B05 `NVLINK` | Device/host directions actually advertised, CUDA IPC handle sharing and stream completion; no stale mapping reuse | Two local GPU processes with supported CUDA peer access | Core, P5 |
 | B06 `MNNVL` | CUDA fabric memory/export/import; opt-in selection, EGM option and supported directions | Supported CUDA fabric/NVLink topology, plus EGM profile where applicable | Core, P5 |
-| B07 `IOURING` | File segments, read/write offsets and completion/error bytes; staging where selected; short/partial/error I/O | Linux io_uring and real local files/storage | Optional storage, P7 |
-| B08 `GDS` | Host/device-to-file directions, cuFile registration and completion/status ownership, explicit fallback behavior | NVIDIA GPU, cuFile/GDS-capable filesystem and storage | Optional storage, P7 |
-| B09 `UB` | Host URMA transport, endpoint/device capability negotiation, jetty/JFC lifecycle, slicing/quota, retries, notifications when enabled, cancellation and quarantine | Supported URMA devices/provider on two hosts; bonding profile separately | Optional network, P8.1 |
+| B07 `IOURING` | File segments, read/write offsets and completion/error bytes; staging where selected; short/partial/error I/O | Linux io_uring and real local files/storage | Core storage, P7 |
+| B08 `GDS` | Host/device-to-file directions, cuFile registration and completion/status ownership, explicit fallback behavior | NVIDIA GPU, cuFile/GDS-capable filesystem and storage | Core storage, P7 |
+| B09 `UB` | Host URMA transport, endpoint/device capability negotiation, jetty/JFC lifecycle, slicing/quota, retries, notifications when enabled, cancellation and quarantine | Supported URMA devices/provider on two hosts; bonding profile separately | Excluded platform |
 | B10 `AscendDirect` | Host/device registration and copy, HIXL/local-copy paths, fabric memory, timeout, resource configuration and agent mode | Ascend runtime and supported HIXL topology | Excluded accelerator |
 | B11 `SUNRISE_LINK` | Advertised host/device directions, registration, provider endpoint and completion lifecycle | Sunrise runtime and link devices | Excluded accelerator |
 | B12 `TPU` | Host-device staging through PJRT ABI and provider bridge; ownership of pending device work | Actual supported TPU/PJRT adapter | Excluded accelerator |
 | B13 `XPU` | Host-device copy and staging with native SYCL allocations/context | Intel XPU, DPC++/SYCL runtime | Excluded accelerator |
 | B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
-| B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.2 |
+| B15 `MPCOMM` | Host and supported NVIDIA GDR; peer registry, registration and completion mapping | Compatible provider/endpoints; frozen GPU support requires `nvidia_peermem` | Optional network, P8.1 |
 | B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
-| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Optional network, P8.3 |
+| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Optional network, P8.2 |
 | B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
 
 Source authority: [transport types][types], [runtime loader][loader],
@@ -194,13 +196,14 @@ topology, configuration and actual route observations matter. The NVIDIA
 [API guide](https://docs.nvidia.com/gpudirect-storage/api-reference-guide/index.html)
 describes compatibility mode and supported memory/configuration rules.
 
-File segments, io_uring and cuFile/GDS are optional modules. The network/memory
-core must build and run without enabling them or loading storage libraries.
-These modules own byte I/O and its resources; OrbitKV retains KV indexing,
-placement, eviction, extents, cache policy and recovery semantics. Enabling a
-file module does not require migrating OrbitKV's own SSD implementation. A
-compatibility profile enables the modules needed to compare with TENT's
-effective configuration.
+File segments, io_uring and cuFile/GDS are core requirements delivered as
+opt-in modules. The network/memory core must build and run without enabling
+them or loading storage libraries. These modules own byte I/O and its
+resources; OrbitKV retains KV indexing, placement, eviction, extents, cache
+policy and recovery semantics. OrbitKV's SSD tier is expected to move its
+DRAM↔SSD and GPU↔SSD byte movement onto these modules; that switch is consumer
+integration with its own P10/P11 qualification. A compatibility profile enables
+the modules needed to compare with TENT's effective configuration.
 
 ## C and language binding inventory
 
@@ -237,9 +240,10 @@ and prevent guard exit/destruction from freeing submitted work prematurely.
 
 The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
 RecvData, Notify, Probe, Delegate, Pin, Unpin, update subscription, update
-notification and UB bootstrap. See [the RPC contract][rpc]. P0 must freeze the
-actual framing/serialization and any external YLT/common dependencies before
-choosing the Rust codec. RPC function IDs alone are not a wire specification.
+notification and UB bootstrap. The UB bootstrap ID stays recognized but
+unavailable, like the excluded transports. See [the RPC contract][rpc]. P0 must
+freeze the actual framing/serialization and any external YLT/common
+dependencies before choosing the Rust codec. RPC function IDs alone are not a wire specification.
 Do the same for segment metadata, HP-TCP frames and provider handshakes.
 
 Interoperability is directional: test a Rust requester against a C++ source

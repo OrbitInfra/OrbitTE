@@ -15,9 +15,12 @@
 
 ## Overview
 
-OrbitTE provides owned, batched data movement across CPU memory, NVIDIA host
-staging and network transports. Its design follows Mooncake TENT's resource
-and runtime boundaries, implemented in Rust without a Mooncake C++ dependency.
+OrbitTE is the transfer engine for OrbitKV's KV cache. It provides owned,
+batched data movement across CPU memory, NVIDIA GPUs and network transports,
+and its planned storage transports extend that to local SSDs, so every
+end-to-end cache path runs through one engine. Its design follows Mooncake
+TENT's resource and runtime boundaries, implemented in Rust without a Mooncake
+C++ dependency.
 
 The engine owns registration, batches and completion. TCP, RDMA and opt-in CUDA IPC are separate
 payload transports, with a shared control service for peer discovery, grants

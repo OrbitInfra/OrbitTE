@@ -18,10 +18,15 @@
 
 ## Overview
 
-OrbitTE moves bytes between CPU memory and NVIDIA GPU allocations, within and
-across machines. It follows Mooncake TENT's engine, topology, context, buffer,
-endpoint and worker architecture, with resource ownership and transfer state
-machines implemented in Rust. The runtime has no Mooncake C++ dependency.
+OrbitTE is the transfer engine for [OrbitKV](https://github.com/OrbitInfra/OrbitKV)'s
+KV cache, replacing its earlier Mooncake TENT dependency. It moves bytes between
+CPU memory, NVIDIA GPU allocations and local SSDs, within and across machines, so
+every end-to-end cache path, including GPU↔DRAM and GPU↔SSD, runs through one
+engine. The SSD paths are planned in
+[P7](docs/completion-plan.md#p7--storage-transports). OrbitTE follows Mooncake
+TENT's engine, topology, context, buffer, endpoint and worker architecture, with
+resource ownership and transfer state machines implemented in Rust. The runtime
+has no Mooncake C++ dependency.
 
 TCP, RDMA and opt-in CUDA IPC are separate payload transports. A shared control service handles
 peer discovery, memory grants and receipts. Applications own cache identity,
@@ -180,7 +185,7 @@ artifacts. Opt-in [host staging location selection](docs/staging.md#host-staging
 now supports GPU-near or explicit NUMA host buffers, with location-aware reuse
 and page-rounded budgets. CPU source checks cover this path; hardware locality
 and performance remain unqualified. Remaining control progress stays open.
-Broader IPC parity, optional SSD transports and
+Broader IPC parity, DRAM/GPU↔SSD storage transports and
 full TENT API/wire parity remain open.
 [Capabilities](docs/capabilities.md) describes supported paths;
 [qualification](docs/qualification.md) records exact artifacts and limits.
