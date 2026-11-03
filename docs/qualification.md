@@ -57,6 +57,9 @@ payloads and guards on both filesystems. The suite also covered EOF/truncation,
 short submission, syscall failure, queued cancellation, QoS, deadlines and
 concurrent close. [Stable job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520140) · [Rust 1.85 job](https://github.com/OrbitInfra/OrbitTE/actions/runs/41639331592/job/125928520599)
 
+On main after the storage closeout (`017654d`), the same real-file test passed on
+[stable](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289755) and [Rust 1.85](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289814).
+
 **CUDA/file staging is implemented. Its installed GPU/NVMe gate is unrun.**
 The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
 with real files to check multi-chunk bytes, short READs, producer events,
