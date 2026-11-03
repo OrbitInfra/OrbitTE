@@ -41,6 +41,16 @@ artifacts and acceptance boundaries.
 The production host RDMA implementation is complete; physical/fabric
 qualification and complete acceptance remain in the existing P4 queue.
 
+## Local file segments
+
+`cargo test --locked --lib segment::file::tests` uses real temporary files.
+It checks shared and stale handles, cached size and refresh after resize,
+EOF and integer overflow, positioned reads and read-only denial. A worker
+holds an admitted write while the pathname is replaced and close times out.
+The test checks the entire original and replacement files, then verifies fd
+release and slot reuse after drain. The same tests run in the Linux feature
+matrix. IOURING and GDS payload qualification remain open.
+
 ## Per-request remote staging
 
 Source `27b73b5` separates the incoming Pin capability from each outgoing

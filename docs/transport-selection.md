@@ -51,7 +51,7 @@ before payload I/O, task publication or admission charges.
 | Field | Consumed behavior |
 | --- | --- |
 | `name` | Unique configuration label, 1–256 bytes; omitted defaults to `memory_default`. Named request selection remains open |
-| `segment_type` | `memory`; `file` is rejected until file execution exists |
+| `segment_type` | `memory`. Policies specifying `file` are rejected until S2 provides a file executor. [File segment handles](storage.md) are available in the core build |
 | `local_memory`, `remote_memory` | `cpu`, `cuda`, or `*`; omission/`*` matches either. Pinned host allocations remain CPU |
 | `min_size`, `max_size` | Inclusive byte bounds; minimum must not exceed maximum |
 | `priority` | Exact match on effective QoS priority, otherwise request priority. Accepts high/medium/low or integers 0/1/2 |

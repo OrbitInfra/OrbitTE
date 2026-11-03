@@ -1,0 +1,282 @@
+//! Local file descriptors, corresponding to TENT's SegmentManager file entries.
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, Weak};
+use std::time::{Duration, Instant};
+
+use crate::engine::remaining;
+use crate::{Error, Permission, Result, SegmentType, TransferOp};
+
+const DESCRIPTOR_TTL: Duration = Duration::from_secs(3600);
+
+/// An engine-local handle for a `file://` name. All aliases close together.
+#[derive(Clone, Debug)]
+pub struct FileSegment(Weak<Entry>);
+
+/// Snapshot of TENT's single regular-file buffer. Its base offset is zero.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileSegmentInfo {
+    pub segment_type: SegmentType,
+    pub path: Arc<str>,
+    pub offset: u64,
+    pub length: u64,
+    pub permission: Permission,
+}
+
+#[derive(Default)]
+pub(crate) struct FileSegments {
+    entries: RwLock<HashMap<Arc<str>, Arc<Entry>>>,
+}
+
+struct Entry {
+    path: Arc<str>,
+    permission: Permission,
+    state: Mutex<State>,
+    drained: Condvar,
+}
+
+#[derive(Default)]
+struct State {
+    closing: bool,
+    active: usize,
+    file: Option<Arc<File>>,
+    size: Option<(Instant, u64)>,
+}
+
+impl Entry {
+    fn lock(&self) -> Result<MutexGuard<'_, State>> {
+        self.state
+            .lock()
+            .map_err(|_| Error::Internal("file segment lock poisoned"))
+    }
+
+    fn pin(self: &Arc<Self>) -> Result<FileLease> {
+        let mut state = self.lock()?;
+        if state.closing {
+            return Err(Error::FileSegmentClosed);
+        }
+        let file = match &state.file {
+            Some(file) => Arc::clone(file),
+            None => {
+                if !std::fs::metadata(self.path.as_ref())?.is_file() {
+                    return Err(Error::InvalidConfig("file segment requires a regular file"));
+                }
+                let mut options = OpenOptions::new();
+                options
+                    .read(self.permission.allows(false))
+                    .write(self.permission.allows(true));
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.custom_flags(libc::O_NONBLOCK);
+                }
+                let file = Arc::new(options.open(self.path.as_ref())?);
+                let metadata = file.metadata()?;
+                if !metadata.is_file() {
+                    return Err(Error::InvalidConfig("file segment requires a regular file"));
+                }
+                state.size = Some((Instant::now(), metadata.len()));
+                state.file = Some(Arc::clone(&file));
+                file
+            }
+        };
+        state.active = state
+            .active
+            .checked_add(1)
+            .ok_or(Error::ResourceExhausted)?;
+        Ok(FileLease {
+            file,
+            permit: FilePermit(Arc::clone(self)),
+        })
+    }
+}
+
+/// An executor holds this until its I/O is physically complete. Field order drops
+/// the fd reference before the permit can wake a closer.
+pub(crate) struct FileLease {
+    file: Arc<File>,
+    permit: FilePermit,
+}
+
+struct FilePermit(Arc<Entry>);
+
+impl Drop for FilePermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.active -= 1;
+        if state.active == 0 && state.closing {
+            self.0.drained.notify_all();
+        }
+    }
+}
+
+impl FileLease {
+    pub(crate) fn file(&self) -> &File {
+        &self.file
+    }
+
+    fn length(&self, refresh: bool) -> Result<u64> {
+        let mut state = self.permit.0.lock()?;
+        match state.size {
+            Some((at, length)) if !refresh && at.elapsed() < DESCRIPTOR_TTL => Ok(length),
+            _ => {
+                let length = self.file().metadata()?.len();
+                state.size = Some((Instant::now(), length));
+                Ok(length)
+            }
+        }
+    }
+}
+
+impl FileSegments {
+    pub(crate) fn open(
+        &self,
+        name: &str,
+        permission: Permission,
+        limit: usize,
+    ) -> Result<FileSegment> {
+        let path = name
+            .strip_prefix("file://")
+            .filter(|path| !path.is_empty() && path.len() <= 4096 && !path.contains('\0'))
+            .ok_or(Error::InvalidConfig(
+                "expected file:// followed by a path of 1..=4096 bytes",
+            ))?;
+        if permission == Permission::LocalOnly {
+            return Err(Error::PermissionDenied);
+        }
+        let entry = {
+            let mut entries = self
+                .entries
+                .write()
+                .map_err(|_| Error::Internal("file table lock poisoned"))?;
+            if let Some(entry) = entries.get(path) {
+                Arc::clone(entry)
+            } else {
+                if entries.len() >= limit {
+                    return Err(Error::ResourceExhausted);
+                }
+                let path: Arc<str> = path.into();
+                let entry = Arc::new(Entry {
+                    path: Arc::clone(&path),
+                    permission,
+                    state: Mutex::default(),
+                    drained: Condvar::new(),
+                });
+                entries.insert(path, Arc::clone(&entry));
+                entry
+            }
+        };
+        if entry.lock()?.closing {
+            return Err(Error::FileSegmentClosed);
+        }
+        if permission != entry.permission {
+            return Err(Error::PermissionDenied);
+        }
+        Ok(FileSegment(Arc::downgrade(&entry)))
+    }
+
+    fn entry(&self, segment: &FileSegment) -> Result<Arc<Entry>> {
+        let entry = segment.0.upgrade().ok_or(Error::FileSegmentClosed)?;
+        let entries = self
+            .entries
+            .read()
+            .map_err(|_| Error::Internal("file table lock poisoned"))?;
+        if entries
+            .get(&entry.path)
+            .is_some_and(|current| Arc::ptr_eq(current, &entry))
+        {
+            Ok(entry)
+        } else {
+            Err(Error::FileSegmentClosed)
+        }
+    }
+
+    pub(crate) fn info(&self, segment: &FileSegment, refresh: bool) -> Result<FileSegmentInfo> {
+        let entry = self.entry(segment)?;
+        let length = entry.pin()?.length(refresh)?;
+        Ok(FileSegmentInfo {
+            segment_type: SegmentType::File,
+            path: Arc::clone(&entry.path),
+            offset: 0,
+            length,
+            permission: entry.permission,
+        })
+    }
+
+    pub(crate) fn admit(
+        &self,
+        segment: &FileSegment,
+        operation: TransferOp,
+        offset: u64,
+        length: usize,
+    ) -> Result<(FileLease, u64)> {
+        let entry = self.entry(segment)?;
+        if !entry.permission.allows(operation == TransferOp::Write) {
+            return Err(Error::PermissionDenied);
+        }
+        let end = offset
+            .checked_add(u64::try_from(length).map_err(|_| Error::InvalidRange)?)
+            .ok_or(Error::InvalidRange)?;
+        if length == 0 {
+            return Err(Error::InvalidRange);
+        }
+        let lease = entry.pin()?;
+        if end > lease.length(true)? {
+            return Err(Error::InvalidRange);
+        }
+        Ok((lease, offset))
+    }
+
+    pub(crate) fn close(&self, segment: &FileSegment, deadline: Instant) -> Result<()> {
+        self.close_entry(&self.entry(segment)?, deadline)
+    }
+
+    fn close_entry(&self, entry: &Arc<Entry>, deadline: Instant) -> Result<()> {
+        let mut state = entry.lock()?;
+        state.closing = true;
+        while state.active != 0 {
+            state = entry
+                .drained
+                .wait_timeout(state, remaining(deadline)?)
+                .map_err(|_| Error::Internal("file segment lock poisoned"))?
+                .0;
+        }
+        state.file.take();
+        drop(state);
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|_| Error::Internal("file table lock poisoned"))?;
+        // A second closer may outlive removal and a fresh open of the same name.
+        if entries
+            .get(&entry.path)
+            .is_some_and(|current| Arc::ptr_eq(current, entry))
+        {
+            entries.remove(&entry.path);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn close_all(&self, deadline: Instant) -> Result<()> {
+        // Requester admission has closed and all public file lookups have returned.
+        let entries: Vec<_> = self
+            .entries
+            .read()
+            .map_err(|_| Error::Internal("file table lock poisoned"))?
+            .values()
+            .cloned()
+            .collect();
+        for entry in entries {
+            self.close_entry(&entry, deadline)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/segment/file.rs"]
+mod tests;

@@ -94,7 +94,7 @@ pub use {
         },
         transport_selector::{SegmentType, SelectionPolicy, TransportSelectorConfig},
     },
-    segment::{RemoteRegion, RemoteSegment, SourceEpoch},
+    segment::{FileSegment, FileSegmentInfo, RemoteRegion, RemoteSegment, SourceEpoch},
 };
 
 #[cfg(all(test, not(unsupported_native_target)))]

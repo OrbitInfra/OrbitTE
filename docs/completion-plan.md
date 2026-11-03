@@ -123,7 +123,7 @@ remains the target; the current order does not reduce the required scope.
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct and cooperative IPC/subbatch profiles accepted with explicit limits; full P5 open |
 | P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: weighted parent allocation, periodic exploration and NIC snapshots implemented; full policy/QoS open |
-| P7 | File, io_uring and GDS paths | P2; GDS also P5 | Planned |
+| P7 | File, io_uring and GDS paths | P2; GDS also P5 | P7.1 local file segments implemented. Payload executors remain open |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
 | P9 | Complete C/C++/Python and operational compatibility | P0/P2/P6; backend claims require their stages | Planned |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3-P9 deliveries | Planned |
@@ -822,8 +822,10 @@ Requirements: B07/B08 and F05 file-segment behavior. These paths are core:
 OrbitKV's SSD tier moves its DRAM↔SSD and GPU↔SSD bytes through them, while
 OrbitKV keeps extents, placement, eviction and recovery policy.
 
-- [ ] Implement file descriptors/segments, offsets, permissions, READ/WRITE,
-  short/error I/O and their owning completion state.
+- [x] P7.1 implements engine-local `file://` segments with cached size and
+  refresh, permissions, checked byte offsets and close with pending fd users.
+  Real temporary files cover these boundaries. See [file segments](storage.md).
+- [ ] Implement file payload READ/WRITE, short/error I/O and their owning completion state.
 - [ ] Implement io_uring queue/registered-buffer lifecycle, partial submission,
   cancellation and actual completion drain before releasing file or memory.
 - [ ] Implement cuFile/GDS registration and both host/device READ and WRITE,
@@ -832,8 +834,8 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
   CUDA/DRAM/file staging and CUDA/file native GDS. Disable compatibility for the
   native-only profile and record actual route evidence. A staged or
   compatibility-mode pass cannot qualify native GDS.
-- [ ] Keep file modules opt-in and prove the network/memory-only build neither
-  loads storage SDKs nor starts storage resources.
+- [ ] Keep storage executors opt-in and prove the network/memory-only build
+  neither loads storage SDKs nor starts storage workers. File segment handles are core.
 - [ ] Audit BufIo source reachability. Preserve any actually consumed behavior;
   document unselected reference code without inventing a public transport.
 

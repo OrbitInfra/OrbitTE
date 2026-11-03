@@ -86,6 +86,8 @@ pub struct EngineConfig {
     pub bind_addr: SocketAddr,
     pub max_registered_regions: usize,
     pub max_registered_bytes: usize,
+    /// Open or draining local file segments. Zero disables file segment opens.
+    pub max_file_segments: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,
     pub max_allocated_batches: usize,
@@ -143,6 +145,7 @@ impl Default for EngineConfig {
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,
+            max_file_segments: 1024,
             max_batch_requests: 1024,
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
@@ -207,6 +210,9 @@ impl EngineConfig {
             return Err(Error::InvalidConfig(
                 "registered regions must be in 1..=4096",
             ));
+        }
+        if self.max_file_segments > 4096 {
+            return Err(Error::InvalidConfig("at most 4096 open file segments"));
         }
         if self.max_registered_bytes == 0
             || self.max_batch_requests == 0

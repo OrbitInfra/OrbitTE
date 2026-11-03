@@ -5,6 +5,9 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
+mod file;
+pub(crate) use file::FileSegments;
+pub use file::{FileSegment, FileSegmentInfo};
 mod metadata;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) use metadata::ProcessIdentity;

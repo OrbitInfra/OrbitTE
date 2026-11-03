@@ -30,6 +30,27 @@ memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
 OrbitTE rendezvous messages. The [wire and consumer boundaries](tent-parity.md#wire-and-consumer-boundaries)
 describe the distinction from TENT's native RPC and metadata.
 
+## Local file segment ownership
+
+TENT's `SegmentManager` maps an open name to one handle and resolves a
+`file://` descriptor outside the name-table lock. `makeFileRemote` describes
+one regular file with base zero. `getSegmentInfo` reports that base and the
+file size. The io_uring implementation passes the request's target offset
+directly to positioned I/O. `SegmentTracker` manages memory registrations.
+
+OrbitTE's `segment/file.rs` follows the same split. A bounded per-engine table
+shares one entry per name. File lookup, size refresh and drain use a per-entry
+lock. A descriptor snapshot can outlive a refresh. File entries share a cached
+size across threads and use TENT's one-hour expiry. Explicit refresh and range
+admission read the size from the open fd, so renaming or replacing the pathname
+cannot change the file used by an admitted operation.
+
+OrbitTE binds access at open. A lease retains the fd until its I/O has
+finished. Close fences all aliases before waiting for leases. A timeout keeps
+the entry charged and closed to new admissions until close is retried. These
+extend TENT's name removal with physical drain. See the [API and offset
+mapping](storage.md) and [real-file controls](qualification.md#local-file-segments).
+
 ## Transport selector ownership
 
 `runtime/transport_selector.rs` owns TENT-style first-match selection;
