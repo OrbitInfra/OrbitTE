@@ -12,12 +12,12 @@ use crate::runtime::control_plane::{self, ControlService};
 use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
 use crate::runtime::receiver_credit::{CreditPermit, ReceiverCreditIssuer, SenderCreditLedger};
 use crate::runtime::transport_selector::{SelectionContext, TransportSelector};
-use crate::segment::SegmentMetadata;
+use crate::segment::{FileSegments, SegmentMetadata};
 use crate::transport::tcp::TcpTransport;
 use crate::{
-    CreditUpdateDisposition, EngineConfig, Error, HostMemory, Notification, NotificationFailure,
-    NotificationStatus, Permission, ReceiverCreditStats, ReceiverCreditUpdateV1, RegisteredMemory,
-    RemoteRegion, RemoteSegment, Result, SourceEpoch,
+    CreditUpdateDisposition, EngineConfig, Error, FileSegment, FileSegmentInfo, HostMemory,
+    Notification, NotificationFailure, NotificationStatus, Permission, ReceiverCreditStats,
+    ReceiverCreditUpdateV1, RegisteredMemory, RemoteRegion, RemoteSegment, Result, SourceEpoch,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,6 +201,7 @@ pub struct TransferEngine {
     receiver_credits: Option<Arc<SenderCreditLedger>>,
     qos: Option<QosContractResolver>,
     selector: Option<TransportSelector>,
+    pub(crate) files: FileSegments,
 }
 
 impl TransferEngine {
@@ -294,6 +295,7 @@ impl TransferEngine {
         });
         Ok(Self {
             runtime_queue,
+            files: FileSegments::default(),
             receiver_credits,
             qos,
             selector,
@@ -601,6 +603,49 @@ impl TransferEngine {
         let deadline = deadline(timeout)?;
         let _admission = self.admit_batch(0)?;
         control_plane::open_segment(endpoint, expected_epoch, deadline)
+    }
+
+    /// Opens a local `file://` name with fixed access. Descriptor lookup is lazy.
+    /// Reopening the same name and permission shares the handle until close.
+    pub fn open_file_segment(&self, name: &str, permission: Permission) -> Result<FileSegment> {
+        let _admission = self.admit_batch(0)?;
+        self.files
+            .open(name, permission, self.config.max_file_segments)
+    }
+
+    /// Returns the cached descriptor of the regular file, opening it on first use.
+    pub fn file_segment_info(&self, segment: &FileSegment) -> Result<FileSegmentInfo> {
+        let _admission = self.admit_batch(0)?;
+        self.files.info(segment, false)
+    }
+
+    /// Refreshes the descriptor from the open file, including after a resize or unlink.
+    pub fn refresh_file_segment(&self, segment: &FileSegment) -> Result<FileSegmentInfo> {
+        let _admission = self.admit_batch(0)?;
+        self.files.info(segment, true)
+    }
+
+    /// Checks access and bounds and returns the starting file byte offset. No payload I/O occurs.
+    pub fn resolve_file_offset(
+        &self,
+        segment: &FileSegment,
+        operation: TransferOp,
+        offset: u64,
+        length: usize,
+    ) -> Result<u64> {
+        let _admission = self.admit_batch(0)?;
+        self.files
+            .admit(segment, operation, offset, length)
+            .map(|(_, offset)| offset)
+    }
+
+    /// Closes admission through every alias, then waits for admitted file users to drain.
+    /// After a timeout, retry close on the same handle.
+    pub fn close_file_segment(&self, segment: &FileSegment, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
+        self.files.close(segment, deadline)
     }
 
     /// Validates the entire batch before sending any request. Admission and
@@ -1165,6 +1210,7 @@ impl TransferEngine {
                 .0;
         }
         drop(usage);
+        self.files.close_all(deadline)?;
         #[cfg(feature = "cuda")]
         if let Some(transport) = &self.source.nvlink {
             transport.close_requester(self.source.epoch, deadline)?;

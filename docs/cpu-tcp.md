@@ -1,8 +1,8 @@
 # CPU TCP foundation
 
 This covers the implemented P1.1/P1.2/P1.3/P1.4/P2.1/P2.2 substages in the
-[completion plan](completion-plan.md), pending independent acceptance. It
-provides original Rust code with no dependencies and no C++ TENT runtime.
+[completion plan](completion-plan.md), pending independent acceptance.
+The TCP payload path uses Rust sockets.
 The source changes have not been published; crates.io `0.1.0-alpha.1` still
 contains only the original package bootstrap.
 

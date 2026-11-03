@@ -175,6 +175,7 @@ pub(crate) fn rdma_fixture_with_config(
         SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
     });
     TransferEngine {
+        files: FileSegments::default(),
         receiver_credits,
         qos: config
             .qos
@@ -1104,6 +1105,7 @@ pub(crate) fn staging_fixture(
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     TransferEngine {
+        files: FileSegments::default(),
         receiver_credits: None,
         qos: config
             .qos

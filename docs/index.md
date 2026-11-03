@@ -41,8 +41,9 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Status
 
-OrbitTE is in alpha. TCP, RDMA and CUDA IPC are implemented; storage, HP-TCP,
-SHM, MNNVL and the optional network providers are planned.
+OrbitTE is in alpha. TCP, RDMA, CUDA IPC and local file segment handles are
+implemented. Storage transports, HP-TCP, SHM, MNNVL and the optional network
+providers are planned.
 [Capabilities](capabilities.md) lists each path and its limits,
 [qualification](qualification.md) records the evidence, and the
 [completion plan](completion-plan.md) is the work queue.
@@ -63,6 +64,7 @@ capabilities
 :maxdepth: 1
 
 cpu-tcp
+storage
 transport-selection
 async-batches
 rdma-cuda

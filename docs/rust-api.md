@@ -178,6 +178,12 @@ Descriptors identify registered regions but do not replace that authority.
 Restarting a process at the same endpoint does not authorize an old peer handle
 to use the new process's allocations.
 
+For a local file, use `open_file_segment` with a `file://` name and explicit
+permission. `file_segment_info` returns the cached descriptor, and
+`refresh_file_segment` reads the size from the same fd. `resolve_file_offset`
+checks a request range and access. `close_file_segment` closes admission for
+all aliases and waits for drain. See [file segments](storage.md).
+
 ## Requests and reports
 
 `TransferRequest` names the transport, priority, local address, remote address

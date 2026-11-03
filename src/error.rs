@@ -30,6 +30,7 @@ pub enum Error {
     PermissionDenied,
     RegionNotFound,
     ForeignRegistration,
+    FileSegmentClosed,
     ForeignQosPolicy,
     RegistrationConflict,
     SourceClosed,
@@ -75,6 +76,7 @@ impl fmt::Display for Error {
             Self::ForeignRegistration => {
                 f.write_str("registration belongs to another engine or segment")
             }
+            Self::FileSegmentClosed => f.write_str("file segment is not open on this engine"),
             Self::ForeignQosPolicy => f.write_str("QoS policy belongs to another engine"),
             Self::RegistrationConflict => {
                 f.write_str("overlapping registrations must share the same HostMemory owner")

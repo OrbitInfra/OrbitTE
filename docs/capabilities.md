@@ -35,6 +35,7 @@ behind every hardware result.
 | --- | --- | --- |
 | Request construction | Implemented | `TransferRequest::new` with builders. The `rdma` and `cuda` features require Linux. See [Rust API](rust-api.md) |
 | Owned and external host registration | Implemented | Transactional batches, duplicate references, aliases and retained backing |
+| Local file segments | Implemented | Core `file://` descriptors, checked offsets and close with pending I/O. Real-file controls cover fd retention and release. See [file segments](storage.md) |
 | Async batches and notifications | Implemented | Bounded admission, cancellation and detached handles. See [async batches](async-batches.md) |
 | NVIDIA allocations, pinned host memory and copy streams | Qualified (H20 local copy) | Stream and event reuse; failure retention has CPU controls only |
 | GPU and pinned-host producer readiness | Implemented | Caller-stream capture before payload access, with a CPU-blocking wait. See [pinned handoff](rdma-cuda.md#pinned-host-producer-handoff) |

@@ -196,9 +196,9 @@ topology, configuration and actual route observations matter. The NVIDIA
 [API guide](https://docs.nvidia.com/gpudirect-storage/api-reference-guide/index.html)
 describes compatibility mode and supported memory/configuration rules.
 
-File segments, io_uring and cuFile/GDS are core requirements delivered as
-opt-in modules. The network/memory core must build and run without enabling
-them or loading storage libraries. These modules own byte I/O and its
+Local [file segments](storage.md) are part of the default build. The upcoming
+io_uring and cuFile/GDS transports are opt-in. The network/memory core runs
+without loading storage libraries. The storage transports own byte I/O and its
 resources; OrbitKV retains KV indexing, placement, eviction, extents, cache
 policy and recovery semantics. OrbitKV's SSD tier is expected to move its
 DRAM↔SSD and GPU↔SSD byte movement onto these modules; that switch is consumer
