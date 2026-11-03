@@ -68,13 +68,13 @@ explicit progress; metrics endpoints; config and metadata-store
 compatibility; the C ABI, C++ adapters, Python bindings and device-plugin ABI;
 TENT wire interoperability; benchmarks.
 
-Done: S0 ([PR #120](https://github.com/OrbitInfra/OrbitTE/pull/120), `82ebf10`).
+Done: S0 ([PR #120](https://github.com/OrbitInfra/OrbitTE/pull/120), `82ebf10`)
+and S0b ([PR #122](https://github.com/OrbitInfra/OrbitTE/pull/122), `9fd8dc7`).
 
-In flight: [PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118)
-(`feat/transport-selector`, draft) delivers the first part of S6. It predates
-S0 and changes the wire version, so after S0b it must be rebased onto `main`,
-adopt `TransferRequest::new` and drop that bump. Check `gh pr list` for open
-work before starting a step.
+[PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118)
+(`feat/transport-selector`) covers the first part of S6. See the
+[selector guide](docs/transport-selection.md) for its scope and remaining work.
+Check `gh pr list` for open work before starting a step.
 
 ## 3. Working mode without hardware
 
@@ -366,7 +366,7 @@ Do this first: later steps add request fields and transports.
   `transport_selector_test`, `transport_hint_test`, `qp_pool_layout_test`.
 - **Status:** PR #118 adds `Transport::Unspec`, TENT-style first-match rules
   over original CPU/CUDA memory type, inclusive size and effective priority,
-  owner-derived capabilities in the v24 Describe and strict explicit hints.
+  owner-derived capabilities in Describe replies and strict explicit hints.
   Build on it; implement only what it leaves open from the list below.
 - **Implement:**
   - Policy order and named policies, all request intents and priority.

@@ -10,7 +10,7 @@ use crate::runtime::control_plane::{ControlChannel, Request};
 use crate::{Error, RegisteredMemory, Result, SourceEpoch};
 
 use super::budget::MappingPermit;
-use super::{BINDING_SIZE, GRANT_SIZE, Identity, NVLinkTransport, RECEIPT_SIZE};
+use super::{BINDING_SIZE, GRANT_SIZE, NVLinkTransport, ProcessIdentity, RECEIPT_SIZE};
 
 pub(super) const CACHE_HELLO_SIZE: usize = 69;
 
@@ -18,7 +18,7 @@ struct ExportEntry {
     export: Option<IpcExport>,
     memory: Option<RegisteredMemory>,
     permit: Option<MappingPermit>,
-    identity: Identity,
+    identity: ProcessIdentity,
     requester: SourceEpoch,
     active: bool,
     failed: bool,
@@ -86,7 +86,7 @@ impl NVLinkTransport {
     fn read_cache_hello(
         &self,
         channel: &mut ControlChannel<'_>,
-    ) -> Result<(Identity, SourceEpoch, SourceEpoch, bool)> {
+    ) -> Result<(ProcessIdentity, SourceEpoch, SourceEpoch, bool)> {
         if self.exports.limit == 0 {
             return Err(Error::Unavailable("NVLink cache is not configured"));
         }
@@ -95,7 +95,7 @@ impl NVLinkTransport {
         if &hello[..4] != b"NVL2" || hello[68] > 1 {
             return Err(Error::Protocol("NVLink cache hello"));
         }
-        let identity = Identity::decode(&hello[4..36]);
+        let identity = ProcessIdentity::decode(&hello[4..36]);
         self.identity.validate_peer(identity)?;
         let mut requester = [0; 16];
         let mut token = [0; 16];

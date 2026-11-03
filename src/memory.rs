@@ -59,6 +59,8 @@ pub struct HostMemory {
     location: MemoryLocation,
     backing: Mutex<HostAccess>,
     #[cfg(feature = "cuda")]
+    cuda_pinned: bool,
+    #[cfg(feature = "cuda")]
     ipc_idle: std::sync::Condvar,
 }
 
@@ -202,6 +204,7 @@ impl HostMemory {
             address: allocation.address.as_ptr() as usize as u64,
             length: allocation.length,
             location: MemoryLocation::Cpu(allocation.numa_node),
+            cuda_pinned: true,
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
@@ -359,6 +362,8 @@ impl HostMemory {
             length,
             location: MemoryLocation::Cpu(None),
             #[cfg(feature = "cuda")]
+            cuda_pinned: false,
+            #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::Owned { address, length },
@@ -400,6 +405,8 @@ impl HostMemory {
             address: address.as_ptr() as usize as u64,
             length,
             location: MemoryLocation::Cpu(None),
+            #[cfg(feature = "cuda")]
+            cuda_pinned: false,
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
@@ -531,13 +538,17 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn ipc_requester(&self) -> bool {
+        match &self.0.allocation {
+            Allocation::Host(memory) => memory.cuda_pinned,
+            Allocation::Cuda(memory) => memory.ipc_requester,
+        }
+    }
+
     /// Classification from the retained backing, without driver calls or locks.
     pub fn memory_type(&self) -> MemoryType {
-        match &self.0.allocation {
-            Allocation::Host(_) => MemoryType::Cpu,
-            #[cfg(feature = "cuda")]
-            Allocation::Cuda(_) => MemoryType::Cuda,
-        }
+        self.0.descriptor.memory_type
     }
 
     /// Location of exactly this registration, never the larger backing range.
@@ -669,6 +680,22 @@ pub(crate) enum Allocation {
 }
 
 impl Allocation {
+    fn memory_type(&self) -> MemoryType {
+        match self {
+            Self::Host(_) => MemoryType::Cpu,
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) => MemoryType::Cuda,
+        }
+    }
+
+    fn ipc_exportable(&self) -> bool {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::Cuda(memory) => memory.ipc_exportable,
+            _ => false,
+        }
+    }
+
     fn base_address(&self) -> u64 {
         match self {
             Self::Host(memory) => memory.base_address(),
@@ -965,6 +992,8 @@ impl MemoryRegistry {
                         address: plan.address,
                         length: *length,
                         permission,
+                        memory_type: allocation.memory_type(),
+                        ipc_exportable: allocation.ipc_exportable(),
                     },
                     allocation: allocation.clone(),
                     allocation_offset: *offset,

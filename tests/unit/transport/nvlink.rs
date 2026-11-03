@@ -45,7 +45,7 @@ fn ipc_grant_validation_binds_request_epochs_and_allocation_extent() {
     let requester = SourceEpoch([2; 16]);
     let mut grant = [0; GRANT_SIZE];
     grant[..4].copy_from_slice(b"NVL1");
-    Identity {
+    ProcessIdentity {
         machine: transport.identity.machine,
         process: SourceEpoch([3; 16]),
     }
@@ -109,7 +109,7 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
     )
     .unwrap();
     channel.write_all(&request.encode()).unwrap();
-    let mut identity = Identity::local().unwrap();
+    let mut identity = ProcessIdentity::local().unwrap();
     if case != "same-process" {
         identity.process = SourceEpoch([0x99; 16]);
     }
@@ -228,9 +228,12 @@ pub(crate) fn requester_case(
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch([0x55; 16]);
     let peer = RemoteSegment {
+        metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![RemoteRegion {
+            memory_type: crate::MemoryType::Cuda,
+            ipc_exportable: true,
             epoch,
             id: 7,
             address: remote.base_address(),
@@ -263,7 +266,7 @@ pub(crate) fn requester_case(
         assert_eq!(&hello[36..], requester_epoch.0);
         let mut grant = [0; GRANT_SIZE];
         grant[..4].copy_from_slice(b"NVL1");
-        let mut identity = Identity::local().unwrap();
+        let mut identity = ProcessIdentity::local().unwrap();
         identity.process = SourceEpoch([0x77; 16]);
         identity.encode(&mut grant[4..36]);
         grant[36..88].copy_from_slice(&request);

@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
-use std::marker::PhantomData;
 use std::path::Path;
 
 use serde::de::{self, MapAccess, Visitor};
@@ -14,32 +13,10 @@ use serde_json::Value;
 use super::{
     MAX_CONTRACTS, QosConfig, QosDegradedActions, QosPolicyFields, QosTenantContract, normalize,
 };
+use crate::runtime::config::Object;
 use crate::{Error, Priority, Result};
 
 const MAX_JSON_BYTES: usize = 1 << 20;
-
-// Serde structs also accept positional sequences; TENT policy nodes must be objects.
-#[derive(Default)]
-struct Object<T>(T);
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct ObjectVisitor<T>(PhantomData<T>);
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
-            type Value = Object<T>;
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a QoS configuration object")
-            }
-            fn visit_map<M: MapAccess<'de>>(
-                self,
-                map: M,
-            ) -> std::result::Result<Self::Value, M::Error> {
-                T::deserialize(de::value::MapAccessDeserializer::new(map)).map(Object)
-            }
-        }
-        deserializer.deserialize_map(ObjectVisitor(PhantomData))
-    }
-}
 
 // Other engine settings are outside this loader's responsibility.
 #[derive(Deserialize)]

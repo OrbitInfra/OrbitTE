@@ -123,9 +123,12 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
         let peer = RemoteSegment {
+            metadata: Default::default(),
             endpoint: listener.local_addr().unwrap(),
             epoch,
             regions: vec![RemoteRegion {
+                memory_type: crate::MemoryType::Cuda,
+                ipc_exportable: true,
                 epoch,
                 id: 1,
                 address: 0x1000,

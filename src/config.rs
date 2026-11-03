@@ -97,6 +97,9 @@ pub struct EngineConfig {
     /// Allowing QoS delay requires runtime_queue; waiting groups still consume
     /// max_inflight_batches/bytes but acquire QoS capacity at dispatch.
     pub qos: Option<crate::QosConfig>,
+    /// Ordered transport policy. None preserves explicit routing; Unspec requests
+    /// still use default eligible NVLink -> RDMA -> TCP selection.
+    pub selector: Option<crate::TransportSelectorConfig>,
     /// Zero disables receiver credit gating. A positive limit (at most 4096)
     /// requires an activated peer session for every nonempty data submission.
     /// Bindings either accept application updates or connect to a peer issuer.
@@ -145,6 +148,7 @@ impl Default for EngineConfig {
             max_allocated_requests: 32 * 1024,
             runtime_queue: None,
             qos: None,
+            selector: None,
             max_receiver_credit_sessions: 0,
             receiver_credit: None,
             max_inflight_batches: 32,

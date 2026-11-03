@@ -3,7 +3,10 @@ use crate::cuda::ipc::{IpcExport, IpcMapping};
 use crate::memory::Allocation;
 
 pub(super) fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
-    let memory = memory(device);
+    let mut memory = memory(device);
+    let owner = Arc::get_mut(&mut memory).unwrap();
+    owner.ipc_requester = true;
+    owner.ipc_exportable = exportable;
     {
         let mut allocation = memory.allocation.lock().unwrap();
         allocation.owned = true;

@@ -63,6 +63,7 @@ capabilities
 :maxdepth: 1
 
 cpu-tcp
+transport-selection
 async-batches
 rdma-cuda
 cuda-ipc

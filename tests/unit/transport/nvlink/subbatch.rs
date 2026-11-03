@@ -63,9 +63,12 @@ pub(crate) fn run_case(
     listener.set_nonblocking(true).unwrap();
     let epoch = SourceEpoch([0x55; 16]);
     let mut peer = RemoteSegment {
+        metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![RemoteRegion {
+            memory_type: crate::MemoryType::Cuda,
+            ipc_exportable: true,
             epoch,
             id: 7,
             address: remote.base_address() + 5,
@@ -73,9 +76,17 @@ pub(crate) fn run_case(
             permission: Permission::RemoteReadWrite,
         }],
     };
+    if case == "success" {
+        peer.metadata.nvlink = Some(ProcessIdentity {
+            process: SourceEpoch([0x77; 16]),
+            ..ProcessIdentity::local().unwrap()
+        });
+    }
     if case == "region" {
         peer.regions[0].length = 64;
         peer.regions.push(RemoteRegion {
+            memory_type: crate::MemoryType::Cuda,
+            ipc_exportable: true,
             epoch,
             id: 8,
             address: remote.base_address() + 69,
@@ -91,7 +102,11 @@ pub(crate) fn run_case(
     let requests: Vec<_> = (0..3)
         .map(|i| {
             TransferRequest::new(
-                Transport::Nvlink,
+                if case == "success" {
+                    Transport::Unspec
+                } else {
+                    Transport::Nvlink
+                },
                 registrations[i].base_address() + 7,
                 remote.base_address() + 5 + offsets[i],
                 17,
@@ -171,7 +186,7 @@ pub(crate) fn run_case(
             let mut export = IpcExport::new(remote_owner.clone()).unwrap();
             let mut grant = [0; GRANT_SIZE];
             grant[..4].copy_from_slice(b"NVL1");
-            let mut identity = Identity::local().unwrap();
+            let mut identity = ProcessIdentity::local().unwrap();
             identity.process = SourceEpoch([0x77; 16]);
             identity.encode(&mut grant[4..36]);
             grant[36..88].copy_from_slice(&wire);

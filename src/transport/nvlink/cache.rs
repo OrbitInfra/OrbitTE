@@ -9,7 +9,7 @@ use crate::engine::remaining;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::{Error, Result, SourceEpoch};
 
-use super::{Identity, NVLinkTransport, mapping::OpenedMapping};
+use super::{NVLinkTransport, ProcessIdentity, mapping::OpenedMapping};
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub(super) struct RelocationKey {
@@ -22,7 +22,7 @@ pub(super) struct RelocationKey {
 pub(super) struct CachedMapping {
     pub token: SourceEpoch,
     pub mapping: Option<OpenedMapping>,
-    pub grant: Option<([u8; 64], usize, usize, Identity)>,
+    pub grant: Option<([u8; 64], usize, usize, ProcessIdentity)>,
     pub may_be_exposed: bool,
     pub closing: bool,
     pub uncertain: bool,

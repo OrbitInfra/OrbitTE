@@ -1,6 +1,6 @@
 //! TENT NVLink transport boundary: same-host IPC relocation and CUDA completion.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 mod budget;
@@ -22,6 +22,7 @@ use crate::cuda::ipc::IpcExport;
 use crate::engine::{PreparedSubmission, remaining};
 use crate::memory::checked_range;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
+use crate::segment::ProcessIdentity;
 use crate::{
     Error, RegisteredMemory, RemoteEffect, Result, SourceEpoch, TransferFailure, TransferOp,
 };
@@ -31,66 +32,10 @@ const GRANT_SIZE: usize = 200;
 const BINDING_SIZE: usize = 84;
 const RECEIPT_SIZE: usize = BINDING_SIZE + 1;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct Identity {
-    machine: SourceEpoch,
-    process: SourceEpoch,
-}
-
-impl Identity {
-    fn local() -> Result<Self> {
-        static IDENTITY: OnceLock<(u32, Identity)> = OnceLock::new();
-        if let Some((pid, identity)) = IDENTITY.get() {
-            if *pid != std::process::id() {
-                return Err(Error::Unavailable("CUDA IPC after fork"));
-            }
-            return Ok(*identity);
-        }
-        let machine = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
-            .trim()
-            .replace('-', "")
-            .parse()?;
-        let candidate = Self {
-            machine,
-            process: SourceEpoch::generate()?,
-        };
-        let (_, identity) = IDENTITY.get_or_init(|| (std::process::id(), candidate));
-        Ok(*identity)
-    }
-
-    fn encode(&self, bytes: &mut [u8]) {
-        bytes[..16].copy_from_slice(&self.machine.0);
-        bytes[16..32].copy_from_slice(&self.process.0);
-    }
-
-    fn decode(bytes: &[u8]) -> Self {
-        let mut machine = [0; 16];
-        let mut process = [0; 16];
-        machine.copy_from_slice(&bytes[..16]);
-        process.copy_from_slice(&bytes[16..32]);
-        Self {
-            machine: SourceEpoch(machine),
-            process: SourceEpoch(process),
-        }
-    }
-
-    fn validate_peer(&self, peer: Self) -> Result<()> {
-        if self.machine != peer.machine {
-            return Err(Error::Unavailable(
-                "CUDA IPC requires the same physical host",
-            ));
-        }
-        if self.process == peer.process {
-            return Err(Error::Unavailable("CUDA IPC requires a different process"));
-        }
-        Ok(())
-    }
-}
-
 /// Legacy IPC is cooperative: exported handles authorize a whole allocation
 /// until every participating process has closed it. It is not remote revocation.
 pub(crate) struct NVLinkTransport {
-    identity: Identity,
+    pub(crate) identity: ProcessIdentity,
     budget: Arc<MappingBudget>,
     imports: RelocationCache,
     stream_pool: Arc<CUDAStreamPool>,
@@ -101,7 +46,7 @@ pub(crate) struct NVLinkTransport {
 impl NVLinkTransport {
     pub(crate) fn new(max_bytes: usize, cache_entries: usize, stream_count: usize) -> Result<Self> {
         Ok(Self {
-            identity: Identity::local()?,
+            identity: ProcessIdentity::local()?,
             budget: MappingBudget::new(max_bytes),
             imports: RelocationCache::new(cache_entries),
             stream_pool: CUDAStreamPool::new(stream_count)?,
@@ -239,7 +184,7 @@ impl NVLinkTransport {
                         let base_offset = remote_offset
                             .checked_sub(start)
                             .ok_or(Error::InvalidRange)?;
-                        let identity = Identity::decode(&grant[4..36]);
+                        let identity = ProcessIdentity::decode(&grant[4..36]);
                         let expected = (handle, extent, base_offset, identity);
                         if entry.grant.is_some_and(|old| old != expected) {
                             return Err(Error::Protocol("NVLink cached allocation changed"));
@@ -379,7 +324,7 @@ impl NVLinkTransport {
             return Err(Error::Protocol("NVLink grant version"));
         }
         self.identity
-            .validate_peer(Identity::decode(&grant[4..36]))?;
+            .validate_peer(ProcessIdentity::decode(&grant[4..36]))?;
         let mut binding = [0; BINDING_SIZE];
         binding.copy_from_slice(&grant[36..120]);
         if binding[..52] != request.encode() || binding[52..68] != requester.0 {
@@ -423,7 +368,7 @@ impl NVLinkTransport {
             return Err(Error::Protocol("NVLink hello version"));
         }
         self.identity
-            .validate_peer(Identity::decode(&hello[4..36]))?;
+            .validate_peer(ProcessIdentity::decode(&hello[4..36]))?;
         let (memory, allocation_offset) = memory.cuda_range(offset, length)?;
         let mut export = IpcExport::new(memory)?;
         let permit = self.budget.reserve(export.extent, true)?;

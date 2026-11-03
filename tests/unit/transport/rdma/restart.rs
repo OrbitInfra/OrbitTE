@@ -233,9 +233,12 @@ pub(super) fn stale(
                 Err(Error::EpochMismatch)
             ));
             let stale = crate::RemoteSegment {
+                metadata: Default::default(),
                 endpoint,
                 epoch,
                 regions: vec![crate::RemoteRegion {
+                    memory_type: crate::MemoryType::Cpu,
+                    ipc_exportable: false,
                     epoch,
                     id: fields[2].parse().unwrap(),
                     address,

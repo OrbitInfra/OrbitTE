@@ -225,6 +225,8 @@ pub struct CudaMemory {
     length: usize,
     location: crate::MemoryLocation,
     allocation: Mutex<DeviceAllocation>,
+    pub(crate) ipc_requester: bool,
+    pub(crate) ipc_exportable: bool,
     ipc_idle: std::sync::Condvar,
 }
 
@@ -319,6 +321,8 @@ impl CudaMemory {
             },
             ipc_idle: std::sync::Condvar::new(),
             allocation: Mutex::new(allocation),
+            ipc_requester: true,
+            ipc_exportable: ipc,
         })
     }
 
@@ -356,6 +360,8 @@ impl CudaMemory {
                 context: context.raw.as_ptr() as usize,
             },
             ipc_idle: std::sync::Condvar::new(),
+            ipc_requester: false,
+            ipc_exportable: false,
             allocation: Mutex::new(DeviceAllocation {
                 context,
                 address,

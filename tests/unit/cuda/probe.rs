@@ -28,6 +28,8 @@ fn owner_locations_bound_registrations_without_reprobing_or_waiting_for_payloads
     access.uncertain = true;
     for registration in &registrations {
         assert_eq!(registration.memory_type(), MemoryType::Cuda);
+        assert!(!registration.ipc_requester());
+        assert!(!registration.0.descriptor.ipc_exportable);
         let location = registration.location().unwrap();
         assert_eq!(location.address, registration.base_address());
         assert_eq!(location.length, registration.len());
@@ -136,4 +138,68 @@ fn pinned_host_location_stays_cpu_without_consuming_producer_readiness() {
         MemoryLocation::Cpu(None)
     );
     assert_eq!(owner.events.lock().unwrap().len(), native_calls);
+}
+
+#[test]
+fn selector_describe_publishes_cuda_owner_capabilities_without_native_access() {
+    let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    let external_device = allocation(&[0; 32]);
+    let external = memory(&external_device);
+    let context = external.allocation.lock().unwrap().context.clone();
+    let owned_device = allocation(&[0; 32]);
+    let owned = super::ipc::owned(&owned_device, false);
+    let exported_device = allocation(&[0; 32]);
+    let exported = super::ipc::owned(&exported_device, true);
+    let host = Arc::new(HostMemory::new(vec![0; 32].into_boxed_slice()).unwrap());
+    let pinned = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
+        PinnedAllocation::new(&context, 32).unwrap(),
+    )));
+    let mut registered = engine
+        .register_cuda_memory_batch(
+            &[
+                (external.clone(), 0, 32),
+                (owned.clone(), 0, 32),
+                (exported.clone(), 0, 32),
+            ],
+            Permission::RemoteRead,
+        )
+        .unwrap();
+    registered.extend(
+        engine
+            .register_host_memory_batch(
+                &[(host.clone(), 0, 32), (pinned.clone(), 0, 32)],
+                Permission::RemoteRead,
+            )
+            .unwrap(),
+    );
+    let events = external_device.events.lock().unwrap().len();
+    // Describe and selector metadata must remain readable with payload owners locked.
+    let _external = external.allocation.lock().unwrap();
+    let _owned = owned.allocation.lock().unwrap();
+    let _exported = exported.allocation.lock().unwrap();
+    let _pin = pinned
+        .cuda_pinned(std::time::Instant::now() + Duration::from_secs(1))
+        .unwrap();
+    let peer = engine
+        .open_segment(
+            engine.endpoint(),
+            engine.source_epoch(),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    for (index, (kind, requester, exportable)) in [
+        (MemoryType::Cuda, false, false),
+        (MemoryType::Cuda, true, false),
+        (MemoryType::Cuda, true, true),
+        (MemoryType::Cpu, false, false),
+        (MemoryType::Cpu, true, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(registered[index].ipc_requester(), requester);
+        assert_eq!(peer.regions()[index].memory_type(), kind);
+        assert_eq!(peer.regions()[index].ipc_exportable, exportable);
+    }
+    assert_eq!(external_device.events.lock().unwrap().len(), events);
 }

@@ -140,6 +140,12 @@ pub(crate) fn rdma_fixture_with_config(
 ) -> TransferEngine {
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        metadata: SegmentMetadata {
+            rdma: true,
+            #[cfg(feature = "cuda")]
+            remote_staging: config.remote_staging,
+            ..Default::default()
+        },
         credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
         #[cfg(feature = "cuda")]
         remote_staging: config.remote_staging,
@@ -177,6 +183,12 @@ pub(crate) fn rdma_fixture_with_config(
             .transpose()
             .unwrap(),
         runtime_queue,
+        selector: config
+            .selector
+            .as_ref()
+            .map(TransportSelector::new)
+            .transpose()
+            .unwrap(),
         config,
         source,
         control,
@@ -600,7 +612,7 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
                     TransferOp::Read,
                     &peer,
                     &[TransferRequest::new(
-                        Transport::Rdma,
+                        Transport::Unspec,
                         local.base_address(),
                         address,
                         8,
@@ -1004,7 +1016,11 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
             });
         }
         let request = TransferRequest::new(
-            Transport::Rdma,
+            if asynchronous {
+                Transport::Unspec
+            } else {
+                Transport::Rdma
+            },
             local.base_address(),
             remote.base_address(),
             8,
@@ -1059,6 +1075,12 @@ pub(crate) fn staging_fixture(
     config.validate().unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        metadata: SegmentMetadata {
+            #[cfg(feature = "rdma")]
+            rdma: rdma.is_some(),
+            remote_staging: config.remote_staging,
+            ..Default::default()
+        },
         credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
         remote_staging: config.remote_staging,
         staging_pipeline_depth: config.staging_pipeline_depth,
@@ -1090,6 +1112,12 @@ pub(crate) fn staging_fixture(
             .transpose()
             .unwrap(),
         runtime_queue,
+        selector: config
+            .selector
+            .as_ref()
+            .map(TransportSelector::new)
+            .transpose()
+            .unwrap(),
         config,
         source,
         control,

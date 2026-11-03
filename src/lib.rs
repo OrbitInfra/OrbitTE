@@ -92,6 +92,7 @@ pub use {
             CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditConfig,
             ReceiverCreditIssuerStats, ReceiverCreditStats, ReceiverCreditUpdateV1,
         },
+        transport_selector::{SegmentType, SelectionPolicy, TransportSelectorConfig},
     },
     segment::{RemoteRegion, RemoteSegment, SourceEpoch},
 };

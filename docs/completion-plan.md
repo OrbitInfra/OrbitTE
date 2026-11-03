@@ -745,6 +745,12 @@ Requirements: F08-F20; all implemented transports consume the same owners.
 - [ ] Implement the full selector contract: policy order/name, all intents,
   priority, segment/memory/size filters, transport hints, device masks and QP
   pools. Merge only requests whose authority and execution-policy fields agree.
+  Implemented: opt-in first-match policy order, original CPU/CUDA memory and
+  inclusive size filters, effective priority, Unspec candidate selection and
+  strict explicit hints. Describe publishes owner-derived capabilities and
+  process placement. The result drives existing sync/async transport execution;
+  no selector parsing/allocation occurs per slice. Named/intent/location/device
+  and QP-pool rules remain open. See [scope](transport-selection.md).
 - [ ] Implement FIFO/EDF admission, promotion, dispatch windows, independent
   owner/byte budgets, staging reserves and deadline-infeasible cancellation.
   Match eligibility rules, queue bypass, disabled defaults and absent-provider
@@ -1235,10 +1241,16 @@ the Batch head. Pending groups hold only global inflight capacity, cannot steal
 quota from predecessors and preserve cancellation/absolute deadlines. Reject-only
 configurations keep immediate admission; all acquired charges follow actual
 ownership through drain. See [scope](qualification.md#qos-admission-actions).
-The next functional delivery is the P6 selector contract: compile transport
-policy order and segment/memory/size eligibility for the implemented transports,
-then consume the selection in actual submission. Transport fallback, local
-recompute and compression remain rejected until their real execution owners exist.
+P6 transport policy order and memory/size/priority eligibility now drive actual
+submission at source scope. Unspec selects within the first matching rule;
+explicit hints remain strict. Owner-derived Describe metadata and cached IPC
+placement feed selection without driver probes or payload locks. See
+[scope](transport-selection.md) and [evidence](qualification.md#transport-policy-selection).
+The next functional delivery is named policy and intent selection, connected to
+existing effective QoS resolution and actual prepared requests. Preserve compiled
+lookup and merge isolation; device masks/QP pools follow with their execution owners.
+Transport fallback, local recompute and compression remain rejected until their
+real execution owners exist.
 Hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
 physical-owner queue granularity, physical staging reserves and deadline-infeasible
 cancellation remain open parts of P6.

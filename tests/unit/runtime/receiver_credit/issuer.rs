@@ -312,6 +312,7 @@ impl Relay {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let peer = RemoteSegment {
+            metadata: Default::default(),
             endpoint: listener.local_addr().unwrap(),
             epoch: source.source_epoch(),
             regions: Vec::new(),
@@ -412,6 +413,7 @@ fn lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable() 
     assert!(connect().is_err());
     assert_eq!(ledger.stats(&relay.peer).unwrap().epoch, 0);
     let alias = RemoteSegment {
+        metadata: Default::default(),
         endpoint: source.endpoint(),
         ..relay.peer.clone()
     };
