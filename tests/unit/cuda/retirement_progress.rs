@@ -155,6 +155,7 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         payload.0.lock().unwrap().1 = true;
         payload.1.notify_all();
     }
+    let mut close_deadline_observed = false;
     if !matches!(outcome, Outcome::Complete) {
         let observed = native
             .observed
@@ -168,16 +169,15 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
                 Outcome::Deadline => {
                     // The retiring grant can reach its own deadline first. Only this
                     // cleanup error describes the deliberately held native operation.
-                    observed == "Timeout"
-                        || observed == "Cancelled"
-                        || observed
-                            == format!(
-                                "{:?}",
-                                Error::Unquiesced {
-                                    operation: "RDMA close deadline before quiescence",
-                                    code: libc::ETIMEDOUT,
-                                }
-                            )
+                    close_deadline_observed = observed
+                        == format!(
+                            "{:?}",
+                            Error::Unquiesced {
+                                operation: "RDMA close deadline before quiescence",
+                                code: libc::ETIMEDOUT,
+                            }
+                        );
+                    observed == "Timeout" || observed == "Cancelled" || close_deadline_observed
                 }
                 Outcome::Complete => unreachable!(),
             },
@@ -205,7 +205,10 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
         stop.join().unwrap().unwrap();
     }
     let report = batch.wait(Duration::from_secs(3)).unwrap();
-    let retained = matches!(outcome, Outcome::Retain);
+    // The held native destroy succeeds on Deadline after release. If its
+    // earlier close deadline won, the staging worker still quarantines its owners.
+    let native_retained = matches!(outcome, Outcome::Retain);
+    let retained = native_retained || close_deadline_observed;
     assert_eq!(
         report.locally_drained, !retained,
         "{operation:?}/{outcome:?}: {report:?}"
@@ -253,6 +256,18 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
             retained,
             "{failure:?}"
         );
+        if close_deadline_observed {
+            assert!(
+                matches!(
+                    failure.error,
+                    Error::Unquiesced {
+                        operation: "RDMA close deadline before quiescence",
+                        code: libc::ETIMEDOUT,
+                    }
+                ),
+                "{failure:?}"
+            );
+        }
         assert_eq!(failure.remote_effect, RemoteEffect::None);
         assert_eq!(report.transferred_bytes, 0);
         // SAFETY: Retirement failed before copy-back, so the retained handles cannot write
@@ -264,11 +279,14 @@ fn pending_retirement(operation: TransferOp, outcome: Outcome) {
     }
     source.close(Duration::from_secs(3)).unwrap();
     let stats = requester.stats().unwrap().rdma.unwrap();
-    assert_eq!(stats.active_grants, usize::from(retained));
-    assert_eq!(stats.active_endpoints, usize::from(retained));
-    assert_eq!(stats.staging_bytes, if retained { 7 } else { 0 });
+    assert_eq!(stats.active_grants, usize::from(native_retained));
+    assert_eq!(stats.active_endpoints, usize::from(native_retained));
+    assert_eq!(stats.staging_bytes, if native_retained { 7 } else { 0 });
     if retained {
-        assert_eq!(requester.stats().unwrap().staging.retained_chunks, 3);
+        let stats = requester.stats().unwrap();
+        assert_eq!(stats.staging.retained_chunks, 3);
+        assert_eq!(stats.inflight_bytes, 41);
+        assert_eq!(local_gpu.allocation.lock().unwrap().dma, vec![2..43]);
         assert!(matches!(batch.free(), Err(Error::BatchBusy)));
     } else {
         assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
