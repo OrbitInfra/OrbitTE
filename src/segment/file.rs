@@ -261,17 +261,48 @@ impl FileSegments {
         Ok((lease, offset))
     }
 
-    pub(crate) fn close(&self, segment: &FileSegment, deadline: Instant) -> Result<()> {
-        self.close_entry(&self.entry(segment)?, deadline)
+    pub(crate) fn close(
+        &self,
+        segment: &FileSegment,
+        deadline: Instant,
+        #[cfg(feature = "gds")] gds: Option<&crate::transport::gds::GdsTransport>,
+    ) -> Result<()> {
+        self.close_entry(
+            &self.entry(segment)?,
+            deadline,
+            #[cfg(feature = "gds")]
+            gds,
+        )
     }
 
-    fn close_entry(&self, entry: &Arc<Entry>, deadline: Instant) -> Result<()> {
+    fn close_entry(
+        &self,
+        entry: &Arc<Entry>,
+        deadline: Instant,
+        #[cfg(feature = "gds")] gds: Option<&crate::transport::gds::GdsTransport>,
+    ) -> Result<()> {
         let mut state = entry.lock()?;
         state.closing = true;
         while state.active != 0 {
+            #[cfg(feature = "gds")]
+            if let Some(gds) = gds {
+                drop(state);
+                gds.cleanup();
+                state = entry.lock()?;
+                if state.active == 0 {
+                    break;
+                }
+            }
+            let wait = remaining(deadline)?;
+            #[cfg(feature = "gds")]
+            let wait = if gds.is_some() {
+                wait.min(Duration::from_millis(10))
+            } else {
+                wait
+            };
             state = entry
                 .drained
-                .wait_timeout(state, remaining(deadline)?)
+                .wait_timeout(state, wait)
                 .map_err(|_| Error::Internal("file segment lock poisoned"))?
                 .0;
         }
@@ -315,7 +346,12 @@ impl FileSegments {
             .cloned()
             .collect();
         for entry in entries {
-            self.close_entry(&entry, deadline)?;
+            self.close_entry(
+                &entry,
+                deadline,
+                #[cfg(feature = "gds")]
+                None,
+            )?;
         }
         Ok(())
     }

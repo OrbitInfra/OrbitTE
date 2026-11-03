@@ -453,7 +453,7 @@ impl GdsTransport {
         deadline: Instant,
         progress: Option<(&BatchProgress, usize)>,
         report: &mut BatchReport,
-        pending: &Mutex<Option<LiveBatch>>,
+        pending: &Mutex<Option<Quarantine>>,
     ) {
         let count = progress.map_or(requests.len(), |(p, first)| {
             p.begin_file_group(first, requests.len())
@@ -461,7 +461,14 @@ impl GdsTransport {
         let mut run = || -> Result<()> {
             if count != 0 {
                 crate::engine::remaining(deadline)?;
-                let mut batch = LiveBatch::prepare(self, op, &requests[..count])?;
+                // Install the physical owner before any cuFile batch call. Even
+                // an interrupted worker cannot drop its arrays, loans or permits.
+                let live = LiveBatch::prepare(self, op, &requests[..count])?;
+                let mut owner = pending.lock().unwrap_or_else(|p| p.into_inner());
+                *owner = Some(Quarantine::Batch(Box::new(live)));
+                let Some(Quarantine::Batch(batch)) = owner.as_mut() else {
+                    return Err(Error::Internal("missing GDS owner"));
+                };
                 let mut stop = batch.run(self, deadline, progress).err();
                 if !matches!(stop, Some(Error::Unquiesced { .. })) {
                     for r in &requests[..count] {
@@ -476,11 +483,10 @@ impl GdsTransport {
                 }
                 report.locally_drained = !matches!(stop, Some(Error::Unquiesced { .. }));
                 batch.report(op, stop.as_ref(), progress, report);
-                if !report.locally_drained {
-                    if !batch.submitted {
-                        batch.permanent = true;
-                    }
-                    *pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(batch);
+                if report.locally_drained {
+                    owner.take();
+                } else if !batch.submitted {
+                    batch.permanent = true;
                 }
             }
             if count < requests.len() && report.failure.is_none() {

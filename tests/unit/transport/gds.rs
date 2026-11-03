@@ -15,6 +15,7 @@ pub(crate) struct Mock {
     pub(crate) opens: AtomicUsize,
     pub(crate) open_error: AtomicBool,
     mode: GdsMode,
+    native_slice_limit: AtomicUsize,
     pub(crate) register_error: AtomicBool,
     pub(crate) deregister_error: AtomicBool,
     pub(crate) buffer_registers: AtomicUsize,
@@ -31,6 +32,7 @@ pub(crate) struct Mock {
     poll_error_once: AtomicBool,
     pub(crate) submits: AtomicUsize,
     cancels: AtomicUsize,
+    polls: AtomicUsize,
     pub(crate) destroys: AtomicUsize,
     files: Mutex<HashMap<usize, File>>,
     batches: Mutex<HashMap<usize, Vec<Event>>>,
@@ -43,6 +45,7 @@ impl Mock {
     pub(crate) fn new(mode: GdsMode) -> Arc<Self> {
         Arc::new(Self {
             mode,
+            native_slice_limit: (16usize << 20).into(),
             opens: 0.into(),
             open_error: false.into(),
             register_error: false.into(),
@@ -61,6 +64,7 @@ impl Mock {
             poll_error_once: false.into(),
             submits: 0.into(),
             cancels: 0.into(),
+            polls: 0.into(),
             destroys: 0.into(),
             files: Mutex::default(),
             batches: Mutex::default(),
@@ -97,7 +101,7 @@ impl Api for Mock {
     fn profile(&self) -> Result<Profile> {
         Ok(Profile {
             mode: self.mode,
-            max_native_slice: 16 << 20,
+            max_native_slice: self.native_slice_limit.load(Ordering::Acquire),
         })
     }
     fn register_file(&self, fd: i32) -> Result<usize> {
@@ -196,6 +200,7 @@ impl Api for Mock {
         }
     }
     fn poll(&self, h: usize, events: &mut [Event]) -> Result<usize> {
+        self.polls.fetch_add(1, Ordering::Release);
         if self.poll_error_once.swap(false, Ordering::AcqRel) {
             return Err(failed("poll"));
         }
@@ -537,8 +542,17 @@ fn pending_cufile_io_past_the_destruction_window_keeps_all_owners_until_late_rea
         f.engine.close_file_segment(&f.segment, Duration::ZERO),
         Err(Error::Timeout)
     ));
-    mock.held.store(false, Ordering::Release);
-    f.engine.close_file_segment(&f.segment, WAIT)?;
+    let prior = mock.polls.load(Ordering::Acquire);
+    std::thread::scope(|scope| -> Result<()> {
+        let closing = scope.spawn(|| f.engine.close_file_segment(&f.segment, WAIT));
+        let end = Instant::now() + WAIT;
+        while mock.polls.load(Ordering::Acquire) == prior {
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        mock.held.store(false, Ordering::Release);
+        closing.join().unwrap()
+    })?;
     assert_eq!(mock.destroys.load(Ordering::Acquire), 1);
     assert_eq!(f.engine.stats()?.inflight_bytes, 0);
     assert!(b.status()?.locally_drained);
@@ -678,6 +692,39 @@ fn native_only_excludes_compat_and_unsafe_extents_before_submit() -> Result<()> 
         Error::Unavailable(_)
     ));
     assert_eq!(mock.submits.load(Ordering::Acquire), 0);
+    let limited = Mock::new(GdsMode::NativeOnly);
+    limited.native_slice_limit.store(4096, Ordering::Release);
+    let f = Fixture::new(
+        &limited,
+        EngineConfig {
+            gds_require_native: true,
+            ..Default::default()
+        },
+        8192,
+    )?;
+    let memory = f.host(8192 + 4096)?;
+    let aligned = (memory.base_address().next_multiple_of(4096) - memory.base_address()) as usize;
+    let report = f.engine.submit_and_wait(
+        TransferOp::Read,
+        &f.segment,
+        &[request(&memory, aligned, 0, 8192)],
+        WAIT,
+    )?;
+    assert!(matches!(
+        report.failure.unwrap().error,
+        Error::Unavailable(_)
+    ));
+    assert_eq!(limited.submits.load(Ordering::Acquire), 0);
+    assert!(
+        f.engine
+            .submit_and_wait(
+                TransferOp::Read,
+                &f.segment,
+                &[request(&memory, aligned, 0, 4096)],
+                WAIT
+            )?
+            .is_complete()
+    );
     Ok(())
 }
 

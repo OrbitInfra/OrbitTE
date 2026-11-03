@@ -693,11 +693,12 @@ impl TransferEngine {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
-        #[cfg(feature = "gds")]
-        if let Some(gds) = &self.gds {
-            gds.cleanup();
-        }
-        self.files.close(segment, deadline)
+        self.files.close(
+            segment,
+            deadline,
+            #[cfg(feature = "gds")]
+            self.gds.as_ref(),
+        )
     }
 
     /// Validates the entire batch before sending any request. Admission and
@@ -863,11 +864,7 @@ impl TransferEngine {
                     files.push(crate::segment::file::FileRequest {
                         transport,
                         #[cfg(feature = "gds")]
-                        buffer: if transport == Transport::Gds {
-                            crate::transport::gds::BufferLease::acquire(&local)?
-                        } else {
-                            None
-                        },
+                        buffer: None,
                         local,
                         local_offset,
                         lease,
@@ -985,7 +982,7 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
-        Ok(PreparedSubmission {
+        let prepared = PreparedSubmission {
             #[cfg(feature = "gds")]
             gds_pending: Mutex::default(),
             operation,
@@ -995,8 +992,11 @@ impl TransferEngine {
             queue,
             credit,
             _qos: qos,
-            _admission: admission,
-        })
+            _admission: Some(admission),
+        };
+        #[cfg(feature = "gds")]
+        let prepared = prepared.pin_gds_buffers()?;
+        Ok(prepared)
     }
 
     fn submit<'a>(
@@ -1042,6 +1042,17 @@ impl TransferEngine {
     }
 
     pub(crate) fn execute(
+        &self,
+        submission: &PreparedSubmission,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> BatchReport {
+        let report = self.execute_payload(submission, progress);
+        #[cfg(feature = "gds")]
+        let report = submission.finish_gds_report(report, progress);
+        report
+    }
+
+    fn execute_payload(
         &self,
         submission: &PreparedSubmission,
         progress: Option<(&BatchProgress, usize)>,
@@ -1144,41 +1155,6 @@ impl TransferEngine {
                         break;
                     }
                     first += count;
-                }
-                #[cfg(feature = "gds")]
-                if report.locally_drained {
-                    if let Err((index, error)) = submission.finish_gds_buffers() {
-                        report.locally_drained = false;
-                        let first = report.completed_requests.min(index);
-                        let end = report
-                            .failure
-                            .as_ref()
-                            .map_or(report.completed_requests, |f| {
-                                f.request_index + f.affected_requests
-                            });
-                        let effect = if *operation == TransferOp::Write
-                            && (first < report.completed_requests
-                                || report
-                                    .failure
-                                    .as_ref()
-                                    .is_some_and(|f| f.remote_effect == RemoteEffect::Unknown))
-                        {
-                            RemoteEffect::Unknown
-                        } else {
-                            RemoteEffect::None
-                        };
-                        report.failure = Some(TransferFailure {
-                            request_index: first,
-                            affected_requests: end.saturating_sub(first).max(1),
-                            error,
-                            remote_effect: effect,
-                        });
-                        report.completed_requests = first;
-                        report.transferred_bytes = requests[..report.completed_requests]
-                            .iter()
-                            .map(|r| r.length)
-                            .sum();
-                    }
                 }
                 return report;
             }
@@ -1673,7 +1649,7 @@ enum PreparedTarget {
 
 pub(crate) struct PreparedSubmission {
     #[cfg(feature = "gds")]
-    gds_pending: Mutex<Option<crate::transport::gds::LiveBatch>>,
+    gds_pending: Mutex<Option<crate::transport::gds::Quarantine>>,
     pub(crate) operation: TransferOp,
     payload: PreparedTarget,
     pub(crate) notification: Option<Notification>,
@@ -1684,11 +1660,80 @@ pub(crate) struct PreparedSubmission {
     queue: Option<QueuePermit>,
     // Remove queue metadata before credit rollback can wake/refill the queue.
     pub(crate) credit: Option<CreditPermit>,
-    _admission: BatchPermit,
+    _admission: Option<BatchPermit>,
 }
 
 #[cfg(feature = "gds")]
 impl PreparedSubmission {
+    fn pin_gds_buffers(mut self) -> Result<Self> {
+        if let PreparedTarget::File { requests, .. } = &mut self.payload {
+            for r in requests {
+                if r.transport == Transport::Gds {
+                    match crate::transport::gds::BufferLease::acquire(&r.local) {
+                        Ok(lease) => r.buffer = lease,
+                        Err(e) => return Err(self.abort_error(e)),
+                    }
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    fn finish_gds_report(
+        &self,
+        mut report: BatchReport,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> BatchReport {
+        let PreparedTarget::File { requests, .. } = &self.payload else {
+            return report;
+        };
+        if report.locally_drained {
+            if let Err((index, error)) = self.finish_gds_buffers() {
+                // A cancelled/queued group can be the last registration borrower.
+                // Its admission stays charged even if it never obtained a native batch.
+                *self.gds_pending.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(crate::transport::gds::Quarantine::BufferRelease);
+                if let Some((p, base)) = progress {
+                    p.fail_file_task(
+                        base + index,
+                        0,
+                        error.for_file_report(),
+                        RemoteEffect::None,
+                        false,
+                    );
+                }
+                report.locally_drained = false;
+                let first = report.completed_requests.min(index);
+                let end = report
+                    .failure
+                    .as_ref()
+                    .map_or(report.completed_requests, |f| {
+                        f.request_index + f.affected_requests
+                    });
+                let effect = if self.operation == TransferOp::Write
+                    && (first < report.completed_requests
+                        || report
+                            .failure
+                            .as_ref()
+                            .is_some_and(|f| f.remote_effect == RemoteEffect::Unknown))
+                {
+                    RemoteEffect::Unknown
+                } else {
+                    RemoteEffect::None
+                };
+                report.failure = Some(TransferFailure {
+                    request_index: first,
+                    affected_requests: end.saturating_sub(first).max(1),
+                    error,
+                    remote_effect: effect,
+                });
+                report.completed_requests = first;
+                report.transferred_bytes = requests[..first].iter().map(|r| r.length).sum();
+            }
+        }
+        report
+    }
+
     fn finish_gds_buffers(&self) -> std::result::Result<(), (usize, Error)> {
         if let PreparedTarget::File { requests, .. } = &self.payload {
             for (index, request) in requests.iter().enumerate() {
@@ -1701,6 +1746,41 @@ impl PreparedSubmission {
     }
     pub(crate) fn release_gds_buffers(&self) -> bool {
         self.finish_gds_buffers().is_ok()
+    }
+}
+
+impl PreparedSubmission {
+    pub(crate) fn abort_error(&self, error: Error) -> Error {
+        #[cfg(feature = "gds")]
+        if let Err((_, cleanup)) = self.finish_gds_buffers() {
+            return cleanup;
+        }
+        error
+    }
+}
+
+#[cfg(feature = "gds")]
+impl Drop for PreparedSubmission {
+    fn drop(&mut self) {
+        let pending = self
+            .gds_pending
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if pending.is_some() || self.finish_gds_buffers().is_err() {
+            // Rollback before enqueue (including worker creation failure) cannot
+            // return a file borrower or its charges without a release receipt.
+            std::mem::forget(pending);
+            if let PreparedTarget::File { requests, .. } = &mut self.payload {
+                std::mem::forget(std::mem::take(requests));
+            }
+            std::mem::forget((
+                self._admission.take(),
+                self._qos.take(),
+                self.queue.take(),
+                self.credit.take(),
+            ));
+        }
     }
 }
 

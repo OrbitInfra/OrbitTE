@@ -280,12 +280,18 @@ impl CudaMemory {
             .uncertain = true;
     }
     pub(crate) fn gds_current<T>(&self, call: impl FnOnce() -> Result<T>) -> Result<T> {
-        let context = self
-            .allocation
-            .lock()
-            .map_err(|_| Error::Internal("CUDA allocation poisoned"))?
-            .context
-            .clone();
+        let allocation = self.allocation.lock().map_err(|_| Error::Unquiesced {
+            operation: "CUDA allocation lock",
+            code: -1,
+        })?;
+        if allocation.uncertain {
+            return Err(Error::Unquiesced {
+                operation: "CUDA file ownership",
+                code: -1,
+            });
+        }
+        let context = allocation.context.clone();
+        drop(allocation);
         context.current(call)
     }
 }

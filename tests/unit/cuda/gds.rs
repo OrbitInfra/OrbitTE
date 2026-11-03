@@ -150,3 +150,60 @@ fn gds_idle_deregister_error_keeps_the_backing_and_registration_budget() -> Resu
     assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
     Ok(())
 }
+
+#[test]
+fn queued_cancel_with_failed_last_deregister_keeps_admission_without_submitting() -> Result<()> {
+    let mock = Mock::new(GdsMode::NativeOnly);
+    let f = Fixture::new(
+        &mock,
+        EngineConfig {
+            runtime_queue: Some(crate::RuntimeQueueConfig {
+                max_dispatch_owners: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        32,
+    )?;
+    let host = f
+        .engine
+        .register_memory(vec![0x31; 16].into_boxed_slice(), Permission::LocalOnly)?;
+    mock.held.store(true, Ordering::Release);
+    let running = f.engine.submit_async(
+        TransferOp::Write,
+        &f.segment,
+        &[request(&host, 0, 0, 4)],
+        None,
+        WAIT,
+    )?;
+    wait_enter(&mock);
+    let dev = allocation(&[0x79; 16]);
+    let gpu = f
+        .engine
+        .register_cuda_memory_batch(&[(memory(&dev), 0, 16)], Permission::LocalOnly)?
+        .remove(0);
+    let queued = f.engine.submit_async(
+        TransferOp::Write,
+        &f.segment,
+        &[request(&gpu, 0, 8, 8)],
+        None,
+        WAIT,
+    )?;
+    f.engine.unregister_memory(&gpu)?;
+    assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
+    mock.deregister_error.store(true, Ordering::Release);
+    assert!(queued.cancel(0)?);
+    assert!(!queued.wait(WAIT)?.locally_drained);
+    let tasks = queued.task_statuses()?;
+    let failure = tasks[0].failure.as_ref().unwrap();
+    assert!(matches!(failure.error, Error::Unquiesced { .. }));
+    assert_eq!(failure.remote_effect, RemoteEffect::None);
+    assert_eq!(mock.submits.load(Ordering::Acquire), 1);
+    assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
+    assert_eq!(f.engine.stats()?.gds.quarantined_batches, 1);
+    mock.held.store(false, Ordering::Release);
+    assert_eq!(running.wait(WAIT)?.completed_tasks, 1);
+    assert_eq!(f.engine.stats()?.inflight_bytes, 8);
+    assert_eq!(&std::fs::read(&f.path)?[8..16], &[0; 8]);
+    Ok(())
+}

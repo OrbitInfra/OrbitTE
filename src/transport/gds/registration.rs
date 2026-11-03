@@ -2,7 +2,7 @@ use super::*;
 use crate::RegisteredMemory;
 use std::fs::File;
 use std::os::fd::AsRawFd;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
 
 pub(crate) struct FileHandle {
     driver: Arc<Driver>,
@@ -108,8 +108,12 @@ impl GdsTransport {
             .gds
             .lock()
             .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
-        let result = gpu.gds_current(|| self.driver.api.register_buffer(base, memory.len()));
-        if matches!(result, Err(Error::Unquiesced { .. })) {
+        let mut attempted = false;
+        let result = gpu.gds_current(|| {
+            attempted = true;
+            self.driver.api.register_buffer(base, memory.len())
+        });
+        if attempted && matches!(result, Err(Error::Unquiesced { .. })) {
             slot.failed = true;
             gpu.fence_gds();
             std::mem::forget((memory.clone(), self.driver.clone()));
@@ -127,9 +131,13 @@ impl GdsTransport {
 
 pub(crate) struct BufferLease {
     memory: RegisteredMemory,
-    active: AtomicBool,
+    // BORROWED, RELEASED or RETAINED. Repeated checks report only this lease's cleanup.
+    state: AtomicU8,
 }
 impl BufferLease {
+    const BORROWED: u8 = 0;
+    const RELEASED: u8 = 1;
+    const RETAINED: u8 = 2;
     pub(crate) fn acquire(memory: &RegisteredMemory) -> Result<Option<Self>> {
         if memory.memory_type() != crate::MemoryType::Cuda {
             return Ok(None);
@@ -153,7 +161,7 @@ impl BufferLease {
         slot.users = slot.users.checked_add(1).ok_or(Error::ResourceExhausted)?;
         Ok(Some(Self {
             memory: memory.clone(),
-            active: AtomicBool::new(true),
+            state: AtomicU8::new(Self::BORROWED),
         }))
     }
     pub(crate) fn retire(memory: &RegisteredMemory) -> Result<()> {
@@ -177,26 +185,29 @@ impl BufferLease {
         Ok(())
     }
     pub(crate) fn release(&self) -> Result<()> {
-        let mut slot = self
-            .memory
-            .0
-            .gds
-            .lock()
-            .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
-        if self.active.swap(false, Ordering::AcqRel) {
-            slot.users -= 1;
-            if slot.users == 0 && slot.retired {
-                return slot
-                    .close()
-                    .inspect_err(|_| std::mem::forget(self.memory.clone()));
+        if self.state.load(Ordering::Acquire) == Self::RELEASED {
+            return Ok(());
+        }
+        let mut slot = self.memory.0.gds.lock().unwrap_or_else(|p| p.into_inner());
+        match self.state.load(Ordering::Relaxed) {
+            Self::RELEASED => return Ok(()),
+            Self::RETAINED => {
+                return Err(Error::Unquiesced {
+                    operation: "cuFileBufDeregister",
+                    code: -1,
+                });
+            }
+            _ => {}
+        }
+        slot.users -= 1;
+        if slot.users == 0 && slot.retired {
+            if let Err(error) = slot.close() {
+                self.state.store(Self::RETAINED, Ordering::Release);
+                std::mem::forget(self.memory.clone());
+                return Err(error);
             }
         }
-        if slot.failed {
-            return Err(Error::Unquiesced {
-                operation: "cuFileBufDeregister",
-                code: -1,
-            });
-        }
+        self.state.store(Self::RELEASED, Ordering::Release);
         Ok(())
     }
 }

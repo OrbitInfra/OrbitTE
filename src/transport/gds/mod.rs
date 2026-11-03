@@ -8,7 +8,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
-pub(crate) use batch::LiveBatch;
+use batch::LiveBatch;
+pub(crate) enum Quarantine {
+    Batch(Box<LiveBatch>),
+    BufferRelease,
+}
 pub(crate) use registration::{BufferLease, BufferSlot, FileHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,7 +103,7 @@ pub(crate) struct GdsTransport {
 }
 
 struct Retained {
-    batch: LiveBatch,
+    batch: Quarantine,
     submission: crate::engine::PreparedSubmission,
     _source: Arc<crate::engine::Source>,
     progress: Option<(Arc<crate::batch::BatchProgress>, usize)>,
@@ -148,7 +152,7 @@ impl GdsTransport {
 
     pub(crate) fn retain(
         &self,
-        batch: LiveBatch,
+        batch: Quarantine,
         submission: crate::engine::PreparedSubmission,
         source: Arc<crate::engine::Source>,
         progress: Option<(Arc<crate::batch::BatchProgress>, usize)>,
@@ -171,12 +175,16 @@ impl GdsTransport {
         let mut i = 0;
         while i < retained.len() {
             let item = &mut retained[i];
-            if !item.batch.collect() {
+            let Quarantine::Batch(batch) = &mut item.batch else {
+                i += 1;
+                continue;
+            };
+            if !batch.collect() {
                 i += 1;
                 continue;
             }
             if !item.submission.release_gds_buffers() {
-                item.batch.permanent = true;
+                batch.permanent = true;
                 i += 1;
                 continue;
             }
