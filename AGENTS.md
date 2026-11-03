@@ -51,8 +51,8 @@ Implemented:
 
 - Engine, owned/external host and CUDA memory, batch registration, async
   batches with cancel, notifications (P1, P2).
-- TCP transport and the OrbitTE-only control plane, wire `VERSION = 23` in
-  `src/runtime/control_plane.rs` (P2).
+- TCP transport and the OrbitTE-only versioned control plane (`VERSION` in
+  `src/runtime/control_plane.rs`) (P2).
 - Host RDMA: persistent MRs, QP arrays, CQ lanes, workers, multirail slicing,
   discovery/topology, monitor and port recovery (P4, bounded RoCE accepted).
 - GPU Direct RDMA, CUDA IPC/NVLink with caches, grouped copies, stream pool,
@@ -67,6 +67,11 @@ FABRIC transports; file segments; the full selector; failover/retry;
 explicit progress; metrics endpoints; config and metadata-store
 compatibility; the C ABI, C++ adapters, Python bindings and device-plugin ABI;
 TENT wire interoperability; benchmarks.
+
+In flight: [PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118)
+(`feat/transport-selector`) delivers the first part of S6, bumping the wire
+to v24. Land it before S0 and base later work on it; check `gh pr list` for
+other open work before starting a step.
 
 ## 3. Working mode without hardware
 
@@ -334,6 +339,10 @@ Do this first: later steps add request fields and transports.
 
 - **TENT:** `runtime/transport_selector.cpp`, `runtime/qos_contract.cpp`; tests
   `transport_selector_test`, `transport_hint_test`, `qp_pool_layout_test`.
+- **Status:** PR #118 adds `Transport::Unspec`, TENT-style first-match rules
+  over original CPU/CUDA memory type, inclusive size and effective priority,
+  owner-derived capabilities in the v24 Describe and strict explicit hints.
+  Build on it; implement only what it leaves open from the list below.
 - **Implement:**
   - Policy order and named policies, all request intents and priority.
   - Segment-type, memory-type and size filters.
