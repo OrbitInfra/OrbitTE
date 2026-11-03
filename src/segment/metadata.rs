@@ -68,8 +68,10 @@ impl ProcessIdentity {
 
 /// Describe capabilities are fixed at engine creation, independent of current
 /// provider health. Execution still checks authoritative owners and readiness.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SegmentMetadata {
+    pub(crate) tcp_disabled: bool,
+    pub(crate) hp: Option<std::sync::Arc<crate::transport::hp_tcp::Endpoint>>,
     pub(crate) max_transfer_bytes: u64,
     pub(crate) boot: Option<SourceEpoch>,
     pub(crate) rdma: bool,
@@ -80,8 +82,8 @@ pub(crate) struct SegmentMetadata {
 impl SegmentMetadata {
     pub(crate) const WIRE_SIZE: usize = 44;
 
-    pub(crate) fn same_machine(self, peer: Self) -> bool {
-        let machine = |segment: Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
+    pub(crate) fn same_machine(&self, peer: &Self) -> bool {
+        let machine = |segment: &Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
         machine(self)
             .zip(machine(peer))
             .is_some_and(|(a, b)| a == b)
@@ -90,7 +92,8 @@ impl SegmentMetadata {
     pub(crate) fn encode(&self, bytes: &mut [u8]) {
         bytes.fill(0);
         bytes[36..44].copy_from_slice(&self.max_transfer_bytes.to_be_bytes());
-        bytes[0] = u8::from(self.rdma)
+        bytes[0] = (u8::from(self.tcp_disabled) << 4)
+            | u8::from(self.rdma)
             | (u8::from(self.remote_staging) << 1)
             | (u8::from(self.nvlink.is_some()) << 2);
         if let Some(identity) = self.nvlink {
@@ -103,7 +106,7 @@ impl SegmentMetadata {
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::WIRE_SIZE
-            || bytes[0] & !15 != 0
+            || bytes[0] & !31 != 0
             || bytes[0] & 12 == 12
             || bytes[1..4].iter().any(|b| *b != 0)
             || (bytes[0] & 12 == 0 && bytes[4..20].iter().any(|b| *b != 0))
@@ -118,6 +121,8 @@ impl SegmentMetadata {
         cap.copy_from_slice(&bytes[36..44]);
         Ok(Self {
             max_transfer_bytes: u64::from_be_bytes(cap),
+            tcp_disabled: bytes[0] & 16 != 0,
+            hp: None,
             boot: (bytes[0] & 12 != 0).then_some(identity.machine),
             rdma: bytes[0] & 1 != 0,
             remote_staging: bytes[0] & 2 != 0,

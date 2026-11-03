@@ -483,3 +483,97 @@ fn cuda_copy_completion_and_destroy_failures_retain_native_owners() {
         assert!(weak.upgrade().is_some(), "{mode}");
     }
 }
+
+#[test]
+fn hp_tcp_rejects_device_memory_and_consumes_pinned_host_readiness() -> Result<()> {
+    let c = || EngineConfig {
+        tcp: false,
+        hp_tcp: crate::HpTcpConfig {
+            enable: true,
+            worker_count: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let src = TransferEngine::new(c())?;
+    let dst = TransferEngine::new(c())?;
+    let owner = allocation(&[0x6a; 64]);
+    let gpu = memory(&owner);
+    let remote_gpu = src
+        .register_cuda_memory_batch(&[(gpu.clone(), 0, 32)], Permission::RemoteReadWrite)?
+        .remove(0);
+    let local_gpu = dst
+        .register_cuda_memory_batch(&[(gpu, 32, 32)], Permission::LocalOnly)?
+        .remove(0);
+    let producer = pinned_readiness::Producer::new(&owner, true);
+    let pinned = producer.pinned();
+    let remote_pinned =
+        src.register_host_memory(pinned.clone(), 0, 16, Permission::RemoteReadWrite)?;
+    let local_pinned = dst.register_host_memory(pinned.clone(), 32, 16, Permission::LocalOnly)?;
+    let host = src.register_memory(vec![0xa5; 8].into(), Permission::RemoteReadWrite)?;
+    let local = dst.register_memory(vec![0xcc; 8].into(), Permission::LocalOnly)?;
+    let peer = dst.open_segment(
+        src.endpoint(),
+        src.source_epoch(),
+        crate::test_support::EVENTUAL_PROGRESS,
+    )?;
+    let calls = owner.events.lock().unwrap().len();
+    for (a, b) in [(&local, &remote_gpu), (&local_gpu, &host)] {
+        let req = TransferRequest::new(
+            Transport::HpTcp,
+            a.base_address() + 1,
+            b.base_address() + 1,
+            4,
+        );
+        for op in [TransferOp::Read, TransferOp::Write] {
+            assert!(matches!(
+                dst.submit_and_wait(
+                    op,
+                    &peer,
+                    std::slice::from_ref(&req),
+                    crate::test_support::EVENTUAL_PROGRESS
+                ),
+                Err(Error::Unavailable(_))
+            ));
+        }
+    }
+    assert_eq!(owner.events.lock().unwrap().len(), calls);
+    let mut got = [0; 8];
+    local.read(0, &mut got)?;
+    assert_eq!(got, [0xcc; 8]);
+    host.read(0, &mut got)?;
+    assert_eq!(got, [0xa5; 8]);
+    for op in [TransferOp::Read, TransferOp::Write] {
+        remote_pinned.write(0, &[0x41; 16])?;
+        local_pinned.write(0, &[0x31; 16])?;
+        producer.record(&pinned)?;
+        let waits = owner.event_waits.load(std::sync::atomic::Ordering::Acquire);
+        let req = TransferRequest::new(
+            Transport::HpTcp,
+            local_pinned.base_address() + 2,
+            remote_pinned.base_address() + 2,
+            8,
+        );
+        let report =
+            dst.submit_and_wait(op, &peer, &[req], crate::test_support::EVENTUAL_PROGRESS)?;
+        assert!(report.is_complete(), "{report:?}");
+        assert_eq!(
+            owner.event_waits.load(std::sync::atomic::Ordering::Acquire),
+            waits + 1
+        );
+        let mut target = [0; 16];
+        let mut sender = [0; 16];
+        remote_pinned.read(0, &mut target)?;
+        local_pinned.read(0, &mut sender)?;
+        let mut expected_remote = [0x41; 16];
+        let mut expected_local = [0x31; 16];
+        if op == TransferOp::Read {
+            expected_local[2..10].fill(0x41);
+        } else {
+            expected_remote[2..10].fill(0x31);
+        }
+        assert_eq!(target, expected_remote);
+        assert_eq!(sender, expected_local);
+    }
+    Ok(())
+}

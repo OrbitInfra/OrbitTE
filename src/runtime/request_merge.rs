@@ -51,7 +51,7 @@ impl TaskMap {
         contracts: &[Option<&crate::runtime::qos_contract::CompiledContract>],
         may_share_memory: bool,
         operation: TransferOp,
-        limit: usize,
+        (limit, hp_limit): (usize, usize),
         enabled: bool,
     ) -> Self {
         if !enabled || requests.len() < 2 {
@@ -83,6 +83,14 @@ impl TaskMap {
         let can_merge = |j: usize, i: usize, length: usize| {
             let (a, b) = (&requests[j], &requests[i]);
             let (left, right) = (&transfers[j], &transfers[i]);
+            let limit = if matches!(
+                a.transport,
+                crate::Transport::HpTcp | crate::Transport::Unspec
+            ) {
+                limit.min(hp_limit)
+            } else {
+                limit
+            };
             partitions[i] == partitions[j]
                 && a.transport == b.transport
                 && a.priority == b.priority

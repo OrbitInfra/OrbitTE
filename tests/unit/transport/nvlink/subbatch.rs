@@ -78,6 +78,7 @@ pub(crate) fn run_case(
         epoch,
         regions: vec![RemoteRegion {
             memory_type: crate::MemoryType::Cuda,
+            hp_registered: false,
             ipc_exportable: true,
             epoch,
             id: 7,
@@ -90,6 +91,7 @@ pub(crate) fn run_case(
         peer.regions[0].length = 64;
         peer.regions.push(RemoteRegion {
             memory_type: crate::MemoryType::Cuda,
+            hp_registered: false,
             ipc_exportable: true,
             epoch,
             id: 8,

@@ -71,6 +71,8 @@ pub mod cuda;
 pub use runtime::topology::{
     DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
 };
+#[cfg(not(unsupported_native_target))]
+pub use transport::hp_tcp::HpTcpConfig;
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub use {
     config::StagingLocation, runtime::proxy_manager::StagingStats, transport::nvlink::NVLinkStats,
@@ -108,6 +110,9 @@ pub use {
     },
 };
 
+#[cfg(all(test, not(unsupported_native_target)))]
+#[path = "../tests/common/ports.rs"]
+mod test_ports;
 #[cfg(all(test, not(unsupported_native_target)))]
 #[path = "../tests/common/mod.rs"]
 mod test_support;

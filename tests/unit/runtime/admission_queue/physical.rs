@@ -152,7 +152,7 @@ fn physical_windows_charge_only_live_wire_bytes_and_use_each_transports_current_
     let healthy = q.admit(vec![item(4, Transport::Rdma)], None).unwrap();
     healthy[0].wait(|| false).unwrap();
     drop((healthy, tcp, p));
-    assert_eq!(q.lock().eligible_bytes, [0; 6]);
+    assert!(q.lock().eligible_bytes.iter().all(|bytes| *bytes == 0));
     assert_eq!(q.stats().deadline_infeasible_drops, 1);
 }
 

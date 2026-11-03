@@ -46,6 +46,7 @@ fn region(kind: MemoryType, ipc_exportable: bool) -> RemoteRegion {
         length: 64,
         permission: Permission::RemoteReadWrite,
         memory_type: kind,
+        hp_registered: false,
         ipc_exportable,
     }
 }
@@ -653,6 +654,7 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
     }
     for (name, expected) in [
         ("tcp", Transport::Tcp),
+        ("hp_tcp", Transport::HpTcp),
         ("rdma", Transport::Rdma),
         ("nvlink", Transport::Nvlink),
     ] {
@@ -662,7 +664,7 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
         assert_eq!(config.policy[0].transports, [expected]);
     }
     for provider in [
-        "ub", "xpu", "mlu", "hylink", "hp_tcp", "shm", "fabric", "mnnvl", "mpcomm",
+        "ub", "xpu", "mlu", "hylink", "shm", "fabric", "mnnvl", "mpcomm",
     ] {
         let json = format!(
             r#"{{"policy":[{{"name":"unsupported","segment_type":"memory","transports":["{provider}"]}}]}}"#

@@ -1032,6 +1032,7 @@ impl MemoryRegistry {
                         permission,
                         memory_type: allocation.memory_type(),
                         ipc_exportable: allocation.ipc_exportable(),
+                        hp_registered: false,
                     },
                     allocation: allocation.clone(),
                     allocation_offset: *offset,
@@ -1120,7 +1121,7 @@ impl MemoryRegistry {
             .ok_or(Error::RegionNotFound)
     }
 
-    pub(crate) fn descriptors(&self) -> Result<Vec<RemoteRegion>> {
+    pub(crate) fn descriptors(&self, hp_enabled: bool) -> Result<Vec<RemoteRegion>> {
         let entries = self
             .entries
             .lock()
@@ -1129,7 +1130,16 @@ impl MemoryRegistry {
             .regions
             .values()
             .filter(|entry| entry.memory.permission() != Permission::LocalOnly)
-            .map(|entry| entry.memory.0.descriptor)
+            .map(|entry| {
+                let mut descriptor = entry.memory.0.descriptor;
+                descriptor.hp_registered = hp_enabled
+                    && crate::transport::hp_tcp::host(&entry.memory)
+                    && matches!(
+                        descriptor.permission,
+                        Permission::RemoteRead | Permission::RemoteReadWrite
+                    );
+                descriptor
+            })
             .collect())
     }
 

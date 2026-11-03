@@ -27,6 +27,9 @@ impl TransferEngine {
     ) -> Result<()> {
         let _ = (local, local_offset, length, deadline, &rdma_ready);
         let transport = selection.transport;
+        if transport == Transport::HpTcp && (staging || !crate::transport::hp_tcp::host(local)) {
+            return Err(selection.rejected("HP-TCP requires ordinary host memory"));
+        }
         if staging && transport == Transport::Nvlink {
             return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
         }
@@ -94,7 +97,7 @@ impl TransferEngine {
         operation: TransferOp,
         peer: &RemoteSegment,
         requests: &[PreparedTransfer],
-        #[cfg(feature = "metrics")] owners: &[OwnerAdmission],
+        owners: &[OwnerAdmission],
         owner_deadline: Instant,
         credit: Option<&crate::runtime::receiver_credit::CreditReservation>,
         progress: Option<(&BatchProgress, usize)>,
@@ -132,6 +135,18 @@ impl TransferEngine {
                     posted,
                 ))
             }
+            Transport::HpTcp => single((|| {
+                let hp = self
+                    .hp_tcp
+                    .as_ref()
+                    .ok_or((Error::Unavailable("HP-TCP is disabled"), RemoteEffect::None))?;
+                owners[0]
+                    .admit_hp(hp, request.length)
+                    .map_err(|e| (e, RemoteEffect::None))?;
+                hp.submit(operation, peer, request, owner_deadline)
+                    .map_err(|e| (e, RemoteEffect::None))?
+                    .wait(posted)
+            })()),
             Transport::Tcp => single(TcpTransport::transfer(
                 operation,
                 peer,
@@ -309,14 +324,14 @@ impl TransferEngine {
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut count = original.selection.initial_attempts;
         let mut request = original.clone();
-        let mut refreshed = false;
+        let mut refreshed = None;
         let mut error = first_error.for_report();
         while count < self.config.max_failover_attempts
             && Instant::now() < deadline
             && retryable(&error)
         {
             count += 1;
-            let refresh = matches!(error, Error::RegionNotFound) && !refreshed;
+            let refresh = matches!(error, Error::RegionNotFound) && refreshed.is_none();
             #[cfg(feature = "cuda")]
             let staging = request.remote_staging;
             #[cfg(not(feature = "cuda"))]
@@ -343,7 +358,6 @@ impl TransferEngine {
                 request.remote_staging = false;
             }
             if refresh {
-                refreshed = true;
                 let snapshot = control_plane::open_segment(peer.endpoint, peer.epoch, deadline)
                     .map_err(|e| (e, RemoteEffect::None))?;
                 let address = request.remote.address + request.remote_offset as u64;
@@ -353,19 +367,27 @@ impl TransferEngine {
                 if current != request.remote || offset != request.remote_offset {
                     return Err((Error::RegionNotFound, RemoteEffect::None));
                 }
+                refreshed = Some(snapshot);
             }
             request.selection = next;
             if let Some((p, i)) = progress {
-                #[cfg(not(feature = "rdma"))]
-                let running = crate::batch::RunningCancel::Unsupported;
+                let running = if request.selection.transport == Transport::HpTcp {
+                    request.hp_cancel.clone().map_or(
+                        crate::batch::RunningCancel::Unsupported,
+                        crate::batch::RunningCancel::HpTcp,
+                    )
+                } else {
+                    crate::batch::RunningCancel::Unsupported
+                };
                 #[cfg(feature = "rdma")]
-                let mut running = crate::batch::RunningCancel::Unsupported;
-                #[cfg(feature = "rdma")]
-                if request.selection.transport == Transport::Rdma {
-                    if let Some(flag) = &request.rdma_cancel {
-                        running = crate::batch::RunningCancel::Rdma(flag.clone());
-                    }
-                }
+                let running = if request.selection.transport == Transport::Rdma {
+                    request
+                        .rdma_cancel
+                        .clone()
+                        .map_or(running, crate::batch::RunningCancel::Rdma)
+                } else {
+                    running
+                };
                 if !p.start_retry(i, request.selection.transport, count, running) {
                     return Err((Error::Cancelled, RemoteEffect::None));
                 }
@@ -413,9 +435,8 @@ impl TransferEngine {
                 .and_then(|()| {
                     self.memory_attempt(
                         op,
-                        peer,
+                        refreshed.as_ref().unwrap_or(peer),
                         std::slice::from_ref(&request),
-                        #[cfg(feature = "metrics")]
                         std::slice::from_ref(owner),
                         deadline,
                         credit,

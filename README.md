@@ -70,7 +70,8 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 | RDMA | DRAM; CUDA through GPUDirect or staging | Implemented; bounded RoCE profiles accepted |
 | NVLink / CUDA IPC | CUDA and pinned DRAM on one host | Implemented; bounded H20 profiles accepted |
 | io_uring, GDS | DRAM/CUDA ↔ local SSD | Implemented (P7) |
-| HP-TCP, SHM | DRAM | Planned (P3) |
+| [HP-TCP](docs/hp-tcp.md) | DRAM over persistent IPv4 lanes | Loopback tested, physical rails unqualified |
+| SHM | DRAM | Planned (P3) |
 | MNNVL | CUDA fabric memory | Planned (P5) |
 | MPComm, libfabric | Optional network providers | Planned (P8) |
 

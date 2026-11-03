@@ -80,6 +80,7 @@ pub struct RemoteRegion {
     pub(crate) permission: Permission,
     pub(crate) memory_type: MemoryType,
     pub(crate) ipc_exportable: bool,
+    pub(crate) hp_registered: bool,
 }
 
 impl RemoteRegion {

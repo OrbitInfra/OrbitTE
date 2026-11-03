@@ -2,6 +2,7 @@ mod admission;
 mod failover;
 #[cfg(any(feature = "io-uring", feature = "gds"))]
 pub(crate) mod file_attempt;
+mod hp_tcp;
 #[cfg(feature = "metrics")]
 mod metrics;
 use admission::OwnerAdmission;
@@ -44,6 +45,8 @@ pub enum TransferOp {
 #[non_exhaustive]
 pub enum Transport {
     Tcp,
+    /// Persistent CPU socket lanes using TENT HP-TCP framing.
+    HpTcp,
     Rdma,
     Nvlink,
     /// Linux io_uring for local regular files and registered memory.
@@ -80,7 +83,7 @@ pub struct TransferRequest {
     /// priority at resolution and replaces this request's legacy priority.
     pub qos: Option<crate::EffectiveQosPolicy>,
     /// Priority for transport policy matching and RDMA payload dispatch.
-    /// TCP and NVLink accept all priorities and treat them as advisory.
+    /// TCP, HP-TCP and NVLink accept all priorities and treat them as advisory.
     /// This does not reorder requests within a batch or preempt posted DMA.
     pub priority: Priority,
     /// Use Pin/Delegate/Unpin for the remote CUDA range over TCP or RDMA.
@@ -157,6 +160,7 @@ impl TransferRequest {
 
 #[derive(Clone)]
 pub(crate) struct PreparedTransfer {
+    pub(crate) hp_cancel: Option<tokio::sync::watch::Sender<bool>>,
     #[cfg(feature = "rdma")]
     pub(crate) priority: Priority,
     #[cfg(feature = "rdma")]
@@ -245,6 +249,7 @@ pub struct EngineStats {
 
 /// Engine, source registry and bounded control-service handler ownership.
 pub struct TransferEngine {
+    hp_tcp: Option<crate::transport::hp_tcp::HpTcpTransport>,
     #[cfg(feature = "metrics")]
     metrics: Option<crate::metrics::Metrics>,
     pub(crate) progress_worker: Option<crate::runtime::progress_worker::ProgressWorker>,
@@ -315,7 +320,14 @@ impl TransferEngine {
             })
             .transpose()?;
         #[allow(unused_mut)]
+        let hp_listener = config
+            .hp_tcp
+            .enable
+            .then(|| config.hp_tcp.bind(config.bind_addr))
+            .transpose()?;
         let mut metadata = SegmentMetadata {
+            tcp_disabled: !config.tcp,
+            hp: hp_listener.as_ref().map(|(_, end)| Arc::new(*end)),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             ..Default::default()
         };
@@ -371,11 +383,21 @@ impl TransferEngine {
         });
         let allocations = Arc::new(AllocationBudget::new());
         let progress_worker = Self::start_progress(&config, &allocations, &runtime_queue, &source)?;
+        let hp_tcp = hp_listener
+            .map(|(listener, _)| {
+                crate::transport::hp_tcp::HpTcpTransport::start(
+                    &config.hp_tcp,
+                    listener,
+                    source.clone(),
+                )
+            })
+            .transpose()?;
         let control = ControlService::start(Arc::clone(&source), &config)?;
         let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
         });
         let engine = Self {
+            hp_tcp,
             #[cfg(feature = "metrics")]
             metrics: None,
             runtime_queue,
@@ -826,8 +848,11 @@ impl TransferEngine {
             return Ok(RemoteSegment {
                 endpoint,
                 epoch: expected_epoch,
-                regions: self.source.registry.descriptors()?,
-                metadata: self.source.metadata,
+                regions: self
+                    .source
+                    .registry
+                    .descriptors(self.source.metadata.hp.is_some())?,
+                metadata: self.source.metadata.clone(),
             });
         }
         control_plane::open_segment(endpoint, expected_epoch, deadline)
@@ -1110,8 +1135,8 @@ impl TransferEngine {
                 #[cfg(not(feature = "cuda"))]
                 local_ipc: false,
                 remote: &remote,
-                local_segment: self.source.metadata,
-                remote_segment: peer.metadata,
+                local_segment: self.source.metadata.clone(),
+                remote_segment: peer.metadata.clone(),
                 transfer_size: request.length,
                 priority,
                 remote_staging: request.remote_staging,
@@ -1144,6 +1169,7 @@ impl TransferEngine {
             let mut selection = selected;
             selection.initial_attempts = used;
             prepared.push(PreparedTransfer {
+                hp_cancel: None,
                 #[cfg(feature = "rdma")]
                 priority,
                 #[cfg(feature = "rdma")]
@@ -1177,15 +1203,24 @@ impl TransferEngine {
                     .zip(peer.metadata.boot)
                     .is_none_or(|(local, remote)| local == remote),
                 operation,
-                self.config
-                    .max_transfer_bytes
-                    .min(usize::try_from(peer.metadata.max_transfer_bytes).unwrap_or(usize::MAX)),
+                (
+                    self.config.max_transfer_bytes.min(
+                        usize::try_from(peer.metadata.max_transfer_bytes).unwrap_or(usize::MAX),
+                    ),
+                    self.source
+                        .metadata
+                        .hp
+                        .as_ref()
+                        .zip(peer.metadata.hp.as_ref())
+                        .map_or(usize::MAX, |(a, b)| {
+                            usize::try_from(a.max_bytes.min(b.max_bytes)).unwrap_or(usize::MAX)
+                        }),
+                ),
                 self.config.merge_requests,
             ),
             #[cfg(any(feature = "io-uring", feature = "gds"))]
             PreparedTarget::File { .. } => TaskMap::identity(requests),
         });
-        #[cfg(feature = "rdma")]
         if batch.is_some() {
             match &mut payload {
                 PreparedTarget::Memory {
@@ -1193,6 +1228,10 @@ impl TransferEngine {
                     ..
                 } => {
                     for transfer in transfers {
+                        if transfer.selection.includes(Transport::HpTcp) {
+                            transfer.hp_cancel = Some(tokio::sync::watch::Sender::new(false));
+                        }
+                        #[cfg(feature = "rdma")]
                         if transfer.selection.includes(Transport::Rdma) {
                             transfer.rdma_cancel = Some(Arc::default());
                         }
@@ -1203,7 +1242,7 @@ impl TransferEngine {
             }
         }
         let owners = self.admit_physical(
-            &payload,
+            &mut payload,
             &mapping,
             requests,
             &contracts,
@@ -1427,6 +1466,26 @@ impl TransferEngine {
             submission.retire_owners(index, 1, 0);
         };
         while index < requests.len() {
+            let hp_count = self.hp_group_len(submission, &requests[index..], index);
+            if hp_count > 1 {
+                let result = self.hp_group(
+                    submission,
+                    peer,
+                    &requests[index..index + hp_count],
+                    index,
+                    progress,
+                );
+                report.completed_requests += result.completed_requests;
+                report.transferred_bytes += result.transferred_bytes;
+                if let Some(mut f) = result.failure {
+                    f.request_index += index;
+                    report.failure = Some(f);
+                    report.locally_drained = result.locally_drained;
+                    break;
+                }
+                index += hp_count;
+                continue;
+            }
             let request = &requests[index];
             let owner = &submission.owners[index];
             let owner_deadline = owner.deadline;
@@ -1497,7 +1556,6 @@ impl TransferEngine {
                 *operation,
                 peer,
                 group,
-                #[cfg(feature = "metrics")]
                 &submission.owners[index..index + cohort],
                 owner_deadline,
                 credit.as_deref(),
@@ -1844,6 +1902,9 @@ impl TransferEngine {
         // waiting for incoming exports, keeping close receipts serviceable.
         self.close_requester_until(deadline)?;
         self.close_source_until(deadline)?;
+        if let Some(hp) = &self.hp_tcp {
+            hp.stop()?;
+        }
         #[cfg(feature = "gds")]
         self.source.registry.close_gds_buffers()?;
         #[cfg(feature = "cuda")]

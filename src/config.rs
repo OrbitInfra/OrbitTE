@@ -60,6 +60,9 @@ impl Default for RuntimeQueueConfig {
 /// Immutable per-engine budgets and optional provider configuration.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Enable ordinary TCP payloads. The control service is independent.
+    pub tcp: bool,
+    pub hp_tcp: crate::HpTcpConfig,
     /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
     #[cfg(feature = "metrics")]
     pub metrics: crate::metrics::MetricsConfig,
@@ -166,6 +169,8 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            tcp: true,
+            hp_tcp: Default::default(),
             #[cfg(feature = "metrics")]
             metrics: Default::default(),
             #[cfg(feature = "metrics")]
@@ -225,6 +230,7 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        self.hp_tcp.validate(self.tcp)?;
         if let Some(q) = self.runtime_queue {
             if q.staging_owner_reserve > q.max_outstanding_owners
                 || q.staging_byte_reserve > q.max_outstanding_bytes

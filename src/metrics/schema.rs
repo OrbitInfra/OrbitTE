@@ -2,7 +2,9 @@
 use crate::{TransferOp, Transport};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 
-pub(super) const TRANSPORTS: [&str; 6] = ["unspec", "tcp", "rdma", "nvlink", "io_uring", "gds"];
+pub(super) const TRANSPORTS: [&str; 7] = [
+    "unspec", "tcp", "rdma", "nvlink", "io_uring", "gds", "hp_tcp",
+];
 pub(super) const OPS: [&str; 2] = ["read", "write"];
 pub(super) const REASONS: [&str; 4] = ["submit", "poll", "timeout", "canceled"];
 
@@ -14,6 +16,7 @@ pub(crate) fn slot(t: Transport) -> usize {
         Transport::Nvlink => 3,
         Transport::IoUring => 4,
         Transport::Gds => 5,
+        Transport::HpTcp => 6,
     }
 }
 pub(super) fn attempt_slot(t: usize, op: TransferOp) -> usize {
@@ -241,10 +244,10 @@ impl Recorder {
                 let spec = &SPECS[i];
                 let n = match spec.labels {
                     Labels::None => 1,
-                    Labels::Transport => 6,
-                    Labels::Attempt => 12,
-                    Labels::Failure => 24,
-                    Labels::Pair => 36,
+                    Labels::Transport => TRANSPORTS.len(),
+                    Labels::Attempt => TRANSPORTS.len() * OPS.len(),
+                    Labels::Failure => TRANSPORTS.len() * REASONS.len(),
+                    Labels::Pair => TRANSPORTS.len() * TRANSPORTS.len(),
                 };
                 let width = match spec.kind {
                     Kind::Histogram(b) => b.len() + 1,

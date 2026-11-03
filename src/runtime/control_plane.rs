@@ -259,23 +259,35 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
     let reply = Reply::read(&mut channel, epoch)?;
     if reply.status != 0
         || reply.length < DESCRIPTOR_HEADER as u64
-        || reply.length > (DESCRIPTOR_HEADER + MAX_REGIONS * REGION_SIZE) as u64
+        || reply.length
+            > (DESCRIPTOR_HEADER
+                + MAX_REGIONS * REGION_SIZE
+                + crate::transport::hp_tcp::Endpoint::MAX_WIRE) as u64
     {
         return Err(Error::Protocol("descriptor payload length"));
     }
     let mut bytes = buffer(reply.length as usize)?;
     channel.read_exact(&mut bytes)?;
     let count = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-    if count > MAX_REGIONS || bytes.len() != DESCRIPTOR_HEADER + count * REGION_SIZE {
+    if count > MAX_REGIONS || bytes.len() < DESCRIPTOR_HEADER + count * REGION_SIZE {
         return Err(Error::Protocol("descriptor count"));
     }
-    let metadata = SegmentMetadata::decode(&bytes[4..DESCRIPTOR_HEADER])?;
+    let mut metadata = SegmentMetadata::decode(&bytes[4..DESCRIPTOR_HEADER])?;
+    let end = DESCRIPTOR_HEADER + count * REGION_SIZE;
+    if bytes.len() != end {
+        if !metadata.tcp_disabled {
+            return Err(Error::Protocol("unexpected HP-TCP descriptor"));
+        }
+        metadata.hp = Some(Arc::new(crate::transport::hp_tcp::Endpoint::decode(
+            &bytes[end..],
+        )?));
+    }
     let mut regions = Vec::new();
     regions
         .try_reserve_exact(count)
         .map_err(|_| Error::ResourceExhausted)?;
     let mut previous = 0;
-    for entry in bytes[DESCRIPTOR_HEADER..].chunks_exact(REGION_SIZE) {
+    for entry in bytes[DESCRIPTOR_HEADER..end].chunks_exact(REGION_SIZE) {
         let id = u64_at(entry, 0);
         let address = u64_at(entry, 8);
         let length = usize::try_from(u64_at(entry, 16))
@@ -287,7 +299,9 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             || entry[25] > 1
             || entry[26] > 1
             || (entry[26] != 0 && entry[25] != 1)
-            || entry[27..].iter().any(|b| *b != 0)
+            || entry[27] > 1
+            || (entry[27] != 0 && (metadata.hp.is_none() || entry[25] != 0))
+            || entry[28..].iter().any(|b| *b != 0)
         {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
         }
@@ -303,6 +317,7 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
                 MemoryType::Cuda
             },
             ipc_exportable: entry[26] != 0,
+            hp_registered: entry[27] != 0,
         });
         previous = id;
     }
@@ -652,8 +667,13 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
     let mut proxy_reply = false;
     let prepared = (|| {
         if request.operation == Operation::Describe {
-            let regions = source.registry.descriptors()?;
-            let mut payload = buffer(DESCRIPTOR_HEADER + regions.len() * REGION_SIZE)?;
+            let regions = source.registry.descriptors(source.metadata.hp.is_some())?;
+            let end = DESCRIPTOR_HEADER + regions.len() * REGION_SIZE;
+            let mut payload =
+                buffer(end + source.metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
+            if let Some(hp) = &source.metadata.hp {
+                hp.encode(&mut payload[end..]);
+            }
             payload[..4].copy_from_slice(&(regions.len() as u32).to_be_bytes());
             source.metadata.encode(&mut payload[4..DESCRIPTOR_HEADER]);
             for (region, entry) in regions
@@ -666,10 +686,16 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 entry[24] = region.permission as u8;
                 entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
                 entry[26] = u8::from(region.ipc_exportable);
+                entry[27] = u8::from(region.hp_registered);
             }
             channel.reply(source.epoch, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;
             return Ok(());
+        }
+        if source.metadata.tcp_disabled
+            && matches!(request.operation, Operation::TcpRead | Operation::TcpWrite)
+        {
+            return Err(Error::Unavailable("ordinary TCP payloads are disabled"));
         }
         if matches!(request.operation, Operation::Notify | Operation::NotifyRpc) {
             if request.operation == Operation::Notify && !source.tcp_notifications {

@@ -156,8 +156,16 @@ pub(crate) fn rdma_fixture_with_config(
         runtime.qp_layout = Some(Arc::new(TransferEngine::qp_layout(&config).unwrap()));
     }
     let epoch = SourceEpoch::generate().unwrap();
+    let hp_listener = config
+        .hp_tcp
+        .enable
+        .then(|| config.hp_tcp.bind(config.bind_addr).unwrap());
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
+            tcp_disabled: !config.tcp,
+            hp: hp_listener
+                .as_ref()
+                .map(|(_, endpoint)| Arc::new(*endpoint)),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             rdma: true,
             #[cfg(feature = "cuda")]
@@ -188,6 +196,10 @@ pub(crate) fn rdma_fixture_with_config(
         }),
         drained: Condvar::new(),
     });
+    let hp_tcp = hp_listener.map(|(listener, _)| {
+        crate::transport::hp_tcp::HpTcpTransport::start(&config.hp_tcp, listener, source.clone())
+            .unwrap()
+    });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
@@ -197,6 +209,7 @@ pub(crate) fn rdma_fixture_with_config(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        hp_tcp,
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),
@@ -1156,6 +1169,7 @@ pub(crate) fn staging_fixture(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        hp_tcp: None,
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),
@@ -1276,4 +1290,75 @@ fn cancelling_a_running_rdma_alias_drains_posts_and_suppresses_the_remaining_sli
         (1, 2, 4, 0)
     );
     Ok(())
+}
+
+#[test]
+fn hp_worker_failure_preserves_an_already_completed_batch() -> Result<()> {
+    let config = || EngineConfig {
+        tcp: false,
+        hp_tcp: crate::HpTcpConfig {
+            enable: true,
+            worker_count: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let src = TransferEngine::new(config())?;
+    let dst = Arc::new(TransferEngine::new(config())?);
+    let source = src.register_memory(vec![0xa5, 1, 2, 3, 0xa5].into(), Permission::RemoteRead)?;
+    let local = dst.register_memory(vec![0xee; 5].into(), Permission::LocalOnly)?;
+    let peer = dst.open_segment(
+        src.endpoint(),
+        src.source_epoch(),
+        crate::test_support::EVENTUAL_PROGRESS,
+    )?;
+    let req = TransferRequest::new(
+        Transport::HpTcp,
+        local.base_address() + 1,
+        source.base_address() + 1,
+        3,
+    );
+    let mut batch = dst.submit_async(
+        TransferOp::Read,
+        &peer,
+        std::slice::from_ref(&req),
+        None,
+        crate::test_support::EVENTUAL_PROGRESS,
+    )?;
+    batch.wait(crate::test_support::EVENTUAL_PROGRESS)?;
+    dst.hp_tcp.as_ref().unwrap().fail_worker_for_test();
+    let task = batch.task_status(0)?;
+    assert_eq!(task.state, crate::TaskState::Completed);
+    assert_eq!(task.transferred_bytes, 3);
+    let mut got = [0; 5];
+    local.read(0, &mut got)?;
+    assert_eq!(got, [0xee, 1, 2, 3, 0xee]);
+    source.read(0, &mut got)?;
+    assert_eq!(got, [0xa5, 1, 2, 3, 0xa5]);
+    batch.free()?;
+    assert!(matches!(
+        dst.submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[req],
+            crate::test_support::EVENTUAL_PROGRESS
+        ),
+        Err(Error::Internal(_))
+    ));
+    assert!(matches!(
+        dst.close(crate::test_support::EVENTUAL_PROGRESS),
+        Err(Error::Internal(_))
+    ));
+    dst.close(crate::test_support::EVENTUAL_PROGRESS)?;
+    Ok(())
+}
+
+impl TransferEngine {
+    pub(crate) fn retired_hp_sessions_for_test(&self) -> usize {
+        self.hp_tcp
+            .as_ref()
+            .unwrap()
+            .retired_sessions
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }

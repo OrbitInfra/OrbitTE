@@ -1,10 +1,18 @@
 //! Public-API control and release benchmark for CPU-only submission and real loopback TCP.
-#[cfg(feature = "metrics")]
 use orbit_te::EngineConfig;
 use orbit_te::{Error, Permission, Result, TransferEngine, TransferOp, TransferRequest, Transport};
 use std::time::{Duration, Instant};
 
-fn engine(_enabled: bool) -> Result<TransferEngine> {
+fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
+    let hp = transport == Transport::HpTcp;
+    let base = EngineConfig {
+        tcp: !hp,
+        hp_tcp: orbit_te::HpTcpConfig {
+            enable: hp,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     #[cfg(feature = "metrics")]
     {
         for _ in 0..16 {
@@ -19,7 +27,7 @@ fn engine(_enabled: bool) -> Result<TransferEngine> {
                     report_interval_seconds: 0,
                     ..Default::default()
                 },
-                ..Default::default()
+                ..base.clone()
             };
             let e = TransferEngine::new(config)?;
             if !_enabled || e.metrics().is_some_and(|m| m.http_port() != 0) {
@@ -30,7 +38,7 @@ fn engine(_enabled: bool) -> Result<TransferEngine> {
     }
     #[cfg(not(feature = "metrics"))]
     {
-        TransferEngine::new(Default::default())
+        TransferEngine::new(base)
     }
 }
 fn main() -> Result<()> {
@@ -43,8 +51,8 @@ fn main() -> Result<()> {
             "use off without metrics or disabled/enabled/serve with metrics",
         ));
     }
-    let source = engine(false)?;
-    let requester = engine(enabled)?;
+    let source = engine(false, Transport::Tcp)?;
+    let requester = engine(enabled, Transport::Tcp)?;
     let pattern: Vec<u8> = (0..66).map(|i| 3 * i + 7).collect();
     let remote = source.register_memory(pattern.clone().into(), Permission::RemoteReadWrite)?;
     let local = requester.register_memory(vec![0xee; 66].into(), Permission::LocalOnly)?;
@@ -134,9 +142,56 @@ fn main() -> Result<()> {
     }
     let tcp = measure(|| run(std::slice::from_ref(&req)), 32, 256)?;
     verify()?;
+    let roundtrip = |transport: Transport| -> Result<(f64, f64)> {
+        let source = engine(false, transport)?;
+        let requester = engine(enabled, transport)?;
+        let remote = source.register_memory(pattern.clone().into(), Permission::RemoteReadWrite)?;
+        let local = requester.register_memory(vec![0xee; 66].into(), Permission::LocalOnly)?;
+        let peer = requester.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
+        let req = TransferRequest::new(
+            transport,
+            local.base_address() + 1,
+            remote.base_address() + 1,
+            64,
+        );
+        let run = |op| {
+            let report =
+                requester.submit_and_wait(op, &peer, std::slice::from_ref(&req), timeout)?;
+            if report.completed_requests != 1
+                || report.transferred_bytes != 64
+                || !report.is_complete()
+            {
+                return Err(Error::Internal("incomplete loopback transfer"));
+            }
+            Ok(())
+        };
+        let read = measure(|| run(TransferOp::Read), 32, 256)?;
+        let mut got = [0; 66];
+        local.read(0, &mut got)?;
+        if got[0] != 0xee || got[65] != 0xee || got[1..65] != pattern[1..65] {
+            return Err(Error::Internal("loopback read data or guards"));
+        }
+        let mut written = pattern.clone();
+        for b in &mut written[1..65] {
+            *b ^= 0x5a;
+        }
+        local.write(1, &written[1..65])?;
+        let write = measure(|| run(TransferOp::Write), 32, 256)?;
+        remote.read(0, &mut got)?;
+        if got[..] != written {
+            return Err(Error::Internal("loopback write data or guards"));
+        }
+        local.read(0, &mut got)?;
+        if got[0] != 0xee || got[65] != 0xee || got[1..65] != written[1..65] {
+            return Err(Error::Internal("loopback write source guards"));
+        }
+        Ok((read, write))
+    };
+    let (_, tcp_write) = roundtrip(Transport::Tcp)?;
+    let (hp_read, hp_write) = roundtrip(Transport::HpTcp)?;
     println!(
         "{}",
-        serde_json::json!({"mode":mode,"empty_batch_ns":cpu,"expired_owner_ns":expired_owner,"tcp_64b_ns":tcp})
+        serde_json::json!({"mode":mode,"empty_batch_ns":cpu,"expired_owner_ns":expired_owner,"tcp_64b_ns":tcp,"tcp_write_64b_ns":tcp_write,"hp_tcp_read_64b_ns":hp_read,"hp_tcp_write_64b_ns":hp_write})
     );
     Ok(())
 }
