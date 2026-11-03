@@ -1,20 +1,23 @@
 # OrbitTE completion plan
 
-Build an independently maintained Rust network and memory transfer engine for
-CPU DRAM and NVIDIA GPUs against the [frozen latest TENT contract](tent-parity.md).
-Local file/SSD movement is optional. CPU and CUDA are the selected platforms;
-other accelerator vendors are outside scope. Preserve the applicable runtime,
-language and operational behavior and all 11 selected transport types. A working
-TCP/RDMA subset is an intermediate delivery within this NVIDIA target.
+Build an independently maintained Rust transfer engine for CPU DRAM, NVIDIA
+GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
+OrbitTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
+end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
+selected platforms; other accelerator vendors are outside scope. Preserve the
+applicable runtime, language and operational behavior and all 10 selected
+transport types. A working TCP/RDMA subset is an intermediate delivery within
+this NVIDIA target.
 
-The core must build and run without file/SSD modules or cuFile dependencies.
-Optional storage and network-provider modules are opt-in builds, but remain
-requirements of the selected complete target. This selection does not restrict
-CPU or network-device vendors. No non-NVIDIA accelerator SDK is a dependency.
+Storage modules are opt-in builds, like `rdma` and `cuda`: a network/memory-only
+build must run without file/SSD modules or cuFile dependencies. Optional
+network-provider modules are also opt-in builds; both remain requirements of the
+selected complete target. This selection does not restrict CPU, SSD or
+network-device vendors. No non-NVIDIA accelerator SDK is a dependency.
 
 This is OrbitTE's only execution queue. The parity document defines requirements;
 it is not another roadmap. OrbitKV keeps its own existing cache delivery queue.
-Do not replace or duplicate that project's state, storage or adapter roadmap here.
+Do not replace or duplicate that project's state, storage-policy or adapter roadmap here.
 
 ## Starting point and delivery states
 
@@ -176,8 +179,8 @@ Requirements: all F/B IDs in [the parity contract](tent-parity.md).
 - [ ] Map the 84 reference C++ test sources to retained behavioral cases and
   their CPU, service, GPU, RNIC, filesystem or vendor-hardware triggers. Map
   Python guards, parent compatibility tests and tebench byte checks too. Mark
-  excluded-accelerator cases as outside scope and require explicit unavailable
-  behavior for their ABI values. Merge overlapping cases; do not mechanically
+  excluded-accelerator and UB cases as outside scope and require explicit
+  unavailable behavior for their ABI values. Merge overlapping cases; do not mechanically
   port low-value implementation tests.
 - [ ] Define a common request trace and runner contract for C++ and Rust:
   initial bytes, registrations, operations, faults, observations and cleanup.
@@ -799,7 +802,9 @@ record any deliberate safety differences with negative controls.
 
 ## P7 — Storage transports
 
-Requirements: B07/B08 and F05 file-segment behavior.
+Requirements: B07/B08 and F05 file-segment behavior. These paths are core:
+OrbitKV's SSD tier moves its DRAM↔SSD and GPU↔SSD bytes through them, while
+OrbitKV keeps extents, placement, eviction and recovery policy.
 
 - [ ] Implement file descriptors/segments, offsets, permissions, READ/WRITE,
   short/error I/O and their owning completion state.
@@ -824,21 +829,20 @@ filesystem and a recorded direct path; an io_uring fallback is a different gate.
 
 These providers fit the selected host/NVIDIA purpose and remain optional
 modules in the target. Each is a separate delivery. Non-NVIDIA accelerator
-platforms and dependent transports are excluded in the parity matrix; their
+platforms, UB/URMA and dependent transports are excluded in the parity matrix; their
 ABI constants must return unavailable rather than instantiate device stubs.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
-| P8.1 | Native URMA, host UB buffers/endpoints/jetty/JFC, quota, cancellation, recovery and teardown | B09, F15/F18 | Two URMA hosts; provider errors and bonding separately; no GPU capability inferred |
-| P8.2 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
-| P8.3 | Libfabric attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA on EFA hosts |
+| P8.1 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
+| P8.2 | Libfabric attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA on EFA hosts |
 
 Exit per row: build without provider, explicit unavailable result, fake-provider
 contract tests, then actual installed bytes, permissions, faults, drain and
 applicable mixed-peer interoperability. Fake/stub-only implementations remain
 hardware-unqualified. Complete NVIDIA-scope parity requires acceptance of every
-in-scope requirement. Excluded accelerator rows require no implementation or
-hardware qualification.
+in-scope requirement. Excluded accelerator and UB rows require no implementation
+or hardware qualification.
 
 ## P9 — External APIs and operational compatibility
 
@@ -933,7 +937,7 @@ Requirements: F22 and applicable accepted backend/compatibility profiles.
 CPU/TCP or NVIDIA/RDMA releases may ship earlier with explicit scoped support.
 The label **complete NVIDIA-scope TENT parity** requires all in-scope reference
 capabilities to be accepted; narrower releases do not remove remaining selected
-obligations. It does not claim the excluded accelerator platforms. A feature
+obligations. It does not claim the excluded accelerator platforms or UB. A feature
 being slower or unqualified is recorded
 as such rather than described as a performance advantage.
 

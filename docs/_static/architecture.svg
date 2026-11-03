@@ -29,5 +29,5 @@
 <text class="small" x="295" y="318" text-anchor="middle">Actual allocation owners retained through physical drain</text>
 <rect class="future" x="20" y="374" width="840" height="54" rx="8"/>
 <text class="small" x="440" y="366" text-anchor="middle">Two-RNIC RoCEv2 validation · broader faults and P4 acceptance open</text>
-<text class="small" x="440" y="406" text-anchor="middle">Planned: broader IPC / stream scheduling · optional SSD transports</text>
+<text class="small" x="440" y="406" text-anchor="middle">Planned: broader IPC / stream scheduling · DRAM/GPU ↔ SSD storage transports</text>
 </svg>

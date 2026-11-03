@@ -1649,7 +1649,7 @@ qualification and independent review. Its detailed completion conditions are
 maintained only in [P4 remaining delivery](completion-plan.md#p4-remaining-delivery).
 
 P4 acceptance does not complete all TENT capabilities. GPU direct paths,
-optional storage transports, remaining runtime policies and API/wire parity
+storage transports, remaining runtime policies and API/wire parity
 retain their existing stages. OrbitKV integration follows accepted P4.
 
 ## Historical record preservation
