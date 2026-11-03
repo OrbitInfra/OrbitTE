@@ -31,6 +31,7 @@ external output directory; failed runs are kept.
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
 | Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
+| Named NIC masks and endpoint QP pools on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
@@ -2471,19 +2472,18 @@ v23 qualification or matched throughput/fairness result is claimed.
 
 ## Transport policy selection
 
-Source implementation adds first-match memory/size/priority policies and actual
-Unspec transport selection. Explicit hints fail when excluded/unavailable;
-no data-plane failure triggers re-selection. Describe publishes actual
-owner memory type and IPC consent plus configured source capabilities. Boot and
-process identities share the existing IPC handshake implementation.
+The [initial selector](https://github.com/OrbitInfra/OrbitTE/pull/118) established
+strict hints and source-owned Describe capabilities. S6 exercises named and
+intent-selected requests through TCP sync/async, NVLink grants, remote staging
+and real file transfers. A two-device verbs shim checks completed bytes on
+each NIC, connected QP indices and the SL/TC passed to native connection setup.
+Mixed TCP/RDMA hints and A/B/A RDMA policies preserve public task IDs. An
+unavailable masked NIC rejects before requester admission.
 
-Focused controls cover typed/JSON boundaries, selected TCP sync/async bytes,
-atomic multi-request preflight, CUDA/pinned/ordinary owner metadata without
-payload locks, and existing RDMA and CUDA IPC native-ABI handoff/drain fixtures
-using Unspec. Prior QoS object validation is rerun after sharing its decoder.
-Protocol controls reject unsupported headers, old Describe layouts and malformed
-capabilities. [PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118) links
-the gate results and packaged artifacts for this source.
+The installed gate runs sliced READ and WRITE on distinct named rails and QP
+pools with both physical NICs enabled. It checks the packaged peers' payloads,
+guards, per-NIC completion bytes, connected pool indices and drain receipts.
+The build and run commands are in the [verification queue](#verification-queue).
 
 Native-ABI fixtures run on CPU. Installed hardware routing, physical DMA,
 bandwidth and latency still require their own qualification. See the

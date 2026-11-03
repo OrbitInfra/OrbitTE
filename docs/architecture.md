@@ -53,9 +53,11 @@ and quarantine. See the [file guide](storage.md) for completion and retention.
 `transport_selector/config.rs` compiles bounded typed or JSON policies.
 `segment/metadata.rs` owns the placement and provider metadata published in
 Describe, plus the process identity shared with CUDA IPC. `TransferEngine::prepare`
-resolves memory and QoS, then selects one concrete transport; `PreparedTransfer`
-carries it to the existing queue, staging, slice and CUDA-group owners. Selection
-never wraps a transport, retries a failure or claims device health. See
+resolves the rule index, transport, NIC mask and QP range before admission.
+Every network request, local file operation and staged CROSS child carries that
+decision. RDMA filters paths before allocating slices. Its endpoint owns QP
+indices, native SL/TC and cache claims independently of CQ worker placement.
+The pool layout is immutable across admitted work. See
 [transport selection](transport-selection.md).
 
 ## Runtime queue ownership
