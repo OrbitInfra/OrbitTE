@@ -105,7 +105,7 @@ fn exercise() -> Result<()> {
         }
     }
     #[cfg(feature = "io-uring")]
-    let has_ring = crate::transport::io_uring::tests::kernel();
+    let has_ring = engine.io_uring.is_some();
     #[cfg(not(feature = "io-uring"))]
     let has_ring = false;
     let memory = engine.register_memory(b"host".to_vec().into(), Permission::LocalOnly)?;
@@ -137,8 +137,12 @@ fn exercise() -> Result<()> {
     );
     assert_eq!(live_rings()?, 0);
     #[cfg(feature = "io-uring")]
-    if has_ring {
+    if crate::transport::io_uring::tests::kernel() {
         // Positive control for the fd inventory.
+        assert!(
+            has_ring,
+            "a live kernel must make the engine's io_uring available"
+        );
         let _ring = ::io_uring::IoUring::new(1)?;
         assert_eq!(live_rings()?, 1);
     }
