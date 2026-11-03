@@ -121,19 +121,14 @@ impl Workers {
                 .as_deref()
                 .filter(|name| !name.is_empty())
                 .map(|name| {
-                    super::shared_quota::SharedSlotManager::attach(
+                    super::shared_quota::SharedSlotManager::install(
                         name,
                         progress.shared.config.slot_rotation_interval,
+                        &mut pool.slot_release,
                     )
                     .map(Arc::new)
                 })
-                .transpose()
-                .inspect_err(|error| {
-                    if matches!(error, Error::Unquiesced { .. }) {
-                        pool.stopped = true;
-                    }
-                })?;
-            pool.slot_release = shared_slots.as_ref().map(|owner| owner.release_receipt());
+                .transpose()?;
             let affinities = crate::platform::cpu_probe::worker_affinities()?;
             for id in 0..count {
                 let context = Arc::new(WorkerContext {

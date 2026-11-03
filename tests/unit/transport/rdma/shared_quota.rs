@@ -31,6 +31,11 @@ impl Drop for Object {
         }
     }
 }
+impl SharedSlotManager {
+    pub(in crate::transport::rdma) fn attach(name: &str, interval: Duration) -> Result<Self> {
+        Self::install(name, interval, &mut None)
+    }
+}
 const INTERVAL: Duration = Duration::from_millis(2);
 
 fn lock_until(f: &File) {
@@ -49,8 +54,9 @@ fn shared_slot_publication_is_visible_and_never_extends_a_stale_tier() {
         ..sys::OS
     };
     let object = Object::new();
-    let first = SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS).unwrap();
-    let second = SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS).unwrap();
+    let first = SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS, &mut None).unwrap();
+    let second =
+        SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS, &mut None).unwrap();
     for now in [
         0,
         1_999_999,
@@ -160,7 +166,7 @@ fn slot_attachment_propagates_native_failures_and_releases_initialization_lock()
     let object = Object::new();
     drop(SharedSlotManager::attach(object.name(), INTERVAL).unwrap());
     for calls in [&LOCK, &MAP, &CLOCK, &UNLOCK] {
-        assert!(SharedSlotManager::attach_with(object.name(), INTERVAL, calls).is_err());
+        assert!(SharedSlotManager::attach_with(object.name(), INTERVAL, calls, &mut None).is_err());
         drop(SharedSlotManager::attach(object.name(), INTERVAL).unwrap());
     }
 }
@@ -350,8 +356,10 @@ fn an_uncertain_unmap_is_attempted_once_and_retains_the_descriptor() {
         ..sys::OS
     };
     let object = Object::new();
-    let owner = SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS).unwrap();
-    let release = owner.release_receipt();
+    let mut receipt = None;
+    let owner =
+        SharedSlotManager::attach_with(object.name(), INTERVAL, &CALLS, &mut receipt).unwrap();
+    let release = receipt.unwrap();
     assert!(matches!(
         release.check(),
         Err(Error::Unquiesced {
@@ -386,4 +394,53 @@ fn an_uncertain_unmap_is_attempted_once_and_retains_the_descriptor() {
         (sys::OS.unmap)(base).unwrap();
         assert_eq!(libc::close(fd), 0);
     }
+}
+
+#[test]
+fn failed_slot_start_retains_the_original_cleanup_receipt() {
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::AtomicI32;
+    static FD: AtomicI32 = AtomicI32::new(-1);
+    static UNMAPS: AtomicU64 = AtomicU64::new(0);
+    unsafe fn uncertain(base: NonNull<u8>) -> io::Result<()> {
+        UNMAPS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: this is the mapping owner's one destruction call.
+        unsafe { (sys::OS.unmap)(base) }?;
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    static FAIL: sys::Calls = sys::Calls {
+        unlock: |file| {
+            FD.store(file.as_raw_fd(), Ordering::Relaxed);
+            (sys::OS.unlock)(file)?;
+            Err(io::Error::from_raw_os_error(libc::EACCES))
+        },
+        unmap: uncertain,
+        ..sys::OS
+    };
+    let object = Object::new();
+    let mut receipt = None;
+    let error = SharedSlotManager::attach_with(object.name(), INTERVAL, &FAIL, &mut receipt)
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        Error::Unquiesced {
+            operation: "RDMA shared slot munmap",
+            code: libc::EIO
+        }
+    ));
+    let receipt = receipt.unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            receipt.check(),
+            Err(Error::Unquiesced {
+                code: libc::EIO,
+                ..
+            })
+        ));
+    }
+    assert_eq!(UNMAPS.load(Ordering::Relaxed), 1);
+    // SAFETY: our shim actually unmapped the object. The manager retained this
+    // exact descriptor, and startup never handed it to a worker.
+    assert_eq!(unsafe { libc::close(FD.load(Ordering::Relaxed)) }, 0);
 }

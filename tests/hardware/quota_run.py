@@ -1,6 +1,7 @@
 """Run two packaged RDMA consumers on one locked RNIC and one private shm name."""
 import argparse
 import fcntl
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -8,6 +9,8 @@ import tempfile
 import time
 import uuid
 from contextlib import ExitStack
+
+from build_installed import digest
 
 
 def main():
@@ -19,8 +22,16 @@ def main():
     args = parser.parse_args()
     binary = args.artifact / 'installed/bin/orbitte-rdma-host'
     args.output.mkdir(parents=True, exist_ok=False)
+    manifest = json.loads((args.artifact / 'manifest.json').read_text())
+    if (manifest['status'] != 'passed' or manifest['dirty'] or manifest['consumer'] != 'host'
+            or digest(binary) != manifest['binary_sha256']
+            or digest(args.artifact / Path(manifest['archive']).name) != manifest['archive_sha256']):
+        raise ValueError('expected the clean, verified packaged host consumer')
     slots = 'orbitte-quota-' + uuid.uuid4().hex
-    with args.nic_lock.open('a') as lock, tempfile.TemporaryDirectory() as ready, ExitStack() as logs:
+    evidence = {key: manifest[key] for key in ('source_commit', 'binary_sha256', 'archive_sha256')}
+    evidence.update(nic=args.nic, slots=slots)
+    (args.output / 'installation.json').write_text(json.dumps(evidence, indent=2))
+    with args.nic_lock.resolve(strict=True).open('r+') as lock, tempfile.TemporaryDirectory() as ready, ExitStack() as logs:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         children = []
         try:

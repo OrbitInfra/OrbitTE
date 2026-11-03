@@ -146,10 +146,19 @@ impl SharedSlotManager {
         }
         Ok(())
     }
-    pub(super) fn attach(name: &str, interval: Duration) -> Result<Self> {
-        Self::attach_with(name, interval, &sys::OS)
+    pub(super) fn install(
+        name: &str,
+        interval: Duration,
+        receipt: &mut Option<SlotRelease>,
+    ) -> Result<Self> {
+        Self::attach_with(name, interval, &sys::OS, receipt)
     }
-    fn attach_with(name: &str, interval: Duration, calls: &'static sys::Calls) -> Result<Self> {
+    fn attach_with(
+        name: &str,
+        interval: Duration,
+        calls: &'static sys::Calls,
+        receipt: &mut Option<SlotRelease>,
+    ) -> Result<Self> {
         Self::validate(name, interval)?;
         let name = CString::new(name)
             .map_err(|_| Error::InvalidConfig("invalid RDMA shared quota name"))?;
@@ -203,6 +212,7 @@ impl SharedSlotManager {
         }
         let base = (calls.map)(&object)?;
         let release = SlotRelease::default();
+        *receipt = Some(release.clone());
         let mapping = Arc::new(Mapping {
             base,
             object: ManuallyDrop::new(object),
@@ -212,9 +222,6 @@ impl SharedSlotManager {
             release: release.clone(),
         });
         Self::start(mapping).map_err(|error| release.check().err().unwrap_or(error))
-    }
-    pub(super) fn release_receipt(&self) -> SlotRelease {
-        self.publisher.mapping.release.clone()
     }
     fn start(mapping: Arc<Mapping>) -> Result<Self> {
         (mapping.calls.unlock)(&mapping.object)?;
