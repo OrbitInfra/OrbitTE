@@ -155,7 +155,7 @@ impl RailMonitor {
     }
     #[cfg(test)]
     pub(in crate::transport::rdma) fn set_time(&self, now: Instant) {
-        *self.clock.lock().unwrap() = Some(now);
+        *self.clock.lock().unwrap_or_else(|p| p.into_inner()) = Some(now);
     }
     pub(super) fn configure(&self, c: &RdmaConfig) {
         self.config.get_or_init(|| Settings::new(c));
