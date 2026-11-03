@@ -68,13 +68,10 @@ explicit progress; metrics endpoints; config and metadata-store
 compatibility; the C ABI, C++ adapters, Python bindings and device-plugin ABI;
 TENT wire interoperability; benchmarks.
 
-Done: S0 ([PR #120](https://github.com/OrbitInfra/OrbitTE/pull/120), `82ebf10`)
-and S0b ([PR #122](https://github.com/OrbitInfra/OrbitTE/pull/122), `9fd8dc7`).
-
-[PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118)
-(`feat/transport-selector`) covers the first part of S6. See the
-[selector guide](docs/transport-selection.md) for its scope and remaining work.
-Check `gh pr list` for open work before starting a step.
+Done: S0 (#120), S0b (#122), the first S6 delivery (#118), advisory
+priorities on TCP/NVLink (#123) and S1 file segments (#125). Next: S2. See the
+[selector guide](docs/transport-selection.md) for what S6 still needs. Check
+`gh pr list` for open work before starting a step.
 
 ## 3. Working mode without hardware
 
@@ -591,8 +588,10 @@ Do this first: later steps add request fields and transports.
 
 ## 8. Verification queue for when hardware returns
 
-Keep this list current in [docs/qualification.md](docs/qualification.md),
-one exact command per profile.
+The canonical list is the
+[verification queue](docs/qualification.md#verification-queue) in
+qualification.md. Keep it current, with one exact gate per profile; the seed
+list below shows its scope.
 
 1. **Re-qualify source-accepted P5 work on the current artifact:**
    - v19–v23 staging: requester rings, CROSS windows, shared shards, the
