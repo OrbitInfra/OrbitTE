@@ -151,7 +151,7 @@ impl LiveBatch {
         }
     }
 
-    fn poll(&mut self, deadline: Option<Instant>) -> Result<()> {
+    fn poll(&mut self, deadline: Option<Instant>) -> Result<bool> {
         let handle = self.handle.ok_or(Error::Internal("missing cuFile batch"))?;
         let count = Self::current(&self.context, || {
             self.driver.api.poll(handle, &mut self.events)
@@ -161,6 +161,7 @@ impl LiveBatch {
             .get(..count)
             .ok_or(Error::Protocol("cuFile event count"))?;
         let late = deadline.is_some_and(|d| Instant::now() >= d);
+        let mut advanced = false;
         for e in events {
             let i = e
                 .cookie
@@ -177,11 +178,13 @@ impl LiveBatch {
                 return Err(Error::Protocol("invalid cuFile completion"));
             }
             let prior = self.receipts[i];
+            // cuFile defines the return count only for a completed IO.
+            let bytes = if e.status == COMPLETE { e.bytes } else { 0 };
             if prior.terminal() {
                 if matches!(e.status, WAITING | PENDING) {
                     continue;
                 }
-                if prior.status != e.status || prior.bytes != e.bytes {
+                if prior.status != e.status || prior.bytes != bytes {
                     return Err(Error::Protocol("conflicting cuFile completion"));
                 }
                 continue;
@@ -189,11 +192,12 @@ impl LiveBatch {
             self.receipts[i] = Receipt {
                 length: prior.length,
                 status: e.status,
-                bytes: e.bytes,
+                bytes,
                 late,
             };
+            advanced |= self.receipts[i].terminal();
         }
-        Ok(())
+        Ok(advanced)
     }
 
     fn cancel(&mut self) {
@@ -294,6 +298,11 @@ impl LiveBatch {
             if self.terminal() {
                 return self.destroy();
             }
+            if let (Ok(true), Some((p, first))) = (&poll, progress) {
+                for (i, task) in self.tasks.iter().enumerate() {
+                    p.file_progress(first + i, self.prefix(task));
+                }
+            }
             if poll.is_err()
                 || Instant::now() >= deadline
                 || progress.is_some_and(|(p, first)| {
@@ -316,22 +325,28 @@ impl LiveBatch {
         }
     }
 
-    fn result(&self, task: &Task, op: TransferOp) -> (usize, Option<Error>, bool) {
+    fn prefix(&self, task: &Task) -> usize {
         let mut bytes = 0;
-        let mut prefix = true;
+        for r in &self.receipts[task.range.clone()] {
+            if r.status != COMPLETE || (r.bytes as isize) < 0 {
+                break;
+            }
+            bytes += r.bytes;
+            if r.bytes < r.length || r.late {
+                break;
+            }
+        }
+        bytes
+    }
+
+    fn result(&self, task: &Task, op: TransferOp) -> (Option<Error>, bool) {
         let mut all_terminal = true;
         let mut failure = None;
         let mut rank = 0;
-        for i in task.range.clone() {
-            let r = self.receipts[i];
-            let size = self.receipts[i].length;
-            if prefix && r.status == COMPLETE && (r.bytes as isize) >= 0 {
-                bytes += r.bytes;
-            }
-            prefix &= r.status == COMPLETE && r.bytes == size && !r.late;
+        for r in &self.receipts[task.range.clone()] {
             all_terminal &= r.terminal();
             let (priority, error) = match r.status {
-                COMPLETE if r.bytes as isize >= 0 && r.bytes != size => (
+                COMPLETE if r.bytes as isize >= 0 && r.bytes != r.length => (
                     4,
                     Error::Io(std::io::Error::new(
                         if op == TransferOp::Read {
@@ -353,7 +368,7 @@ impl LiveBatch {
                     4,
                     Error::Backend {
                         operation: "cuFile IO",
-                        code: r.bytes as i32,
+                        code: FAILED as i32,
                     },
                 ),
                 TIMEOUT => (3, Error::Timeout),
@@ -373,13 +388,14 @@ impl LiveBatch {
                 failure = Some(error);
             }
         }
-        (bytes, failure, all_terminal)
+        (failure, all_terminal)
     }
 
     fn report(
         &self,
         op: TransferOp,
         stop: Option<&Error>,
+        deregister_failure: Option<usize>,
         progress: Option<(&BatchProgress, usize)>,
         report: &mut BatchReport,
     ) {
@@ -399,15 +415,19 @@ impl LiveBatch {
         } else {
             RemoteEffect::None
         };
-        let first_bad = self.tasks.iter().position(|t| {
-            let (_, e, terminal) = self.result(t, op);
-            e.is_some() || !terminal
+        let first_bad = self.tasks.iter().enumerate().position(|(i, t)| {
+            let (e, terminal) = self.result(t, op);
+            e.is_some() || !terminal || Some(i) == deregister_failure
         });
         // A failed physical teardown is a group failure even if all bytes arrived.
         let first_bad = first_bad.or(stop.map(|_| 0));
         for (i, t) in self.tasks.iter().enumerate() {
-            let (bytes, mut error, terminal) = self.result(t, op);
-            if !terminal || (error.is_none() && Some(i) == first_bad) {
+            let bytes = self.prefix(t);
+            let (mut error, terminal) = self.result(t, op);
+            if !terminal
+                || Some(i) == deregister_failure
+                || (error.is_none() && Some(i) == first_bad)
+            {
                 error = stop.map(Error::for_file_report).or(error);
             }
             if Some(i) == first_bad {
@@ -470,19 +490,21 @@ impl GdsTransport {
                     return Err(Error::Internal("missing GDS owner"));
                 };
                 let mut stop = batch.run(self, deadline, progress).err();
+                let mut deregister_failure = None;
                 if !matches!(stop, Some(Error::Unquiesced { .. })) {
-                    for r in &requests[..count] {
+                    for (i, r) in requests[..count].iter().enumerate() {
                         if let Some(buffer) = &r.buffer {
                             if let Err(e) = buffer.release() {
                                 batch.permanent = true;
                                 stop = Some(e);
+                                deregister_failure = Some(i);
                                 break;
                             }
                         }
                     }
                 }
                 report.locally_drained = !matches!(stop, Some(Error::Unquiesced { .. }));
-                batch.report(op, stop.as_ref(), progress, report);
+                batch.report(op, stop.as_ref(), deregister_failure, progress, report);
                 if report.locally_drained {
                     owner.take();
                 } else if !batch.submitted {

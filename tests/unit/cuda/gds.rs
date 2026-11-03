@@ -83,12 +83,13 @@ fn gds_final_unregister_waits_for_batch_and_failed_deregister_retains_real_owner
             .engine
             .register_cuda_memory_batch(&[(gpu, 0, 16)], Permission::LocalOnly)?
             .remove(0);
+        let host = f.host(2)?;
         mock.held.store(true, Ordering::Release);
         mock.deregister_error.store(fail, Ordering::Release);
         let b = f.engine.submit_async(
             TransferOp::Write,
             &f.segment,
-            &[request(&v, 0, 0, 8)],
+            &[request(&host, 0, 12, 2), request(&v, 0, 0, 8)],
             None,
             WAIT,
         )?;
@@ -102,9 +103,22 @@ fn gds_final_unregister_waits_for_batch_and_failed_deregister_retains_real_owner
         assert_eq!(status.locally_drained, !fail);
         assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
         assert_eq!(mock.destroys.load(Ordering::Acquire), 1);
-        let out = b.task_statuses()?.remove(0);
+        let first = b.task_status(0)?;
+        assert_eq!(
+            (first.state, first.transferred_bytes),
+            (TaskState::Completed, 2)
+        );
+        let out = b.task_status(1)?;
         assert_eq!(out.transferred_bytes, 8);
+        let reports = b.submissions()?;
+        let report = &reports[0];
         if fail {
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (1, 2)
+            );
+            let span = report.failure.as_ref().unwrap();
+            assert_eq!((span.request_index, span.affected_requests), (1, 1));
             assert_eq!(out.state, TaskState::Failed);
             let failure = out.failure.unwrap();
             assert!(matches!(failure.error, Error::Unquiesced { .. }));
@@ -115,10 +129,15 @@ fn gds_final_unregister_waits_for_batch_and_failed_deregister_retains_real_owner
                     .close_file_segment(&f.segment, Duration::ZERO)
                     .is_err()
             );
-            assert_eq!(f.engine.stats()?.inflight_bytes, 8);
+            assert!(host.write(0, &[1]).is_err());
+            assert_eq!(f.engine.stats()?.inflight_bytes, 10);
             assert_eq!(f.engine.stats()?.gds.quarantined_batches, 1);
             assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
         } else {
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (2, 10)
+            );
             assert_eq!(out.state, TaskState::Completed);
             v.write(0, &[1])?;
             f.engine.close_file_segment(&f.segment, WAIT)?;

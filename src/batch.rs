@@ -512,6 +512,10 @@ impl BatchProgress {
         self.changed.notify_all();
     }
     #[cfg(feature = "gds")]
+    pub(crate) fn file_progress(&self, index: usize, bytes: usize) {
+        self.lock().tasks[index].transferred_bytes = bytes;
+    }
+    #[cfg(feature = "gds")]
     pub(crate) fn complete_file_task(&self, index: usize, bytes: usize, drained: bool) {
         let mut state = self.lock();
         let task = &mut state.tasks[index];

@@ -116,8 +116,9 @@ A failure after GDS selection is returned to the caller.
 The caller or batch worker sets up one native batch at `gds_batch_depth`
 (default 32). Requests split at 16 MiB. A group exceeding the configured
 slice count fails before submission. Each terminal cookie identifies one
-slice. The group reports the completed request prefix and each async task
-reports its contiguous byte prefix. Cancel requests native batch cancellation
+slice. The group reports the completed request prefix. Each async task's byte
+count advances as contiguous receipts arrive. Its final status also accounts
+for cleanup of its registration. Cancel requests native batch cancellation
 and can affect other slices. Only terminal receipts authorize destruction.
 An ambiguous submit drains without replay. After the deadline plus the
 30-second destruction window, unresolved I/O returns `Unquiesced` and keeps

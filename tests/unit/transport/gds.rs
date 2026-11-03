@@ -27,6 +27,7 @@ pub(crate) struct Mock {
     setup_error: AtomicBool,
     destroy_error: AtomicBool,
     pub(crate) held: AtomicBool,
+    held_cookie: AtomicUsize,
     until_cancel: AtomicBool,
     partial: AtomicBool,
     poll_error_once: AtomicBool,
@@ -59,6 +60,7 @@ impl Mock {
             setup_error: false.into(),
             destroy_error: false.into(),
             held: false.into(),
+            held_cookie: 0.into(),
             until_cancel: false.into(),
             partial: false.into(),
             poll_error_once: false.into(),
@@ -212,9 +214,16 @@ impl Api for Mock {
         }
         let mut batches = self.batches.lock().unwrap();
         let list = batches.get_mut(&h).unwrap();
-        let n = list.len();
-        events[..n].copy_from_slice(list);
-        list.clear();
+        let held = self.held_cookie.load(Ordering::Acquire);
+        let mut n = 0;
+        list.retain(|event| {
+            if event.cookie == held {
+                return true;
+            }
+            events[n] = *event;
+            n += 1;
+            false
+        });
         Ok(n)
     }
     fn cancel(&self, _: usize) -> Result<()> {
@@ -254,7 +263,7 @@ impl Fixture {
             path,
         })
     }
-    fn host(&self, size: usize) -> Result<RegisteredMemory> {
+    pub(crate) fn host(&self, size: usize) -> Result<RegisteredMemory> {
         self.engine
             .register_memory(vec![0x6b; size].into(), Permission::LocalOnly)
     }
@@ -473,11 +482,56 @@ fn slices_and_partial_submit_keep_task_prefixes_and_concurrent_write_effects() -
 }
 
 #[test]
+fn a_running_task_publishes_its_contiguous_prefix_before_the_last_receipt() -> Result<()> {
+    const SLICE: usize = 16 << 20;
+    let mock = Mock::new(GdsMode::NativeOnly);
+    mock.held_cookie.store(2, Ordering::Release);
+    let f = Fixture::new(
+        &mock,
+        EngineConfig {
+            max_transfer_bytes: 3 * SLICE,
+            ..Default::default()
+        },
+        2 * SLICE + 1,
+    )?;
+    let m = f.host(2 * SLICE + 1)?;
+    let file = OpenOptions::new().write(true).open(&f.path)?;
+    file.write_all_at(b"G", (2 * SLICE) as u64)?;
+    let b = f.engine.submit_async(
+        TransferOp::Read,
+        &f.segment,
+        &[request(&m, 0, 0, m.len())],
+        None,
+        WAIT,
+    )?;
+    let end = Instant::now() + WAIT;
+    loop {
+        let t = b.task_status(0)?;
+        if t.transferred_bytes > 0 {
+            // The provider returned cookies 3 and 1. Cookie 2 still owns the gap.
+            assert_eq!((t.state, t.transferred_bytes), (TaskState::Running, SLICE));
+            assert!(!t.locally_drained);
+            break;
+        }
+        assert!(Instant::now() < end);
+        std::thread::yield_now();
+    }
+    assert!(m.write(0, &[0]).is_err());
+    mock.held_cookie.store(0, Ordering::Release);
+    assert_eq!(b.wait(WAIT)?.transferred_bytes, m.len());
+    let mut actual = vec![0x6b; m.len()];
+    m.read(0, &mut actual)?;
+    assert!(actual[..2 * SLICE].iter().all(|byte| *byte == 0));
+    assert_eq!(actual[2 * SLICE], b'G');
+    Ok(())
+}
+
+#[test]
 fn running_cancel_and_failed_io_are_terminal_only_after_receipts() -> Result<()> {
     for receipt in [FAILED, TIMEOUT, CANCELED] {
         let canceled = receipt == CANCELED;
         let mock = Mock::new(GdsMode::NativeOnly);
-        *mock.script.lock().unwrap() = vec![(COMPLETE, 2), (receipt, 0)];
+        *mock.script.lock().unwrap() = vec![(COMPLETE, 2), (receipt, usize::MAX)];
         mock.until_cancel.store(canceled, Ordering::Release);
         mock.poll_error_once.store(!canceled, Ordering::Release);
         let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
@@ -503,7 +557,9 @@ fn running_cancel_and_failed_io_are_terminal_only_after_receipts() -> Result<()>
                 assert_eq!(tasks[1].state, TaskState::Cancelled);
             }
             TIMEOUT => assert!(matches!(failure.error, Error::Timeout)),
-            _ => assert!(matches!(failure.error, Error::Backend { .. })),
+            _ => assert!(
+                matches!(failure.error, Error::Backend { code, .. } if code == FAILED as i32)
+            ),
         }
     }
     Ok(())
