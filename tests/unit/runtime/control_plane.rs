@@ -40,43 +40,75 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
         offset: 2,
         length: 3,
     };
-    let mut expected = Vec::from(&b"ORBITTE\0\0\x17\x01\0"[..]);
+    let mut expected = Vec::from(&b"ORBITTE\0\0\x01\x01\0"[..]);
     expected.extend([0x11; 16]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 1]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 2]);
     expected.extend([0, 0, 0, 0, 0, 0, 0, 3]);
     assert_eq!(request.encode().as_slice(), expected);
-    for (index, value) in [
-        (0, 0),
-        (9, 1),
-        (9, 2),
-        (9, 3),
-        (9, 4),
-        (9, 5),
-        (9, 6),
-        (9, 7),
-        (9, 8),
-        (9, 9),
-        (9, 10),
-        (9, 11),
-        (9, 12),
-        (9, 13),
-        (9, 14),
-        (9, 15),
-        (9, 16),
-        (9, 17),
-        (9, 18),
-        (9, 19),
-        (9, 20),
-        (9, 21),
-        (9, 22),
-        (10, 255),
-        (11, 1),
-    ] {
+    for (index, value) in [(0, 0), (10, 255), (11, 1)] {
         let mut malformed = request.encode();
         malformed[index] = value;
-        assert!(Request::decode(&malformed).is_err());
+        assert!(matches!(
+            Request::decode(&malformed),
+            Err(Error::Protocol(_))
+        ));
     }
+
+    let mut request_bytes = request.encode();
+    let mut reply_bytes = Reply {
+        status: 0,
+        epoch: request.epoch,
+        length: 3,
+    }
+    .encode();
+    for version in (0..=u16::MAX).filter(|&v| v != VERSION) {
+        request_bytes[8..10].copy_from_slice(&version.to_be_bytes());
+        reply_bytes[8..10].copy_from_slice(&version.to_be_bytes());
+        assert!(
+            matches!(Request::decode(&request_bytes), Err(Error::Protocol(_))),
+            "request version {version}"
+        );
+        assert!(
+            matches!(
+                Reply::decode(&reply_bytes, request.epoch),
+                Err(Error::Protocol(_))
+            ),
+            "reply version {version}"
+        );
+    }
+}
+
+#[test]
+fn source_rejects_a_legacy_header_and_accepts_a_same_build_peer() {
+    let source = TransferEngine::new(EngineConfig::default()).unwrap();
+    let memory = source
+        .register_memory(vec![7; 8].into_boxed_slice(), Permission::RemoteRead)
+        .unwrap();
+    let epoch = source.source_epoch();
+    let mut legacy = Request {
+        operation: Operation::Describe,
+        epoch,
+        region: 0,
+        offset: 0,
+        length: 0,
+    }
+    .encode();
+    legacy[8..10].copy_from_slice(&23u16.to_be_bytes());
+    let mut channel =
+        ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+    channel.write_all(&legacy).unwrap();
+    assert!(matches!(
+        Reply::read(&mut channel, epoch),
+        Err(Error::Protocol(_))
+    ));
+
+    let requester = TransferEngine::new(EngineConfig::default()).unwrap();
+    let peer = requester
+        .open_segment(source.endpoint(), epoch, TIMEOUT)
+        .unwrap();
+    assert_eq!(peer.regions().len(), 1);
+    assert_eq!(peer.regions()[0].id(), memory.id());
 }
 
 #[test]
@@ -472,7 +504,7 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
             }
             .encode();
             if case == 6 {
-                reply[8..10].copy_from_slice(&1u16.to_be_bytes());
+                reply[8..10].copy_from_slice(&(VERSION + 1).to_be_bytes());
             }
             channel.write_all(&reply).unwrap();
             let _ = channel.write_all(&payload);

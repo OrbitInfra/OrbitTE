@@ -5,7 +5,7 @@ use super::*;
 fn wire<const N: usize>(code: u8, length: u64) -> [u8; N] {
     let mut bytes = [0; N];
     bytes[..8].copy_from_slice(b"ORBITTE\0");
-    bytes[8..10].copy_from_slice(&23u16.to_be_bytes());
+    bytes[8..10].copy_from_slice(&WIRE_VERSION.to_be_bytes());
     bytes[10] = code;
     bytes[28..36].copy_from_slice(&length.to_be_bytes());
     bytes
@@ -107,8 +107,8 @@ fn incompatible_frames_cannot_fall_back_to_tcp_payload() -> Result<()> {
         assert!(upstream.accept().is_err());
         assert!(gate.close().is_err());
     }
-    let mut old = wire::<36>(0, 0);
-    old[9] = 13;
-    assert!(header(&old).is_err());
+    let mut incompatible = wire::<36>(0, 0);
+    incompatible[8..10].copy_from_slice(&(WIRE_VERSION + 1).to_be_bytes());
+    assert!(header(&incompatible).is_err());
     Ok(())
 }

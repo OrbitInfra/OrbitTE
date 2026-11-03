@@ -246,34 +246,20 @@ OrbitKV-required safety contracts; address discovery cannot replace authority.
 
 ## Development wire contract
 
-This is **OrbitTE protocol version 14**, not TENT's YLT RPC framing or HP-TCP.
-It makes this first Rust CPU slice executable while TENT wire compatibility
-remains an explicit P0/P9 gate. Future wire changes require a version change
-and corresponding decoder rejection tests.
-Version 2 added base addresses; version 3 adds reserved notification admission,
-body submission and final receipts. Version 4 added staged RDMA bootstrap/commit operations. Version 5 allows
-explicit direct application host MRs: a WRITE attempt can change application
-bytes before DONE/ACK, and a failed direct READ can change its local target.
-Version 6 splits RDMA connection metadata from completed one-use MW grants;
-BIND/INV completion precedes grant publication/final ACK. Version 7 binds
-both process/PD/connection incarnations, the exact request and an independent
-source grant generation to every RDMA phase and receipt. Version 8 requires
-an actual source RQ receipt after same-QP fenced SEND_WITH_INV, while retaining
-both physical QP-close barriers. Version 9 adds an explicit bilateral connection
-rendezvous, a bound host-Direct release profile and ACK/READY completion for
-connected RDMA reuse. Version 10 adds a bounded source NIC/PD path table before
-RDMA rendezvous. The requester selects a compatible pair and pins its source
-PD domain before creating authority. The existing bilateral identities and
-DONE/ACK/READY proof remain mandatory. Version 11 adds bounded multirail parent
-slice plans. Version 12 reserves the complete source RQ plan atomically and
-replies with admission status before requester QP construction. The existing
-TCP payload and notification sequencing is unchanged. Versions 1–11 are
-explicitly rejected.
-There is no legacy-protocol fallback.
+OrbitTE uses its own control protocol. See the
+[development wire policy](tent-parity.md#wire-and-consumer-boundaries).
+Describe returns registered base addresses. Notifications reserve capacity
+before body submission and complete with a source receipt.
 
-Integers are unsigned, big endian. Each connection carries one operation.
-Both headers start with eight bytes `ORBITTE\0`, a two-byte version (`13`), a
-one-byte operation/status and one zero reserved byte.
+The RDMA handshake selects compatible network paths and binds the request,
+both peers and the source grant generation to each receipt. A direct transfer
+can change destination bytes before DONE/ACK. The source reserves the receive
+queue entries for the entire slice plan before issuing grants. See
+[RDMA grant and completion semantics](rdma-cuda.md).
+
+Integers are unsigned and big endian. Each connection carries one operation.
+Both headers begin with the eight-byte `ORBITTE\0` magic, a two-byte
+version, a one-byte operation or status, and one zero reserved byte.
 
 | Frame | Remaining fields |
 | --- | --- |

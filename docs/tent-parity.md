@@ -238,6 +238,11 @@ and prevent guard exit/destruction from freeing submitted work prematurely.
 
 ## Wire and consumer boundaries
 
+OrbitTE uses wire version **1** throughout pre-release development. Both
+peers must run the same build. The header carries no build identifier, so
+it cannot detect a mismatched build. Wire versioning under an explicit
+compatibility policy starts at the first release.
+
 The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
 RecvData, Notify, Probe, Delegate, Pin, Unpin, update subscription, update
 notification and UB bootstrap. The UB bootstrap ID stays recognized but

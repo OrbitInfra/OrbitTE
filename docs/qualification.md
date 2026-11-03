@@ -1,8 +1,9 @@
 # Qualification
 
-Current production wire is **v23**. Historical sections below retain the
-protocol version and revision of their recorded evidence; they do not qualify
-current installed v23 hardware execution. The receiver-window and resource-owner
+Wire labels v3–v23 below identify historical artifacts and the revisions on
+which their evidence was collected.
+See the [development wire policy](tent-parity.md#wire-and-consumer-boundaries) for current builds.
+The receiver-window and resource-owner
 source gates are recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows)
 and [staging/consumer owner credits](#staging-and-consumer-owner-credits).
 
