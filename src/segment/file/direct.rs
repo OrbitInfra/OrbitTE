@@ -63,6 +63,21 @@ impl DirectFile {
 }
 
 impl FileLease {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn file_for_buffer(
+        &self,
+        offset: u64,
+        length: usize,
+        address: usize,
+    ) -> Result<Arc<File>> {
+        let (file, alignment) = self.io_file(offset, length)?;
+        if address % alignment == 0 {
+            Ok(file)
+        } else {
+            Ok(Arc::clone(&self.file))
+        }
+    }
+
     /// Select before building SQEs. A direct-capable file can still require a
     /// buffered request for its offset or length.
     pub(crate) fn io_file(&self, offset: u64, length: usize) -> Result<(Arc<File>, usize)> {

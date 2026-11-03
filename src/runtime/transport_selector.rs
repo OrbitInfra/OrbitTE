@@ -124,7 +124,7 @@ impl TransportSelector {
             None => &[Transport::IoUring],
         };
         Self::select_candidate(candidates, hint, |t| {
-            t == Transport::IoUring && local == MemoryType::Cpu
+            t == Transport::IoUring && (local == MemoryType::Cpu || cfg!(feature = "cuda"))
         })
     }
 

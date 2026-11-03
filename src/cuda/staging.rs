@@ -93,6 +93,8 @@ impl CudaMemory {
 pub(crate) struct StagingCopy {
     memory: Arc<CudaMemory>,
     range: Range<usize>,
+    context: Arc<Context>,
+    node: Option<u32>,
     address: u64,
     length: usize,
     pending: usize,
@@ -112,6 +114,24 @@ impl CudaMemory {
             Vec<crate::runtime::proxy_manager::StageBufferLease>,
         ) -> Result<T>,
     ) -> Result<T> {
+        let mut copy = self.staging_loan(offset, length, manager)?;
+        let mut stages = Vec::with_capacity(depth);
+        for _ in 0..depth {
+            let credit = credits
+                .as_mut()
+                .map(|credits| credits.take(crate::CreditResource::StagingSlots))
+                .transpose()?;
+            stages.push(copy.pin(manager, credit)?);
+        }
+        operation(&mut copy, stages)
+    }
+
+    pub(crate) fn staging_loan(
+        self: &Arc<Self>,
+        offset: usize,
+        length: usize,
+        manager: &crate::runtime::proxy_manager::ProxyManager,
+    ) -> Result<StagingCopy> {
         let range = checked_range(offset, length, self.length)?;
         let mut allocation = self.allocation.try_lock().map_err(|error| match error {
             std::sync::TryLockError::WouldBlock => Error::ResourceExhausted,
@@ -128,31 +148,32 @@ impl CudaMemory {
         let mut copy = StagingCopy {
             memory: Arc::clone(self),
             range,
+            context,
+            node: None,
             address: self.address + offset as u64,
             length,
             pending: 0,
             failed: false,
         };
-        let node = context.staging_node(manager.location, manager.numa)?;
-        let mut stages = Vec::with_capacity(depth);
-        for _ in 0..depth {
-            stages.push(
-                manager.pin_stage_buffer(
-                    context.raw.as_ptr() as usize,
-                    node,
-                    credits
-                        .as_mut()
-                        .map(|credits| credits.take(crate::CreditResource::StagingSlots))
-                        .transpose()?,
-                    |size| PinnedAllocation::new_at(&context, size, node, manager.numa),
-                )?,
-            );
-        }
-        operation(&mut copy, stages)
+        copy.node = copy.context.staging_node(manager.location, manager.numa)?;
+        Ok(copy)
     }
 }
 
 impl StagingCopy {
+    pub(crate) fn pin(
+        &self,
+        manager: &Arc<crate::runtime::proxy_manager::ProxyManager>,
+        credit: Option<crate::runtime::receiver_credit::ReceiverResourceLease>,
+    ) -> Result<crate::runtime::proxy_manager::StageBufferLease> {
+        manager.pin_stage_buffer(
+            self.context.raw.as_ptr() as usize,
+            self.node,
+            credit,
+            |length| PinnedAllocation::new_at(&self.context, length, self.node, manager.numa),
+        )
+    }
+
     /// Called before taking private host/lease/stream locks. Existing accepted
     /// copies still drain even when another range has made the allocation uncertain.
     pub(crate) fn check_access(&self) -> Result<()> {

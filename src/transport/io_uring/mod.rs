@@ -1,10 +1,12 @@
 //! TENT's single-issuer file sub-batch. The caller or existing Batch worker owns the ring.
 mod ring;
+#[cfg(feature = "cuda")]
+mod staging;
 mod task;
 
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/io_uring.rs"]
-mod tests;
+pub(crate) mod tests;
 
 use std::io;
 use std::mem::ManuallyDrop;
@@ -53,6 +55,10 @@ impl IoUringTransport {
         deadline: Instant,
         progress: Option<(&BatchProgress, usize)>,
         report: &mut BatchReport,
+        #[cfg(feature = "cuda")] (proxy, max_batch_requests): (
+            &Arc<crate::runtime::proxy_manager::ProxyManager>,
+            usize,
+        ),
     ) {
         if requests.is_empty() {
             return;
@@ -62,7 +68,24 @@ impl IoUringTransport {
         });
         let mut run = || -> Result<()> {
             remaining(deadline)?;
-            if count != 0 {
+            #[cfg(feature = "cuda")]
+            let staged = requests[..count]
+                .iter()
+                .any(|r| r.local.memory_type() == crate::MemoryType::Cuda);
+            #[cfg(not(feature = "cuda"))]
+            let staged = false;
+            #[cfg(feature = "cuda")]
+            if staged {
+                staging::Submission {
+                    requests: &requests[..count],
+                    proxy,
+                    operation,
+                    deadline,
+                    progress,
+                }
+                .execute(self, max_batch_requests, report)?;
+            }
+            if count != 0 && !staged {
                 let mut tasks = Vec::new();
                 tasks
                     .try_reserve_exact(count)
@@ -103,6 +126,7 @@ impl IoUringTransport {
             Ok(())
         };
         if let Err(error) = run() {
+            report.locally_drained = !matches!(error, Error::Unquiesced { .. });
             report.failure = Some(failure(0, error, RemoteEffect::None));
         }
     }
@@ -189,7 +213,33 @@ impl LiveBatch {
             drop(ManuallyDrop::into_inner(live));
             return Err(error.into());
         }
-        let drain = live.submit_and_drain(operation, deadline, drain_deadline, progress);
+        let live_batch = &mut *live;
+        let tasks = &mut live_batch.tasks;
+        let drain = submit_and_drain(
+            &mut *live_batch.ring,
+            tasks.len(),
+            deadline,
+            drain_deadline,
+            |index, result| {
+                let task = &mut tasks[index];
+                if !task.complete(operation, result, Instant::now() >= deadline) {
+                    return false;
+                }
+                if let Some((p, first)) = progress {
+                    if let Some(error) = task.observed_error(operation) {
+                        let effect = if operation == TransferOp::Write {
+                            RemoteEffect::Unknown
+                        } else {
+                            RemoteEffect::None
+                        };
+                        p.fail_file_task(first + index, task.bytes(), error, effect, true);
+                    } else {
+                        p.complete_task(first + index, task.bytes());
+                    }
+                }
+                true
+            },
+        );
         report.locally_drained = drain.status.is_ok();
         // CQEs already published independent task outcomes. Finish any tasks
         // without a receipt, including the tail a failed enter never consumed.
@@ -234,106 +284,84 @@ impl LiveBatch {
         // remain live. The shared submission owner also retains admission and file leases.
         Ok(())
     }
+}
 
-    fn submit_and_drain(
-        &mut self,
-        operation: TransferOp,
-        deadline: Instant,
-        drain_deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
-    ) -> Drain {
-        let count = self.tasks.len();
-        let mut submitted = 0;
-        let mut retries = 0;
-        let mut code = -libc::EIO;
-        while submitted < count {
-            match self.ring.submit((count - submitted) as u32) {
-                Ok(n) if n > 0 && n <= count - submitted => {
-                    submitted += n;
-                    retries = 0;
-                }
-                Ok(0) if retries < 3 => retries += 1,
-                Ok(0) => break,
-                Ok(_) => return Drain::invalid_sq(count),
-                Err(e)
-                    if matches!(e.raw_os_error(), Some(libc::EINTR | libc::EAGAIN))
-                        && retries < 3 =>
-                {
-                    retries += 1;
-                }
-                Err(e) => {
-                    code = -e.raw_os_error().unwrap_or(libc::EIO);
-                    break;
-                }
+fn submit_and_drain(
+    ring: &mut dyn Ring,
+    count: usize,
+    deadline: Instant,
+    drain_deadline: Instant,
+    observe: impl FnMut(usize, i32) -> bool,
+) -> Drain {
+    let mut submitted = 0;
+    let mut retries = 0;
+    let mut code = -libc::EIO;
+    while submitted < count {
+        match ring.submit((count - submitted) as u32) {
+            Ok(n) if n > 0 && n <= count - submitted => {
+                submitted += n;
+                retries = 0;
             }
-            if submitted < count && Instant::now() >= deadline {
-                code = -libc::ETIMEDOUT;
+            Ok(0) if retries < 3 => retries += 1,
+            Ok(0) => break,
+            Ok(_) => return Drain::invalid_sq(count),
+            Err(e)
+                if matches!(e.raw_os_error(), Some(libc::EINTR | libc::EAGAIN)) && retries < 3 =>
+            {
+                retries += 1;
+            }
+            Err(e) => {
+                code = -e.raw_os_error().unwrap_or(libc::EIO);
                 break;
             }
         }
-        // Even a failed enter must not erase a prefix already consumed from the SQ.
-        let Some(consumed) = count
-            .checked_sub(self.ring.queued())
-            .filter(|n| *n >= submitted)
-        else {
-            return Drain::invalid_sq(count);
-        };
-        let status = self.drain(consumed, operation, deadline, drain_deadline, progress);
-        Drain {
-            consumed,
-            submit_error: code,
-            status,
+        if submitted < count && Instant::now() >= deadline {
+            code = -libc::ETIMEDOUT;
+            break;
         }
     }
+    // Even a failed enter must not erase a prefix already consumed from the SQ.
+    let Some(consumed) = count.checked_sub(ring.queued()).filter(|n| *n >= submitted) else {
+        return Drain::invalid_sq(count);
+    };
+    let status = drain(ring, consumed, drain_deadline, observe);
+    Drain {
+        consumed,
+        submit_error: code,
+        status,
+    }
+}
 
-    fn drain(
-        &mut self,
-        consumed: usize,
-        operation: TransferOp,
-        deadline: Instant,
-        drain_deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
-    ) -> std::result::Result<(), i32> {
-        for _ in 0..consumed {
-            let (id, result) = loop {
-                if Instant::now() >= drain_deadline {
-                    return Err(-libc::ETIMEDOUT);
-                }
-                match self.ring.reap(drain_deadline) {
-                    Ok(cqe) => break cqe,
-                    // A wakeup or interrupted wait never starts a new window.
-                    Err(e)
-                        if e.kind() == io::ErrorKind::Interrupted
-                            || e.kind() == io::ErrorKind::TimedOut
-                            || e.raw_os_error() == Some(libc::ETIME) =>
-                    {
-                        continue;
-                    }
-                    Err(e) => return Err(-e.raw_os_error().unwrap_or(libc::EIO)),
-                }
-            };
-            let Ok(index) = usize::try_from(id) else {
-                return Err(-libc::EPROTO);
-            };
-            if index >= consumed
-                || !self.tasks[index].complete(operation, result, Instant::now() >= deadline)
-            {
-                return Err(-libc::EPROTO);
+fn drain(
+    ring: &mut dyn Ring,
+    consumed: usize,
+    drain_deadline: Instant,
+    mut observe: impl FnMut(usize, i32) -> bool,
+) -> std::result::Result<(), i32> {
+    for _ in 0..consumed {
+        let (id, result) = loop {
+            if Instant::now() >= drain_deadline {
+                return Err(-libc::ETIMEDOUT);
             }
-            if let Some((p, first)) = progress {
-                let task = &self.tasks[index];
-                if let Some(error) = task.observed_error(operation) {
-                    let effect = if operation == TransferOp::Write {
-                        RemoteEffect::Unknown
-                    } else {
-                        RemoteEffect::None
-                    };
-                    p.fail_file_task(first + index, task.bytes(), error, effect, true);
-                } else {
-                    p.complete_task(first + index, task.bytes());
+            match ring.reap(drain_deadline) {
+                Ok(cqe) => break cqe,
+                // A wakeup or interrupted wait never starts a new window.
+                Err(e)
+                    if e.kind() == io::ErrorKind::Interrupted
+                        || e.kind() == io::ErrorKind::TimedOut
+                        || e.raw_os_error() == Some(libc::ETIME) =>
+                {
+                    continue;
                 }
+                Err(e) => return Err(-e.raw_os_error().unwrap_or(libc::EIO)),
             }
+        };
+        let Ok(index) = usize::try_from(id) else {
+            return Err(-libc::EPROTO);
+        };
+        if index >= consumed || !observe(index, result) {
+            return Err(-libc::EPROTO);
         }
-        Ok(())
     }
+    Ok(())
 }

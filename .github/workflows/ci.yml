@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'rdma,cuda,io-uring']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITTE_FEATURES: ${{ matrix.features }}
@@ -42,7 +42,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring rdma,cuda,io-uring; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -139,3 +139,19 @@ jobs:
             ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/nvlink_run.py
             ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/consumer/Cargo.lock
             ${{ runner.temp }}/orbitte-installed-nvlink-${{ matrix.toolchain }}/installed/bin/orbitte-nvlink
+      - name: Install public CUDA file consumer from packaged crate
+        if: matrix.features == 'cuda,io-uring'
+        run: python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-storage-cuda-$RUSTUP_TOOLCHAIN"
+      - name: Preserve installed CUDA file artifact
+        if: always() && matrix.features == 'cuda,io-uring'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: installed-storage-cuda-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/manifest.json
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/*.stdout
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/*.stderr
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/*.crate
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/storage_cuda_run.py
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/consumer/Cargo.lock
+            ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/installed/bin/orbitte-storage-cuda

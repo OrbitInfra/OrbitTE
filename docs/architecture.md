@@ -39,8 +39,10 @@ charged until close is retried. See [file segments](storage.md).
 
 For DRAM/file payloads the existing submission worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
-targets share admission and batch progress. The [file guide](storage.md)
-records the alignment, short-submit and uncertain-drain differences from TENT.
+targets share admission and batch progress. CUDA/file submissions use the same
+worker and ring for successive rounds of pinned chunks from `ProxyManager`.
+The whole GPU range stays loaned through file receipts and CUDA copy events.
+See the [file guide](storage.md) for alignment, completion and retention.
 
 ## Transport selector ownership
 

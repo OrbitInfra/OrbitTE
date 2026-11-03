@@ -42,6 +42,50 @@ pub enum Error {
     Io(io::Error),
 }
 
+#[cfg(all(feature = "io-uring", feature = "cuda"))]
+impl Error {
+    // Concurrent file tasks and their completed-prefix group each own an error.
+    pub(crate) fn for_file_report(&self) -> Self {
+        match self {
+            Self::BatchBusy => Self::BatchBusy,
+            Self::BatchClosed => Self::BatchClosed,
+            Self::BatchOpen => Self::BatchOpen,
+            Self::RequesterClosed => Self::RequesterClosed,
+            Self::InvalidTask => Self::InvalidTask,
+            Self::Cancelled => Self::Cancelled,
+            Self::InvalidRange => Self::InvalidRange,
+            Self::PermissionDenied => Self::PermissionDenied,
+            Self::RegionNotFound => Self::RegionNotFound,
+            Self::ForeignRegistration => Self::ForeignRegistration,
+            Self::FileSegmentClosed => Self::FileSegmentClosed,
+            Self::ForeignQosPolicy => Self::ForeignQosPolicy,
+            Self::RegistrationConflict => Self::RegistrationConflict,
+            Self::SourceClosed => Self::SourceClosed,
+            Self::EpochMismatch => Self::EpochMismatch,
+            Self::ResourceExhausted => Self::ResourceExhausted,
+            Self::Timeout => Self::Timeout,
+            Self::InvalidConfig(msg) => Self::InvalidConfig(msg),
+            Self::Unavailable(msg) => Self::Unavailable(msg),
+            Self::Protocol(msg) => Self::Protocol(msg),
+            Self::Internal(msg) => Self::Internal(msg),
+            Self::InvalidSelectorConfig(msg) => Self::InvalidSelectorConfig(msg.clone()),
+            Self::InvalidQosConfig(msg) => Self::InvalidQosConfig(msg.clone()),
+            Self::Unquiesced { operation, code } => Self::Unquiesced {
+                operation,
+                code: *code,
+            },
+            Self::Backend { operation, code } => Self::Backend {
+                operation,
+                code: *code,
+            },
+            Self::Io(e) => Self::Io(match e.raw_os_error() {
+                Some(n) => io::Error::from_raw_os_error(n),
+                None => io::Error::new(e.kind(), e.to_string()),
+            }),
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

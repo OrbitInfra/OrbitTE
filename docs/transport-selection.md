@@ -51,7 +51,7 @@ before payload I/O, task publication or admission charges.
 | Field | Consumed behavior |
 | --- | --- |
 | `name` | Unique configuration label, 1–256 bytes; omitted defaults to `memory_default`. Named request selection remains open |
-| `segment_type` | `memory` or, with the Linux `io-uring` feature, `file`. A file target has CPU remote memory and requires registered local DRAM |
+| `segment_type` | `memory` or, with the Linux `io-uring` feature, `file`. A file target has CPU remote memory and accepts registered local DRAM or, with `cuda`, CUDA memory |
 | `local_memory`, `remote_memory` | `cpu`, `cuda`, or `*`; omission/`*` matches either. Pinned host allocations remain CPU |
 | `min_size`, `max_size` | Inclusive byte bounds; minimum must not exceed maximum |
 | `priority` | Exact match on effective QoS priority, otherwise request priority. Accepts high/medium/low or integers 0/1/2 |
