@@ -169,6 +169,7 @@ pub(crate) fn rdma_fixture_with_config(
             config.max_registered_regions,
             config.max_registered_bytes,
         ),
+        tcp_notifications: config.tcp_notifications,
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {
             open: true,
@@ -181,7 +182,12 @@ pub(crate) fn rdma_fixture_with_config(
     let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
         SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
     });
+    let allocations = Arc::new(AllocationBudget::new());
+    let progress_worker =
+        TransferEngine::start_progress(&config, &allocations, &runtime_queue).unwrap();
     TransferEngine {
+        notification_routes: NotificationRoutes::new(&config),
+        progress_worker,
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]
         io_uring: None,
@@ -206,7 +212,7 @@ pub(crate) fn rdma_fixture_with_config(
         source,
         control,
         batches: Arc::default(),
-        allocations: Arc::new(AllocationBudget::new()),
+        allocations,
     }
 }
 
@@ -1113,6 +1119,7 @@ pub(crate) fn staging_fixture(
             config.max_registered_regions,
             config.max_registered_bytes,
         ),
+        tcp_notifications: config.tcp_notifications,
         notifications: NotificationInbox::new(8, 4096, 1024),
         admission: Mutex::new(SourceAdmission {
             open: true,
@@ -1122,7 +1129,12 @@ pub(crate) fn staging_fixture(
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
+    let allocations = Arc::new(AllocationBudget::new());
+    let progress_worker =
+        TransferEngine::start_progress(&config, &allocations, &runtime_queue).unwrap();
     TransferEngine {
+        notification_routes: NotificationRoutes::new(&config),
+        progress_worker,
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]
         io_uring: None,
@@ -1147,6 +1159,12 @@ pub(crate) fn staging_fixture(
         source,
         control,
         batches: Arc::default(),
-        allocations: Arc::new(AllocationBudget::new()),
+        allocations,
+    }
+}
+
+impl TransferEngine {
+    pub(crate) fn notification_inbox_for_test(&self) -> &NotificationInbox {
+        &self.source.notifications
     }
 }

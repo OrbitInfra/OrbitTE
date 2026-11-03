@@ -38,7 +38,7 @@ behind every hardware result.
 | Request construction | Implemented | `TransferRequest::new` with builders. The `rdma` and `cuda` features require Linux. See [Rust API](rust-api.md) |
 | Owned and external host registration | Implemented | Transactional batches, duplicate references, aliases and retained backing |
 | Local file segments | Implemented | Core `file://` descriptors, checked offsets and close with pending I/O. Real-file controls cover fd retention and release. See [file segments](storage.md) |
-| Async batches and notifications | Implemented | Bounded admission, cancellation and detached handles. See [async batches](async-batches.md) |
+| Async batches and notifications | Implemented | Explicit progress, event-driven batch wakes, deferred free, bounded TCP/RPC notifications and per-target delivery. See [async batches](async-batches.md#explicit-progress) |
 | NVIDIA allocations, pinned host memory and copy streams | Qualified (H20 local copy) | Stream and event reuse; failure retention has CPU controls only |
 | GPU and pinned-host producer readiness | Implemented | Caller-stream capture before payload access, with a CPU-blocking wait. See [pinned handoff](rdma-cuda.md#pinned-host-producer-handoff) |
 | Memory type and location | Implemented | Owner-backed CPU/CUDA locations; unknown pointers never select CPU access. See [memory location](rust-api.md#memory-type-and-location) |
@@ -55,7 +55,7 @@ behind every hardware result.
 | Runtime FIFO/EDF admission | Implemented | Whole-submission dispatch windows. Staging reserves and deadline-infeasible cancellation are open. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
 | QoS contracts | Implemented | TENT-format global, tenant and intent policies with byte/request caps and delay/reject. Hierarchical quotas are open. See [QoS](async-batches.md#qos-contracts) |
 | Receiver credits | Implemented | Cumulative peer grants and automatic receiver windows. They authorize requests; they are not a rate limiter. See [credits](async-batches.md#receiver-credit-gating) |
-| Failover, explicit progress, metrics endpoints | Planned (P6) | |
+| Failover, metrics endpoints | Planned (P6) | |
 
 ## Failure handling
 

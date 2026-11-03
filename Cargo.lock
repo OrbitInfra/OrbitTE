@@ -200,6 +200,7 @@ dependencies = [
  "io-uring",
  "libc",
  "libloading",
+ "log",
  "serde",
  "serde_json",
  "socket2",

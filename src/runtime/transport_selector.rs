@@ -3,7 +3,6 @@ mod config;
 pub(crate) mod qp_pools;
 
 use qp_pools::{QpLayout, QpRange};
-use std::io::Write;
 use std::sync::Arc;
 
 use crate::segment::SegmentMetadata;
@@ -182,17 +181,15 @@ impl TransportSelector {
                 }
                 unresolved_devices += missing.len();
                 if mask == 0 {
-                    let _ = writeln!(
-                        std::io::stderr().lock(),
-                        "error: policy {}: no device resolved ({missing:?}), allowing all devices",
+                    log::error!(
+                        "policy {}: no device resolved ({missing:?}), allowing all devices",
                         rule.name
                     );
                 } else {
                     result.device_mask = mask;
                     if !missing.is_empty() {
-                        let _ = writeln!(
-                            std::io::stderr().lock(),
-                            "warning: policy {}: unresolved devices {missing:?}, using the resolved subset",
+                        log::warn!(
+                            "policy {}: unresolved devices {missing:?}, using the resolved subset",
                             rule.name
                         );
                     }
@@ -202,9 +199,8 @@ impl TransportSelector {
             result.service_level = rule.service_level.filter(|&sl| sl <= 15);
             result.traffic_class = rule.traffic_class;
             if rule.service_level.is_some() || rule.traffic_class.is_some() {
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "warning: policy {}: policy SL/TC have no effect, configure them on the endpoint QP pool",
+                log::warn!(
+                    "policy {}: policy SL/TC have no effect, configure them on the endpoint QP pool",
                     rule.name
                 );
             }

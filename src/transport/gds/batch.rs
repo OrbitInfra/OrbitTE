@@ -46,6 +46,7 @@ pub(crate) struct LiveBatch {
     submitted: bool,
     canceled: bool,
     pub(super) permanent: bool,
+    reclaim_failures: u32,
 }
 
 #[allow(unsafe_code)]
@@ -77,6 +78,7 @@ impl LiveBatch {
             submitted: false,
             canceled: false,
             permanent: false,
+            reclaim_failures: 0,
         };
         for r in requests {
             // cuFile documents a compatibility route for oversized batch slices
@@ -234,14 +236,18 @@ impl LiveBatch {
     }
     // Called only while the quarantine lock serializes the original batch owner.
     pub(super) fn collect(&mut self) -> bool {
-        if self.permanent || self.pid != self.driver.api.pid() {
+        self.permanent |= self.pid != self.driver.api.pid();
+        if self.permanent {
             return false;
         }
         if !self.terminal() {
             if let Err(e) = self.poll(None) {
-                self.permanent |= matches!(e, Error::Protocol(_) | Error::Unquiesced { .. });
+                self.reclaim_failures += 1;
+                self.permanent |= self.reclaim_failures >= 4096
+                    || matches!(e, Error::Protocol(_) | Error::Unquiesced { .. });
                 return false;
             }
+            self.reclaim_failures = 0;
         }
         self.terminal() && self.destroy().is_ok()
     }
@@ -532,3 +538,7 @@ impl GdsTransport {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/transport/gds/reclaim.rs"]
+mod reclaim_tests;

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::batch::{AllocationBudget, Batch, BatchId, BatchProgress};
 use crate::memory::MemoryRegistry;
-use crate::notification::NotificationInbox;
+use crate::notification::{NotificationInbox, NotificationRoutes, Target};
 use crate::runtime::admission_queue::{
     LocalTransferAdmissionQueue, QueuePermit, RuntimeQueueStats,
 };
@@ -195,6 +195,9 @@ impl BatchReport {
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineStats {
+    /// Freed batches awaiting physical completion, and batches with no safe release path.
+    pub deferred_batches: usize,
+    pub quarantined_batches: usize,
     /// Device name entries missing or outside the policy mask at construction.
     pub unresolved_policy_devices: usize,
     #[cfg(feature = "gds")]
@@ -223,9 +226,11 @@ pub struct EngineStats {
 
 /// Engine, source registry and bounded control-service handler ownership.
 pub struct TransferEngine {
+    pub(crate) progress_worker: Option<crate::runtime::progress_worker::ProgressWorker>,
     config: EngineConfig,
     source: Arc<Source>,
     control: ControlService,
+    pub(crate) notification_routes: NotificationRoutes,
     batches: Arc<RequesterAdmission>,
     allocations: Arc<AllocationBudget>,
     runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
@@ -236,7 +241,7 @@ pub struct TransferEngine {
     #[cfg(feature = "io-uring")]
     pub(crate) io_uring: Option<crate::transport::io_uring::IoUringTransport>,
     #[cfg(feature = "gds")]
-    pub(crate) gds: Option<crate::transport::gds::GdsTransport>,
+    pub(crate) gds: Option<Arc<crate::transport::gds::GdsTransport>>,
 }
 
 impl TransferEngine {
@@ -326,6 +331,7 @@ impl TransferEngine {
                 config.max_registered_regions,
                 config.max_registered_bytes,
             ),
+            tcp_notifications: config.tcp_notifications,
             notifications: NotificationInbox::new(
                 config.max_pending_notifications,
                 config.max_pending_notification_bytes,
@@ -337,6 +343,8 @@ impl TransferEngine {
             }),
             drained: Condvar::new(),
         });
+        let allocations = Arc::new(AllocationBudget::new());
+        let progress_worker = Self::start_progress(&config, &allocations, &runtime_queue)?;
         let control = ControlService::start(Arc::clone(&source), &config)?;
         let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
@@ -347,16 +355,46 @@ impl TransferEngine {
             #[cfg(feature = "io-uring")]
             io_uring: crate::transport::io_uring::IoUringTransport::probe(),
             #[cfg(feature = "gds")]
-            gds: crate::transport::gds::GdsTransport::probe(&config),
+            gds: crate::transport::gds::GdsTransport::probe(&config).map(Arc::new),
             receiver_credits,
             qos,
             selector,
+            notification_routes: NotificationRoutes::new(&config),
             config,
             source,
             control,
             batches: Arc::default(),
-            allocations: Arc::new(AllocationBudget::new()),
+            allocations,
+            progress_worker,
         })
+    }
+
+    fn start_progress(
+        config: &EngineConfig,
+        allocations: &Arc<AllocationBudget>,
+        queue: &Option<Arc<LocalTransferAdmissionQueue>>,
+    ) -> Result<Option<crate::runtime::progress_worker::ProgressWorker>> {
+        (config.enable_progress_worker || queue.is_some())
+            .then(|| {
+                crate::runtime::progress_worker::ProgressWorker::start(
+                    allocations.clone(),
+                    queue.clone(),
+                    config.max_allocated_batches,
+                    config.progress_fallback_interval,
+                )
+            })
+            .transpose()
+    }
+
+    pub(crate) fn defers_busy_free(&self) -> bool {
+        self.config.enable_progress_worker
+    }
+
+    /// Advance one dispatch or completion for this batch, then observe its status.
+    /// Native I/O stays on the worker that owns the admitted submission.
+    pub fn progress_batch(&self, id: BatchId) -> Result<crate::BatchStatus> {
+        let batch = self.allocations.lookup(id).ok_or(Error::BatchClosed)?;
+        batch.progress_public()
     }
 
     fn qp_layout(config: &EngineConfig) -> Result<QpLayout> {
@@ -550,6 +588,8 @@ impl TransferEngine {
                 .as_ref()
                 .map(|transport| transport.stats())
                 .transpose()?,
+            deferred_batches: allocated.3,
+            quarantined_batches: allocated.4,
             allocated_batches: allocated.0,
             allocated_requests: allocated.1,
             requester_workers: allocated.2,
@@ -719,6 +759,15 @@ impl TransferEngine {
     ) -> Result<RemoteSegment> {
         let deadline = deadline(timeout)?;
         let _admission = self.admit_batch(0)?;
+        if endpoint == self.endpoint() && expected_epoch == self.source_epoch() {
+            let _permit = self.source.admit()?;
+            return Ok(RemoteSegment {
+                endpoint,
+                epoch: expected_epoch,
+                regions: self.source.registry.descriptors()?,
+                metadata: self.source.metadata,
+            });
+        }
         control_plane::open_segment(endpoint, expected_epoch, deadline)
     }
 
@@ -766,7 +815,7 @@ impl TransferEngine {
             segment,
             deadline,
             #[cfg(feature = "gds")]
-            self.gds.as_ref(),
+            self.gds.as_deref(),
         )
     }
 
@@ -1102,7 +1151,7 @@ impl TransferEngine {
             queue,
             credit,
             _qos: qos,
-            _admission: Some(admission),
+            admission: Some(admission),
         };
         #[cfg(feature = "gds")]
         let prepared = prepared.pin_gds_buffers()?;
@@ -1121,7 +1170,7 @@ impl TransferEngine {
         let report = self.execute(&prepared, None);
         if !report.locally_drained {
             // Preserve actual registrations and admission, not a pointer surrogate.
-            self.retain_undrained(prepared, None, None, || {});
+            self.retain_undrained(prepared, None, || {});
         }
         Ok(report)
     }
@@ -1130,7 +1179,6 @@ impl TransferEngine {
         &self,
         prepared: PreparedSubmission,
         progress: Option<(Arc<BatchProgress>, usize)>,
-        engine: Option<Arc<TransferEngine>>,
         publish: impl FnOnce(),
     ) {
         #[cfg(feature = "gds")]
@@ -1147,7 +1195,7 @@ impl TransferEngine {
             }
             std::mem::forget(batch);
         }
-        std::mem::forget((prepared, self.source.clone(), progress, engine));
+        std::mem::forget((prepared, self.source.clone(), progress));
         publish();
     }
 
@@ -1468,7 +1516,7 @@ impl TransferEngine {
     /// poll returns an empty vector; concurrent receivers never share a message.
     /// Already queued messages remain drainable after source admission closes.
     pub fn receive_notifications(&self) -> Result<Vec<Notification>> {
-        self.source.notifications.receive()
+        self.notification_routes.receive(&self.source.notifications)
     }
 
     fn validate_notification(&self, notification: &Notification) -> Result<usize> {
@@ -1485,12 +1533,28 @@ impl TransferEngine {
         notification: &Notification,
         deadline: Instant,
     ) -> std::result::Result<(), NotificationFailure> {
+        self.notify_target(peer.into(), notification, deadline)
+            .map_err(|failure| failure.outcome)
+    }
+
+    pub(crate) fn local_target(&self) -> Target {
+        Target {
+            endpoint: self.endpoint(),
+            epoch: self.source_epoch(),
+        }
+    }
+    pub(crate) fn notify_target(
+        &self,
+        peer: Target,
+        notification: &Notification,
+        deadline: Instant,
+    ) -> crate::notification::Attempt {
         remaining(deadline)?;
-        if peer.source_epoch() == self.source_epoch() && peer.endpoint() == self.endpoint() {
+        if peer == self.local_target() {
             self.send_local_notification(notification)
                 .map_err(Into::into)
         } else {
-            control_plane::notify(peer, notification, deadline)
+            self.notification_routes.send(peer, notification, deadline)
         }
     }
 
@@ -1704,6 +1768,7 @@ pub(crate) struct Source {
     pub(crate) epoch: SourceEpoch,
     pub(crate) registry: MemoryRegistry,
     pub(crate) notifications: NotificationInbox,
+    pub(crate) tcp_notifications: bool,
     #[cfg(feature = "rdma")]
     pub(crate) rdma: Option<Arc<crate::transport::rdma::RdmaTransport>>,
     admission: Mutex<SourceAdmission>,
@@ -1770,7 +1835,7 @@ pub(crate) struct PreparedSubmission {
     queue: Option<QueuePermit>,
     // Remove queue metadata before credit rollback can wake/refill the queue.
     pub(crate) credit: Option<CreditPermit>,
-    _admission: Option<BatchPermit>,
+    pub(crate) admission: Option<BatchPermit>,
 }
 
 #[cfg(feature = "gds")]
@@ -1885,7 +1950,7 @@ impl Drop for PreparedSubmission {
                 std::mem::forget(std::mem::take(requests));
             }
             std::mem::forget((
-                self._admission.take(),
+                self.admission.take(),
                 self._qos.take(),
                 self.queue.take(),
                 self.credit.take(),
@@ -1913,7 +1978,7 @@ struct RequesterAdmission {
     usage: Mutex<BatchUsage>,
     drained: Condvar,
 }
-struct BatchPermit {
+pub(crate) struct BatchPermit {
     batches: Arc<RequesterAdmission>,
     bytes: usize,
 }

@@ -130,6 +130,13 @@ requests were never attempted. A multirail or remote-staged request counts only
 after all its slices or chunks complete, but earlier slices may already have
 changed bytes. For asynchronous ownership see [async batches](async-batches.md).
 
+For explicit progress, call `engine.progress_batch(batch.id()?)?`. A status
+query observes the published result. `EngineConfig::enable_progress_worker`
+enables event-driven turns and deferred free. Use
+`Batch::submit_with_notification_targets` to track deliveries independently
+of the payload result. See [explicit progress](async-batches.md#explicit-progress)
+for backoff, queue wakes, bounded retries and owner retirement.
+
 ## Native providers
 
 `transport::rdma::RdmaConfig` selects discovery and pins, host Direct or staged

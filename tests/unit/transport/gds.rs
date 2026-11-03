@@ -32,10 +32,10 @@ pub(crate) struct Mock {
     held_cookie: AtomicUsize,
     until_cancel: AtomicBool,
     partial: AtomicBool,
-    poll_error_once: AtomicBool,
+    pub(super) poll_error_once: AtomicBool,
     pub(crate) submits: AtomicUsize,
     cancels: AtomicUsize,
-    polls: AtomicUsize,
+    pub(super) polls: AtomicUsize,
     pub(crate) destroys: AtomicUsize,
     files: Mutex<HashMap<usize, File>>,
     batches: Mutex<HashMap<usize, Vec<Event>>>,
@@ -84,7 +84,7 @@ impl Mock {
         engine.gds = driver
             .mode()
             .ok()
-            .map(|_| GdsTransport::new(driver, config));
+            .map(|_| Arc::new(GdsTransport::new(driver, config)));
     }
 }
 fn failed(op: &'static str) -> Error {
@@ -874,5 +874,82 @@ fn slice_capacity_rejection_has_no_provider_side_effects() -> Result<()> {
     assert_eq!(mock.file_registers.load(Ordering::Acquire), 0);
     assert!(mock.depths.lock().unwrap().is_empty());
     assert_eq!(mock.submits.load(Ordering::Acquire), 0);
+    Ok(())
+}
+
+#[test]
+fn deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work() -> Result<()> {
+    let mock = Mock::new(GdsMode::NativeOnly);
+    let config = EngineConfig {
+        enable_progress_worker: true,
+        max_allocated_batches: 2,
+        ..Default::default()
+    };
+    let f = Fixture::new(&mock, config, 32)?;
+    let stuck = f.host(8)?;
+    mock.destroy_error.store(true, Ordering::Release);
+    let mut b = f.engine.submit_async(
+        TransferOp::Write,
+        &f.segment,
+        &[request(&stuck, 0, 0, 8)],
+        None,
+        WAIT,
+    )?;
+    assert!(!b.wait(EVENTUAL_PROGRESS)?.locally_drained);
+    b.free()?;
+    let end = Instant::now() + EVENTUAL_PROGRESS;
+    while f.engine.stats()?.quarantined_batches != 1 {
+        assert!(Instant::now() < end);
+        std::thread::yield_now();
+    }
+    let healthy = f.host(8)?;
+    mock.destroy_error.store(false, Ordering::Release);
+    mock.held.store(true, Ordering::Release);
+    let mut b = f.engine.submit_async(
+        TransferOp::Write,
+        &f.segment,
+        &[request(&healthy, 0, 8, 8)],
+        None,
+        WAIT,
+    )?;
+    while mock.submits.load(Ordering::Acquire) != 2 {
+        assert!(Instant::now() < end);
+        std::thread::yield_now();
+    }
+    b.free()?;
+    let held = f.engine.stats()?;
+    assert_eq!(
+        (
+            held.quarantined_batches,
+            held.deferred_batches,
+            held.inflight_bytes
+        ),
+        (1, 1, 16)
+    );
+    assert!(matches!(
+        f.engine.allocate_batch(1),
+        Err(Error::ResourceExhausted)
+    ));
+    assert!(healthy.read(0, &mut [0]).is_err());
+    mock.held.store(false, Ordering::Release);
+    while f.engine.stats()?.allocated_batches != 1 {
+        assert!(Instant::now() < end);
+        std::thread::yield_now();
+    }
+    for _ in 0..8 {
+        f.engine.allocate_batch(1)?.free()?;
+    }
+    let done = f.engine.stats()?;
+    assert_eq!(
+        (
+            done.quarantined_batches,
+            done.deferred_batches,
+            done.inflight_bytes
+        ),
+        (1, 0, 8)
+    );
+    assert_eq!(mock.destroys.load(Ordering::Acquire), 2);
+    assert!(stuck.read(0, &mut [0]).is_err());
+    healthy.read(0, &mut [0])?;
     Ok(())
 }

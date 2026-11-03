@@ -60,6 +60,30 @@ indices, native SL/TC and cache claims independently of CQ worker placement.
 The pool layout is immutable across admitted work. See
 [transport selection](transport-selection.md).
 
+Library diagnostics use the pinned `log` facade. OrbitTE installs no logger.
+Consumers can enable selector warnings and errors through their own logger.
+
+## Batch progress and notification ownership
+
+The batch executor runs each admitted transport to its receipt. Submitting
+work and completing an execution signal the same per-batch state that
+`progress_batch` advances. TENT uses progress-lock shards. OrbitTE uses a lock
+per live batch and a bounded weak-ID registry for admission and deferred
+retirement. The optional engine worker owns a bounded wake set and joins on
+drop. The typed `progress_fallback_interval` corresponds to TENT's
+`runtime_queue/progress_fallback_interval_us`, and `notification_rpc_fallback`
+corresponds to `notification/rpc_fallback`. A sweep probes retired owners independently and skips permanently
+quarantined IDs. A source staging session continues to own its chunk and CUDA
+loan after its socket disappears. Only a confirmed event and restored context
+return the chunk. See [batch progress](async-batches.md#explicit-progress).
+
+Notification routing visits installed channels before the control RPC. TCP and
+self share the bounded control inbox. An async hook retains a charged set of
+outstanding destinations. OrbitTE omits RDMA from notification routing because
+its data grant QPs have no notification receive owner. An RPC-only engine can
+send and receive even without an installed TCP notification channel. A lost
+receipt precludes automatic replay. See [notifications](cpu-tcp.md#notification-contracts).
+
 ## Runtime queue ownership
 
 | Owner | Responsibility | TENT counterpart |

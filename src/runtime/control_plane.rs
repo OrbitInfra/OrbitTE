@@ -56,6 +56,7 @@ pub(crate) enum Operation {
     QueryDelegate = 19,
     CreditSync = 20,
     CreditClose = 21,
+    NotifyRpc = 22,
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +106,7 @@ impl Request {
             19 => Operation::QueryDelegate,
             20 => Operation::CreditSync,
             21 => Operation::CreditClose,
+            22 => Operation::NotifyRpc,
             _ => return Err(Error::Protocol("unknown operation")),
         };
         let request = Self {
@@ -121,7 +123,7 @@ impl Request {
         {
             return Err(Error::Protocol("metadata request contains a memory range"));
         }
-        if operation == Operation::Notify && request.region != 0 {
+        if matches!(operation, Operation::Notify | Operation::NotifyRpc) && request.region != 0 {
             return Err(Error::Protocol("notification contains a registration ID"));
         }
         Ok(request)
@@ -305,7 +307,8 @@ pub(crate) fn open_segment(
 }
 
 pub(crate) fn notify(
-    peer: &RemoteSegment,
+    operation: Operation,
+    peer: crate::notification::Target,
     notification: &Notification,
     deadline: Instant,
 ) -> std::result::Result<(), NotificationFailure> {
@@ -314,7 +317,7 @@ pub(crate) fn notify(
         let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
         channel.write_all(
             &Request {
-                operation: Operation::Notify,
+                operation,
                 epoch: peer.epoch,
                 region: 0,
                 offset: notification.name.len() as u64,
@@ -468,6 +471,7 @@ fn retryable(error: &io::Error) -> bool {
 }
 
 pub(crate) struct ControlService {
+    source: Arc<Source>,
     endpoint: SocketAddr,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
@@ -482,7 +486,11 @@ impl ControlService {
         let stopping = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<(TcpStream, Instant)>(config.handler_threads);
         let receiver = Arc::new(Mutex::new(receiver));
+        source
+            .notifications
+            .set_receiver(Some(|permit, message| permit.commit(message)));
         let mut service = Self {
+            source: source.clone(),
             endpoint,
             stopping,
             acceptor: None,
@@ -561,6 +569,7 @@ impl ControlService {
 impl Drop for ControlService {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
+        self.source.notifications.set_receiver(None);
         if let Some(acceptor) = self.acceptor.take() {
             let _ = acceptor.join();
         }
@@ -650,7 +659,10 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             channel.write_all(&payload)?;
             return Ok(());
         }
-        if request.operation == Operation::Notify {
+        if matches!(request.operation, Operation::Notify | Operation::NotifyRpc) {
+            if request.operation == Operation::Notify && !source.tcp_notifications {
+                return Err(Error::Unavailable("peer TCP notification channel"));
+            }
             let name_length =
                 usize::try_from(request.offset).map_err(|_| Error::ResourceExhausted)?;
             let message_length =
@@ -671,7 +683,9 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             let message = String::from_utf8(message)
                 .map_err(|_| Error::Protocol("notification message is not UTF-8"))?;
             remaining(channel.deadline)?;
-            reservation.commit(Notification { name, message })?;
+            source
+                .notifications
+                .deliver(reservation, Notification { name, message })?;
             channel.reply(source.epoch, 0, 0)?;
             return Ok(());
         }

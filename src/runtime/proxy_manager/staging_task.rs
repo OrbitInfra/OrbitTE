@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::remote_stage_operation::{ControlOperation, RemoteStageOperation};
 use crate::engine::{PreparedTransfer, Source, remaining};
@@ -66,12 +66,7 @@ impl<'a> StagingTask<'a> {
             if let Some(channel) = connecting.poll()? {
                 break channel;
             }
-            if idle < 128 {
-                std::thread::yield_now();
-            } else {
-                let delay = Duration::from_micros((1u64 << (idle - 128).min(8)).min(200));
-                std::thread::park_timeout(delay.min(remaining(deadline)?));
-            }
+            crate::runtime::progress_worker::wait_for_poll(u64::from(idle), remaining(deadline)?);
             idle = idle.saturating_add(1);
         };
         channel.write_all(
@@ -463,12 +458,10 @@ impl<'a> StagingTask<'a> {
             if progress {
                 idle = 0;
             } else {
-                if idle < 128 {
-                    std::thread::yield_now();
-                } else {
-                    let delay = Duration::from_micros((1u64 << (idle - 128).min(8)).min(200));
-                    std::thread::park_timeout(delay.min(remaining(self.channel.deadline)?));
-                }
+                crate::runtime::progress_worker::wait_for_poll(
+                    u64::from(idle),
+                    remaining(self.channel.deadline)?,
+                );
                 idle = idle.saturating_add(1);
             }
         }
