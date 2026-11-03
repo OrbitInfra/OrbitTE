@@ -1710,7 +1710,6 @@ pub(crate) fn runtime_with_config(config: RdmaConfig) -> RdmaTransport {
         config,
         usage,
         qp_layout: None,
-        next_qp: Default::default(),
         counters: Arc::default(),
         workers: Arc::default(),
         cq_quota: Arc::default(),

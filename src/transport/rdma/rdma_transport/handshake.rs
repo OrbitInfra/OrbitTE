@@ -94,6 +94,7 @@ impl RdmaTransport {
             }
             Ok(GrantLease {
                 qp_index: None,
+                policy_worker: None,
                 _credit: credit,
                 usage: Arc::clone(&self.usage),
                 length,

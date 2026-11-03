@@ -13,6 +13,7 @@ pub(super) mod construction;
 
 pub(super) struct GrantLease {
     pub(super) qp_index: Option<usize>,
+    pub(super) policy_worker: Option<super::workers::SliceLease>,
     pub(super) _credit: admission::GrantCredit,
     pub(super) _selection: super::quota::DeviceLease,
     pub(super) usage: Arc<Mutex<RdmaStats>>,

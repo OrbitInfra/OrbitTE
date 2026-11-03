@@ -1,7 +1,7 @@
 //! RDMA transport entry points: registration, parent dispatch and source serving.
 
 use crate::runtime::transport_selector::{SelectionResult, qp_pools::QpLayout};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,6 @@ pub(crate) struct RdmaTransport {
     #[cfg(feature = "cuda")]
     pub(crate) proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
     pub(crate) qp_layout: Option<Arc<QpLayout>>,
-    pub(super) next_qp: AtomicUsize,
     pub(super) config: RdmaConfig,
     pub(super) usage: Arc<Mutex<RdmaStats>>,
     pub(super) counters: Arc<events::Counters>,
@@ -76,7 +75,6 @@ impl RdmaTransport {
             proxy,
             config,
             qp_layout,
-            next_qp: AtomicUsize::new(0),
             usage,
             counters: Arc::default(),
             workers: Arc::default(),
@@ -101,10 +99,24 @@ impl RdmaTransport {
         Ok(advertised.min(self.qp_width()))
     }
 
-    fn qp_index(&self, selection: &SelectionResult) -> Option<usize> {
-        let layout = self.qp_layout.as_ref()?;
+    fn route_grant(
+        &self,
+        grant: &mut super::grant::GrantLease,
+        selection: &SelectionResult,
+    ) -> Result<()> {
+        let Some(layout) = &self.qp_layout else {
+            return Ok(());
+        };
+        let device = self.device_at(grant._selection.device_id())?;
+        let (lane, worker) = self.workers.select(&self.cq_list(device)?)?;
+        let candidate = lane
+            .worker_id
+            .get()
+            .ok_or(Error::Internal("RDMA candidate has no worker"))?;
         let range = selection.qp_pool.unwrap_or_else(|| layout.range(None));
-        Some(range.index(self.next_qp.fetch_add(1, Ordering::Relaxed)))
+        grant.qp_index = Some(range.index(*candidate as i32));
+        grant.policy_worker = Some(worker);
+        Ok(())
     }
 
     pub(crate) fn policy_devices(&self) -> Result<Vec<String>> {
@@ -366,7 +378,7 @@ impl RdmaTransport {
                     remote.clone(),
                     {
                         let mut lease = self.reserve_grant(selection, &request.local, &credits)?;
-                        lease.qp_index = self.qp_index(&request.selection);
+                        self.route_grant(&mut lease, &request.selection)?;
                         lease
                     },
                     width,

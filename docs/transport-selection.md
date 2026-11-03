@@ -103,6 +103,8 @@ and their sum fits the endpoint limit of 64. With empty pools the flat width is
 `qp_mul_factor`, defaulting to `RdmaConfig::num_lanes`. With pools the sum sets
 the endpoint width independently of the worker/CQ lane count. Each selected
 index inherits its pool's SL (0–15) and TC (0–255), or the RDMA defaults.
+The requester folds its least-loaded worker's index into the selected range.
+The QP uses the CQ at that index modulo the lane count.
 Unbound traffic can use a named pool's QP and inherit its settings too. Both
 ends use the selected index for fresh connections and cache reuse.
 

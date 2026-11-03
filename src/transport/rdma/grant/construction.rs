@@ -25,7 +25,7 @@ pub(in crate::transport::rdma) struct GrantConstruction {
 impl GrantConstruction {
     pub(in crate::transport::rdma) fn new(
         transport: &RdmaTransport,
-        grant_lease: GrantLease,
+        mut grant_lease: GrantLease,
         memory: &RegisteredMemory,
         range: std::ops::Range<usize>,
         permission: u32,
@@ -70,11 +70,26 @@ impl GrantConstruction {
                 None => Buffer::Staged(Staging::new(length)?),
             };
             let device = transport.device_at(grant_lease._selection.device_id())?;
-            let (progress, worker_lease) = if let Some(endpoint) = &reuse {
-                (
-                    Arc::clone(&endpoint.progress),
-                    transport.workers.reserve(&endpoint.progress)?,
-                )
+            // The worker candidate chooses the pool index. Its QP uses the CQ
+            // at index modulo lane count, including for a passive or transient QP.
+            let assigned = match (&reuse, grant_lease.qp_index) {
+                (Some(endpoint), _) => Some(Arc::clone(&endpoint.progress)),
+                (None, Some(index)) => {
+                    let lanes = transport.cq_list(Arc::clone(&device))?;
+                    Some(Arc::clone(
+                        lanes
+                            .get(index % transport.config.num_lanes)
+                            .ok_or(Error::Internal("missing RDMA pool CQ lane"))?,
+                    ))
+                }
+                _ => None,
+            };
+            let (progress, worker_lease) = if let Some(lane) = assigned {
+                let lease = match grant_lease.policy_worker.take() {
+                    Some(lease) => lease,
+                    None => transport.workers.reserve(&lane)?,
+                };
+                (lane, lease)
             } else {
                 transport
                     .workers

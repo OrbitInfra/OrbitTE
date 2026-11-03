@@ -20,8 +20,8 @@ pub(crate) struct QpRange {
 
 impl QpRange {
     #[cfg(any(feature = "rdma", test))]
-    pub(crate) fn index(self, candidate: usize) -> usize {
-        self.begin + candidate % self.count
+    pub(crate) fn index(self, candidate: i32) -> usize {
+        self.begin + candidate.max(0) as usize % self.count
     }
 }
 

@@ -252,7 +252,6 @@ fn shared_cq_peer() {
         config,
         usage,
         qp_layout: None,
-        next_qp: Default::default(),
         counters: Arc::default(),
         workers: Arc::default(),
         cq_quota: Arc::default(),

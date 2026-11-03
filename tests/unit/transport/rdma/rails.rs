@@ -1712,6 +1712,7 @@ fn named_policy_masks_every_slice_and_connects_only_its_qp_pool() -> Result<()> 
     )?;
     let make = || {
         let mut transport = runtime(u64::MAX, 12);
+        transport.config.num_lanes = 2;
         transport.config.block_size = 8;
         crate::engine::tests::rdma_fixture_with_config(
             transport,

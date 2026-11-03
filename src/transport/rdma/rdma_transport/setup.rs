@@ -205,7 +205,7 @@ impl RdmaSetup {
                             .as_ref()
                             .ok_or(Error::Internal("missing parent grant credits"))?,
                     )?;
-                    lease.qp_index = transport.qp_index(&child.selection);
+                    transport.route_grant(&mut lease, &child.selection)?;
                     self.active = Some(RequesterSetup::new(
                         wire,
                         child,

@@ -512,13 +512,15 @@ fn qp_pool_layout_and_spray_partition_the_native_indices() -> Result<()> {
     let flat = QpLayout::new(&[], 6)?;
     assert!(!flat.has_pools() && flat.width == 6);
     assert!(QpLayout::new(&[], 0).is_err());
-    for i in 0..128 {
+    assert_eq!(flat.range(None).index(-1), 0);
+    assert_eq!(layout.range(Some("ctrl")).index(-1), 4);
+    for i in 0..128usize {
         for name in [None, Some(""), Some("absent")] {
-            assert_eq!(layout.range(name).index(i), i % 6);
+            assert_eq!(layout.range(name).index(i as i32), i % 6);
         }
-        assert_eq!(flat.range(Some("kv")).index(i), i % 6);
-        assert_eq!(layout.range(Some("kv")).index(i), i % 4);
-        assert_eq!(layout.range(Some("ctrl")).index(i), 4 + i % 2);
+        assert_eq!(flat.range(Some("kv")).index(i as i32), i % 6);
+        assert_eq!(layout.range(Some("kv")).index(i as i32), i % 4);
+        assert_eq!(layout.range(Some("ctrl")).index(i as i32), 4 + i % 2);
     }
     for count in ["0", "-1", "65"] {
         let json = format!(

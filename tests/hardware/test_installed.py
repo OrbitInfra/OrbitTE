@@ -21,10 +21,10 @@ class InstalledHostEvidence(unittest.TestCase):
                     for index, name in enumerate(self.profile['rails'])]
             rows += [('ORBITTE_INSTALLED_ROUND ', dict(phase=0, round=index, opened_qps=6, closed_qps=0,
                      reused_qps=index * 96, completed_grants=(index + 1) * 96,
-                     opened_mrs=4, read_bytes=(index + 1) * 16 * self.case['payload']
+                     opened_mrs=4, read_bytes=(index + 1) * self.case['parents'] * self.case['payload']
                      if role == 'requester' else 0, write_bytes=0)) for index in range(3)]
             rows += [('ORBITTE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL,
-                     status='passed', role=role, operation='read', parents=16,
+                     status='passed', role=role, operation='read', parents=self.case['parents'],
                      payload=self.case['payload'], rounds=3,
                      full_bytes_and_guards=True, locally_drained=True))]
             result[role] = {'stdout.log': '\n'.join(prefix + json.dumps(row) for prefix, row in rows),

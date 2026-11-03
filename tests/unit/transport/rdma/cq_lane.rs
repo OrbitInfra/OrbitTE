@@ -173,6 +173,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
             buffer: Buffer::Staged(Staging::new(8).unwrap()),
             _lease: GrantLease {
                 qp_index: None,
+                policy_worker: None,
                 _credit: super::super::grant::admission::GrantCredits::acquire(
                     Arc::clone(&runtime.usage),
                     runtime.config.max_grants,
