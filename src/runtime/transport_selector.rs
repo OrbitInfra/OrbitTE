@@ -124,6 +124,24 @@ impl SelectionResult {
         self.transport == t || self.ranked.contains(&t)
     }
 
+    #[cfg(feature = "gds")]
+    pub(crate) fn omit_gds(&mut self, max_attempts: usize) -> bool {
+        if self.transport == Transport::Gds {
+            let next = self.initial_attempts + 1;
+            let Some(route) = self.candidate(next).filter(|_| next <= max_attempts) else {
+                return false;
+            };
+            self.transport = route.transport;
+            self.initial_attempts = next;
+        } else if let Some(i) = self.ranked.iter().position(|t| *t == Transport::Gds) {
+            self.ranked[i..].rotate_left(1);
+            if let Some(last) = self.ranked.last_mut() {
+                *last = Transport::Unspec;
+            }
+        }
+        true
+    }
+
     pub(crate) fn rejected(&self, reason: &'static str) -> Error {
         match &self.policy {
             Some(name) => Error::TransportPolicy {

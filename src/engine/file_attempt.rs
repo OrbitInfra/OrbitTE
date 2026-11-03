@@ -216,6 +216,9 @@ impl TransferEngine {
                 };
                 if let Some((p, b)) = progress {
                     if task.posted && !p.retry_on_progress(b + i, e.for_report(), deadline) {
+                        if p.cancel_requested(b + i) {
+                            task.error = Some(Error::Cancelled);
+                        }
                         break;
                     }
                     if !p.start_retry(

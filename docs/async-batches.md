@@ -80,7 +80,8 @@ after its last possible write to the destination has drained. A WRITE that
 might have posted reports `RemoteEffect::Unknown`. An expired deadline,
 accepted cancel or uncertain teardown ends retry. A short file completion
 keeps its own byte prefix. Within a native file batch, only eligible failed
-owners can retry after the group drains.
+owners can retry after the group drains. If unregister closes a cuFile
+registration during preparation, an eligible io_uring route keeps its file lease.
 
 `enable_auto_failover_on_poll` defaults to true. A task, vector or overall
 status poll can advance one drained failure. With this setting disabled, a poll

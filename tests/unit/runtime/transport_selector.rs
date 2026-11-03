@@ -755,3 +755,39 @@ fn named_tcp_and_intent_reach_sync_and_async_owners_before_any_charge() -> Resul
     batch.free()?;
     Ok(())
 }
+
+#[cfg(feature = "gds")]
+#[test]
+fn a_gds_registration_retiring_after_selection_preserves_an_eligible_file_route() {
+    let select = |hint| {
+        TransportSelector::select(
+            None,
+            Filters {
+                segment: crate::SegmentType::File,
+                local: crate::MemoryType::Cuda,
+                remote: crate::MemoryType::Cpu,
+                size: 8,
+                priority: crate::Priority::High,
+                same_machine: true,
+            },
+            &crate::TransferRequest::new(hint, 1, 0, 8),
+            None,
+            |_| true,
+        )
+        .unwrap()
+    };
+    let mut primary = select(Transport::Gds);
+    assert!(!primary.omit_gds(0));
+    assert!(primary.omit_gds(1));
+    assert_eq!(
+        (primary.transport, primary.initial_attempts),
+        (Transport::IoUring, 1)
+    );
+    let mut alternate = select(Transport::IoUring);
+    assert!(alternate.omit_gds(3));
+    assert_eq!(
+        (alternate.transport, alternate.initial_attempts),
+        (Transport::IoUring, 0)
+    );
+    assert!(alternate.candidate(1).is_none());
+}

@@ -1201,7 +1201,7 @@ impl TransferEngine {
             admission: Some(admission),
         };
         #[cfg(feature = "gds")]
-        let prepared = prepared.pin_gds_buffers()?;
+        let prepared = prepared.pin_gds_buffers(self.config.max_failover_attempts)?;
         Ok(prepared)
     }
 
@@ -1919,12 +1919,17 @@ pub(crate) struct PreparedSubmission {
 
 #[cfg(feature = "gds")]
 impl PreparedSubmission {
-    fn pin_gds_buffers(mut self) -> Result<Self> {
+    fn pin_gds_buffers(mut self, max_attempts: usize) -> Result<Self> {
         if let PreparedTarget::File { requests, .. } = &mut self.payload {
             for r in requests {
-                if r.selection.includes(Transport::Gds) {
+                if r.selection.transport == Transport::Gds
+                    || (max_attempts != 0 && r.selection.includes(Transport::Gds))
+                {
                     match crate::transport::gds::BufferLease::acquire(&r.local) {
                         Ok(lease) => r.buffer = lease,
+                        // Unregister can retire a GDS slot after selection. It
+                        // cannot invalidate the independent file lease/CPU route.
+                        Err(Error::Unavailable(_)) if r.selection.omit_gds(max_attempts) => {}
                         Err(e) => return Err(self.abort_error(e)),
                     }
                 }
