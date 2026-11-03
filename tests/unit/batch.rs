@@ -419,3 +419,21 @@ fn independent_batches_progress_while_a_sibling_progress_lock_is_held() {
     });
     drop(held);
 }
+
+#[cfg(feature = "rdma")]
+impl Batch {
+    pub(crate) fn reach_retry(&self) {
+        let p = self.progress().unwrap();
+        let (s, timed) = p
+            .changed
+            .wait_timeout_while(p.lock(), crate::test_support::EVENTUAL_PROGRESS, |s| {
+                s.retry_gate.is_none() && s.pending != 0
+            })
+            .unwrap();
+        assert!(
+            !timed.timed_out() && s.retry_gate.is_some(),
+            "backend did not return a recoverable completion: {:?}",
+            s.status()
+        );
+    }
+}

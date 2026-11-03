@@ -68,6 +68,13 @@ impl TcpTask {
         })
     }
 
+    pub(super) fn payload_started(&self) -> bool {
+        match self.operation {
+            TransferOp::Write => self.effect == RemoteEffect::Unknown,
+            TransferOp::Read => matches!(self.state, State::Payload | State::Commit | State::Done),
+        }
+    }
+
     pub(crate) fn effect(&self) -> RemoteEffect {
         self.effect
     }

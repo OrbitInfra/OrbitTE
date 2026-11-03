@@ -180,6 +180,7 @@ fn engine() -> Arc<TransferEngine> {
 fn engine_with_limit(limit: usize) -> Arc<TransferEngine> {
     Arc::new(
         TransferEngine::new(EngineConfig {
+            max_failover_attempts: 0, // observe this backend in isolation
             nvlink: true,
             nvlink_cache_entries: limit,
             handler_timeout: Duration::from_millis(500),
@@ -769,6 +770,7 @@ fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
         let remote = owned(&src, true);
         let local = owned(&dst, false);
         let source = TransferEngine::new(EngineConfig {
+            max_failover_attempts: 0, // observe this backend in isolation
             nvlink: true,
             nvlink_cache_entries: if case == "disabled" { 0 } else { 2 },
             ..EngineConfig::default()

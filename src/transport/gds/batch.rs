@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 
 use super::sys::*;
 use super::*;
-use crate::batch::BatchProgress;
+use crate::engine::file_attempt::FileAttempts;
 use crate::segment::file::FileRequest;
 use crate::{BatchReport, MemoryType, RemoteEffect, TransferFailure, TransferOp};
 
@@ -256,7 +256,7 @@ impl LiveBatch {
         &mut self,
         gds: &GdsTransport,
         deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
+        progress: Option<(&FileAttempts<'_>, usize)>,
     ) -> Result<()> {
         let until = deadline
             .checked_add(crate::transport::DESTRUCTION_TIMEOUT)
@@ -402,7 +402,7 @@ impl LiveBatch {
         op: TransferOp,
         stop: Option<&Error>,
         deregister_failure: Option<usize>,
-        progress: Option<(&BatchProgress, usize)>,
+        progress: Option<(&FileAttempts<'_>, usize)>,
         report: &mut BatchReport,
     ) {
         if !self.submitted {
@@ -410,7 +410,7 @@ impl LiveBatch {
                 report.failure = Some(TransferFailure {
                     request_index: 0,
                     affected_requests: 1,
-                    error: stop.for_file_report(),
+                    error: stop.for_report(),
                     remote_effect: RemoteEffect::None,
                 });
             }
@@ -434,7 +434,7 @@ impl LiveBatch {
                 || Some(i) == deregister_failure
                 || (error.is_none() && Some(i) == first_bad)
             {
-                error = stop.map(Error::for_file_report).or(error);
+                error = stop.map(Error::for_report).or(error);
             }
             if Some(i) == first_bad {
                 let reason = if !report.locally_drained {
@@ -449,10 +449,8 @@ impl LiveBatch {
                     } else {
                         1
                     },
-                    error: reason.map_or(
-                        Error::Internal("missing cuFile status"),
-                        Error::for_file_report,
-                    ),
+                    error: reason
+                        .map_or(Error::Internal("missing cuFile status"), Error::for_report),
                     remote_effect: effect,
                 });
             }
@@ -461,6 +459,7 @@ impl LiveBatch {
                 report.transferred_bytes += bytes;
             }
             if let Some((p, first)) = progress {
+                p.posted(first + i);
                 if let Some(e) = error {
                     p.fail_file_task(first + i, bytes, e, effect, report.locally_drained);
                 } else if terminal {
@@ -477,7 +476,7 @@ impl GdsTransport {
         op: TransferOp,
         requests: &[FileRequest],
         deadline: Instant,
-        progress: Option<(&BatchProgress, usize)>,
+        progress: Option<(&FileAttempts<'_>, usize)>,
         report: &mut BatchReport,
         pending: &Mutex<Option<Quarantine>>,
     ) {

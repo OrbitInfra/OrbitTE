@@ -237,6 +237,13 @@ pub(crate) fn open_segment(
     epoch: SourceEpoch,
     deadline: Instant,
 ) -> Result<RemoteSegment> {
+    match describe(endpoint, epoch, deadline) {
+        Err(Error::Io(_)) if Instant::now() < deadline => describe(endpoint, epoch, deadline),
+        outcome => outcome,
+    }
+}
+
+fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Result<RemoteSegment> {
     let mut channel = ControlChannel::connect(endpoint, deadline)?;
     channel.write_all(
         &Request {

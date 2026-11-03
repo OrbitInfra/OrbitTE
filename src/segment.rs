@@ -71,7 +71,7 @@ impl FromStr for SourceEpoch {
 }
 
 /// A source-owned registration ID and bounds, fenced to one source instance.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoteRegion {
     pub(crate) epoch: SourceEpoch,
     pub(crate) id: u64,

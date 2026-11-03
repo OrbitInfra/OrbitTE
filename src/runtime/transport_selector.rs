@@ -75,6 +75,10 @@ impl PolicyName {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SelectionResult {
     pub(crate) transport: Transport,
+    // Ordered once against the original public request, before merge. Slots
+    // past the end contain Unspec. Engine failover alone advances this cursor.
+    ranked: [Transport; 5],
+    pub(crate) initial_attempts: usize,
     pub(crate) device_mask: u64,
     pub(crate) qp_pool: Option<QpRange>,
     // Policy SL/TC are diagnostic only. Native QPs take SL/TC from their pool.
@@ -90,6 +94,8 @@ impl SelectionResult {
     pub(crate) fn plain(transport: Transport) -> Self {
         Self {
             transport,
+            ranked: [Transport::Unspec; 5],
+            initial_attempts: 0,
             device_mask: u64::MAX,
             qp_pool: None,
             service_level: None,
@@ -99,6 +105,23 @@ impl SelectionResult {
             named: false,
             intent: IntentType::Unspec,
         }
+    }
+
+    pub(crate) fn candidate(&self, index: usize) -> Option<Self> {
+        let transport = *self.ranked.get(index)?;
+        (transport != Transport::Unspec).then(|| Self {
+            transport,
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn has_fallback(&self) -> bool {
+        self.ranked[1] != Transport::Unspec
+    }
+
+    #[cfg(any(feature = "rdma", feature = "gds"))]
+    pub(crate) fn includes(&self, t: Transport) -> bool {
+        self.transport == t || self.ranked.contains(&t)
     }
 
     pub(crate) fn rejected(&self, reason: &'static str) -> Error {
@@ -363,6 +386,14 @@ impl TransportSelector {
         } else {
             hint
         };
+        result.ranked[0] = result.transport;
+        let mut count = 1;
+        for &t in candidates {
+            if !result.ranked[..count].contains(&t) && available(t) {
+                result.ranked[count] = t;
+                count += 1;
+            }
+        }
         result.named = named.is_some();
         result.intent = request.intent;
         Ok(result)

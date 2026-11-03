@@ -229,6 +229,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
         let requester = crate::engine::tests::rdma_fixture_with_config(
             runtime,
             EngineConfig {
+                max_failover_attempts: 0, // isolate the native cancellation boundary
                 remote_staging: true,
                 staging_chunk_size: 3,
                 staging_chunk_count: 3,

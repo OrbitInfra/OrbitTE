@@ -923,6 +923,7 @@ unsafe extern "C" fn post(
             length: request.length - u32::from(mode == "length"),
             status: u32::from(
                 mode == "wc"
+                    || mode.ends_with("copy_fault_partial")
                     || mode == "wc_close0"
                     || (mode == "copy_second_error_close0" && ordinal == 2)
                     || (failed == Some((state.qpn, request.id)))
@@ -937,7 +938,8 @@ unsafe extern "C" fn post(
             ..Default::default()
         });
     }
-    if mode == "pause_copy" || mode.starts_with("pause_post") {
+    if mode == "pause_copy" || mode == "pause_copy_fault_partial" || mode.starts_with("pause_post")
+    {
         block(device);
     }
     // SAFETY: The posting owner provides exclusive writable result storage for this callback.
@@ -1685,8 +1687,16 @@ pub(crate) fn runtime(mode: &str) -> RdmaTransport {
         max_staging_bytes: 8,
         host_memory,
         max_direct_bytes: 8,
-        block_size: if mode == "pause_copy" { 2 } else { 64 << 10 },
-        max_send_wr: if mode == "pause_copy" { 2 } else { 16 },
+        block_size: if mode == "pause_copy" || mode.ends_with("copy_fault_partial") {
+            2
+        } else {
+            64 << 10
+        },
+        max_send_wr: if mode == "pause_copy" || mode.ends_with("copy_fault_partial") {
+            2
+        } else {
+            16
+        },
         ..RdmaConfig::new(mode)
     };
     runtime_with_config(config)

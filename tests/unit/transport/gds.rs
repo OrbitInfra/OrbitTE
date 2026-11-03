@@ -376,7 +376,14 @@ fn native_handle_setup_and_cleanup_failures_never_replay_or_free_uncertain_owner
         mock.setup_error.store(kind == "setup", Ordering::Release);
         mock.destroy_error
             .store(kind == "destroy", Ordering::Release);
-        let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
+        let f = Fixture::new(
+            &mock,
+            EngineConfig {
+                max_failover_attempts: 0,
+                ..Default::default()
+            },
+            16,
+        )?;
         let m = f.host(16)?;
         let r = [TransferRequest::new(
             Transport::Unspec,
@@ -545,7 +552,14 @@ fn running_cancel_and_failed_io_are_terminal_only_after_receipts() -> Result<()>
         *mock.script.lock().unwrap() = vec![(COMPLETE, 2), (receipt, usize::MAX)];
         mock.until_cancel.store(canceled, Ordering::Release);
         mock.poll_error_once.store(!canceled, Ordering::Release);
-        let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
+        let f = Fixture::new(
+            &mock,
+            EngineConfig {
+                max_failover_attempts: 0,
+                ..Default::default()
+            },
+            16,
+        )?;
         let m = f.host(16)?;
         let req = [request(&m, 0, 0, 2), request(&m, 4, 4, 2)];
         let b = f
@@ -744,6 +758,7 @@ fn native_only_excludes_compat_and_unsafe_extents_before_submit() -> Result<()> 
     let f = Fixture::new(
         &mock,
         EngineConfig {
+            max_failover_attempts: 0,
             gds_require_native: true,
             ..Default::default()
         },
@@ -764,6 +779,7 @@ fn native_only_excludes_compat_and_unsafe_extents_before_submit() -> Result<()> 
     let f = Fixture::new(
         &limited,
         EngineConfig {
+            max_failover_attempts: 0,
             gds_require_native: true,
             ..Default::default()
         },
@@ -855,6 +871,7 @@ fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -
 fn slice_capacity_rejection_has_no_provider_side_effects() -> Result<()> {
     let mock = Mock::new(GdsMode::NativeOnly);
     let config = EngineConfig {
+        max_failover_attempts: 0,
         gds_batch_depth: 1,
         max_transfer_bytes: 32 << 20,
         ..Default::default()
@@ -951,5 +968,33 @@ fn deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work() -> Res
     assert_eq!(mock.destroys.load(Ordering::Acquire), 2);
     assert!(stuck.read(0, &mut [0]).is_err());
     healthy.read(0, &mut [0])?;
+    Ok(())
+}
+
+#[cfg(feature = "io-uring")]
+#[test]
+fn clean_file_submit_rejection_retries_each_owner_without_reissuing_its_neighbours() -> Result<()> {
+    let mock = Mock::new(GdsMode::CompatAllowed);
+    mock.setup_error.store(true, Ordering::Release);
+    let f = Fixture::new(&mock, Default::default(), 16)?;
+    let local = f.host(16)?;
+    let pattern: [u8; 16] = std::array::from_fn(|i| i as u8);
+    local.write(0, &pattern)?;
+    let requests = [request(&local, 2, 1, 3), request(&local, 8, 10, 4)];
+    let b = f
+        .engine
+        .submit_async(TransferOp::Write, &f.segment, &requests, None, WAIT)?;
+    assert_eq!(b.wait(WAIT)?.completed_tasks, 2);
+    for (i, t) in b.task_statuses()?.iter().enumerate() {
+        assert_eq!(
+            (t.physical_owner, t.transport, t.failover_count),
+            (i, Transport::IoUring, 1)
+        );
+    }
+    let mut expected = [0; 16];
+    expected[1..4].copy_from_slice(&pattern[2..5]);
+    expected[10..14].copy_from_slice(&pattern[8..12]);
+    assert_eq!(fs::read(&f.path)?, expected);
+    assert_eq!(mock.submits.load(Ordering::Acquire), 0);
     Ok(())
 }

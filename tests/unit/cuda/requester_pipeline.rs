@@ -178,6 +178,7 @@ fn requester_pipeline_keeps_independent_rings_pending_until_query_completion() {
 fn self_peer_pipeline_requires_both_ring_budgets_before_any_payload_copy() {
     for capacity in [5, 6] {
         let engine = TransferEngine::new(EngineConfig {
+            max_failover_attempts: 0, // observe this backend in isolation
             remote_staging: true,
             staging_chunk_size: 3,
             staging_chunk_count: capacity,

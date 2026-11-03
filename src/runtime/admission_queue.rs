@@ -553,6 +553,24 @@ pub(crate) struct QueuePermit {
 }
 
 impl QueuePermit {
+    pub(crate) fn reroute(&self, rate: Option<(Transport, u64)>) {
+        let mut state = self.queue.lock();
+        let Some(owner) = state.owners.get_mut(&self.id) else {
+            return;
+        };
+        if !owner.dispatching || owner.rate == rate {
+            return;
+        }
+        let previous = std::mem::replace(&mut owner.rate, rate);
+        let length = owner.length;
+        if let Some((t, _)) = previous {
+            state.eligible_bytes[t as usize] -= length;
+        }
+        if let Some((t, _)) = rate {
+            state.eligible_bytes[t as usize] += length;
+        }
+    }
+
     /// The predicate only reads the first public task's cancellation flag. Lock
     /// order is queue -> QoS -> credit and queue -> BatchProgress. Cancellation
     /// releases BatchProgress before wake. Credit sync releases all locks before I/O;

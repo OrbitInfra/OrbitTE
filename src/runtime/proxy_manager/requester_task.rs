@@ -22,6 +22,7 @@ impl ProxyManager {
         peer: &crate::RemoteSegment,
         request: &PreparedTransfer,
         source: &Arc<Source>,
+        posted: &mut bool,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
@@ -65,6 +66,7 @@ impl ProxyManager {
                 };
                 let result = (|| {
                     let chunk = receive(&pinned, deadline)?;
+                    *posted = true;
                     session.transfer_event_loop(stages, request, operation, chunk, deadline)?;
                     stages.drain()?;
                     remaining(deadline)?;

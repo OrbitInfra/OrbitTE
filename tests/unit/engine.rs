@@ -130,7 +130,14 @@ pub(crate) fn rdma_fixture(mode: &str) -> TransferEngine {
 pub(crate) fn rdma_fixture_with_runtime(
     runtime: crate::transport::rdma::RdmaTransport,
 ) -> TransferEngine {
-    rdma_fixture_with_config(runtime, EngineConfig::default())
+    // These single-backend fault controls inspect the exact native failure.
+    rdma_fixture_with_config(
+        runtime,
+        EngineConfig {
+            max_failover_attempts: 0,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(feature = "rdma")]
