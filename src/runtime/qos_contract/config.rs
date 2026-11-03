@@ -11,7 +11,9 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use super::{MAX_CONTRACTS, QosConfig, QosPolicyFields, QosTenantContract, normalize};
+use super::{
+    MAX_CONTRACTS, QosConfig, QosDegradedActions, QosPolicyFields, QosTenantContract, normalize,
+};
 use crate::{Error, Priority, Result};
 
 const MAX_JSON_BYTES: usize = 1 << 20;
@@ -66,6 +68,8 @@ struct Policy {
     max_inflight_bytes: Option<usize>,
     #[serde(deserialize_with = "requests")]
     max_inflight_requests: Option<usize>,
+    #[serde(deserialize_with = "actions")]
+    allowed_degraded_actions: Option<QosDegradedActions>,
 }
 
 impl From<Policy> for QosPolicyFields {
@@ -74,6 +78,7 @@ impl From<Policy> for QosPolicyFields {
             priority: policy.priority,
             max_inflight_bytes: policy.max_inflight_bytes,
             max_inflight_requests: policy.max_inflight_requests,
+            allowed_degraded_actions: policy.allowed_degraded_actions,
         }
     }
 }
@@ -222,6 +227,25 @@ fn requests<'de, D: Deserializer<'de>>(
     usize::try_from(count).map(Some).map_err(|_| {
         de::Error::custom("max_inflight_requests must be a nonnegative integer fitting usize")
     })
+}
+
+fn actions<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<QosDegradedActions>, D::Error> {
+    let values = Vec::<String>::deserialize(deserializer)?;
+    let mut actions = QosDegradedActions::default();
+    for value in values {
+        match value.trim_ascii().to_ascii_lowercase().as_str() {
+            "delay" => actions.delay = true,
+            "reject" => actions.reject = true,
+            _ => {
+                return Err(de::Error::custom(format!(
+                    "unsupported allowed_degraded_actions entry: {value}; only delay/reject are implemented"
+                )));
+            }
+        }
+    }
+    Ok(Some(actions))
 }
 
 fn intents<'de, D: Deserializer<'de>>(

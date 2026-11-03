@@ -90,15 +90,26 @@ contract is cached. `resolve_qos` produces an immutable, engine-bound
 the submission path. Unknown identities reuse the corresponding fallback slot,
 so repeated resolution cannot create fresh quota buckets.
 
-`QosQuota` owns one mutex over fixed per-contract counters. Preparation coalesces
-adjacent charges, sorts only the remaining runs by slot and checks every charge
-before mutating any counter. One `QosPermit` retains the grouped charges until
-actual ownership ends. Quota locks never cover memory operations, queue waits,
-transport calls or credit updates. Priority-only policies allocate no quota
-ledger; disabled engines allocate no resolver. The existing transport workers
-consume the resolved priority. Frozen TENT's resolver is resolution-only;
-OrbitTE's per-contract admission and lifetime enforcement are explicit additions.
-See [scope, defaults and resource units](async-batches.md#qos-contracts).
+`runtime/qos_contract/admission.rs::QosQuota` owns fixed per-contract counters.
+Preparation coalesces charges once. Without any effective delay action, the
+existing single-lock immediate admission path remains. Enabling delay requires
+the existing runtime queue: every bounded contract in that engine acquires only
+at its Batch head, so a later group cannot reserve its predecessor's quota.
+`QosReservation` is shared scheduling metadata with no refund destructor;
+`PreparedSubmission` retains the real `QosPermit`. Backing drops first, then QoS,
+then queue metadata and credit. Returning quota before advancing the Batch head
+prevents false rejection of a reject-only successor. Only actual-owner Drop
+returns charged quota, then wakes the queue after unlocking.
+Unquiesced owners retain their charges.
+
+Dispatch locks queue -> QoS -> receiver-credit ledger. One decision obtains all
+contract slots, credit and window capacity, or obtains none. A QoS-blocked head
+does not create byte head-of-line blocking for independent groups. Automatic
+credit synchronization waits for QoS eligibility and performs I/O outside the
+locks. This adds no polling thread, per-slice lookup or wire change. Priority-only
+policies allocate no quota ledger; disabled engines allocate no resolver. Frozen
+TENT's resolver is resolution-only; OrbitTE defines the consumed delay/reject
+semantics in [QoS admission actions](async-batches.md#qos-admission-actions).
 
 `runtime/receiver_credit/issuer.rs::ReceiverCreditIssuer` belongs to `Source`.
 It reserves fixed per-sender windows from aggregate byte/request budgets and

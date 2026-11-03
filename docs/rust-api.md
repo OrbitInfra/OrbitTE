@@ -67,7 +67,13 @@ settings still come from `EngineConfig`. See [JSON format](async-batches.md#json
 explicit handles use their captured fallback priority. Per-contract payload
 byte/request caps are reserved atomically for each mixed submission and retained
 through actual drain. `fields()` and resolution accessors explain the policy;
-`usage()` samples its shared budget. See [configuration and scope](async-batches.md#qos-contracts).
+`usage()` samples its shared budget. `QosPolicyFields::allowed_degraded_actions`
+accepts `QosDegradedActions { delay, reject }`; the JSON equivalent is an action
+array. Effective delay requires `runtime_queue` and defers every bounded
+contract's charge to joint dispatch admission. Pending groups retain the global
+inflight budget; `usage()` counts only acquired QoS capacity. See
+[configuration and scope](async-batches.md#qos-contracts) and
+[action semantics](async-batches.md#qos-admission-actions).
 
 ## Memory type and location
 

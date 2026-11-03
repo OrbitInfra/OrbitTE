@@ -771,8 +771,10 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   Immutable engine-bound handles reuse compiled slots; fallback names cannot
   create new budgets, and Unquiesced retains charges. Bounded TENT-format JSON/file
   loading now feeds these same compiled fields, with no submission-path parsing.
-  Unsupported actions/fields are rejected. Degraded actions and
-  hierarchical/cluster quota enforcement remain open. See
+  Delay/reject now consumes the same policies through atomic queue/QoS/credit
+  admission, preserving same-Batch order, deadlines and actual-owner release.
+  Unsupported actions/fields and hierarchical/cluster quota enforcement remain
+  open. See [admission actions](async-batches.md#qos-admission-actions),
   [QoS contract consumption](async-batches.md#qos-contracts),
   [credit scope](async-batches.md#receiver-credit-gating) and
   [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
@@ -1194,7 +1196,8 @@ tenant-default and intent overlays compile once; immutable policies feed the
 actual priority path and atomic per-contract retained-byte/request admission.
 Queued and uncertain owners preserve charges, while clean drain returns them.
 This follows frozen TENT's resolution fields and adds real consumption; it does
-not establish parent/child tenant limits, degraded actions or full QoS parity.
+not establish parent/child tenant limits or full QoS parity; delay/reject
+consumption is recorded below.
 See [source controls](qualification.md#qos-contract-consumption).
 Receiver issuance/update synchronization is implemented at source scope in
 wire v22. Source-owned windows bound aggregate authorization; actual successful
@@ -1216,10 +1219,16 @@ contracts. String/file entry points preserve disabled/default semantics, strict
 field validation, normalized identities and binary byte units. Bounded parsing
 stays outside engine compilation and transfer dispatch. Existing public quota
 and RDMA priority controls consume JSON input; see [scope](qualification.md#json-qos-configuration).
-The next functional delivery is defined degraded-action consumption, starting
-with delay/reject at QoS admission while preserving deadlines, cancellation and
-actual retained ownership. Transport fallback, local recompute and compression
-must remain rejected until their real execution owners exist.
+Defined delay/reject consumption is implemented at source scope. Delay-enabled
+engines join whole-group QoS, receiver credit and dispatch-window admission at
+the Batch head. Pending groups hold only global inflight capacity, cannot steal
+quota from predecessors and preserve cancellation/absolute deadlines. Reject-only
+configurations keep immediate admission; all acquired charges follow actual
+ownership through drain. See [scope](qualification.md#qos-admission-actions).
+The next functional delivery is the P6 selector contract: compile transport
+policy order and segment/memory/size eligibility for the implemented transports,
+then consume the selection in actual submission. Transport fallback, local
+recompute and compression remain rejected until their real execution owners exist.
 Hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
 physical-owner queue granularity, physical staging reserves and deadline-infeasible
 cancellation remain open parts of P6.

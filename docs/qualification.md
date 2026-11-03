@@ -2365,8 +2365,10 @@ requested for this substage.
 The supported TENT `qos` JSON section now loads from a string or bounded file
 into `QosConfig`. Parsing validates known fields and objects, disabled semantics,
 normalized unique identities, integer/byte-unit limits and the existing contract
-count bound. Unknown/unconsumed policy keys, including `allowed_degraded_actions`,
-are rejected. Root engine settings outside `qos` remain the caller's responsibility.
+count bound. The original `307b0ac` loader rejected all action metadata; the
+[subsequent action consumer](#qos-admission-actions) accepts delay/reject.
+Unknown/unconsumed keys remain errors. Root engine settings outside `qos` remain
+the caller's responsibility.
 
 Two focused CPU controls cover input shape, inheritance, numeric/byte units,
 disabled behavior, duplicates, limits and bounded file loading. The existing
@@ -2385,3 +2387,33 @@ Exact source, CI, independent review and logs are maintained outside Git at
 `/root/orbitte-artifacts/qos-json-20261103/`. JSON loading adds no transfer-time
 lookup, lock or network work; this is a design property, not a measured throughput
 advantage. Installed v23 hardware and performance remain unqualified.
+
+
+## QoS admission actions
+
+The runtime consumes TENT-named `allowed_degraded_actions` for delay/reject.
+Allowing delay requires the existing runtime queue. Every bounded contract in
+that engine acquires atomically at its Batch head together with receiver credit
+and the dispatch window. Without delay, the prior immediate admission path
+remains. Pending owners retain global inflight capacity; acquired quota remains
+charged until actual cleanup, including Unquiesced retention.
+
+Two public TCP controls cover same-Batch dependencies under EDF, independent
+work bypassing a QoS-blocked byte head, exact payload order, actual-owner release,
+intrinsically oversized groups, mixed-slot rejection precedence, rejection after
+enqueue, joint receiver-credit accounting, cancellation and deadline expiry.
+Existing parser controls cover action normalization, inherited replacement and
+unsupported actions. The existing RDMA shared-CQ cleanup-failure control now
+uses a delay-enabled contract and verifies that actual retained native owners
+still retain QoS, credit and dispatch charges. It uses CPU/verbs ABI fixtures.
+
+Frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` supplies names and
+field overlay semantics, not execution policy: its resolver is
+`resolution_only`. OrbitTE's [defined behavior](async-batches.md#qos-admission-actions)
+is explicit. Transport fallback, recompute/compression, hierarchical/cluster
+budgets and complete QoS parity remain open.
+
+Exact source, CI and independent review are recorded outside Git at
+`/root/orbitte-artifacts/qos-actions-20261103/`. There is no new wire version,
+background thread or per-slice policy allocation. No hardware task, installed
+v23 qualification or matched throughput/fairness result is claimed.

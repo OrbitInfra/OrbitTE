@@ -188,6 +188,7 @@ fn credit_eligible_large_head_keeps_byte_order_without_reserving_early() {
                 Instant::now() + TIMEOUT,
                 None,
                 Some(Arc::clone(&credit.reservation)),
+                None,
             )
             .unwrap();
         (queued, credit) // Same release order as PreparedSubmission.
