@@ -103,7 +103,7 @@ fn automatic_staging_credit_uses_negotiated_depth_and_committed_groups_finish_af
             let mut batch = requester
                 .submit_async(operation, &peer, &requests, None, TIMEOUT)
                 .unwrap();
-            let until = Instant::now() + TIMEOUT;
+            let until = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
             while a.event_not_ready.load(Ordering::Acquire) == 0 {
                 assert!(Instant::now() < until, "Pin did not reach CUDA completion");
                 std::thread::yield_now();

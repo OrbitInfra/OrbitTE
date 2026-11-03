@@ -383,9 +383,11 @@ fn provider_return_after_deadline_does_not_start_native_qp_construction() {
     });
     let (state, timeout) = gate
         .1
-        .wait_timeout_while(gate.0.lock().unwrap(), Duration::from_secs(2), |state| {
-            !state.0
-        })
+        .wait_timeout_while(
+            gate.0.lock().unwrap(),
+            crate::test_support::EVENTUAL_PROGRESS,
+            |state| !state.0,
+        )
         .unwrap();
     assert!(!timeout.timed_out());
     drop(state);

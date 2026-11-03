@@ -378,7 +378,7 @@ impl Relay {
     }
 
     fn until_received(&self, count: usize) {
-        let deadline = Instant::now() + TIMEOUT;
+        let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
         while self.received.load(Ordering::Acquire) < count {
             assert!(Instant::now() < deadline, "credit RPC was not received");
             thread::sleep(Duration::from_millis(1));

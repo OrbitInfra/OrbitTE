@@ -353,7 +353,7 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || send.send(engine.close(Duration::from_secs(5))).unwrap())
     };
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while engine.source.admission.lock().unwrap().open {
         assert!(Instant::now() < deadline, "close did not fence admission");
         std::thread::yield_now();
@@ -374,7 +374,7 @@ fn whole_close_fences_both_directions_and_waits_for_previously_accepted_work() {
     assert_eq!(runtime.stats().unwrap().active_devices, 1);
     drop(requester);
     receive
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
         .unwrap()
         .unwrap();
     closer.join().unwrap();
@@ -632,7 +632,11 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
         });
         let (lock, changed) = &*pause;
         let (state, timed) = changed
-            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+            .wait_timeout_while(
+                lock.lock().unwrap(),
+                crate::test_support::EVENTUAL_PROGRESS,
+                |s| !s.0,
+            )
             .unwrap();
         assert!(!timed.timed_out());
         drop(state);
@@ -921,7 +925,9 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     let (lock, ready) = &*pause;
     let state = lock.lock().unwrap();
     let (state, timeout) = ready
-        .wait_timeout_while(state, Duration::from_secs(1), |state| !state.0)
+        .wait_timeout_while(state, crate::test_support::EVENTUAL_PROGRESS, |state| {
+            !state.0
+        })
         .unwrap();
     assert!(!timeout.timed_out(), "native post fixture did not start");
     drop(state);
@@ -964,7 +970,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
     assert!(!events.lock().unwrap().contains(&"dealloc_pd"));
     lock.lock().unwrap().1 = true;
     ready.notify_all();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while weak_engine.upgrade().is_some()
         || fixture.owner.upgrade().is_some()
         || !events.lock().unwrap().contains(&"close_device")

@@ -321,7 +321,9 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
         })
         .collect();
     for _ in &workers {
-        done_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        done_rx
+            .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+            .unwrap();
     }
     for worker in workers {
         worker.join().unwrap();

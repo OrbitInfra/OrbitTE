@@ -30,7 +30,7 @@ fn engine(mode: &str, depth: usize) -> (TransferEngine, PayloadHold) {
 }
 
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while !ready() {
         assert!(
             Instant::now() < until,

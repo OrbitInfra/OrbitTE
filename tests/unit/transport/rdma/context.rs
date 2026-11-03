@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -595,12 +596,12 @@ fn reused_grant_exhaustion_and_pre_open_async_fault_preserve_its_creating_identi
                 });
                 let (lock, changed) = &*pause;
                 let (state, timed) = changed
-                    .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |s| !s.0)
+                    .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |s| !s.0)
                     .unwrap();
                 assert!(!timed.timed_out());
                 drop(state);
                 emit_async(runtime, 3);
-                let end = Instant::now() + Duration::from_secs(2);
+                let end = Instant::now() + EVENTUAL_PROGRESS;
                 while runtime.stats().unwrap().active_endpoints != 0 && Instant::now() < end {
                     thread::yield_now();
                 }

@@ -1,7 +1,6 @@
 use std::io::{Read, Write, copy};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
-use std::time::Duration;
 
 // Hold bytes on a real control connection without stopping the source owner.
 // Releasing this gate, rather than requester terminal, permits source EOF cleanup.
@@ -42,7 +41,7 @@ impl SocketGate {
             client.set_nodelay(true).unwrap();
             server.set_nodelay(true).unwrap();
             server
-                .set_read_timeout(Some(Duration::from_secs(10)))
+                .set_read_timeout(Some(crate::test_support::EVENTUAL_PROGRESS))
                 .unwrap();
             let mut input = client.try_clone().unwrap();
             let mut output = server.try_clone().unwrap();

@@ -232,7 +232,8 @@ fn close_drains_admitted_io_on_the_original_fd() -> Result<()> {
     let (release, wait) = mpsc::channel();
     thread::scope(|scope| -> Result<()> {
         let worker = scope.spawn(move || -> Result<()> {
-            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            wait.recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+                .unwrap();
             lease.file().write_all_at(b"xyz", offset)?;
             Ok(())
         });

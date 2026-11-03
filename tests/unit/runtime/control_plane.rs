@@ -32,6 +32,33 @@ fn wire_request(
 }
 
 #[test]
+fn pin_requires_the_last_hello_byte_before_replying_to_an_invalid_region() {
+    let source = TransferEngine::new(EngineConfig::default()).unwrap();
+    for operation in [Operation::PinRead, Operation::PinWrite] {
+        let mut hello = [0; PIN_HELLO_SIZE];
+        hello[1] = 1;
+        hello[2..10].copy_from_slice(&1u64.to_be_bytes());
+        hello[10] = 1;
+        let mut partial = wire_request(&source, operation, 99, 0, 1);
+        partial.write_all(&hello[..PIN_HELLO_SIZE - 1]).unwrap();
+        partial.stream.shutdown(Shutdown::Write).unwrap();
+        assert!(
+            matches!(partial.read_exact(&mut [0]), Err(Error::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof)
+        );
+
+        let mut complete = wire_request(&source, operation, 99, 0, 1);
+        complete.write_all(&hello).unwrap();
+        assert!(matches!(
+            Reply::read(&mut complete, source.source_epoch()),
+            Err(Error::RegionNotFound)
+        ));
+        #[cfg(feature = "cuda")]
+        assert_eq!(source.stats().unwrap().staging.allocations, 0);
+    }
+    source.close(TIMEOUT).unwrap();
+}
+
+#[test]
 fn request_fixture_and_decoder_reject_protocol_drift() {
     let request = Request {
         operation: Operation::TcpRead,
@@ -767,7 +794,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         };
         channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
         admitted_tx.send(()).unwrap();
-        release_rx.recv_timeout(TIMEOUT).unwrap();
+        release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
         channel
             .write_all(
                 &Reply {
@@ -801,7 +828,7 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
                 .unwrap()
         })
     };
-    admitted_rx.recv_timeout(TIMEOUT).unwrap();
+    admitted_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
     engine.unregister_memory(&local).unwrap();
     drop(local);
     drop(fixture.memory);
@@ -853,7 +880,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             admitted_tx.send(()).unwrap();
-            release_rx.recv_timeout(TIMEOUT).unwrap();
+            release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
             channel
                 .write_all(
                     &Reply {
@@ -894,7 +921,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
                 TIMEOUT,
             )
             .unwrap();
-        admitted_rx.recv_timeout(TIMEOUT).unwrap();
+        admitted_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
         let queued_timeout = if queued_cancel {
             TIMEOUT
         } else {
@@ -1001,7 +1028,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             if index == 0 {
                 admitted_tx.send(()).unwrap();
-                release_rx.recv_timeout(TIMEOUT).unwrap();
+                release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
             }
             channel
                 .write_all(
@@ -1047,7 +1074,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     batch
         .submit(TransferOp::Read, &peer, &[request], None, TIMEOUT)
         .unwrap();
-    admitted_rx.recv_timeout(TIMEOUT).unwrap();
+    admitted_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
     engine.unregister_memory(&local).unwrap();
     drop(local);
     drop(fixture.memory);
@@ -1062,7 +1089,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     assert!(weak_engine.upgrade().is_some());
     release_tx.send(()).unwrap();
     handler.join().unwrap();
-    let end = Instant::now() + TIMEOUT;
+    let end = Instant::now() + common::EVENTUAL_PROGRESS;
     while weak_engine.upgrade().is_some() || fixture.owner.upgrade().is_some() {
         assert!(
             Instant::now() < end,

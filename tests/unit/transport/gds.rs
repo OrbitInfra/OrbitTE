@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::{
     EngineConfig, FileSegment, Permission, RegisteredMemory, RemoteEffect, TaskState,
     TransferEngine, TransferOp, TransferRequest, Transport,
@@ -293,7 +294,7 @@ pub(crate) fn request(
     TransferRequest::new(Transport::Gds, mem.base_address() + local as u64, offset, n)
 }
 pub(crate) fn wait_enter(mock: &Mock) {
-    let end = Instant::now() + WAIT;
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while mock.submits.load(Ordering::Acquire) == 0 {
         assert!(Instant::now() < end);
         std::thread::yield_now();
@@ -453,7 +454,7 @@ fn slices_and_partial_submit_keep_task_prefixes_and_concurrent_write_effects() -
     let b = f
         .engine
         .submit_async(TransferOp::Write, &f.segment, &r, None, WAIT)?;
-    let status = b.wait(WAIT)?;
+    let status = b.wait(EVENTUAL_PROGRESS)?;
     assert!(status.locally_drained);
     assert_eq!(status.completed_tasks, 1);
     let tasks = b.task_statuses()?;
@@ -514,7 +515,7 @@ fn a_running_task_publishes_its_contiguous_prefix_before_the_last_receipt() -> R
         None,
         WAIT,
     )?;
-    let end = Instant::now() + WAIT;
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     loop {
         let t = b.task_status(0)?;
         if t.transferred_bytes > 0 {
@@ -528,7 +529,7 @@ fn a_running_task_publishes_its_contiguous_prefix_before_the_last_receipt() -> R
     }
     assert!(m.write(0, &[0]).is_err());
     mock.held_cookie.store(0, Ordering::Release);
-    assert_eq!(b.wait(WAIT)?.transferred_bytes, m.len());
+    assert_eq!(b.wait(EVENTUAL_PROGRESS)?.transferred_bytes, m.len());
     let mut actual = vec![0x6b; m.len()];
     m.read(0, &mut actual)?;
     assert!(actual[..2 * SLICE].iter().all(|byte| *byte == 0));
@@ -554,7 +555,7 @@ fn running_cancel_and_failed_io_are_terminal_only_after_receipts() -> Result<()>
             wait_enter(&mock);
             assert!(b.cancel(1)?);
         }
-        assert_eq!(b.wait(WAIT)?.completed_tasks, 1);
+        assert_eq!(b.wait(EVENTUAL_PROGRESS)?.completed_tasks, 1);
         let gs = b.submissions()?;
         assert_eq!((gs[0].completed_requests, gs[0].transferred_bytes), (1, 2));
         let tasks = b.task_statuses()?;
@@ -611,7 +612,7 @@ fn pending_cufile_io_past_the_destruction_window_keeps_all_owners_until_late_rea
     let prior = mock.polls.load(Ordering::Acquire);
     std::thread::scope(|scope| -> Result<()> {
         let closing = scope.spawn(|| f.engine.close_file_segment(&f.segment, WAIT));
-        let end = Instant::now() + WAIT;
+        let end = Instant::now() + EVENTUAL_PROGRESS;
         while mock.polls.load(Ordering::Acquire) == prior {
             assert!(Instant::now() < end);
             std::thread::yield_now();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -130,7 +131,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
         .unwrap()
         .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = Instant::now() + EVENTUAL_PROGRESS;
     let mut state = gate.0.lock().unwrap();
     while !state.0 {
         state = gate
@@ -202,7 +203,7 @@ fn a_lost_source_does_not_stop_other_devices_or_allow_native_close() {
     let mut failed = attach(&monitor, None);
     let mut healthy = attach(&monitor, None);
     drop(failed.writer.take());
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = Instant::now() + EVENTUAL_PROGRESS;
     while stats(&monitor).async_event_sources != 1 {
         assert!(Instant::now() < until);
         thread::yield_now();
@@ -267,7 +268,7 @@ fn close_joins_a_stopped_monitor_even_when_its_wake_reader_has_already_exited() 
     let shared = Arc::clone(&monitor.running.lock().unwrap().as_ref().unwrap().shared);
     shared.stopping.store(true, Ordering::Release);
     let _ = shared.wake();
-    let until = Instant::now() + Duration::from_secs(2);
+    let until = Instant::now() + EVENTUAL_PROGRESS;
     let mut exited = shared.exited.lock().unwrap();
     while !*exited {
         exited = shared
@@ -310,7 +311,7 @@ fn foreign_port_events_are_acknowledged_without_pausing_selected_port() {
         .unwrap()
         .write_all(&[ibverbs_sys::IBV_EVENT_PORT_ERR as u8])
         .unwrap();
-    let end = Instant::now() + Duration::from_secs(2);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while source.native.acknowledgments.lock().unwrap().is_empty() {
         assert!(Instant::now() < end);
         thread::yield_now();

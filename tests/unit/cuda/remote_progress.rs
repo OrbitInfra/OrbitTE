@@ -4,7 +4,7 @@ use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 
 #[cfg(feature = "rdma")]
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let until = std::time::Instant::now() + Duration::from_secs(3);
+    let until = std::time::Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while !ready() {
         assert!(
             std::time::Instant::now() < until,

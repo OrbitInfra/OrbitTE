@@ -9,7 +9,7 @@ use crate::CreditResource;
 use crate::cuda::StagingCopy;
 use crate::engine::Source;
 use crate::memory::Allocation;
-use crate::runtime::control_plane::{ControlChannel, Operation, Request};
+use crate::runtime::control_plane::{ControlChannel, Operation, PIN_HELLO_SIZE, Request};
 use crate::runtime::receiver_credit::protocol::PinCredit;
 use crate::transport::tcp::TcpTransport;
 use crate::{Error, RegisteredMemory, Result, SourceEpoch, TransferOp, Transport};
@@ -72,9 +72,10 @@ impl ProxyManager {
         source: &Source,
         request: &Request,
         memory: &RegisteredMemory,
+        hello: &[u8; PIN_HELLO_SIZE],
     ) -> Result<()> {
         let mut reply_epoch = source.epoch;
-        let result = self.pin_remote(channel, source, request, memory, &mut reply_epoch);
+        let result = self.pin_remote(channel, source, request, memory, hello, &mut reply_epoch);
         if let Err(error) = &result {
             if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
                 // Preserve the native error if the error receipt itself is lost.
@@ -94,15 +95,14 @@ impl ProxyManager {
         source: &Source,
         request: &Request,
         memory: &RegisteredMemory,
+        hello: &[u8; PIN_HELLO_SIZE],
         reply_epoch: &mut SourceEpoch,
     ) -> Result<()> {
         if !source.remote_staging {
             return Err(Error::Unavailable("remote staging is not enabled"));
         }
-        let mut hello = [0; 11];
-        channel.read_exact(&mut hello)?;
         let mut binding = [0; 24];
-        channel.read_exact(&mut binding)?;
+        binding.copy_from_slice(&hello[11..]);
         let binding = PinCredit::decode(&binding)?;
         let transport = match hello[0] {
             0 => Transport::Tcp,
@@ -128,7 +128,7 @@ impl ProxyManager {
         if !(1..=16).contains(&hello[1]) || !(1..=16).contains(&hello[10]) {
             return Err(Error::Protocol("Pin pipeline depth"));
         }
-        let cap = usize::try_from(crate::runtime::control_plane::u64_at(&hello, 2))
+        let cap = usize::try_from(crate::runtime::control_plane::u64_at(hello, 2))
             .map_err(|_| Error::Protocol("Pin chunk cap"))?;
         if cap == 0 || cap > 64 << 20 {
             return Err(Error::Protocol("Pin chunk cap"));

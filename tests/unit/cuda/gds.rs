@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::gds::tests::{Fixture, Mock, WAIT, request, wait_enter};
 use crate::{GdsMode, RemoteEffect, TaskState};
 
@@ -26,7 +27,7 @@ fn gds_registers_the_cuda_view_once_consumes_readiness_and_uses_registered_offse
     let b = f
         .engine
         .submit_async(TransferOp::Write, &f.segment, &r, None, WAIT)?;
-    assert_eq!(b.wait(WAIT)?.completed_tasks, 1);
+    assert_eq!(b.wait(EVENTUAL_PROGRESS)?.completed_tasks, 1);
     assert!(weak.upgrade().is_none());
     let mut expected = [0; 32];
     expected[3..11].fill(0x38);
@@ -197,7 +198,7 @@ fn gds_final_unregister_waits_for_batch_and_failed_deregister_retains_real_owner
         assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
         assert!(v.write(0, &[1]).is_err());
         mock.held.store(false, Ordering::Release);
-        let status = b.wait(WAIT)?;
+        let status = b.wait(EVENTUAL_PROGRESS)?;
         assert_eq!(status.locally_drained, !fail);
         assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
         assert_eq!(mock.destroys.load(Ordering::Acquire), 1);
@@ -310,7 +311,7 @@ fn queued_cancel_with_failed_last_deregister_keeps_admission_without_submitting(
     assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
     mock.deregister_error.store(true, Ordering::Release);
     assert!(queued.cancel(0)?);
-    assert!(!queued.wait(WAIT)?.locally_drained);
+    assert!(!queued.wait(EVENTUAL_PROGRESS)?.locally_drained);
     let tasks = queued.task_statuses()?;
     let failure = tasks[0].failure.as_ref().unwrap();
     assert!(matches!(failure.error, Error::Unquiesced { .. }));
@@ -319,7 +320,7 @@ fn queued_cancel_with_failed_last_deregister_keeps_admission_without_submitting(
     assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 1);
     assert_eq!(f.engine.stats()?.gds.quarantined_batches, 1);
     mock.held.store(false, Ordering::Release);
-    assert_eq!(running.wait(WAIT)?.completed_tasks, 1);
+    assert_eq!(running.wait(EVENTUAL_PROGRESS)?.completed_tasks, 1);
     assert_eq!(f.engine.stats()?.inflight_bytes, 8);
     assert_eq!(&std::fs::read(&f.path)?[8..16], &[0; 8]);
     Ok(())

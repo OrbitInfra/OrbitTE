@@ -1,6 +1,7 @@
 use super::ipc::owned;
 use super::*;
 use crate::memory::Allocation;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::sync::{Barrier, mpsc};
 use std::time::Instant;
 
@@ -45,7 +46,7 @@ fn stream_pool_bounds_concurrent_cold_leases_without_locking_memory() {
         })
         .collect();
     start.wait();
-    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    ready_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert!(ready_rx.recv_timeout(Duration::from_millis(20)).is_err());
     assert_eq!(pool.stats().unwrap(), (1, 1, 0));
     assert!(memory.allocation.try_lock().is_ok());
@@ -58,7 +59,7 @@ fn stream_pool_bounds_concurrent_cold_leases_without_locking_memory() {
     ));
     assert_eq!(count(&device, "stream-create"), 1);
     release.wait();
-    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    ready_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert_eq!(pool.stats().unwrap(), (1, 1, 0));
     release.wait();
     for worker in workers {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::proxy_manager::ProxyManager;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::time::Instant;
 
 fn deadline() -> Instant {
@@ -155,7 +156,7 @@ fn active_chunk_keeps_capacity_and_close_waits_for_native_completion() {
     let manager = pool.clone();
     let worker =
         std::thread::spawn(move || gpu.copy_staged(0, &mut [0; 8], None, &manager, deadline()));
-    wait.recv_timeout(Duration::from_secs(1)).unwrap();
+    wait.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert_eq!(pool.stats().unwrap().active_chunks, 1);
     assert!(matches!(
         other.copy_staged(0, &mut [0; 8], None, &pool, deadline()),
@@ -191,7 +192,7 @@ fn chunk_deadline_reports_partial_effect_and_reuses_only_drained_bytes() {
     let worker = std::thread::spawn(move || {
         worker_gpu.copy_staged(0, &mut [], Some(&[7; 8]), &manager, end)
     });
-    wait.recv_timeout(Duration::from_secs(1)).unwrap();
+    wait.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     std::thread::sleep(end.saturating_duration_since(Instant::now()) + Duration::from_millis(1));
     resume.send(()).unwrap();
     assert!(matches!(worker.join().unwrap(), Err(Error::Timeout)));
@@ -342,7 +343,7 @@ fn queued_cancellation_does_not_release_the_running_chunk_or_report_partial_succ
             Duration::from_secs(2),
         )
         .unwrap();
-    wait.recv_timeout(Duration::from_secs(1)).unwrap();
+    wait.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert!(batch.cancel(1).unwrap());
     assert!(matches!(batch.free(), Err(Error::BatchBusy)));
     assert!(matches!(

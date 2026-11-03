@@ -369,7 +369,9 @@ fn delayed_event_keeps_the_whole_range_and_chunk_and_cancel_only_stops_queued_io
             None,
             WAIT,
         )?;
-        waiting.recv_timeout(WAIT).unwrap();
+        waiting
+            .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+            .unwrap();
         assert!(first.cancel(0)?);
         assert!(v.write(7, &[0x11]).is_err());
         assert_eq!(f.engine.stats()?.staging.active_chunks, 1);

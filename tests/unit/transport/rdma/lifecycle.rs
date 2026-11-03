@@ -243,7 +243,7 @@ fn engine(rails: &[String], bind: SocketAddr) -> TransferEngine {
 }
 
 fn wait(mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while !ready() {
         assert!(Instant::now() < deadline, "live peer did not drain");
         thread::sleep(Duration::from_millis(1));

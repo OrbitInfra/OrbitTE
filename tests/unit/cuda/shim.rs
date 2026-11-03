@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::BTreeMap;
 use std::ffi::{c_int, c_uint, c_void};
@@ -405,13 +406,13 @@ unsafe extern "C" fn event_synchronize(completion: sys::CUevent) -> Status {
         }
     };
     if let Some((entered, resume)) = gate {
-        if entered.send(()).is_err() || resume.recv_timeout(Duration::from_secs(3)).is_err() {
+        if entered.send(()).is_err() || resume.recv_timeout(EVENTUAL_PROGRESS).is_err() {
             return Status::CUDA_ERROR_INVALID_VALUE;
         }
     }
     let (stream, through) = current().completions.lock().unwrap()[&(completion as usize)]
         .expect("unrecorded event cannot prove this copy complete");
-    let until = std::time::Instant::now() + Duration::from_secs(3);
+    let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
     while copy_held(device, stream, through) {
         if std::time::Instant::now() >= until {
             return Status::CUDA_ERROR_INVALID_VALUE;
@@ -461,7 +462,7 @@ fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usi
 fn enter_copy_gate() -> bool {
     let gate = current().copy_gate.lock().unwrap().take();
     gate.is_none_or(|(entered, resume)| {
-        entered.send(()).is_ok() && resume.recv_timeout(Duration::from_secs(3)).is_ok()
+        entered.send(()).is_ok() && resume.recv_timeout(EVENTUAL_PROGRESS).is_ok()
     })
 }
 
@@ -962,7 +963,7 @@ fn ipc_copy_control() {
 }
 
 pub(super) fn wait_pending(device: &Device, count: usize) {
-    let until = std::time::Instant::now() + Duration::from_secs(3);
+    let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
     loop {
         let pending = device
             .streams

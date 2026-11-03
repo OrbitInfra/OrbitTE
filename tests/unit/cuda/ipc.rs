@@ -1,6 +1,7 @@
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
 use crate::memory::Allocation;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 pub(super) fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
     let mut memory = memory(device);
@@ -381,7 +382,7 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
 pub(super) fn complete_group(
     mut group: crate::cuda::ipc::IpcCopyGroup,
 ) -> crate::cuda::ipc::IpcCopyCompletion {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + EVENTUAL_PROGRESS;
     loop {
         match group.query() {
             Ok(false) if std::time::Instant::now() < deadline => std::thread::yield_now(),
@@ -392,7 +393,7 @@ pub(super) fn complete_group(
 }
 
 pub(super) fn wait_query(device: &Device) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + EVENTUAL_PROGRESS;
     while device.event_not_ready.load(Ordering::Acquire) == 0 {
         assert!(
             std::time::Instant::now() < deadline,

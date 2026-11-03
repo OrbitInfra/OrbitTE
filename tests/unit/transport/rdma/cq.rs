@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_int;
 use std::io::{Read, Write};
@@ -236,11 +237,9 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
     let (debt, timeout) = entry
         .debt
         .1
-        .wait_timeout_while(
-            entry.debt.0.lock().unwrap(),
-            Duration::from_secs(2),
-            |debt| *debt != 0,
-        )
+        .wait_timeout_while(entry.debt.0.lock().unwrap(), EVENTUAL_PROGRESS, |debt| {
+            *debt != 0
+        })
         .unwrap();
     if timeout.timed_out() || *debt != 0 {
         return libc::EBUSY;
@@ -371,7 +370,7 @@ fn deadline() -> Instant {
 }
 
 fn wait_until(mut predicate: impl FnMut() -> bool) {
-    let end = deadline();
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while !predicate() {
         assert!(Instant::now() < end, "completion event control timed out");
         thread::yield_now();

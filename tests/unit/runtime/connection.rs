@@ -36,7 +36,9 @@ fn connect_consumes_one_socket_and_preserves_typed_stop_during_pin_io() {
                 assert!(!channel.nonblocking);
                 result
             });
-            reached.recv_timeout(Duration::from_secs(1)).unwrap();
+            reached
+                .recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+                .unwrap();
             let mut byte = [0];
             std::io::Read::read_exact(&mut peer, &mut byte).unwrap();
             assert_eq!(byte, [0x53]);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
@@ -23,14 +24,14 @@ fn block_shards(workers: &Workers) -> (Vec<TaskHandle>, Vec<mpsc::Sender<()>>) {
                     move || {
                         entered.send(()).unwrap();
                         let result = blocked
-                            .recv_timeout(Duration::from_secs(3))
+                            .recv_timeout(EVENTUAL_PROGRESS)
                             .map_err(|_| Error::Timeout);
                         (result, RemoteEffect::None)
                     },
                 )
                 .unwrap(),
         );
-        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        ready.recv_timeout(EVENTUAL_PROGRESS).unwrap();
         releases.push(release);
     }
     (tasks, releases)
@@ -192,7 +193,7 @@ fn task_panic_preserves_shared_thread_and_drop_joins_idle_shards() {
                     },
                 )
                 .unwrap();
-            let id = thread.recv_timeout(Duration::from_secs(1)).unwrap();
+            let id = thread.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             assert_eq!(*thread_id.get_or_insert(id), id);
             let (result, effect) = task.finish(false);
             if panic {

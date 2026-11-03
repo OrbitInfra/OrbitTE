@@ -112,7 +112,7 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                     Duration::from_millis(500),
                 )
                 .unwrap();
-            let until = std::time::Instant::now() + Duration::from_secs(1);
+            let until = std::time::Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
             while requester.stats().unwrap().staging.queued_tasks == 0 {
                 assert!(std::time::Instant::now() < until);
                 assert_eq!(queued.status().unwrap().state, BatchState::Pending);

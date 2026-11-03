@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 #[cfg(feature = "rdma")]
@@ -71,7 +72,7 @@ fn partial_pin(operation: TransferOp, stop: bool) {
             },
         )
         .unwrap();
-    gate.reached.recv_timeout(Duration::from_secs(3)).unwrap();
+    gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert_eq!(source_gpu.allocation.lock().unwrap().dma, vec![1..18]);
     assert_eq!(local_gpu.allocation.lock().unwrap().dma, vec![2..19]);
     assert!(b.submitted_copies.lock().unwrap().is_empty());
@@ -108,7 +109,7 @@ fn partial_pin(operation: TransferOp, stop: bool) {
     assert!(local_gpu.allocation.lock().unwrap().dma.is_empty());
     assert!(b.submitted_copies.lock().unwrap().is_empty());
     gate.closed
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(EVENTUAL_PROGRESS)
         .expect("task terminal retained its control socket");
     let stats = source.stats().unwrap();
     assert_eq!(
@@ -327,9 +328,9 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                     Duration::from_secs(10),
                 )
                 .unwrap();
-            gate.reached.recv_timeout(Duration::from_secs(3)).unwrap();
+            gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             if setup {
-                let until = Instant::now() + Duration::from_secs(2);
+                let until = Instant::now() + EVENTUAL_PROGRESS;
                 while !hold.0.lock().unwrap().0
                     || requester.stats().unwrap().rdma.unwrap().work_requests == 0
                 {
@@ -386,7 +387,7 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
             assert_eq!(failure.remote_effect, RemoteEffect::None);
             assert_eq!(requester.stats().unwrap().staging.active_tasks, 0);
             gate.closed
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(EVENTUAL_PROGRESS)
                 .expect("native task terminal retained socket");
             assert_eq!(source.stats().unwrap().active_source_operations, 1);
             assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);

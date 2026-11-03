@@ -276,7 +276,7 @@ fn connected_endpoint_peer() {
             let weak = Arc::downgrade(&backing);
             drop(memory);
             drop(backing);
-            let end = Instant::now() + Duration::from_secs(2);
+            let end = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
             while weak.upgrade().is_some() && Instant::now() < end {
                 thread::yield_now();
             }

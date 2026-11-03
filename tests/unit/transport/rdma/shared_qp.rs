@@ -371,9 +371,11 @@ pub(super) fn run() {
         }
         let (lock, changed) = GATE.get().unwrap();
         let (mut gate, timed) = changed
-            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |gate| {
-                !gate.entered
-            })
+            .wait_timeout_while(
+                lock.lock().unwrap(),
+                crate::test_support::EVENTUAL_PROGRESS,
+                |gate| !gate.entered,
+            )
             .unwrap();
         assert!(!timed.timed_out());
         gate.released = true;

@@ -1,4 +1,5 @@
 //! Gate a real cache creator after provider return, outside all production locks.
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -65,7 +66,7 @@ pub(crate) fn before_acquire(
     }));
     let (state, timeout) = gate
         .changed
-        .wait_timeout_while(state, Duration::from_secs(3), |state| !state.entered)
+        .wait_timeout_while(state, EVENTUAL_PROGRESS, |state| !state.entered)
         .unwrap();
     assert!(
         !timeout.timed_out() && state.entered,
@@ -93,7 +94,7 @@ pub(crate) fn before_publish(
     gate.changed.notify_all();
     let (state, timeout) = gate
         .changed
-        .wait_timeout_while(state, Duration::from_secs(15), |state| !state.released)
+        .wait_timeout_while(state, EVENTUAL_PROGRESS, |state| !state.released)
         .unwrap();
     assert!(
         !timeout.timed_out() && state.released,

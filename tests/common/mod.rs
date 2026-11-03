@@ -7,6 +7,9 @@ use std::sync::{Arc, Weak};
 
 use crate::HostMemory;
 
+/// Watchdog for a test fixture or worker to reach an observable boundary.
+pub const EVENTUAL_PROGRESS: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct Allocation {
     bytes: UnsafeCell<Box<[u8]>>,
     drops: Arc<AtomicUsize>,

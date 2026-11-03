@@ -1,3 +1,4 @@
+use crate::test_support::EVENTUAL_PROGRESS;
 use std::time::Instant;
 
 use super::socket_gate::{Boundary, SocketGate};
@@ -8,7 +9,7 @@ use crate::engine::tests::source_runtime;
 use crate::runtime::control_plane::Reply;
 
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = Instant::now() + EVENTUAL_PROGRESS;
     while !ready() {
         assert!(
             Instant::now() < until,
@@ -97,7 +98,7 @@ fn pending_native_finish(send_pending: bool) {
                 .unwrap();
             wait_until(|| hold.0.lock().unwrap().0);
             if let Some(gate) = &gate {
-                gate.reached.recv_timeout(Duration::from_secs(3)).unwrap();
+                gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
                 assert!(requester.stats().unwrap().rdma.unwrap().completed_sends > 0);
             } else {
                 assert_eq!(requester.stats().unwrap().rdma.unwrap().completed_sends, 0);
@@ -172,7 +173,7 @@ fn pending_native_finish(send_pending: bool) {
             assert_eq!(requester.stats().unwrap().staging.active_tasks, 0);
             assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);
             if let Some(gate) = &gate {
-                gate.closed.recv_timeout(Duration::from_secs(1)).unwrap();
+                gate.closed.recv_timeout(EVENTUAL_PROGRESS).unwrap();
                 assert_eq!(source.stats().unwrap().active_source_operations, 1);
                 assert_eq!(source_gpu.allocation.lock().unwrap().dma, vec![1..42]);
             }
@@ -272,7 +273,7 @@ fn fragmented_native_receipts_resume_once_and_validate_the_binding() {
                     Duration::from_secs(10),
                 )
                 .unwrap();
-            gate.reached.recv_timeout(Duration::from_secs(3)).unwrap();
+            gate.reached.recv_timeout(EVENTUAL_PROGRESS).unwrap();
             assert!(matches!(batch.free(), Err(Error::BatchBusy)));
             assert_eq!(local_gpu.allocation.lock().unwrap().dma, vec![2..43]);
             assert_eq!(source.stats().unwrap().staging.remote_unpins, 0);

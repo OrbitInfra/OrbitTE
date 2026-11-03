@@ -1257,7 +1257,11 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
         device.emit_async(3);
         let (acks, changed) = &device.async_acks;
         let (acks, _) = changed
-            .wait_timeout_while(acks.lock().unwrap(), Duration::from_secs(2), |n| *n == 0)
+            .wait_timeout_while(
+                acks.lock().unwrap(),
+                crate::test_support::EVENTUAL_PROGRESS,
+                |n| *n == 0,
+            )
             .unwrap();
         if *acks != 1 {
             return libc::ETIMEDOUT;

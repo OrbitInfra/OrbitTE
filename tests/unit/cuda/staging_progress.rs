@@ -1,8 +1,9 @@
 use super::requester_staging::engine;
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 fn wait_until(mut ready: impl FnMut() -> bool) {
-    let until = std::time::Instant::now() + Duration::from_secs(2);
+    let until = std::time::Instant::now() + EVENTUAL_PROGRESS;
     while !ready() {
         assert!(
             std::time::Instant::now() < until,
@@ -275,7 +276,7 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
                 Duration::from_secs(5),
             )
             .unwrap();
-        local_waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        local_waiting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
         wait_until(|| {
             hold.0.lock().unwrap().0 && requester.stats().unwrap().rdma.unwrap().work_requests > 0
         });

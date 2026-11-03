@@ -1,5 +1,6 @@
 //! Concurrent public parents share actual context queues and aggregate budgets.
 use super::*;
+use crate::test_support::EVENTUAL_PROGRESS;
 
 #[path = "concurrent_verbs.rs"]
 mod native;
@@ -127,7 +128,7 @@ fn wake(engine: &TransferEngine) {
 }
 
 fn until(mut condition: impl FnMut() -> bool) {
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while !condition() {
         assert!(
             Instant::now() < end,
@@ -612,7 +613,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
             }
             native::release();
             wake(&engine);
-            let end = Instant::now() + Duration::from_secs(8);
+            let end = Instant::now() + EVENTUAL_PROGRESS;
             while pending.iter().any(|task| !task.is_finished()) && Instant::now() < end {
                 thread::sleep(Duration::from_millis(1));
             }

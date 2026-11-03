@@ -25,6 +25,7 @@ const MAGIC: &[u8; 8] = b"ORBITTE\0";
 const VERSION: u16 = 1;
 pub(crate) const REQUEST_SIZE: usize = 52;
 pub(crate) const REPLY_SIZE: usize = 36;
+pub(crate) const PIN_HELLO_SIZE: usize = 35;
 const MAX_REGIONS: usize = 4096;
 const REGION_SIZE: usize = 32;
 const DESCRIPTOR_HEADER: usize = 4 + SegmentMetadata::WIRE_SIZE;
@@ -579,6 +580,12 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             return Ok(());
         }
     };
+    // A Pin requester sends both frames before it reads the reply. Closing
+    // over unread hello bytes can reset TCP and discard the rejection.
+    let mut pin_hello = [0; PIN_HELLO_SIZE];
+    if matches!(request.operation, Operation::PinRead | Operation::PinWrite) {
+        channel.read_exact(&mut pin_hello)?;
+    }
     if request.epoch != source.epoch {
         channel.reply(source.epoch, 1, 0)?;
         return Ok(());
@@ -695,7 +702,9 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 #[cfg(feature = "cuda")]
                 {
                     proxy_reply = true;
-                    source.proxy.serve_remote(channel, source, &request, memory)
+                    source
+                        .proxy
+                        .serve_remote(channel, source, &request, memory, &pin_hello)
                 }
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));

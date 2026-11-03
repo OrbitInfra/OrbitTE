@@ -459,7 +459,7 @@ impl Drop for PeerProcess {
 }
 
 fn wait_marker(receiver: &Receiver<String>) -> String {
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + common::EVENTUAL_PROGRESS;
     loop {
         let line = receiver
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))

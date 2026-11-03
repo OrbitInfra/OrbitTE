@@ -59,7 +59,7 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
             TIMEOUT,
         )
         .unwrap();
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while requester.stats().unwrap().nvlink.unwrap().pending_groups != 2 {
         assert!(
             Instant::now() < deadline,

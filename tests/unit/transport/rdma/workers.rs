@@ -175,7 +175,11 @@ fn unexpected_worker_exit_retains_active_and_pending_contexts_and_fences_assignm
         if id == 0 {
             let (lock, changed) = PANIC_GATE.get_or_init(Default::default);
             let (gate, timed) = changed
-                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(3), |gate| !gate.0)
+                .wait_timeout_while(
+                    lock.lock().unwrap(),
+                    crate::test_support::EVENTUAL_PROGRESS,
+                    |gate| !gate.0,
+                )
                 .unwrap();
             assert!(!timed.timed_out() && gate.0);
         }

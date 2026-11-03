@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::tests::rdma_fixture_with_runtime;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::RdmaHostMemory;
 use crate::transport::rdma::tests::{self as fixture, on_requester_close};
 use crate::{MemEntry, MemType, NicEntry, NicType, Topology};
@@ -529,7 +530,7 @@ fn both_rail_workers_can_own_payloads_before_parent_completion_and_unregister_wa
     for pause in &pauses {
         let (lock, changed) = &**pause;
         let (guard, timed) = changed
-            .wait_timeout_while(lock.lock().unwrap(), TIMEOUT, |state| !state.0)
+            .wait_timeout_while(lock.lock().unwrap(), EVENTUAL_PROGRESS, |state| !state.0)
             .unwrap();
         assert!(
             !timed.timed_out(),
@@ -1037,16 +1038,14 @@ fn releasing_aggregate_cq_quota_wakes_another_context_without_a_local_cqe() {
                 scope.spawn(|| a.transfer(&a.descriptor(), operation, crate::Priority::High, end));
             let (state, timed) = first
                 .1
-                .wait_timeout_while(first.0.lock().unwrap(), Duration::from_secs(1), |state| {
-                    !state.0
-                })
+                .wait_timeout_while(first.0.lock().unwrap(), EVENTUAL_PROGRESS, |state| !state.0)
                 .unwrap();
             assert!(!timed.timed_out() && state.0);
             drop(state);
             let waits = runtime.stats().unwrap().cq_event_waits;
             let b_task =
                 scope.spawn(|| b.transfer(&b.descriptor(), operation, crate::Priority::High, end));
-            let wait_deadline = Instant::now() + Duration::from_secs(1);
+            let wait_deadline = Instant::now() + EVENTUAL_PROGRESS;
             while b_record
                 .send_namespace
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -1382,7 +1381,7 @@ fn periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sli
         let domain = owner.domain().unwrap();
         let mrs = runtime.stats().unwrap().opened_persistent_mrs;
         owner.asynchronous.fence_route();
-        let deadline = Instant::now() + Duration::from_secs(6);
+        let deadline = Instant::now() + EVENTUAL_PROGRESS;
         while runtime.stats().unwrap().route_recoveries == 0 {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(5));
@@ -1460,7 +1459,7 @@ fn initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling
         2
     );
     crate::transport::rdma::context::tests::change_route(runtime, |route| route.active = true);
-    let end = Instant::now() + Duration::from_secs(6);
+    let end = Instant::now() + EVENTUAL_PROGRESS;
     while runtime.stats().unwrap().route_recoveries == 0 {
         assert!(Instant::now() < end);
         thread::sleep(Duration::from_millis(5));

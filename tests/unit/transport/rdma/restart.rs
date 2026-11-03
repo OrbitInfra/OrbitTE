@@ -115,7 +115,7 @@ pub(super) fn control(source: bool, generation: Option<usize>) -> TcpStream {
         return super::super::control(source);
     }
     let path = file("peer", generation.unwrap());
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + crate::test_support::EVENTUAL_PROGRESS;
     while !path.exists() {
         assert!(
             Instant::now() < deadline,
