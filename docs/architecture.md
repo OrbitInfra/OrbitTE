@@ -135,6 +135,25 @@ ACK and check the untouched guards. The file owners keep confirmed siblings.
 A Describe RPC alone retries a connection error once, with the original
 deadline and epoch. A replaced registration cannot inherit an admitted WRITE.
 
+## Metrics ownership
+
+The optional per-engine registry preallocates the frozen transport, operation
+and reason domains, including the failover pairs. Recording uses indexed
+relaxed atomics. The physical admission owner carries timestamps and the first
+failure stage across retries. Its aliases and subsequent status polls add no
+samples. Registration gauges change at publication and final unregistration.
+The exporter samples existing queue, QoS, receiver-credit and rail owners only
+on a scrape. Benchmark-only QoS reports have no runtime series.
+
+Frozen TENT uses process-wide ylt metrics. OrbitTE engines own separate
+registries and use a bounded standard-library listener, so no C++ runtime or
+HTTP dependency is needed. Each worker serves one connection with a 4 KiB
+request-header limit and an absolute 500 ms I/O deadline. Dropping the engine
+joins the HTTP workers and the optional periodic logger. A busy port degrades
+to log-only recording. The loader rejects malformed values and caps the pool
+at 64 threads. Tests exercise a busy port, incomplete and oversized headers,
+per-engine isolation and toggle-safe gauges. See [metrics](metrics.md).
+
 ## RDMA resource owners
 
 A bounded rail table is shared by requester workers and the existing port

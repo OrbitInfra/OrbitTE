@@ -57,9 +57,15 @@ impl Default for RuntimeQueueConfig {
     }
 }
 
-/// Immutable per-engine budgets. No process environment is read or modified.
+/// Immutable per-engine budgets and optional provider configuration.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
+    #[cfg(feature = "metrics")]
+    pub metrics: crate::metrics::MetricsConfig,
+    /// Optional TENT JSON file containing the metrics section.
+    #[cfg(feature = "metrics")]
+    pub metrics_config_file: Option<std::path::PathBuf>,
     /// Merge adjacent requests within the same pair of registered ranges.
     pub merge_requests: bool,
     /// Maximum additional attempts per physical owner. Zero pins the first route.
@@ -160,6 +166,10 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "metrics")]
+            metrics: Default::default(),
+            #[cfg(feature = "metrics")]
+            metrics_config_file: None,
             #[cfg(feature = "gds")]
             gds_batch_depth: 32,
             #[cfg(feature = "gds")]

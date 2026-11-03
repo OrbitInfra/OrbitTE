@@ -185,6 +185,15 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
         let mut got = vec![0; f.memory.len()];
         f.memory.read(0, &mut got)?;
         assert_eq!(got, expected_memory);
+        #[cfg(feature = "metrics")]
+        {
+            let p = f.engine.metrics().unwrap().prometheus();
+            for op in ["read", "write"] {
+                assert!(p.contains(&format!(
+                    "tent_{op}_bytes_total{{transport=\"io_uring\"}} 8223"
+                )));
+            }
+        }
         assert_eq!(
             f.engine.file_segment_info(&f.segment)?.direct_io,
             Some(direct)
@@ -225,6 +234,13 @@ fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> 
     let status = batch.wait(TIMEOUT)?;
     assert!(status.locally_drained);
     assert_eq!((status.completed_tasks, status.transferred_bytes), (1, 5));
+    #[cfg(feature = "metrics")]
+    {
+        let m = f.engine.metrics().unwrap();
+        assert_eq!(m.json()["tent_read_failures_total"], 2);
+        assert_eq!(m.json()["tent_read_bytes_total"], 2);
+        assert_eq!(m.json()["tent_read_requests_total"], 3);
+    }
     let tasks = batch.task_statuses()?;
     assert_eq!(
         tasks

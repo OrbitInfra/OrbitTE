@@ -70,6 +70,7 @@ cpu-tcp
 storage
 transport-selection
 async-batches
+metrics
 rdma-cuda
 cuda-ipc
 staging

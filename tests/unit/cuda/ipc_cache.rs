@@ -249,6 +249,15 @@ fn cached_ipc_reuses_import_but_releases_completed_local_owners() {
         let mut expected = [0xa5; 128];
         expected[7..24].fill(0x5a);
         assert_eq!(actual, expected);
+        #[cfg(feature = "metrics")]
+        {
+            let p = requester.metrics().unwrap().prometheus();
+            assert!(p.contains(&format!(
+                "tent_read_bytes_total{{transport=\"nvlink\"}} {}\n",
+                (index + 1) * 17
+            )));
+            assert!(p.contains("tent_inflight_attempts{transport=\"nvlink\"} 0\n"));
+        }
         let weak = Arc::downgrade(&host);
         requester.unregister_memory(&registered).unwrap();
         drop(registered);

@@ -43,6 +43,17 @@ impl QosQuota {
         self.usage.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    #[cfg(feature = "metrics")]
+    pub(super) fn total_usage(&self) -> QosUsage {
+        self.lock()
+            .iter()
+            .fold(QosUsage::default(), |mut total, u| {
+                total.owners += u.owners;
+                total.inflight_bytes += u.inflight_bytes;
+                total.inflight_requests += u.inflight_requests;
+                total
+            })
+    }
     pub(super) fn usage(&self, slot: usize) -> QosUsage {
         self.lock()[slot]
     }

@@ -44,6 +44,17 @@ external output directory; failed runs are kept.
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
 
+## Metrics
+
+CPU controls scrape a real loopback endpoint with the Prometheus reference
+parser, compare JSON histogram counts, exercise a busy port and check shutdown
+with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
+and the cuFile table check transport attribution at their executing owners.
+The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
+and a 64-byte loopback READ with metrics compiled out, configured
+off, and enabled. The S10 handoff records the host and measurements. Physical
+NIC and GPU performance remains unmeasured.
+
 ## Batch progress and notification fallback
 
 Implemented at source level. The Linux CPU controls exercise independent batch

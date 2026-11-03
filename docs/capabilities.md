@@ -57,7 +57,8 @@ behind every hardware result.
 | QoS contracts | Implemented | TENT-format global, tenant and intent policies with byte/request caps and delay/reject. Hierarchical quotas are open. See [QoS](async-batches.md#qos-contracts) |
 | Receiver credits | Implemented | Cumulative peer grants and automatic receiver windows. They authorize requests; they are not a rate limiter. See [credits](async-batches.md#receiver-credit-gating) |
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
-| Rail cooldown and metrics endpoints | Planned (P6) | |
+| RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
+| TENT metrics and HTTP export | Implemented (P6, opt-in) | [Metrics](metrics.md) |
 
 ## Failure handling
 

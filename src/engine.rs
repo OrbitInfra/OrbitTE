@@ -2,6 +2,8 @@ mod admission;
 mod failover;
 #[cfg(any(feature = "io-uring", feature = "gds"))]
 pub(crate) mod file_attempt;
+#[cfg(feature = "metrics")]
+mod metrics;
 use admission::OwnerAdmission;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
@@ -243,6 +245,8 @@ pub struct EngineStats {
 
 /// Engine, source registry and bounded control-service handler ownership.
 pub struct TransferEngine {
+    #[cfg(feature = "metrics")]
+    metrics: Option<crate::metrics::Metrics>,
     pub(crate) progress_worker: Option<crate::runtime::progress_worker::ProgressWorker>,
     config: EngineConfig,
     source: Arc<Source>,
@@ -264,6 +268,8 @@ pub struct TransferEngine {
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
+        #[cfg(feature = "metrics")]
+        let metrics_config = config.metrics.load(config.metrics_config_file.as_deref())?;
 
         let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let qos = config
@@ -369,7 +375,9 @@ impl TransferEngine {
         let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
         });
-        Ok(Self {
+        let engine = Self {
+            #[cfg(feature = "metrics")]
+            metrics: None,
             runtime_queue,
             files: FileSegments::default(),
             #[cfg(feature = "io-uring")]
@@ -386,7 +394,10 @@ impl TransferEngine {
             batches: Arc::default(),
             allocations,
             progress_worker,
-        })
+        };
+        #[cfg(feature = "metrics")]
+        let engine = engine.install_metrics(&metrics_config)?;
+        Ok(engine)
     }
 
     fn start_progress(
@@ -739,6 +750,10 @@ impl TransferEngine {
             }
             cleanup?;
         }
+        #[cfg(feature = "metrics")]
+        if result.is_ok() && self.metrics.is_some() {
+            self.record_registration_routes(memory);
+        }
         result
     }
 
@@ -922,6 +937,11 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let deadline = deadline(timeout)?;
+        #[cfg(feature = "metrics")]
+        let submitted = self
+            .metrics
+            .as_ref()
+            .and_then(crate::metrics::Metrics::timestamp);
         let target = peer.into();
         let kind = match target {
             TransferTarget::Memory(_) => crate::SegmentType::Memory,
@@ -1186,6 +1206,8 @@ impl TransferEngine {
             requests,
             &contracts,
             (batch, deadline),
+            #[cfg(feature = "metrics")]
+            (operation, submitted),
             notification_bytes,
         )?;
         let prepared = PreparedSubmission {
@@ -1305,6 +1327,10 @@ impl TransferEngine {
                     if let Err(error) = owner.start(|| {
                         progress.is_some_and(|(p, base)| p.cancel_requested(base + first))
                     }) {
+                        #[cfg(feature = "metrics")]
+                        if let Some(m) = &owner.metrics {
+                            m.terminal(Some(&error));
+                        }
                         report.failure = Some(TransferFailure {
                             request_index: first,
                             affected_requests: 1,
@@ -1335,9 +1361,18 @@ impl TransferEngine {
                         owner_deadline,
                         progress,
                         submission,
+                        #[cfg(feature = "metrics")]
+                        &submission.owners[first..first + count],
                     );
                     #[cfg(feature = "gds")]
                     let result = submission.finish_gds_range(result, group, progress);
+                    #[cfg(feature = "metrics")]
+                    for (i, o) in submission.owners[first..first + count].iter().enumerate() {
+                        if let Some(m) = &o.metrics {
+                            let failure = result.failure.as_ref().filter(|f| i == f.request_index);
+                            m.file_terminal(failure.map(|f| &f.error));
+                        }
+                    }
                     if result.locally_drained {
                         submission.retire_owners(first, count, result.completed_requests);
                     } else {
@@ -1402,6 +1437,10 @@ impl TransferEngine {
                 }
             });
             if let Err(error) = start {
+                #[cfg(feature = "metrics")]
+                if let Some(m) = &owner.metrics {
+                    m.terminal(Some(&error));
+                }
                 if matches!(error, Error::DeadlineInfeasible)
                     || (matches!(error, Error::Cancelled) && cancelled())
                 {
@@ -1417,9 +1456,17 @@ impl TransferEngine {
                 });
                 break;
             }
+            #[cfg(feature = "metrics")]
+            if let Some(m) = &owner.metrics {
+                m.dispatched();
+            }
             let credit = owner.credit();
             if let Some(c) = &credit {
                 if let Err(error) = c.commit() {
+                    #[cfg(feature = "metrics")]
+                    if let Some(m) = &owner.metrics {
+                        m.terminal(Some(&error));
+                    }
                     report.failure = Some(TransferFailure {
                         request_index: index,
                         affected_requests: 1,
@@ -1448,11 +1495,22 @@ impl TransferEngine {
                 *operation,
                 peer,
                 group,
+                #[cfg(feature = "metrics")]
+                &submission.owners[index..index + cohort],
                 owner_deadline,
                 credit.as_deref(),
                 progress_at,
                 &mut posted,
             );
+            #[cfg(feature = "metrics")]
+            for (i, o) in submission.owners[index..index + cohort].iter().enumerate() {
+                if let Some(m) = &o.metrics {
+                    let err = result.as_ref().err().filter(|f| {
+                        i >= f.request_index && i < f.request_index + f.affected_requests
+                    });
+                    m.finish(err.map(|f| &f.error), posted);
+                }
+            }
             let result = match result {
                 Err(failure) => self.retry_memory_group(
                     *operation,
@@ -1471,6 +1529,18 @@ impl TransferEngine {
                 Ok(count) => *count,
                 Err(failure) => failure.request_index,
             };
+            #[cfg(feature = "metrics")]
+            for (i, o) in submission.owners[index..index + cohort].iter().enumerate() {
+                if let Some(m) = &o.metrics {
+                    if i < completed {
+                        m.terminal(None);
+                    } else if let Err(f) = &result {
+                        if i < f.request_index + f.affected_requests {
+                            m.terminal(Some(&f.error));
+                        }
+                    }
+                }
+            }
             for (next, request) in requests[index..index + completed].iter().enumerate() {
                 report.completed_requests += 1;
                 report.transferred_bytes += request.length;

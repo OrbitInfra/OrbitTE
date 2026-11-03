@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 impl TransferEngine {
+    #[cfg_attr(feature = "metrics", allow(clippy::too_many_arguments))]
     pub(super) fn admit_physical(
         &self,
         payload: &PreparedTarget,
@@ -17,6 +18,7 @@ impl TransferEngine {
         requests: &[TransferRequest],
         contracts: &[Option<&CompiledContract>],
         (batch, deadline): (Option<BatchId>, Instant),
+        #[cfg(feature = "metrics")] observation: (crate::TransferOp, Option<Instant>),
         notification_bytes: usize,
     ) -> Result<Vec<OwnerAdmission>> {
         let mut owners = Vec::with_capacity(mapping.owners.len());
@@ -87,6 +89,31 @@ impl TransferEngine {
                 });
             }
             owners.push(OwnerAdmission {
+                #[cfg(feature = "metrics")]
+                metrics: self.metrics.as_ref().map(|metrics| {
+                    let selection = match payload {
+                        PreparedTarget::Memory { requests, .. } => &requests[i].selection,
+                        #[cfg(any(feature = "io-uring", feature = "gds"))]
+                        PreparedTarget::File { requests, .. } => &requests[i].selection,
+                    };
+                    let first_route = selection
+                        .candidate(0)
+                        .map_or(selection.transport, |v| v.transport);
+                    let sample = crate::metrics::Observation::new(
+                        metrics.recorder(),
+                        observation.0,
+                        first_route,
+                        owner.length,
+                        requests[first].deadline,
+                        observation.1,
+                    );
+                    for j in 1..=selection.initial_attempts {
+                        if let Some(route) = selection.candidate(j) {
+                            sample.retry(route.transport);
+                        }
+                    }
+                    sample
+                }),
                 deadline: owner_deadline,
                 permits: Mutex::new(Some(OwnerPermits {
                     _qos: qos,
@@ -114,6 +141,8 @@ struct OwnerPermits {
     credit: Option<CreditPermit>,
 }
 pub(super) struct OwnerAdmission {
+    #[cfg(feature = "metrics")]
+    pub(super) metrics: Option<crate::metrics::Observation>,
     pub(super) deadline: Instant,
     permits: Mutex<Option<OwnerPermits>>,
 }

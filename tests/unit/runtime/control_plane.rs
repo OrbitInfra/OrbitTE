@@ -1491,6 +1491,23 @@ fn one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit() {
     let queue = usage.runtime_queue.unwrap();
     assert_eq!((queue.dispatching_owners, queue.dispatching_bytes), (1, 4));
     let credits = engine.receiver_credit_stats(&peer).unwrap();
+    #[cfg(feature = "metrics")]
+    {
+        let j = engine.metrics().unwrap().json();
+        assert_eq!(j["orbitte_qos_owners"], 1);
+        assert_eq!(j["orbitte_qos_inflight_requests"], 1);
+        assert_eq!(j["orbitte_qos_inflight_bytes"], 4);
+        assert_eq!(j["orbitte_dispatching_owners"], 1);
+        assert_eq!(
+            j["orbitte_receiver_credit_active_owners"],
+            credits.active_owners
+        );
+        assert_eq!(
+            j["orbitte_receiver_credit_reserved_owners"],
+            credits.reserved_owners
+        );
+        assert_eq!(j["tent_inflight_attempts"], 1);
+    }
     assert_eq!(
         (
             credits.active_owners,

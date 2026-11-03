@@ -94,6 +94,7 @@ impl TransferEngine {
         operation: TransferOp,
         peer: &RemoteSegment,
         requests: &[PreparedTransfer],
+        #[cfg(feature = "metrics")] owners: &[OwnerAdmission],
         owner_deadline: Instant,
         credit: Option<&crate::runtime::receiver_credit::CreditReservation>,
         progress: Option<(&BatchProgress, usize)>,
@@ -111,6 +112,10 @@ impl TransferEngine {
                     remote_effect,
                 })
         };
+        #[cfg(feature = "metrics")]
+        if let Some(m) = &owners[0].metrics {
+            m.begin(request.selection.transport);
+        }
         match request.selection.transport {
             Transport::IoUring | Transport::Gds | Transport::Unspec => single(Err((
                 Error::Internal("unresolved transport"),
@@ -146,9 +151,17 @@ impl TransferEngine {
                             self.source.epoch,
                             posted,
                             |next| {
-                                progress.is_none_or(|(progress, first_task)| {
+                                let allowed = progress.is_none_or(|(progress, first_task)| {
                                     progress.begin_task(first_task + next)
-                                })
+                                });
+                                #[cfg(feature = "metrics")]
+                                if allowed {
+                                    if let Some(m) = &owners[next].metrics {
+                                        m.dispatched();
+                                        m.begin(Transport::Nvlink);
+                                    }
+                                }
+                                allowed
                             },
                         ),
                         None => single(Err((
@@ -362,6 +375,11 @@ impl TransferEngine {
                 request.selection.transport,
                 count
             );
+            #[cfg(feature = "metrics")]
+            if let Some(m) = &owner.metrics {
+                m.retry(request.selection.transport);
+                m.begin(request.selection.transport);
+            }
             owner.reroute(&request.selection, {
                 #[cfg(feature = "cuda")]
                 {
@@ -397,12 +415,18 @@ impl TransferEngine {
                         op,
                         peer,
                         std::slice::from_ref(&request),
+                        #[cfg(feature = "metrics")]
+                        std::slice::from_ref(owner),
                         deadline,
                         credit,
                         progress,
                         &mut posted,
                     )
                 });
+            #[cfg(feature = "metrics")]
+            if let Some(m) = &owner.metrics {
+                m.finish(result.as_ref().err().map(|f| &f.error), posted);
+            }
             match result {
                 Ok(_) => return Ok(()),
                 Err(f)

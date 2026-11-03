@@ -337,6 +337,12 @@ fn open_mode_selection_and_synchronous_file_bytes() -> Result<()> {
         let mut expected = [0xa2; 32];
         expected[3..10].copy_from_slice(b"payload");
         assert_eq!(actual, expected);
+        #[cfg(feature = "metrics")]
+        {
+            let p = f.engine.metrics().unwrap().prometheus();
+            assert!(p.contains("tent_read_bytes_total{transport=\"gds\"} 7"));
+            assert!(p.contains("tent_write_bytes_total{transport=\"gds\"} 7"));
+        }
         assert_eq!(f.engine.file_segment_info(&f.segment)?.gds_mode, Some(mode));
         assert_eq!(f.engine.stats()?.gds.mode, Some(mode));
         assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 0);
@@ -919,6 +925,11 @@ fn deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work() -> Res
         assert!(Instant::now() < end);
         std::thread::yield_now();
     }
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        f.engine.metrics().unwrap().json()["tent_quarantined_batches_total"],
+        1
+    );
     let healthy = f.host(8)?;
     mock.destroy_error.store(false, Ordering::Release);
     mock.held.store(true, Ordering::Release);

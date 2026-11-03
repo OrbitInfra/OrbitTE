@@ -15,6 +15,8 @@ struct Outcome {
 }
 
 pub(crate) struct FileAttempts<'a> {
+    #[cfg(feature = "metrics")]
+    owners: &'a [OwnerAdmission],
     progress: Option<(&'a BatchProgress, usize)>,
     outcomes: Option<RefCell<Vec<Outcome>>>,
 }
@@ -36,6 +38,11 @@ impl FileAttempts<'_> {
         }
     }
     pub(crate) fn posted(&self, i: usize) {
+        #[cfg(feature = "metrics")]
+        if let Some(m) = &self.owners[i].metrics {
+            m.file_posted
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(v) = &self.outcomes {
             v.borrow_mut()[i].posted = true;
         }
@@ -45,6 +52,10 @@ impl FileAttempts<'_> {
         self.complete_file_task(i, bytes, true);
     }
     pub(crate) fn complete_file_task(&self, i: usize, bytes: usize, drained: bool) {
+        #[cfg(feature = "metrics")]
+        if let Some(m) = &self.owners[i].metrics {
+            m.finish(None, true);
+        }
         if let Some(v) = &self.outcomes {
             let mut list = v.borrow_mut();
             list[i].complete = true;
@@ -63,6 +74,13 @@ impl FileAttempts<'_> {
         effect: RemoteEffect,
         drained: bool,
     ) {
+        #[cfg(feature = "metrics")]
+        if let Some(m) = &self.owners[i].metrics {
+            m.finish(
+                Some(&error),
+                m.file_posted.load(std::sync::atomic::Ordering::Relaxed),
+            );
+        }
         if let Some(v) = &self.outcomes {
             let mut list = v.borrow_mut();
             let t = &mut list[i];
@@ -106,6 +124,15 @@ impl TransferEngine {
             locally_drained: true,
             notification: NotificationStatus::NotRequested,
         };
+        #[cfg(feature = "metrics")]
+        let observations = &progress.0.owners[progress.1..progress.1 + group.len()];
+        #[cfg(feature = "metrics")]
+        for o in observations {
+            if let Some(m) = &o.metrics {
+                m.dispatched();
+                m.begin(transport);
+            }
+        }
         let executed = match transport {
             #[cfg(feature = "io-uring")]
             Transport::IoUring => self.io_uring.as_ref().map(|io| {
@@ -140,6 +167,19 @@ impl TransferEngine {
                 remote_effect: RemoteEffect::None,
             });
         }
+        #[cfg(feature = "metrics")]
+        for (i, o) in observations.iter().enumerate() {
+            if let Some(m) = &o.metrics {
+                m.finish(
+                    result
+                        .failure
+                        .as_ref()
+                        .filter(|f| i >= f.request_index)
+                        .map(|f| &f.error),
+                    m.file_posted.load(std::sync::atomic::Ordering::Relaxed),
+                );
+            }
+        }
         result
     }
 
@@ -152,9 +192,12 @@ impl TransferEngine {
         deadline: Instant,
         progress: Option<(&BatchProgress, usize)>,
         submission: &PreparedSubmission,
+        #[cfg(feature = "metrics")] owners: &[OwnerAdmission],
     ) -> BatchReport {
         let eligible = self.config.max_failover_attempts != 0 && group[0].selection.has_fallback();
         let attempts = FileAttempts {
+            #[cfg(feature = "metrics")]
+            owners,
             progress,
             outcomes: eligible
                 .then(|| RefCell::new((0..group.len()).map(|_| Outcome::default()).collect())),
@@ -236,6 +279,10 @@ impl TransferEngine {
                     next.transport,
                     count
                 );
+                #[cfg(feature = "metrics")]
+                if let Some(m) = &owners[i].metrics {
+                    m.retry(next.transport);
+                }
                 let retry = self.file_attempt(
                     op,
                     next.transport,

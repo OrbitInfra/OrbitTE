@@ -77,6 +77,12 @@ fn exercise() -> Result<()> {
     let threads = fs::read_dir("/proc/self/task")?.count();
     let engine = TransferEngine::new(EngineConfig {
         handler_threads: 1,
+        // Count only the control and storage owners in this isolation profile.
+        #[cfg(feature = "metrics")]
+        metrics: crate::metrics::MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
         ..Default::default()
     })?;
     let check_idle = || -> Result<()> {

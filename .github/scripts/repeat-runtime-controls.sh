@@ -59,6 +59,23 @@ controls=(
   transport::rdma::rail_monitor::tests::an_open_pair_admits_one_probe_and_only_its_receipt_can_reopen_it
   transport::rdma::rail_monitor::tests::half_open_failures_cap_at_five_minutes_and_prepost_abandonment_reopens_the_trial
 )
+if [[ ${2:-} == metrics ]]; then
+  controls=(
+    runtime::control_plane::tests::one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit
+    metrics::tests::recording::concurrent_cells_keep_exact_transport_counts_and_inclusive_buckets
+    metrics::tests::recording::real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats
+    metrics::tests::recording::busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers
+    metrics::tests::recording::stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable
+    engine::failover::tests::native::metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport
+    transport::io_uring::tests::truncation_reports_short_and_eof_per_cqe_with_exact_copyback
+    transport::io_uring::tests::real_files_move_full_bytes_on_ext4_and_tmpfs
+    transport::gds::tests::open_mode_selection_and_synchronous_file_bytes
+    transport::gds::tests::deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work
+    cuda::tests::ipc_cache::cached_ipc_reuses_import_but_releases_completed_local_owners
+    transport::rdma::rdma_transport::tests::rails::admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_post
+    transport::rdma::rdma_transport::tests::rails::a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receipt
+  )
+fi
 for iteration in {1..50}; do
   echo "Iteration $iteration/50 with RUST_TEST_THREADS=$RUST_TEST_THREADS"
   output=$("$binary" --exact "${controls[@]}") || { echo "$output"; exit 1; }
