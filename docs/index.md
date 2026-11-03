@@ -42,7 +42,7 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 ## Status
 
 OrbitTE is in alpha. TCP, RDMA, CUDA IPC and local file segment handles are
-implemented, along with Linux io_uring for DRAM/file and staged CUDA/file transfers. GDS, HP-TCP, SHM, MNNVL and the optional network
+implemented, along with Linux io_uring and GDS file transfers. HP-TCP, SHM, MNNVL and the optional network
 providers are planned.
 [Capabilities](capabilities.md) lists each path and its limits,
 [qualification](qualification.md) records the evidence, and the

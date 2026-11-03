@@ -1,0 +1,506 @@
+use std::ops::Range;
+use std::sync::atomic::Ordering;
+
+use super::sys::*;
+use super::*;
+use crate::batch::BatchProgress;
+use crate::segment::file::FileRequest;
+use crate::{BatchReport, MemoryType, RemoteEffect, TransferFailure, TransferOp};
+
+const SLICE: usize = 16 << 20;
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+enum Loan {
+    Host { _lease: crate::memory::DmaLease },
+    Device { _lease: crate::cuda::GdsLoan },
+}
+struct Task {
+    range: Range<usize>,
+    _loan: Loan,
+}
+#[derive(Clone, Copy)]
+struct Receipt {
+    length: usize,
+    status: u32,
+    bytes: usize,
+    late: bool,
+}
+impl Receipt {
+    fn terminal(self) -> bool {
+        matches!(
+            self.status,
+            INVALID | CANCELED | COMPLETE | TIMEOUT | FAILED
+        )
+    }
+}
+
+pub(crate) struct LiveBatch {
+    driver: Arc<Driver>,
+    pid: u32,
+    context: Option<Arc<crate::cuda::CudaMemory>>,
+    handle: Option<usize>,
+    tasks: Vec<Task>,
+    params: Vec<Param>,
+    events: Vec<Event>,
+    receipts: Vec<Receipt>,
+    submitted: bool,
+    canceled: bool,
+    pub(super) permanent: bool,
+}
+
+#[allow(unsafe_code)]
+// SAFETY: transferring a quarantined batch moves no pointed-to storage. Its
+// exclusively loaned host pointers and cuFile arrays outlive every poll.
+// A single owner polls it under the quarantine lock in the retained context.
+unsafe impl Send for LiveBatch {}
+
+impl LiveBatch {
+    fn prepare(gds: &GdsTransport, op: TransferOp, requests: &[FileRequest]) -> Result<Self> {
+        let mode = gds.mode()?;
+        let count = requests
+            .iter()
+            .map(|r| r.length.div_ceil(SLICE))
+            .try_fold(0usize, |n, k| n.checked_add(k))
+            .ok_or(Error::ResourceExhausted)?;
+        if count > gds.depth as usize {
+            return Err(Error::ResourceExhausted);
+        }
+        let mut batch = Self {
+            driver: gds.driver.clone(),
+            pid: gds.driver.api.pid(),
+            context: None,
+            handle: None,
+            tasks: Vec::with_capacity(requests.len()),
+            params: Vec::with_capacity(count),
+            events: vec![Event::default(); count],
+            receipts: Vec::with_capacity(count),
+            submitted: false,
+            canceled: false,
+            permanent: false,
+        };
+        for r in requests {
+            // cuFile documents a compatibility route for oversized batch slices
+            // and for certain unaligned writes, even on a direct-capable mount.
+            if gds.require_native
+                && (r.length.min(SLICE) > gds.driver.max_native_slice.load(Ordering::Acquire)
+                    || (r.local.base_address() + r.local_offset as u64) % 4096 != 0
+                    || r.offset % 4096 != 0
+                    || r.length % 4096 != 0)
+            {
+                return Err(Error::Unavailable(
+                    "GDS native batch requires aligned IO within the cuFile per-buffer cache limit",
+                ));
+            }
+            let file = r.lease.gds_handle(&gds.driver, mode)?;
+            let (base, buffer_offset, loan) = if r.local.memory_type() == MemoryType::Cuda {
+                let (gpu, offset) = r.local.cuda_range(r.local_offset, r.length)?;
+                let loan = gpu.gds_loan(offset, r.length)?;
+                batch.context.get_or_insert(gpu);
+                (
+                    r.local.base_address() as usize,
+                    r.local_offset,
+                    Loan::Device { _lease: loan },
+                )
+            } else {
+                let loan = r.local.dma_lease(r.local_offset, r.length)?;
+                (
+                    loan.address().as_ptr() as usize,
+                    0,
+                    Loan::Host { _lease: loan },
+                )
+            };
+            let first = batch.params.len();
+            for offset in (0..r.length).step_by(SLICE) {
+                let file_offset = libc::off_t::try_from(r.offset + offset as u64)
+                    .map_err(|_| Error::InvalidRange)?;
+                let buffer_offset = libc::off_t::try_from(buffer_offset + offset)
+                    .map_err(|_| Error::InvalidRange)?;
+                let size = SLICE.min(r.length - offset);
+                batch.receipts.push(Receipt {
+                    length: size,
+                    status: WAITING,
+                    bytes: 0,
+                    late: false,
+                });
+                batch.params.push(Param {
+                    mode: 1,
+                    base,
+                    file_offset,
+                    buffer_offset,
+                    size,
+                    handle: file,
+                    opcode: u32::from(op == TransferOp::Write),
+                    cookie: batch.params.len() + 1,
+                });
+            }
+            batch.tasks.push(Task {
+                range: first..batch.params.len(),
+                _loan: loan,
+            });
+        }
+        Ok(batch)
+    }
+
+    fn current<T>(
+        context: &Option<Arc<crate::cuda::CudaMemory>>,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        match context {
+            Some(gpu) => gpu.gds_current(f),
+            None => f(),
+        }
+    }
+
+    fn poll(&mut self, deadline: Option<Instant>) -> Result<()> {
+        let handle = self.handle.ok_or(Error::Internal("missing cuFile batch"))?;
+        let count = Self::current(&self.context, || {
+            self.driver.api.poll(handle, &mut self.events)
+        })?;
+        let events = self
+            .events
+            .get(..count)
+            .ok_or(Error::Protocol("cuFile event count"))?;
+        let late = deadline.is_some_and(|d| Instant::now() >= d);
+        for e in events {
+            let i = e
+                .cookie
+                .checked_sub(1)
+                .filter(|i| *i < self.receipts.len())
+                .ok_or(Error::Protocol("cuFile event cookie"))?;
+            if !matches!(
+                e.status,
+                WAITING | PENDING | INVALID | CANCELED | COMPLETE | TIMEOUT | FAILED
+            ) || e.status == COMPLETE
+                && e.bytes as isize >= 0
+                && e.bytes > self.receipts[i].length
+            {
+                return Err(Error::Protocol("invalid cuFile completion"));
+            }
+            let prior = self.receipts[i];
+            if prior.terminal() {
+                if matches!(e.status, WAITING | PENDING) {
+                    continue;
+                }
+                if prior.status != e.status || prior.bytes != e.bytes {
+                    return Err(Error::Protocol("conflicting cuFile completion"));
+                }
+                continue;
+            }
+            self.receipts[i] = Receipt {
+                length: prior.length,
+                status: e.status,
+                bytes: e.bytes,
+                late,
+            };
+        }
+        Ok(())
+    }
+
+    fn cancel(&mut self) {
+        if self.canceled {
+            return;
+        }
+        self.canceled = true;
+        if let Some(handle) = self.handle {
+            // A cancel acknowledgement never marks a slice terminal.
+            let result = Self::current(&self.context, || self.driver.api.cancel(handle));
+            if matches!(result, Err(Error::Unquiesced { .. })) {
+                self.permanent = true;
+            }
+        }
+    }
+    fn terminal(&self) -> bool {
+        !self.submitted || self.receipts.iter().all(|r| r.terminal())
+    }
+
+    fn destroy(&mut self) -> Result<()> {
+        if self.permanent || !self.terminal() {
+            return Err(Error::Unquiesced {
+                operation: "cuFile batch still live",
+                code: -1,
+            });
+        }
+        if let Some(handle) = self.handle.take() {
+            Self::current(&self.context, || self.driver.api.destroy(handle)).map_err(|e| {
+                self.permanent = true;
+                uncertain("cuFileBatchIODestroy", &e)
+            })?;
+        }
+        Ok(())
+    }
+    // Called only while the quarantine lock serializes the original batch owner.
+    pub(super) fn collect(&mut self) -> bool {
+        if self.permanent || self.pid != self.driver.api.pid() {
+            return false;
+        }
+        if !self.terminal() {
+            if let Err(e) = self.poll(None) {
+                self.permanent |= matches!(e, Error::Protocol(_) | Error::Unquiesced { .. });
+                return false;
+            }
+        }
+        self.terminal() && self.destroy().is_ok()
+    }
+
+    fn run(
+        &mut self,
+        gds: &GdsTransport,
+        deadline: Instant,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> Result<()> {
+        let until = deadline
+            .checked_add(crate::transport::DESTRUCTION_TIMEOUT)
+            .ok_or(Error::InvalidConfig("GDS destruction deadline overflow"))?;
+        crate::engine::remaining(deadline)?;
+        Self::current(&self.context, || {
+            self.handle = Some(self.driver.api.setup(gds.depth)?);
+            Ok(())
+        })?;
+        if let Err(error) = crate::engine::remaining(deadline) {
+            self.destroy()?;
+            return Err(error);
+        }
+        let handle = self.handle.ok_or(Error::Internal("missing cuFile batch"))?;
+        // cuFile returns one status, not an accepted count. Include every cookie
+        // until a terminal receipt proves what happened, even on submit error.
+        let submit = Self::current(&self.context, || {
+            self.submitted = true;
+            gds.submitted.fetch_add(1, Ordering::Relaxed);
+            self.driver.api.submit(handle, &mut self.params)
+        });
+        if let Err(e) = submit {
+            if matches!(e, Error::Unquiesced { .. }) {
+                self.permanent = true;
+                return Err(e);
+            }
+            if !self.submitted {
+                self.destroy()?;
+                return Err(e);
+            }
+            self.cancel();
+        }
+        loop {
+            if Instant::now() >= until {
+                return Err(Error::Unquiesced {
+                    operation: "cuFile terminal receipts",
+                    code: -libc::ETIMEDOUT,
+                });
+            }
+            let poll = self.poll(Some(deadline));
+            if let Err(error @ (Error::Protocol(_) | Error::Unquiesced { .. })) = &poll {
+                self.permanent = true;
+                return Err(uncertain("cuFile completion accounting", error));
+            }
+            if self.terminal() {
+                return self.destroy();
+            }
+            if poll.is_err()
+                || Instant::now() >= deadline
+                || progress.is_some_and(|(p, first)| {
+                    (0..self.tasks.len()).any(|i| p.cancel_requested(first + i))
+                })
+                || self
+                    .receipts
+                    .iter()
+                    .any(|r| r.terminal() && (r.status != COMPLETE || r.bytes != r.length))
+            {
+                self.cancel();
+            }
+            if self.permanent {
+                return Err(Error::Unquiesced {
+                    operation: "cuFile cancel context",
+                    code: -1,
+                });
+            }
+            std::thread::sleep(POLL_INTERVAL.min(until.saturating_duration_since(Instant::now())));
+        }
+    }
+
+    fn result(&self, task: &Task, op: TransferOp) -> (usize, Option<Error>, bool) {
+        let mut bytes = 0;
+        let mut prefix = true;
+        let mut all_terminal = true;
+        let mut failure = None;
+        let mut rank = 0;
+        for i in task.range.clone() {
+            let r = self.receipts[i];
+            let size = self.receipts[i].length;
+            if prefix && r.status == COMPLETE && (r.bytes as isize) >= 0 {
+                bytes += r.bytes;
+            }
+            prefix &= r.status == COMPLETE && r.bytes == size && !r.late;
+            all_terminal &= r.terminal();
+            let (priority, error) = match r.status {
+                COMPLETE if r.bytes as isize >= 0 && r.bytes != size => (
+                    4,
+                    Error::Io(std::io::Error::new(
+                        if op == TransferOp::Read {
+                            std::io::ErrorKind::UnexpectedEof
+                        } else {
+                            std::io::ErrorKind::WriteZero
+                        },
+                        "short cuFile completion",
+                    )),
+                ),
+                COMPLETE if (r.bytes as isize) < 0 => (
+                    4,
+                    Error::Backend {
+                        operation: "cuFile IO",
+                        code: r.bytes as i32,
+                    },
+                ),
+                FAILED => (
+                    4,
+                    Error::Backend {
+                        operation: "cuFile IO",
+                        code: r.bytes as i32,
+                    },
+                ),
+                TIMEOUT => (3, Error::Timeout),
+                CANCELED => (2, Error::Cancelled),
+                INVALID => (
+                    1,
+                    Error::Backend {
+                        operation: "invalid cuFile IO",
+                        code: INVALID as i32,
+                    },
+                ),
+                COMPLETE if r.late => (3, Error::Timeout),
+                _ => continue,
+            };
+            if priority > rank {
+                rank = priority;
+                failure = Some(error);
+            }
+        }
+        (bytes, failure, all_terminal)
+    }
+
+    fn report(
+        &self,
+        op: TransferOp,
+        stop: Option<&Error>,
+        progress: Option<(&BatchProgress, usize)>,
+        report: &mut BatchReport,
+    ) {
+        if !self.submitted {
+            if let Some(stop) = stop {
+                report.failure = Some(TransferFailure {
+                    request_index: 0,
+                    affected_requests: 1,
+                    error: stop.for_file_report(),
+                    remote_effect: RemoteEffect::None,
+                });
+            }
+            return;
+        }
+        let effect = if self.submitted && op == TransferOp::Write {
+            RemoteEffect::Unknown
+        } else {
+            RemoteEffect::None
+        };
+        let first_bad = self.tasks.iter().position(|t| {
+            let (_, e, terminal) = self.result(t, op);
+            e.is_some() || !terminal
+        });
+        // A failed physical teardown is a group failure even if all bytes arrived.
+        let first_bad = first_bad.or(stop.map(|_| 0));
+        for (i, t) in self.tasks.iter().enumerate() {
+            let (bytes, mut error, terminal) = self.result(t, op);
+            if !terminal || (error.is_none() && Some(i) == first_bad) {
+                error = stop.map(Error::for_file_report).or(error);
+            }
+            if Some(i) == first_bad {
+                let reason = if !report.locally_drained {
+                    stop
+                } else {
+                    error.as_ref()
+                };
+                report.failure = Some(TransferFailure {
+                    request_index: i,
+                    affected_requests: if self.submitted {
+                        self.tasks.len() - i
+                    } else {
+                        1
+                    },
+                    error: reason.map_or(
+                        Error::Internal("missing cuFile status"),
+                        Error::for_file_report,
+                    ),
+                    remote_effect: effect,
+                });
+            }
+            if first_bad.is_none_or(|first| i < first) {
+                report.completed_requests += 1;
+                report.transferred_bytes += bytes;
+            }
+            if let Some((p, first)) = progress {
+                if let Some(e) = error {
+                    p.fail_file_task(first + i, bytes, e, effect, report.locally_drained);
+                } else if terminal {
+                    p.complete_file_task(first + i, bytes, report.locally_drained);
+                }
+            }
+        }
+    }
+}
+
+impl GdsTransport {
+    pub(crate) fn execute(
+        &self,
+        op: TransferOp,
+        requests: &[FileRequest],
+        deadline: Instant,
+        progress: Option<(&BatchProgress, usize)>,
+        report: &mut BatchReport,
+        pending: &Mutex<Option<LiveBatch>>,
+    ) {
+        let count = progress.map_or(requests.len(), |(p, first)| {
+            p.begin_file_group(first, requests.len())
+        });
+        let mut run = || -> Result<()> {
+            if count != 0 {
+                crate::engine::remaining(deadline)?;
+                let mut batch = LiveBatch::prepare(self, op, &requests[..count])?;
+                let mut stop = batch.run(self, deadline, progress).err();
+                if !matches!(stop, Some(Error::Unquiesced { .. })) {
+                    for r in &requests[..count] {
+                        if let Some(buffer) = &r.buffer {
+                            if let Err(e) = buffer.release() {
+                                batch.permanent = true;
+                                stop = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                report.locally_drained = !matches!(stop, Some(Error::Unquiesced { .. }));
+                batch.report(op, stop.as_ref(), progress, report);
+                if !report.locally_drained {
+                    if !batch.submitted {
+                        batch.permanent = true;
+                    }
+                    *pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(batch);
+                }
+            }
+            if count < requests.len() && report.failure.is_none() {
+                report.failure = Some(TransferFailure {
+                    request_index: count,
+                    affected_requests: 1,
+                    error: Error::Cancelled,
+                    remote_effect: RemoteEffect::None,
+                });
+            }
+            Ok(())
+        };
+        if let Err(e) = run() {
+            report.locally_drained = !matches!(e, Error::Unquiesced { .. });
+            report.failure = Some(TransferFailure {
+                request_index: 0,
+                affected_requests: 1,
+                error: e,
+                remote_effect: RemoteEffect::None,
+            });
+        }
+    }
+}

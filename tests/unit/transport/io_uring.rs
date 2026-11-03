@@ -6,8 +6,8 @@ use std::time::Duration;
 use super::*;
 use crate::{
     EngineConfig, FileSegment, Notification, Permission, QosConfig, QosPolicyFields,
-    RuntimeQueueConfig, SourceEpoch, TaskState, TransferEngine, TransferRequest, Transport,
-    TransportSelectorConfig,
+    RegisteredMemory, RuntimeQueueConfig, SourceEpoch, TaskState, TransferEngine, TransferRequest,
+    Transport, TransportSelectorConfig,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);

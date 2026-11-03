@@ -42,7 +42,7 @@ pub enum Error {
     Io(io::Error),
 }
 
-#[cfg(all(feature = "io-uring", feature = "cuda"))]
+#[cfg(any(feature = "gds", all(feature = "io-uring", feature = "cuda")))]
 impl Error {
     // Concurrent file tasks and their completed-prefix group each own an error.
     pub(crate) fn for_file_report(&self) -> Self {

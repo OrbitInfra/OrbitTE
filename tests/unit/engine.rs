@@ -178,6 +178,8 @@ pub(crate) fn rdma_fixture_with_config(
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]
         io_uring: None,
+        #[cfg(feature = "gds")]
+        gds: None,
         receiver_credits,
         qos: config
             .qos
@@ -1110,6 +1112,8 @@ pub(crate) fn staging_fixture(
         files: FileSegments::default(),
         #[cfg(feature = "io-uring")]
         io_uring: None,
+        #[cfg(feature = "gds")]
+        gds: None,
         receiver_credits: None,
         qos: config
             .qos

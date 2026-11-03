@@ -22,8 +22,11 @@ pub struct FileSegmentInfo {
     pub length: u64,
     pub permission: Permission,
     /// Whether a direct fd is usable. None until the first file transfer.
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub direct_io: Option<bool>,
+    /// Effective cuFile policy at handle registration.
+    #[cfg(feature = "gds")]
+    pub gds_mode: Option<crate::GdsMode>,
 }
 
 #[derive(Default)]
@@ -44,8 +47,12 @@ struct State {
     active: usize,
     file: Option<Arc<File>>,
     size: Option<(Instant, u64)>,
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     direct: Option<direct::DirectFile>,
+    #[cfg(feature = "gds")]
+    gds: Option<crate::transport::gds::FileHandle>,
+    #[cfg(feature = "gds")]
+    gds_open_uncertain: Option<i32>,
 }
 
 impl Entry {
@@ -101,6 +108,18 @@ impl Entry {
 pub(crate) struct FileLease {
     file: Arc<File>,
     permit: FilePermit,
+}
+
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+pub(crate) struct FileRequest {
+    pub(crate) local: crate::RegisteredMemory,
+    pub(crate) transport: crate::Transport,
+    #[cfg(feature = "gds")]
+    pub(crate) buffer: Option<crate::transport::gds::BufferLease>,
+    pub(crate) local_offset: usize,
+    pub(crate) lease: FileLease,
+    pub(crate) offset: u64,
+    pub(crate) length: usize,
 }
 
 struct FilePermit(Arc<Entry>);
@@ -203,18 +222,18 @@ impl FileSegments {
     pub(crate) fn info(&self, segment: &FileSegment, refresh: bool) -> Result<FileSegmentInfo> {
         let entry = self.entry(segment)?;
         let length = entry.pin()?.length(refresh)?;
+        #[cfg(any(feature = "io-uring", feature = "gds"))]
+        let state = entry.lock()?;
         Ok(FileSegmentInfo {
             segment_type: SegmentType::File,
             path: Arc::clone(&entry.path),
             offset: 0,
             length,
             permission: entry.permission,
-            #[cfg(feature = "io-uring")]
-            direct_io: entry
-                .lock()?
-                .direct
-                .as_ref()
-                .map(|direct| direct.file.is_some()),
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            direct_io: state.direct.as_ref().map(|direct| direct.file.is_some()),
+            #[cfg(feature = "gds")]
+            gds_mode: state.gds.as_ref().map(|h| h.mode),
         })
     }
 
@@ -256,8 +275,20 @@ impl FileSegments {
                 .map_err(|_| Error::Internal("file segment lock poisoned"))?
                 .0;
         }
+        #[cfg(feature = "gds")]
+        if let Some(code) = state.gds_open_uncertain {
+            return Err(Error::Unquiesced {
+                operation: "cuFileHandleRegister",
+                code,
+            });
+        }
+        #[cfg(feature = "gds")]
+        if let Some(handle) = &mut state.gds {
+            handle.close()?;
+            state.gds.take();
+        }
         state.file.take();
-        #[cfg(feature = "io-uring")]
+        #[cfg(any(feature = "io-uring", feature = "gds"))]
         state.direct.take();
         drop(state);
         let mut entries = self
@@ -290,7 +321,7 @@ impl FileSegments {
     }
 }
 
-#[cfg(feature = "io-uring")]
+#[cfg(any(feature = "io-uring", feature = "gds"))]
 mod direct;
 
 #[cfg(test)]

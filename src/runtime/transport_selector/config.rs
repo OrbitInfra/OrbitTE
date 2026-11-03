@@ -11,7 +11,7 @@ use crate::{Error, MemoryType, Priority, Result, Transport};
 pub enum SegmentType {
     #[default]
     Memory,
-    /// Local file policy. Requires the Linux `io-uring` feature.
+    /// Local file policy. Requires a Linux file provider.
     File,
 }
 
@@ -85,9 +85,11 @@ impl TransportSelectorConfig {
                     "transport policy names must be unique and fit 256 bytes",
                 ));
             }
-            if policy.segment_type == SegmentType::File && !cfg!(feature = "io-uring") {
+            if policy.segment_type == SegmentType::File
+                && !cfg!(any(feature = "io-uring", feature = "gds"))
+            {
                 return Err(Error::InvalidConfig(
-                    "file segment selection requires --features io-uring",
+                    "file segment selection requires io-uring or gds",
                 ));
             }
             if policy
@@ -102,7 +104,7 @@ impl TransportSelectorConfig {
             if policy.transports.len() > 3
                 || policy.transports.iter().enumerate().any(|(i, transport)| {
                     *transport == Transport::Unspec
-                        || (*transport == Transport::IoUring)
+                        || matches!(transport, Transport::IoUring | Transport::Gds)
                             != (policy.segment_type == SegmentType::File)
                         || policy.transports[..i].contains(transport)
                 })
@@ -173,8 +175,9 @@ fn transports<'de, D: Deserializer<'de>>(
             "rdma" => Ok(Transport::Rdma),
             "nvlink" => Ok(Transport::Nvlink),
             "io_uring" => Ok(Transport::IoUring),
+            "gds" => Ok(Transport::Gds),
             _ => Err(serde::de::Error::custom(
-                "transport must be tcp, rdma, nvlink or io_uring",
+                "transport must be tcp, rdma, nvlink, io_uring or gds",
             )),
         })
         .collect()

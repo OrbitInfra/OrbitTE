@@ -36,6 +36,8 @@ pub enum Transport {
     Nvlink,
     /// Linux io_uring for local regular files and registered memory.
     IoUring,
+    /// Local cuFile batch I/O.
+    Gds,
     /// Choose an eligible transport before any payload I/O. No failure replay.
     Unspec,
 }
@@ -171,6 +173,8 @@ impl BatchReport {
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineStats {
+    #[cfg(feature = "gds")]
+    pub gds: crate::GdsStats,
     #[cfg(feature = "cuda")]
     pub nvlink: Option<crate::NVLinkStats>,
     #[cfg(feature = "cuda")]
@@ -207,6 +211,8 @@ pub struct TransferEngine {
     pub(crate) files: FileSegments,
     #[cfg(feature = "io-uring")]
     pub(crate) io_uring: Option<crate::transport::io_uring::IoUringTransport>,
+    #[cfg(feature = "gds")]
+    pub(crate) gds: Option<crate::transport::gds::GdsTransport>,
 }
 
 impl TransferEngine {
@@ -303,6 +309,8 @@ impl TransferEngine {
             files: FileSegments::default(),
             #[cfg(feature = "io-uring")]
             io_uring: crate::transport::io_uring::IoUringTransport::probe(),
+            #[cfg(feature = "gds")]
+            gds: crate::transport::gds::GdsTransport::probe(&config),
             receiver_credits,
             qos,
             selector,
@@ -450,12 +458,20 @@ impl TransferEngine {
             .map_err(|_| Error::Internal("source lock poisoned"))?
             .active;
         let allocated = self.allocations.usage()?;
+        // Quarantine cleanup drops admission permits. Sample it before locking usage.
+        #[cfg(feature = "gds")]
+        let gds = self
+            .gds
+            .as_ref()
+            .map_or_else(Default::default, |g| g.stats());
         let batches = self
             .batches
             .usage
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            #[cfg(feature = "gds")]
+            gds,
             #[cfg(feature = "cuda")]
             staging: self.source.proxy.stats()?,
             #[cfg(feature = "cuda")]
@@ -547,12 +563,29 @@ impl TransferEngine {
     }
 
     fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
+        #[cfg(feature = "gds")]
+        let result = self.gds.as_ref().map_or(Ok(()), |gds| {
+            memory.iter().try_for_each(|region| gds.register(region))
+        });
+        #[cfg(not(feature = "gds"))]
+        let result = Ok(());
         #[cfg(feature = "rdma")]
-        if let Some(runtime) = &self.source.rdma {
-            return runtime.register_memory(memory, deadline(self.config.handler_timeout)?);
-        }
+        let result = result.and_then(|()| {
+            self.source.rdma.as_ref().map_or(Ok(()), |runtime| {
+                runtime.register_memory(memory, deadline(self.config.handler_timeout)?)
+            })
+        });
+        #[cfg(not(any(feature = "rdma", feature = "gds")))]
         let _ = memory;
-        Ok(())
+        #[cfg(feature = "gds")]
+        if result.is_err() {
+            let mut cleanup = Ok(());
+            for region in memory {
+                cleanup = cleanup.and(crate::transport::gds::BufferLease::retire(region));
+            }
+            cleanup?;
+        }
+        result
     }
 
     /// Registers retained CUDA device ranges, using the same transactional
@@ -591,11 +624,19 @@ impl TransferEngine {
     /// already been removed. Admitted borrowers finish retiring it on release.
     /// Call `close_source` to establish source-handler quiescence first.
     pub fn unregister_memory(&self, memory: &RegisteredMemory) -> Result<()> {
-        self.source.registry.unregister(memory)?;
+        let _last = self.source.registry.unregister(memory)?;
+        #[cfg(feature = "gds")]
+        let gds_result = if _last {
+            crate::transport::gds::BufferLease::retire(memory)
+        } else {
+            Ok(())
+        };
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
             runtime.registrations.retire(memory)?;
         }
+        #[cfg(feature = "gds")]
+        gds_result?;
         Ok(())
     }
 
@@ -652,6 +693,10 @@ impl TransferEngine {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Error::InvalidConfig("deadline overflows monotonic clock"))?;
+        #[cfg(feature = "gds")]
+        if let Some(gds) = &self.gds {
+            gds.cleanup();
+        }
         self.files.close(segment, deadline)
     }
 
@@ -686,6 +731,17 @@ impl TransferEngine {
         self.submit(operation, peer, requests, Some(notification), timeout)
     }
 
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
+    fn file_available(&self, transport: Transport) -> bool {
+        match transport {
+            #[cfg(feature = "io-uring")]
+            Transport::IoUring => self.io_uring.is_some(),
+            #[cfg(feature = "gds")]
+            Transport::Gds => self.gds.as_ref().is_some_and(|g| g.mode().is_ok()),
+            _ => false,
+        }
+    }
+
     pub(crate) fn prepare<'a>(
         &self,
         operation: TransferOp,
@@ -710,17 +766,25 @@ impl TransferEngine {
                     "file transfers do not support notifications",
                 ));
             }
-            #[cfg(feature = "io-uring")]
-            TransferTarget::File(segment) => PreparedTarget::File {
-                segment: segment.clone(),
-                transport: self
-                    .io_uring
-                    .clone()
-                    .ok_or(Error::Unavailable("io_uring is not available"))?,
-                requests: Vec::new(),
-            },
-            #[cfg(not(feature = "io-uring"))]
-            TransferTarget::File(_) => return Err(Error::Unavailable("io_uring is not available")),
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            TransferTarget::File(segment) => {
+                #[cfg(feature = "gds")]
+                if let Some(gds) = &self.gds {
+                    gds.cleanup();
+                }
+                if !self.file_available(Transport::Gds) && !self.file_available(Transport::IoUring)
+                {
+                    return Err(Error::Unavailable("no local file transport is available"));
+                }
+                PreparedTarget::File {
+                    segment: segment.clone(),
+                    requests: Vec::new(),
+                }
+            }
+            #[cfg(not(any(feature = "io-uring", feature = "gds")))]
+            TransferTarget::File(_) => {
+                return Err(Error::Unavailable("no local file transport is available"));
+            }
         };
         let notification_bytes = match notification {
             Some(notification) => self.validate_notification(notification)?,
@@ -732,7 +796,7 @@ impl TransferEngine {
             PreparedTarget::Memory {
                 requests: prepared, ..
             } => prepared.try_reserve_exact(requests.len()),
-            #[cfg(feature = "io-uring")]
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
             PreparedTarget::File {
                 requests: prepared, ..
             } => prepared.try_reserve_exact(requests.len()),
@@ -771,7 +835,7 @@ impl TransferEngine {
             }
             let (peer, prepared) = match &mut payload {
                 PreparedTarget::Memory { peer, requests } => (peer, requests),
-                #[cfg(feature = "io-uring")]
+                #[cfg(any(feature = "io-uring", feature = "gds"))]
                 PreparedTarget::File {
                     segment,
                     requests: files,
@@ -782,12 +846,13 @@ impl TransferEngine {
                             "file I/O does not support remote staging",
                         ));
                     }
-                    TransportSelector::select_file(
+                    let transport = TransportSelector::select_file(
                         self.selector.as_ref(),
                         local.memory_type(),
                         request.length,
                         priority,
                         request.transport,
+                        |t| self.file_available(t),
                     )?;
                     let (lease, offset) = self.files.admit(
                         segment,
@@ -795,7 +860,14 @@ impl TransferEngine {
                         request.remote_address,
                         request.length,
                     )?;
-                    files.push(crate::transport::io_uring::FileRequest {
+                    files.push(crate::segment::file::FileRequest {
+                        transport,
+                        #[cfg(feature = "gds")]
+                        buffer: if transport == Transport::Gds {
+                            crate::transport::gds::BufferLease::acquire(&local)?
+                        } else {
+                            None
+                        },
                         local,
                         local_offset,
                         lease,
@@ -805,8 +877,8 @@ impl TransferEngine {
                     continue;
                 }
             };
-            if request.transport == Transport::IoUring {
-                return Err(Error::Unavailable("io_uring requires a file target"));
+            if matches!(request.transport, Transport::Gds | Transport::IoUring) {
+                return Err(Error::Unavailable("file transport requires a file target"));
             }
             let (remote, remote_offset) =
                 peer.resolve_address(request.remote_address, request.length)?;
@@ -914,6 +986,8 @@ impl TransferEngine {
             })
             .transpose()?;
         Ok(PreparedSubmission {
+            #[cfg(feature = "gds")]
+            gds_pending: Mutex::default(),
             operation,
             payload,
             notification: notification.cloned(),
@@ -937,9 +1011,34 @@ impl TransferEngine {
         let report = self.execute(&prepared, None);
         if !report.locally_drained {
             // Preserve actual registrations and admission, not a pointer surrogate.
-            std::mem::forget((prepared, Arc::clone(&self.source)));
+            self.retain_undrained(prepared, None, None, || {});
         }
         Ok(report)
+    }
+
+    pub(crate) fn retain_undrained(
+        &self,
+        prepared: PreparedSubmission,
+        progress: Option<(Arc<BatchProgress>, usize)>,
+        engine: Option<Arc<TransferEngine>>,
+        publish: impl FnOnce(),
+    ) {
+        #[cfg(feature = "gds")]
+        let pending = prepared
+            .gds_pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        #[cfg(feature = "gds")]
+        if let Some(batch) = pending {
+            if let Some(gds) = &self.gds {
+                gds.retain(batch, prepared, self.source.clone(), progress, publish);
+                return;
+            }
+            std::mem::forget(batch);
+        }
+        std::mem::forget((prepared, self.source.clone(), progress, engine));
+        publish();
     }
 
     pub(crate) fn execute(
@@ -984,21 +1083,103 @@ impl TransferEngine {
         }
         let (peer, requests) = match payload {
             PreparedTarget::Memory { peer, requests } => (peer, requests),
-            #[cfg(feature = "io-uring")]
-            PreparedTarget::File {
-                transport,
-                requests,
-                ..
-            } => {
-                transport.execute(
-                    *operation,
-                    requests,
-                    *deadline,
-                    progress,
-                    &mut report,
-                    #[cfg(feature = "cuda")]
-                    (&self.source.proxy, self.config.max_batch_requests),
-                );
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            PreparedTarget::File { requests, .. } => {
+                let mut first = 0;
+                while first < requests.len() {
+                    let transport = requests[first].transport;
+                    let count = requests[first..]
+                        .iter()
+                        .take_while(|r| r.transport == transport)
+                        .count();
+                    let group = &requests[first..first + count];
+                    let progress = progress.map(|(p, base)| (p, base + first));
+                    let mut result = BatchReport {
+                        completed_requests: 0,
+                        transferred_bytes: 0,
+                        failure: None,
+                        locally_drained: true,
+                        notification: NotificationStatus::NotRequested,
+                    };
+                    let executed = match transport {
+                        #[cfg(feature = "io-uring")]
+                        Transport::IoUring => self.io_uring.as_ref().map(|io| {
+                            io.execute(
+                                *operation,
+                                group,
+                                *deadline,
+                                progress,
+                                &mut result,
+                                #[cfg(feature = "cuda")]
+                                (&self.source.proxy, self.config.max_batch_requests),
+                            )
+                        }),
+                        #[cfg(feature = "gds")]
+                        Transport::Gds => self.gds.as_ref().map(|gds| {
+                            gds.execute(
+                                *operation,
+                                group,
+                                *deadline,
+                                progress,
+                                &mut result,
+                                &submission.gds_pending,
+                            )
+                        }),
+                        _ => None,
+                    };
+                    if executed.is_none() {
+                        result.failure = Some(TransferFailure {
+                            request_index: 0,
+                            affected_requests: 1,
+                            error: Error::Unavailable("selected file transport is unavailable"),
+                            remote_effect: RemoteEffect::None,
+                        });
+                    }
+                    report.completed_requests += result.completed_requests;
+                    report.transferred_bytes += result.transferred_bytes;
+                    report.locally_drained = result.locally_drained;
+                    if let Some(mut failure) = result.failure {
+                        failure.request_index += first;
+                        report.failure = Some(failure);
+                        break;
+                    }
+                    first += count;
+                }
+                #[cfg(feature = "gds")]
+                if report.locally_drained {
+                    if let Err((index, error)) = submission.finish_gds_buffers() {
+                        report.locally_drained = false;
+                        let first = report.completed_requests.min(index);
+                        let end = report
+                            .failure
+                            .as_ref()
+                            .map_or(report.completed_requests, |f| {
+                                f.request_index + f.affected_requests
+                            });
+                        let effect = if *operation == TransferOp::Write
+                            && (first < report.completed_requests
+                                || report
+                                    .failure
+                                    .as_ref()
+                                    .is_some_and(|f| f.remote_effect == RemoteEffect::Unknown))
+                        {
+                            RemoteEffect::Unknown
+                        } else {
+                            RemoteEffect::None
+                        };
+                        report.failure = Some(TransferFailure {
+                            request_index: first,
+                            affected_requests: end.saturating_sub(first).max(1),
+                            error,
+                            remote_effect: effect,
+                        });
+                        report.completed_requests = first;
+                        report.transferred_bytes = requests[..report.completed_requests]
+                            .iter()
+                            .map(|r| r.length)
+                            .sum();
+                    }
+                }
                 return report;
             }
         };
@@ -1040,7 +1221,7 @@ impl TransferEngine {
                     })
             };
             let result = match request.transport {
-                Transport::IoUring | Transport::Unspec => single(Err((
+                Transport::IoUring | Transport::Gds | Transport::Unspec => single(Err((
                     Error::Internal("unresolved transport"),
                     RemoteEffect::None,
                 ))),
@@ -1294,7 +1475,26 @@ impl TransferEngine {
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         usage.open = false;
         while usage.count != 0 {
+            #[cfg(feature = "gds")]
+            if let Some(gds) = &self.gds {
+                drop(usage);
+                gds.cleanup();
+                usage = self
+                    .batches
+                    .usage
+                    .lock()
+                    .map_err(|_| Error::Internal("batch lock poisoned"))?;
+                if usage.count == 0 {
+                    break;
+                }
+            }
             let duration = remaining(deadline)?;
+            #[cfg(feature = "gds")]
+            let duration = if self.gds.is_some() {
+                duration.min(Duration::from_millis(10))
+            } else {
+                duration
+            };
             usage = self
                 .batches
                 .drained
@@ -1340,6 +1540,8 @@ impl TransferEngine {
         // waiting for incoming exports, keeping close receipts serviceable.
         self.close_requester_until(deadline)?;
         self.close_source_until(deadline)?;
+        #[cfg(feature = "gds")]
+        self.source.registry.close_gds_buffers()?;
         #[cfg(feature = "cuda")]
         self.source.proxy.close(deadline)?;
         #[cfg(feature = "rdma")]
@@ -1462,15 +1664,16 @@ enum PreparedTarget {
         peer: RemoteSegment,
         requests: Vec<PreparedTransfer>,
     },
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     File {
         segment: FileSegment,
-        transport: crate::transport::io_uring::IoUringTransport,
-        requests: Vec<crate::transport::io_uring::FileRequest>,
+        requests: Vec<crate::segment::file::FileRequest>,
     },
 }
 
 pub(crate) struct PreparedSubmission {
+    #[cfg(feature = "gds")]
+    gds_pending: Mutex<Option<crate::transport::gds::LiveBatch>>,
     pub(crate) operation: TransferOp,
     payload: PreparedTarget,
     pub(crate) notification: Option<Notification>,
@@ -1482,6 +1685,23 @@ pub(crate) struct PreparedSubmission {
     // Remove queue metadata before credit rollback can wake/refill the queue.
     pub(crate) credit: Option<CreditPermit>,
     _admission: BatchPermit,
+}
+
+#[cfg(feature = "gds")]
+impl PreparedSubmission {
+    fn finish_gds_buffers(&self) -> std::result::Result<(), (usize, Error)> {
+        if let PreparedTarget::File { requests, .. } = &self.payload {
+            for (index, request) in requests.iter().enumerate() {
+                if let Some(buffer) = &request.buffer {
+                    buffer.release().map_err(|e| (index, e))?;
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn release_gds_buffers(&self) -> bool {
+        self.finish_gds_buffers().is_ok()
+    }
 }
 
 struct BatchUsage {

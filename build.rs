@@ -6,7 +6,8 @@ fn main() {
     } else if cfg!(any(
         feature = "cuda",
         feature = "rdma",
-        feature = "io-uring"
+        feature = "io-uring",
+        feature = "gds"
     )) {
         println!("cargo:rustc-cfg=unsupported_native_target");
     }

@@ -198,12 +198,15 @@ impl Batch {
                         let report = engine.execute(&prepared, Some((&state, first_task)));
                         if report.locally_drained {
                             drop(prepared);
+                            state.finish_submission(submission, first_task, report);
                         } else {
-                            // Quarantine real owners and capacity on unproven native
-                            // termination. Logical failure does not authorize free.
-                            std::mem::forget((prepared, Arc::clone(&engine), Arc::clone(&state)));
+                            engine.retain_undrained(
+                                prepared,
+                                Some((state.clone(), submission)),
+                                Some(engine.clone()),
+                                || state.finish_submission(submission, first_task, report),
+                            );
                         }
-                        state.finish_submission(submission, first_task, report);
                     }
                 },
             )?);
@@ -450,7 +453,7 @@ impl BatchProgress {
     }
     /// Commit a file group on the batch worker. A queued cancellation cuts off
     /// that request and its suffix before any SQE is published.
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn begin_file_group(&self, first: usize, count: usize) -> usize {
         let mut state = self.lock();
         let tasks = &mut state.tasks[first..first + count];
@@ -464,7 +467,7 @@ impl BatchProgress {
         count
     }
 
-    #[cfg(feature = "io-uring")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn fail_file_task(
         &self,
         index: usize,
@@ -475,7 +478,11 @@ impl BatchProgress {
     ) {
         let mut state = self.lock();
         let task = &mut state.tasks[index];
-        task.state = TaskState::Failed;
+        task.state = if matches!(error, Error::Cancelled) {
+            TaskState::Cancelled
+        } else {
+            TaskState::Failed
+        };
         task.transferred_bytes = bytes;
         task.locally_drained = drained;
         task.failure = Some(Arc::new(TransferFailure {
@@ -491,6 +498,25 @@ impl BatchProgress {
         state.tasks[index].state = TaskState::Completed;
         state.tasks[index].transferred_bytes = length;
         state.tasks[index].locally_drained = true;
+        self.changed.notify_all();
+    }
+    #[cfg(feature = "gds")]
+    pub(crate) fn complete_file_task(&self, index: usize, bytes: usize, drained: bool) {
+        let mut state = self.lock();
+        let task = &mut state.tasks[index];
+        task.state = TaskState::Completed;
+        task.transferred_bytes = bytes;
+        task.locally_drained = drained;
+        self.changed.notify_all();
+    }
+    #[cfg(feature = "gds")]
+    pub(crate) fn gds_drained(&self, index: usize) {
+        let mut state = self.lock();
+        state.submissions[index].locally_drained = true;
+        let range = state.submissions[index].tasks.clone();
+        for task in &mut state.tasks[range] {
+            task.locally_drained = true;
+        }
         self.changed.notify_all();
     }
     fn finish_submission(&self, index: usize, first: usize, report: BatchReport) {

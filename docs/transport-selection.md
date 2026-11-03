@@ -40,7 +40,7 @@ let request = TransferRequest::new(
 An explicit transport must appear in the matching policy's candidate list and
 be eligible. A rejected or unavailable hint fails the request. With
 `selector: None`, explicit routing keeps its existing behavior and `Unspec`
-uses NVLink, RDMA, then TCP for memory targets. A file target selects io_uring.
+uses NVLink, RDMA, then TCP for memory targets. A file target tries eligible GDS, then io_uring.
 
 The first matching rule wins. An unavailable candidate is skipped within that
 rule for `Unspec`; an exhausted rule fails instead of trying a later rule.
@@ -51,11 +51,11 @@ before payload I/O, task publication or admission charges.
 | Field | Consumed behavior |
 | --- | --- |
 | `name` | Unique configuration label, 1–256 bytes; omitted defaults to `memory_default`. Named request selection remains open |
-| `segment_type` | `memory` or, with the Linux `io-uring` feature, `file`. A file target has CPU remote memory and accepts registered local DRAM or, with `cuda`, CUDA memory |
+| `segment_type` | `memory` or, with a Linux file provider (`gds` or `io-uring`), `file`. A file target has CPU remote memory and accepts registered local DRAM or, with `cuda`, CUDA memory |
 | `local_memory`, `remote_memory` | `cpu`, `cuda`, or `*`; omission/`*` matches either. Pinned host allocations remain CPU |
 | `min_size`, `max_size` | Inclusive byte bounds; minimum must not exceed maximum |
 | `priority` | Exact match on effective QoS priority, otherwise request priority. Accepts high/medium/low or integers 0/1/2 |
-| `transports` | Ordered, unique `tcp`, `rdma`, `nvlink` for memory or `io_uring` for files. Omission uses segment defaults. TENT prefers GDS then io_uring for files. Only io_uring is implemented |
+| `transports` | Ordered, unique `tcp`, `rdma`, `nvlink` for memory or `gds`, `io_uring` for files. Omission uses segment defaults. A GDS execution failure ends the group |
 
 The typed equivalents are `TransportSelectorConfig` and `SelectionPolicy`.
 JSON input is bounded to 1 MiB and 256 policies; values compile at engine
@@ -109,7 +109,7 @@ TENT defaults to the buffer's registered transport order. OrbitTE currently
 uses eligible NVLink → RDMA → TCP; configured lists override that order. TENT's
 named policy override, intent matching, same-machine rule filters, device-name
 masks and QP pools are still open. Unsupported fields are rejected instead of
-accepted without execution. GDS, retry/failover and automatic
+accepted without execution. Retry/failover and automatic
 staging selection also remain open.
 
 The selector scans at most 256 compiled rules and three candidates, once per

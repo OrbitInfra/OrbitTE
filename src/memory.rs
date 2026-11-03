@@ -70,7 +70,7 @@ struct HostAccess {
     cuda_uncertain: bool,
     #[cfg(feature = "cuda")]
     cuda_inflight: bool,
-    #[cfg(any(feature = "rdma", feature = "io-uring"))]
+    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
     dma: Vec<Range<usize>>,
 }
 
@@ -113,7 +113,7 @@ impl HostAccess {
                 return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
             }
         }
-        #[cfg(any(feature = "rdma", feature = "io-uring"))]
+        #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
         if self
             .dma
             .iter()
@@ -123,7 +123,7 @@ impl HostAccess {
                 "host range has an active native I/O loan",
             ));
         }
-        #[cfg(not(any(feature = "rdma", feature = "io-uring")))]
+        #[cfg(not(any(feature = "rdma", feature = "io-uring", feature = "gds")))]
         let _ = range;
         #[cfg(feature = "cuda")]
         if let HostBacking::CudaPinned(allocation) = &self.bytes {
@@ -214,7 +214,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(any(feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
         }
@@ -373,7 +373,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(any(feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
         })
@@ -420,7 +420,7 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
-                #[cfg(any(feature = "rdma", feature = "io-uring"))]
+                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
         })
@@ -480,7 +480,7 @@ impl HostMemory {
     }
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring"))]
+#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
 pub(crate) struct DmaLease {
     _registration: RegisteredMemory,
     allocation: Allocation,
@@ -488,7 +488,7 @@ pub(crate) struct DmaLease {
     address: NonNull<u8>,
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring"))]
+#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
 impl DmaLease {
     #[cfg(feature = "rdma")]
     pub(crate) fn registration(&self) -> RegisteredMemory {
@@ -506,12 +506,13 @@ impl DmaLease {
     pub(crate) fn address(&self) -> NonNull<u8> {
         self.address
     }
+    #[cfg(any(feature = "rdma", feature = "io-uring"))]
     pub(crate) fn len(&self) -> usize {
         self.range.len()
     }
 }
 
-#[cfg(any(feature = "rdma", feature = "io-uring"))]
+#[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
 impl Drop for DmaLease {
     fn drop(&mut self) {
         match &self.allocation {
@@ -607,7 +608,7 @@ impl RegisteredMemory {
         self.memory_type() == MemoryType::Cuda
     }
 
-    #[cfg(any(feature = "rdma", feature = "io-uring"))]
+    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
     pub(crate) fn dma_lease(&self, offset: usize, length: usize) -> Result<DmaLease> {
         checked_range(offset, length, self.len())?;
         let offset = self
@@ -764,6 +765,8 @@ impl AllocationRef {
 }
 
 pub(crate) struct Registration {
+    #[cfg(feature = "gds")]
+    pub(crate) gds: Mutex<crate::transport::gds::BufferSlot>,
     pub(crate) descriptor: RemoteRegion,
     allocation: Allocation,
     allocation_offset: usize,
@@ -774,6 +777,18 @@ pub(crate) struct Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
+        #[cfg(feature = "gds")]
+        if self
+            .gds
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .close()
+            .is_err()
+        {
+            // Failed native release retains the allocation and its capacity.
+            std::mem::forget(self.allocation.clone());
+            return;
+        }
         let mut usage = self
             .budget
             .lock()
@@ -999,6 +1014,8 @@ impl MemoryRegistry {
             } else {
                 let (allocation, offset, length) = &ranges[plan.input];
                 let memory = RegisteredMemory(Arc::new(Registration {
+                    #[cfg(feature = "gds")]
+                    gds: Mutex::default(),
                     descriptor: RemoteRegion {
                         epoch: self.epoch,
                         id: plan.id,
@@ -1046,7 +1063,7 @@ impl MemoryRegistry {
         Ok(result)
     }
 
-    pub(crate) fn unregister(&self, memory: &RegisteredMemory) -> Result<()> {
+    pub(crate) fn unregister(&self, memory: &RegisteredMemory) -> Result<bool> {
         self.check_owner(memory)?;
         let mut entries = self
             .entries
@@ -1057,12 +1074,13 @@ impl MemoryRegistry {
             .get_mut(&memory.id())
             .ok_or(Error::RegionNotFound)?;
         entry.references -= 1;
-        if entry.references == 0 {
+        let last = entry.references == 0;
+        if last {
             #[cfg(feature = "rdma")]
             entry.memory.0.active.store(false, Ordering::Release);
             entries.regions.remove(&memory.id());
         }
-        Ok(())
+        Ok(last)
     }
 
     pub(crate) fn check_owner(&self, memory: &RegisteredMemory) -> Result<()> {
@@ -1122,6 +1140,23 @@ impl MemoryRegistry {
             })
             .min_by_key(|(memory, _)| (memory.base_address(), Reverse(memory.len())))
             .ok_or(Error::RegionNotFound)
+    }
+
+    #[cfg(feature = "gds")]
+    pub(crate) fn close_gds_buffers(&self) -> Result<()> {
+        let buffers: Vec<_> = self
+            .entries
+            .lock()
+            .map_err(|_| Error::Internal("registry lock poisoned"))?
+            .regions
+            .values()
+            .map(|e| e.memory.clone())
+            .collect();
+        let mut result = Ok(());
+        for memory in buffers {
+            result = result.and(crate::transport::gds::BufferLease::retire(&memory));
+        }
+        result
     }
 
     pub(crate) fn usage(&self) -> Result<(usize, usize)> {

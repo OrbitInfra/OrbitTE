@@ -44,6 +44,12 @@ impl Default for RuntimeQueueConfig {
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Maximum number of 16 MiB slices in one cuFile batch.
+    #[cfg(feature = "gds")]
+    pub gds_batch_depth: u32,
+    /// Exclude GDS from selection if cuFile permits or forces compatibility I/O.
+    #[cfg(feature = "gds")]
+    pub gds_require_native: bool,
     /// Cooperative same-host CUDA IPC. Both processes must opt in and keep the
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
@@ -124,6 +130,10 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "gds")]
+            gds_batch_depth: 32,
+            #[cfg(feature = "gds")]
+            gds_require_native: false,
             #[cfg(feature = "cuda")]
             nvlink: false,
             #[cfg(feature = "cuda")]
@@ -205,6 +215,10 @@ impl EngineConfig {
         #[cfg(feature = "rdma")]
         if let Some(config) = &self.rdma {
             config.validate()?;
+        }
+        #[cfg(feature = "gds")]
+        if !(1..=65536).contains(&self.gds_batch_depth) {
+            return Err(Error::InvalidConfig("GDS batch depth must be in 1..=65536"));
         }
         if self.max_registered_regions == 0 || self.max_registered_regions > 4096 {
             return Err(Error::InvalidConfig(

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITTE_FEATURES: ${{ matrix.features }}
@@ -42,7 +42,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -58,10 +58,10 @@ jobs:
         run: |
           cargo tree --locked --features "$ORBITTE_FEATURES" -e normal,build > "$RUNNER_TEMP/deps.txt"
           if grep -F 'io-uring v' "$RUNNER_TEMP/deps.txt"; then exit 1; fi
-      - name: Require real io_uring on ext4 and tmpfs
-        if: contains(matrix.features, 'io-uring')
+      - name: Prepare real ext4 and tmpfs for file providers
+        if: contains(matrix.features, 'io-uring') || contains(matrix.features, 'gds')
         run: |
-          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          if [[ "$ORBITTE_FEATURES" == *io-uring* ]] && test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
           ext="$RUNNER_TEMP/orbitte-ext4"
           mkdir -p "$ext"
           if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
@@ -74,7 +74,7 @@ jobs:
           test "$(findmnt -n -o FSTYPE -T /dev/shm)" = tmpfs
           echo "ORBITTE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
           echo "ORBITTE_TMPFS_DIR=/dev/shm" >> "$GITHUB_ENV"
-          echo "ORBITTE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"
+          if [[ "$ORBITTE_FEATURES" == *io-uring* ]]; then echo "ORBITTE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"; fi
       - name: Clippy
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Test CPU TCP and ownership
@@ -155,3 +155,20 @@ jobs:
             ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/storage_cuda_run.py
             ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/consumer/Cargo.lock
             ${{ runner.temp }}/orbitte-installed-storage-cuda-${{ matrix.toolchain }}/installed/bin/orbitte-storage-cuda
+
+      - name: Install public GDS consumer from packaged crate
+        if: matrix.features == 'gds'
+        run: python3 tests/hardware/build_installed.py --consumer gds --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-gds-$RUSTUP_TOOLCHAIN"
+      - name: Preserve installed GDS artifact
+        if: always() && matrix.features == 'gds'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: installed-gds-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/manifest.json
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/*.stdout
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/*.stderr
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/*.crate
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/*_run.py
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/consumer/Cargo.lock
+            ${{ runner.temp }}/orbitte-installed-gds-${{ matrix.toolchain }}/installed/bin/orbitte-gds
