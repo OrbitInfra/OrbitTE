@@ -105,7 +105,7 @@ impl RdmaTransport {
         }
     }
 
-    pub(in crate::transport::rdma) fn direct(&self, memory: &RegisteredMemory) -> bool {
+    pub(crate) fn direct(&self, memory: &RegisteredMemory) -> bool {
         if memory.is_cuda() {
             self.config.cuda_memory == crate::transport::rdma::RdmaCudaMemory::Direct
         } else {

@@ -451,6 +451,16 @@ impl SenderCreditLedger {
         Ok(permits)
     }
 
+    #[cfg(feature = "metrics")]
+    pub(crate) fn metric_owners(&self) -> (usize, usize) {
+        let state = self.lock();
+        state
+            .entries
+            .values()
+            .fold((0, 0), |(active, reserved), e| {
+                (active + e.active, reserved + e.reserved)
+            })
+    }
     pub(crate) fn stats(&self, peer: &RemoteSegment) -> Option<ReceiverCreditStats> {
         let state = self.lock();
         let entry = state.entries.get(&CreditKey::from(peer))?;

@@ -387,6 +387,49 @@ mod native {
         }
         Ok(())
     }
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport() -> Result<()> {
+        for (mode, reason) in [("direct:connect", "submit"), ("direct:wc", "poll")] {
+            for budget in [0, 1] {
+                let p = Pair::new(mode, budget, true, false)?;
+                let b = p.engine.submit_async(
+                    TransferOp::Read,
+                    &p.peer,
+                    &[p.request(2, 4), p.request(6, 4)],
+                    None,
+                    WAIT,
+                )?;
+                assert_eq!(
+                    b.wait(WAIT)?.completed_tasks,
+                    if budget == 0 { 0 } else { 2 }
+                );
+                p.bytes(budget != 0)?;
+                let m = p.engine.metrics().unwrap();
+                let j = m.json();
+                let text = m.prometheus();
+                assert_eq!(j["tent_transport_attempts_total"], 1 + budget);
+                assert_eq!(j["tent_transport_attempt_failures_total"], 1);
+                assert_eq!(j["tent_transport_attempt_latency_us"]["count"], 1 + budget);
+                assert_eq!(j["tent_read_requests_total"], 1);
+                assert_eq!(j["tent_read_failures_total"], usize::from(budget == 0));
+                assert_eq!(j["tent_read_bytes_total"], 8 * budget);
+                assert_eq!(j["tent_transport_failover_total"], budget);
+                assert_eq!(j["tent_inflight_attempts"], 0);
+                if budget == 0 {
+                    assert!(text.contains(&format!(
+                        "tent_task_failures_total{{transport=\"rdma\",reason=\"{reason}\"}} 1"
+                    )));
+                } else {
+                    assert!(
+                        text.contains("tent_transport_failover_total{from=\"rdma\",to=\"tcp\"} 1")
+                    );
+                    assert!(text.contains("tent_read_bytes_total{transport=\"tcp\"} 8"));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[test]

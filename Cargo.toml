@@ -20,6 +20,7 @@ rdma = ["dep:cc", "dep:bindgen", "dep:ibverbs-sys", "dep:libloading"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
 gds = ["cuda"]
+metrics = []
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
@@ -85,3 +86,7 @@ required-features = ["cuda", "io-uring"]
 name = "gds"
 path = "tests/hardware/gds.rs"
 required-features = ["gds"]
+
+[[example]]
+name = "metrics_overhead"
+path = "tests/metrics/overhead.rs"

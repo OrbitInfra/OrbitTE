@@ -269,6 +269,16 @@ impl QosContractResolver {
         }
     }
 
+    #[cfg(feature = "metrics")]
+    pub(crate) fn metrics_sampler(&self) -> impl Fn() -> QosUsage + Send + Sync + 'static {
+        let quota = self.quota.clone();
+        move || {
+            quota
+                .as_ref()
+                .map_or_else(QosUsage::default, |q| q.total_usage())
+        }
+    }
+
     pub(crate) fn default_contract(&self) -> &CompiledContract {
         &self.default
     }

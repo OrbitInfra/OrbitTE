@@ -50,6 +50,9 @@ mod error;
 #[cfg(not(unsupported_native_target))]
 mod memory;
 #[cfg(not(unsupported_native_target))]
+#[cfg(feature = "metrics")]
+pub mod metrics;
+#[cfg(not(unsupported_native_target))]
 mod notification;
 #[cfg(all(target_os = "linux", any(feature = "rdma", feature = "cuda")))]
 mod platform;

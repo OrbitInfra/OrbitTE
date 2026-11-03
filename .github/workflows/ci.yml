@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITTE_FEATURES: ${{ matrix.features }}
@@ -78,7 +78,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Set the same test parallelism for the suite and stability controls
-        if: matrix.toolchain == 'stable' && (matrix.features == 'rdma,cuda,io-uring' || matrix.features == 'rdma,cuda,io-uring,gds')
+        if: matrix.toolchain == 'stable' && (matrix.features == 'rdma,cuda,io-uring' || matrix.features == 'rdma,cuda,io-uring,gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --locked --features "$ORBITTE_FEATURES"
@@ -106,6 +106,22 @@ jobs:
           binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary"
+      - name: Parse a real TENT metrics scrape
+        if: matrix.features == 'metrics'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/metrics-parser"
+          "$RUNNER_TEMP/metrics-parser/bin/pip" install prometheus-client==0.22.1
+          cargo build --locked --features metrics --example metrics_overhead
+          "$RUNNER_TEMP/metrics-parser/bin/python" tests/metrics/scrape.py target/debug/examples/metrics_overhead
+      - name: Measure CPU and TCP submission with metrics off, disabled and enabled
+        if: matrix.toolchain == 'stable' && matrix.features == 'metrics'
+        run: python3 tests/metrics/benchmark.py
+      - name: Repeat metrics owner and scrape controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" metrics
       - name: RDMA interruption relay protocol boundary
         if: contains(matrix.features, 'rdma')
         run: cargo test --locked --features "$ORBITTE_FEATURES" --example rdma_host relay_tracks_the_public_engines_current_wire

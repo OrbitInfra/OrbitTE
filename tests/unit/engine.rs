@@ -193,7 +193,9 @@ pub(crate) fn rdma_fixture_with_config(
     let allocations = Arc::new(AllocationBudget::new());
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
-    TransferEngine {
+    let engine = TransferEngine {
+        #[cfg(feature = "metrics")]
+        metrics: None,
         notification_routes: NotificationRoutes::new(&config),
         progress_worker,
         files: FileSegments::default(),
@@ -221,7 +223,17 @@ pub(crate) fn rdma_fixture_with_config(
         control,
         batches: Arc::default(),
         allocations,
-    }
+    };
+    #[cfg(feature = "metrics")]
+    let engine = {
+        let cfg = engine
+            .config
+            .metrics
+            .load(engine.config.metrics_config_file.as_deref())
+            .unwrap();
+        engine.install_metrics(&cfg).unwrap()
+    };
+    engine
 }
 
 #[cfg(feature = "rdma")]
@@ -1143,7 +1155,9 @@ pub(crate) fn staging_fixture(
     let allocations = Arc::new(AllocationBudget::new());
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
-    TransferEngine {
+    let engine = TransferEngine {
+        #[cfg(feature = "metrics")]
+        metrics: None,
         notification_routes: NotificationRoutes::new(&config),
         progress_worker,
         files: FileSegments::default(),
@@ -1171,7 +1185,17 @@ pub(crate) fn staging_fixture(
         control,
         batches: Arc::default(),
         allocations,
-    }
+    };
+    #[cfg(feature = "metrics")]
+    let engine = {
+        let cfg = engine
+            .config
+            .metrics
+            .load(engine.config.metrics_config_file.as_deref())
+            .unwrap();
+        engine.install_metrics(&cfg).unwrap()
+    };
+    engine
 }
 
 impl TransferEngine {

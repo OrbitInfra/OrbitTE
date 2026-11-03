@@ -244,6 +244,13 @@ impl RdmaTransport {
         Ok(())
     }
 
+    #[cfg(feature = "metrics")]
+    pub(crate) fn rail_health_stats(&self) -> RdmaStats {
+        let mut stats = RdmaStats::default();
+        self.workers.monitor.rails.snapshot(&mut stats);
+        stats
+    }
+
     pub(crate) fn stats(&self) -> Result<RdmaStats> {
         let mut stats = *self
             .usage

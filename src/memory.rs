@@ -765,6 +765,8 @@ impl AllocationRef {
 }
 
 pub(crate) struct Registration {
+    #[cfg(feature = "metrics")]
+    pub(crate) metric_transports: std::sync::atomic::AtomicU8,
     #[cfg(feature = "gds")]
     pub(crate) gds: Mutex<crate::transport::gds::BufferSlot>,
     pub(crate) descriptor: RemoteRegion,
@@ -805,6 +807,8 @@ struct MemoryUsage {
 }
 
 pub(crate) struct MemoryRegistry {
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: std::sync::OnceLock<Weak<crate::metrics::Recorder>>,
     epoch: SourceEpoch,
     max_regions: usize,
     max_bytes: usize,
@@ -841,6 +845,8 @@ struct RegistryEntry {
 impl MemoryRegistry {
     pub(crate) fn new(epoch: SourceEpoch, max_regions: usize, max_bytes: usize) -> Self {
         Self {
+            #[cfg(feature = "metrics")]
+            metrics: Default::default(),
             epoch,
             max_regions,
             max_bytes,
@@ -1014,6 +1020,8 @@ impl MemoryRegistry {
             } else {
                 let (allocation, offset, length) = &ranges[plan.input];
                 let memory = RegisteredMemory(Arc::new(Registration {
+                    #[cfg(feature = "metrics")]
+                    metric_transports: Default::default(),
                     #[cfg(feature = "gds")]
                     gds: Mutex::default(),
                     descriptor: RemoteRegion {
@@ -1047,6 +1055,12 @@ impl MemoryRegistry {
                 memory.0.active.store(false, Ordering::Release);
             }
         })?;
+        #[cfg(feature = "metrics")]
+        if let Some(metrics) = self.metrics.get().and_then(Weak::upgrade) {
+            for m in &unpublished {
+                metrics.registration(m, true);
+            }
+        }
         // Native preparation completed; lookup visibility and duplicate bumps commit together.
         for (plan, memory) in plans.iter().zip(&registered) {
             entries.regions.insert(
@@ -1076,6 +1090,10 @@ impl MemoryRegistry {
         entry.references -= 1;
         let last = entry.references == 0;
         if last {
+            #[cfg(feature = "metrics")]
+            if let Some(metrics) = self.metrics.get().and_then(Weak::upgrade) {
+                metrics.registration(memory, false);
+            }
             #[cfg(feature = "rdma")]
             entry.memory.0.active.store(false, Ordering::Release);
             entries.regions.remove(&memory.id());

@@ -1241,6 +1241,9 @@ enum Life {
 }
 
 pub(crate) struct AllocationBudget {
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics: std::sync::OnceLock<std::sync::Weak<crate::metrics::Recorder>>,
+
     state: Mutex<Allocated>,
 }
 struct Allocated {
@@ -1253,6 +1256,8 @@ struct Allocated {
 impl AllocationBudget {
     pub(crate) fn new() -> Self {
         Self {
+            #[cfg(feature = "metrics")]
+            metrics: Default::default(),
             state: Mutex::new(Allocated {
                 registry: HashMap::new(),
                 next_id: 1,
@@ -1291,6 +1296,12 @@ impl AllocationBudget {
             .registry
             .get_mut(&id)
         {
+            #[cfg(feature = "metrics")]
+            if *current != Life::Quarantined && life == Life::Quarantined {
+                if let Some(recorder) = self.metrics.get().and_then(std::sync::Weak::upgrade) {
+                    recorder.quarantine();
+                }
+            }
             *current = life;
         }
     }

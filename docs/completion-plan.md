@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Admission, selection and explicit progress implemented. The P6 section tracks recovery and qualification. Metrics open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Admission, selection and explicit progress implemented. The P6 section tracks recovery and qualification. Metrics implemented; quotas open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -86,7 +86,7 @@ fixes the order (S0–S26) for this period; this plan remains the status record.
 
 S0 and S0b delivered the request API and pre-release wire rules. S1–S5
 complete P7 at source level. S6 implements P6 selector routing and S7 implements explicit progress and
-notification fallback. S8 implements physical admission and merge. S9 covers transport failover and RDMA rail recovery. OrbitKV
+notification fallback. S8 implements physical admission and merge. S9 covers transport failover and RDMA rail recovery. S10 exposes engine and transport metrics. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -184,7 +184,7 @@ Open:
 
 - [ ] Peer identity, descriptor update subscriptions and reconnect semantics.
 - [ ] Notification RPC fallback and native C allocation/free conventions.
-- [ ] Core resource and failure metrics (with P6/P9).
+- [x] Core resource and failure metrics. See [metrics](metrics.md).
 - [ ] Physical two-host TCP and mixed-peer tests against frozen TENT.
 
 Exit: real two-process and two-host TCP byte tests, mixed-peer tests for the
@@ -302,6 +302,7 @@ Done (source scope, CPU controls):
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.
+- **Metrics (S10, F20).** The opt-in TENT exporter records physical attempts, logical results, failure reasons and bounded-owner gauges. CPU and TCP measurements compare disabled and enabled recording. See [metrics](metrics.md).
 - **RDMA rail health (S9, F18).** A pair-level circuit under the existing
   context monitor gates new slices. Recovery requires a native probe receipt.
   Real link-loss qualification is queued. See [rail health](rdma-cuda.md#rail-health).
@@ -314,7 +315,6 @@ Open:
 - [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
   reclamation and manual resource mapping (F15).
 - [ ] Installed transport failover and physical rail fault qualification (F17/F18).
-- [ ] Required metrics, failure attribution and disabled-mode overhead (F20).
 
 Exit: deterministic-clock and fault-provider state-machine tests, race detection
 and real backends; fairness and byte accounting under contention; installed
@@ -371,7 +371,7 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
 - [ ] etcd, Redis and HTTP metadata stores with auth and failure behavior.
-- [ ] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints.
+- [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
 - [ ] Device plugin ABI registration and real CUDA plugin loading.
 
 Exit: independent Rust, C, C++ and Python consumers run the parity cases

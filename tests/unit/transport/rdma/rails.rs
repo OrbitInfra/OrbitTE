@@ -1940,6 +1940,13 @@ fn admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_pos
                 (g.completed_requests, g.failure.unwrap().affected_requests),
                 (0, 2)
             );
+            #[cfg(feature = "metrics")]
+            {
+                let j = requester.metrics().unwrap().json();
+                assert_eq!(j["orbitte_queue_deadline_drops_total"], 1);
+                assert_eq!(j["tent_deadline_infeasible_total"], 1);
+                assert_eq!(j["tent_transport_attempts_total"], 0);
+            }
             assert_eq!(stats.rdma.unwrap().opened_connections, 0);
             assert_eq!(source.stats()?.rdma.unwrap().receive_post_calls, 0);
         } else {
@@ -2202,6 +2209,14 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
         (stats.open_rails, stats.rail_probes, stats.rail_recoveries),
         (0, 2, 1)
     );
+    #[cfg(feature = "metrics")]
+    {
+        let j = requester.metrics().unwrap().json();
+        assert_eq!(j["orbitte_rdma_open_rails"], 0);
+        assert_eq!(j["orbitte_rdma_rail_recoveries_total"], 1);
+        assert_eq!(j["orbitte_rdma_rail_probes_total"], 2);
+        assert_eq!(j["orbitte_rdma_rail_errors_total"], 2);
+    }
     let nics = requester.nic_load_stats()?;
     assert_eq!(
         nics.iter()
