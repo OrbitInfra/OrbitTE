@@ -1405,29 +1405,55 @@ impl TransferEngine {
             }
         };
         let mut index = 0;
-        let mut first_drop = None;
+        let mut first_interruption = None;
+        // A queue drop or an accepted task cancel retires just this owner.
+        // Later owners on the same worker can still carry independent payload.
+        let mut interrupt = |index: usize, reason: Error, effect: RemoteEffect| {
+            if let Some((p, base)) = progress {
+                let task_error = if matches!(reason, Error::DeadlineInfeasible) {
+                    Error::DeadlineInfeasible
+                } else {
+                    Error::Cancelled
+                };
+                p.fail_owners(
+                    base,
+                    TransferFailure {
+                        request_index: index,
+                        affected_requests: 1,
+                        error: task_error,
+                        remote_effect: effect,
+                    },
+                    true,
+                );
+            }
+            let first = first_interruption.get_or_insert(TransferFailure {
+                request_index: index,
+                affected_requests: 1,
+                error: reason,
+                remote_effect: effect,
+            });
+            if effect == RemoteEffect::Unknown {
+                first.remote_effect = effect;
+            }
+            submission.retire_owners(index, 1, 0);
+        };
         while index < requests.len() {
             let request = &requests[index];
             let owner = &submission.owners[index];
             let owner_deadline = owner.deadline;
-            if let Err(error) =
-                owner.start(|| progress.is_some_and(|(p, base)| p.cancel_requested(base + index)))
-            {
-                if matches!(error, Error::DeadlineInfeasible) {
-                    first_drop.get_or_insert(index);
-                    if let Some((p, base)) = progress {
-                        p.fail_owners(
-                            base,
-                            TransferFailure {
-                                request_index: index,
-                                affected_requests: 1,
-                                error,
-                                remote_effect: RemoteEffect::None,
-                            },
-                            true,
-                        );
-                    }
-                    submission.retire_owners(index, 1, 0);
+            let cancelled = || progress.is_some_and(|(p, base)| p.cancel_requested(base + index));
+            let start = owner.start(cancelled).and_then(|()| {
+                if progress.is_some_and(|(p, base)| !p.begin_task(base + index)) {
+                    Err(Error::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(error) = start {
+                if matches!(error, Error::DeadlineInfeasible)
+                    || (matches!(error, Error::Cancelled) && cancelled())
+                {
+                    interrupt(index, error, RemoteEffect::None);
                     index += 1;
                     continue;
                 }
@@ -1438,17 +1464,6 @@ impl TransferEngine {
                     remote_effect: RemoteEffect::None,
                 });
                 break;
-            }
-            if let Some((progress, first_task)) = progress {
-                if !progress.begin_task(first_task + index) {
-                    report.failure = Some(TransferFailure {
-                        request_index: index,
-                        affected_requests: 1,
-                        error: Error::Cancelled,
-                        remote_effect: RemoteEffect::None,
-                    });
-                    break;
-                }
             }
             let credit = owner.credit();
             if let Some(c) = &credit {
@@ -1580,6 +1595,14 @@ impl TransferEngine {
                 submission.retire_owners(index, completed, completed);
             }
             if let Err(mut failure) = result {
+                if request.selection.transport == Transport::Rdma
+                    && matches!(failure.error, Error::Cancelled)
+                    && cancelled()
+                {
+                    interrupt(index, failure.error, failure.remote_effect);
+                    index += 1;
+                    continue;
+                }
                 report.locally_drained = !matches!(failure.error, Error::Unquiesced { .. });
                 failure.request_index += index;
                 report.failure = Some(failure);
@@ -1587,25 +1610,21 @@ impl TransferEngine {
             }
             index += completed;
         }
-        if let Some(first) = first_drop {
-            // Picking drops one owner and continues with feasible neighbours.
-            // BatchReport keeps its public completed-prefix contract. Per-task
-            // status retains each independently known result.
+        if let Some(mut interrupted) = first_interruption {
+            // The report counts the successful public prefix. Async task
+            // statuses retain independent successes after the first gap.
+            let first = interrupted.request_index;
             let mut end = index;
-            let mut effect = if *operation == TransferOp::Write && report.completed_requests > first
-            {
-                RemoteEffect::Unknown
-            } else {
-                RemoteEffect::None
-            };
-            let mut error = Error::DeadlineInfeasible;
+            if *operation == TransferOp::Write && report.completed_requests > first {
+                interrupted.remote_effect = RemoteEffect::Unknown;
+            }
             if let Some(failure) = report.failure.take() {
                 end = failure.request_index + failure.affected_requests;
                 if failure.remote_effect == RemoteEffect::Unknown {
-                    effect = RemoteEffect::Unknown;
+                    interrupted.remote_effect = RemoteEffect::Unknown;
                 }
                 if let Error::Unquiesced { operation, code } = &failure.error {
-                    error = Error::Unquiesced {
+                    interrupted.error = Error::Unquiesced {
                         operation,
                         code: *code,
                     };
@@ -1619,12 +1638,8 @@ impl TransferEngine {
                 .iter()
                 .map(|o| o.length)
                 .sum();
-            report.failure = Some(TransferFailure {
-                request_index: first,
-                affected_requests: end - first,
-                error,
-                remote_effect: effect,
-            });
+            interrupted.affected_requests = end - first;
+            report.failure = Some(interrupted);
         }
         if report.is_complete() && !requests.is_empty() {
             if let Some(notification) = notification {

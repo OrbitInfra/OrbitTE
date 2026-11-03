@@ -232,7 +232,7 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
         .submit(TransferOp::Write, &peer, &requests[..2], None, TIMEOUT)
         .unwrap();
     batch.seal().unwrap();
-    batch.cancel(0).unwrap();
+    batch.cancel_all().unwrap();
     assert_eq!(batch.wait(TIMEOUT).unwrap().state, BatchState::Cancelled);
     batch.free().unwrap();
     let mut expired = requester
@@ -286,11 +286,25 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
         [
             TaskState::Completed,
             TaskState::Cancelled,
-            TaskState::Skipped
+            TaskState::Completed
         ]
     );
     remote.read(0, &mut bytes).unwrap();
-    assert_eq!(bytes, [7, 0, 0]);
+    assert_eq!(bytes, [7, 0, 7]);
+    let result = &partial.submissions().unwrap()[0];
+    assert_eq!(
+        (result.completed_requests, result.transferred_bytes),
+        (1, 1)
+    );
+    let failure = result.failure.as_ref().unwrap();
+    assert_eq!(
+        (
+            failure.request_index,
+            failure.affected_requests,
+            failure.remote_effect
+        ),
+        (1, 2, crate::RemoteEffect::Unknown)
+    );
     partial.free().unwrap();
     assert_eq!(requester.stats().unwrap().inflight_batches, 0);
     assert_eq!(

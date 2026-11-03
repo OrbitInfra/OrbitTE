@@ -45,7 +45,8 @@ Every public request keeps its task ID and length. `task_status(i).physical_owne
 is the absolute public ID of the first task carried by that physical transfer.
 All aliases see the same running, cancellation and terminal state. Each reports
 only bytes within its own range. Cancelling any alias addresses the owner.
-A queued cancellation removes the owner before payload I/O. A running RDMA
+Cancelling one memory owner leaves independent successors eligible. A queued
+cancellation removes the owner before payload I/O. A running RDMA
 owner cancels unposted slices and drains every accepted post before retiring
 its backing.
 
@@ -156,7 +157,8 @@ owner eligible for ordinary dispatch. Ordinary execution timeouts still apply.
 A drop removes queue accounting before I/O, publishes `Error::DeadlineInfeasible`
 to its aliases and increments `RuntimeQueueStats::deadline_infeasible_drops`
 once. Other eligible owners can run, including later tasks in the same submit.
-A later WRITE in a failed report’s span can therefore have an unknown effect.
+A later WRITE in a failed report’s span can therefore have an unknown effect,
+including when an earlier owner was cancelled.
 The engine exposes this decision through status and stats. It installs no
 local-decoding or compression callback. See
 [RDMA deadline prediction](rdma-cuda.md#request-priority-and-bandwidth-arbitration)

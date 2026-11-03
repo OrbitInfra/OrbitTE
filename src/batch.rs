@@ -394,73 +394,85 @@ impl Batch {
     /// drops only unposted slices. A running transport without cancellation
     /// support returns Unavailable. A cancel never proves physical quiescence.
     pub fn cancel(&self, task: usize) -> Result<bool> {
+        self.cancel_owners(Some(task))
+    }
+
+    /// Attempt every physical owner, including queued successors of a running
+    /// transport that cannot cancel. Return the first unsupported operation.
+    pub fn cancel_all(&self) -> Result<()> {
+        self.cancel_owners(None).map(|_| ())
+    }
+
+    fn cancel_owners(&self, public_task: Option<usize>) -> Result<bool> {
         let mut state = self.progress()?.lock();
-        let owner = state.public.get(task).ok_or(Error::InvalidTask)?.owner;
-        let control = &state.controls[owner];
-        let task = &state.tasks[owner];
-        if task.state.is_terminal()
-            || control
-                .ticket
-                .as_ref()
-                .is_some_and(|t| t.terminal().is_err())
-        {
-            return Ok(false);
-        }
-        if task.cancel_requested {
-            return Ok(true);
-        }
+        let owners = match public_task {
+            Some(id) => {
+                let i = state.public.get(id).ok_or(Error::InvalidTask)?.owner;
+                i..i + 1
+            }
+            None => 0..state.tasks.len(),
+        };
         let engine = self.engine.as_ref().ok_or(Error::BatchClosed)?;
-        if task.state == TaskState::Running {
-            match &control.running {
-                RunningCancel::Unsupported => {
-                    return Err(Error::Unavailable(
-                        "running transport does not support cancellation",
-                    ));
-                }
-                #[cfg(any(feature = "io-uring", feature = "gds"))]
-                RunningCancel::File => {}
-                #[cfg(feature = "rdma")]
-                RunningCancel::Rdma(flag) => {
-                    flag.store(true, std::sync::atomic::Ordering::Release);
+        let mut tickets = Vec::new();
+        let mut accepted = false;
+        let mut unsupported = false;
+        #[cfg(feature = "rdma")]
+        let mut native = false;
+        // Publish every bulk cancellation before a freed slot can admit a
+        // successor. The queue is woken only after releasing the batch lock.
+        for owner in owners {
+            let control = &state.controls[owner];
+            let task = &state.tasks[owner];
+            if task.state.is_terminal()
+                || control
+                    .ticket
+                    .as_ref()
+                    .is_some_and(|t| t.terminal().is_err())
+            {
+                continue;
+            }
+            if task.cancel_requested {
+                accepted = true;
+                continue;
+            }
+            if task.state == TaskState::Running {
+                match &control.running {
+                    RunningCancel::Unsupported => {
+                        unsupported = true;
+                        continue;
+                    }
+                    #[cfg(any(feature = "io-uring", feature = "gds"))]
+                    RunningCancel::File => {}
+                    #[cfg(feature = "rdma")]
+                    RunningCancel::Rdma(flag) => {
+                        flag.store(true, std::sync::atomic::Ordering::Release);
+                        native = true;
+                    }
                 }
             }
+            if let Some(ticket) = &control.ticket {
+                tickets.push(ticket.clone());
+            }
+            state.tasks[owner].cancel_requested = true;
+            accepted = true;
         }
-        let ticket = control.ticket.clone();
-        #[cfg(feature = "rdma")]
-        let native =
-            task.state == TaskState::Running && matches!(control.running, RunningCancel::Rdma(_));
-        state.tasks[owner].cancel_requested = true;
         drop(state);
-        if let Some(ticket) = ticket {
+        for ticket in tickets {
             engine.cancel_queued(&ticket);
         }
         #[cfg(feature = "rdma")]
         if native {
             engine.wake_rdma_cancel();
         }
-        engine.wake_runtime_queue();
-        Ok(true)
-    }
-
-    /// Attempt every physical owner, including queued successors of a running
-    /// transport that cannot cancel. Return the first unsupported operation.
-    pub fn cancel_all(&self) -> Result<()> {
-        let owners: Vec<_> = self
-            .progress()?
-            .lock()
-            .tasks
-            .iter()
-            .map(|t| t.physical_owner)
-            .collect();
-        let mut result = Ok(());
-        for owner in owners {
-            if let Err(e) = self.cancel(owner) {
-                if result.is_ok() {
-                    result = Err(e);
-                }
-            }
+        if accepted {
+            engine.wake_runtime_queue();
         }
-        result
+        if unsupported {
+            return Err(Error::Unavailable(
+                "running transport does not support cancellation",
+            ));
+        }
+        Ok(accepted)
     }
 
     /// Observational wait: timeout neither cancels nor frees work. Seal before

@@ -288,7 +288,7 @@ fn cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range()
         EngineConfig {
             runtime_queue: Some(RuntimeQueueConfig {
                 max_dispatch_owners: 1,
-                max_outstanding_owners: 2,
+                max_outstanding_owners: 3,
                 ..Default::default()
             }),
             ..Default::default()
@@ -303,16 +303,21 @@ fn cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range()
         .submit_async(
             TransferOp::Write,
             &f.peer,
-            &[f.req(4, 2), f.req(6, 2)],
+            &[f.req(4, 2), f.req(6, 2), f.req(12, 1)],
             None,
             WAIT,
         )
         .unwrap();
     assert_eq!(
         f.dst.stats().unwrap().runtime_queue.unwrap().queued_owners,
-        1
+        2
     );
     batch.cancel(1).unwrap();
+    assert_eq!(
+        f.dst.stats().unwrap().runtime_queue.unwrap().queued_owners,
+        1
+    );
+    drop(held);
     let report = batch.wait(WAIT).unwrap();
     assert_eq!(
         (
@@ -320,7 +325,7 @@ fn cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range()
             report.completed_tasks,
             report.transferred_bytes
         ),
-        (BatchState::Cancelled, 0, 0)
+        (BatchState::Cancelled, 1, 1)
     );
     let failed = batch.submissions().unwrap()[0].failure.clone().unwrap();
     assert!(matches!(failed.error, Error::Cancelled));
@@ -330,12 +335,10 @@ fn cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range()
             failed.affected_requests,
             failed.remote_effect
         ),
-        (0, 2, RemoteEffect::None)
+        (0, 3, RemoteEffect::Unknown)
     );
     assert!(
-        batch
-            .task_statuses()
-            .unwrap()
+        batch.task_statuses().unwrap()[..2]
             .iter()
             .all(|t| t.physical_owner == 0
                 && t.state == TaskState::Cancelled
@@ -348,9 +351,19 @@ fn cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range()
     );
     let mut guard = [0; 32];
     f.remote.read(0, &mut guard).unwrap();
-    assert_eq!(guard, std::array::from_fn(|i| i as u8));
+    let mut expected = std::array::from_fn(|i| i as u8);
+    expected[12] = 0xcc;
+    assert_eq!(guard, expected);
+    let sibling = batch.task_status(2).unwrap();
+    assert_eq!(
+        (
+            sibling.physical_owner,
+            sibling.state,
+            sibling.transferred_bytes
+        ),
+        (2, TaskState::Completed, 1)
+    );
     batch.free().unwrap();
-    drop(held);
 }
 
 #[test]
