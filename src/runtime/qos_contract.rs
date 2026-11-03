@@ -1,19 +1,35 @@
+mod admission;
 mod config;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use crate::runtime::admission_queue::LocalTransferAdmissionQueue;
 use crate::{Error, Priority, Result, SourceEpoch};
+
+use admission::QosQuota;
+pub(crate) use admission::{QosCharge, QosPermit, QosReservation};
 
 const MAX_CONTRACTS: usize = 4096;
 
+/// Supported TENT action allowlist. Empty or absent actions preserve rejection;
+/// allowing delay requires EngineConfig::runtime_queue. If both are allowed,
+/// temporary quota pressure delays; impossible groups still fail admission.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QosDegradedActions {
+    pub delay: bool,
+    pub reject: bool,
+}
+
 /// None inherits the less specific layer. An effective None is unlimited;
-/// Some(0) is a hard zero budget. Counts cover retained public data requests.
+/// Some(0) is a hard zero budget. Counts cover admitted public data requests
+/// until their actual owner drains.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct QosPolicyFields {
     pub priority: Option<Priority>,
     pub max_inflight_bytes: Option<usize>,
     pub max_inflight_requests: Option<usize>,
+    pub allowed_degraded_actions: Option<QosDegradedActions>,
 }
 
 impl QosPolicyFields {
@@ -24,6 +40,9 @@ impl QosPolicyFields {
             max_inflight_requests: specific
                 .max_inflight_requests
                 .or(self.max_inflight_requests),
+            allowed_degraded_actions: specific
+                .allowed_degraded_actions
+                .or(self.allowed_degraded_actions),
         }
     }
 
@@ -144,7 +163,7 @@ impl EffectiveQosPolicy {
             return None;
         }
         let quota = self.0.quota.as_ref()?;
-        Some(quota.usage.lock().unwrap_or_else(|p| p.into_inner())[contract.slot])
+        Some(quota.usage(contract.slot))
     }
 
     pub(crate) fn contract(&self, engine: SourceEpoch) -> Result<Option<&CompiledContract>> {
@@ -181,7 +200,10 @@ fn normalize(value: &str, fallback: &str) -> Result<String> {
 }
 
 impl QosContractResolver {
-    pub(crate) fn new(config: &QosConfig) -> Result<Self> {
+    pub(crate) fn new(
+        config: &QosConfig,
+        queue: Option<&Arc<LocalTransferAdmissionQueue>>,
+    ) -> Result<Self> {
         if config.version != 1 {
             return Err(Error::InvalidConfig("unsupported QoS version"));
         }
@@ -215,12 +237,18 @@ impl QosContractResolver {
             }
             tenants.insert(name, TenantContract { defaults, intents });
         }
-        let quota = limits.iter().any(|policy| policy.bounded()).then(|| {
-            Arc::new(QosQuota {
-                usage: Mutex::new(vec![QosUsage::default(); limits.len()]),
-                limits,
-            })
+        let delay = limits.iter().any(|policy| {
+            policy
+                .allowed_degraded_actions
+                .is_some_and(|actions| actions.delay)
         });
+        if delay && queue.is_none() {
+            return Err(Error::InvalidConfig("QoS delay requires runtime_queue"));
+        }
+        let quota = limits
+            .iter()
+            .any(|policy| policy.bounded())
+            .then(|| Arc::new(QosQuota::new(limits, queue.filter(|_| delay))));
         let mut resolver = Self {
             default: Arc::clone(&global),
             global,
@@ -279,125 +307,6 @@ impl QosContractResolver {
             .ok_or(Error::Internal("QoS quota missing"))?
             .admit(charges)
             .map(Some)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct QosCharge {
-    slot: usize,
-    bytes: usize,
-    requests: usize,
-}
-
-impl QosCharge {
-    pub(crate) fn add(
-        charges: &mut Vec<Self>,
-        contract: &CompiledContract,
-        bytes: usize,
-    ) -> Result<()> {
-        if !contract.fields.bounded() {
-            return Ok(());
-        }
-        if let Some(last) = charges.last_mut().filter(|last| last.slot == contract.slot) {
-            last.bytes = last
-                .bytes
-                .checked_add(bytes)
-                .ok_or(Error::ResourceExhausted)?;
-            last.requests = last
-                .requests
-                .checked_add(1)
-                .ok_or(Error::ResourceExhausted)?;
-        } else {
-            charges
-                .try_reserve(1)
-                .map_err(|_| Error::ResourceExhausted)?;
-            charges.push(Self {
-                slot: contract.slot,
-                bytes,
-                requests: 1,
-            });
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct QosQuota {
-    limits: Vec<QosPolicyFields>,
-    usage: Mutex<Vec<QosUsage>>,
-}
-
-impl QosQuota {
-    fn admit(self: &Arc<Self>, mut charges: Vec<QosCharge>) -> Result<QosPermit> {
-        // Adjacent requests coalesce while preparing; sort only the remaining runs.
-        charges.sort_unstable_by_key(|charge| charge.slot);
-        let mut count = 0;
-        for index in 0..charges.len() {
-            let charge = charges[index];
-            if count > 0 && charges[count - 1].slot == charge.slot {
-                let previous = &mut charges[count - 1];
-                previous.bytes = previous
-                    .bytes
-                    .checked_add(charge.bytes)
-                    .ok_or(Error::ResourceExhausted)?;
-                previous.requests = previous
-                    .requests
-                    .checked_add(charge.requests)
-                    .ok_or(Error::ResourceExhausted)?;
-            } else {
-                charges[count] = charge;
-                count += 1;
-            }
-        }
-        charges.truncate(count);
-        let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
-        for charge in &charges {
-            let current = usage[charge.slot];
-            let limits = self.limits[charge.slot];
-            let bytes = current
-                .inflight_bytes
-                .checked_add(charge.bytes)
-                .ok_or(Error::ResourceExhausted)?;
-            let requests = current
-                .inflight_requests
-                .checked_add(charge.requests)
-                .ok_or(Error::ResourceExhausted)?;
-            if limits.max_inflight_bytes.is_some_and(|cap| bytes > cap)
-                || limits
-                    .max_inflight_requests
-                    .is_some_and(|cap| requests > cap)
-                || current.owners == usize::MAX
-            {
-                return Err(Error::ResourceExhausted);
-            }
-        }
-        for charge in &charges {
-            let current = &mut usage[charge.slot];
-            current.inflight_bytes += charge.bytes;
-            current.inflight_requests += charge.requests;
-            current.owners += 1;
-        }
-        Ok(QosPermit {
-            quota: Arc::clone(self),
-            charges,
-        })
-    }
-}
-
-pub(crate) struct QosPermit {
-    quota: Arc<QosQuota>,
-    charges: Vec<QosCharge>,
-}
-
-impl Drop for QosPermit {
-    fn drop(&mut self) {
-        let mut usage = self.quota.usage.lock().unwrap_or_else(|p| p.into_inner());
-        for charge in &self.charges {
-            let current = &mut usage[charge.slot];
-            current.inflight_bytes -= charge.bytes;
-            current.inflight_requests -= charge.requests;
-            current.owners -= 1;
-        }
     }
 }
 

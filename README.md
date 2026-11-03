@@ -43,7 +43,9 @@ recovery policy and replica placement.
   intent priorities once and enforce retained payload byte/request budgets per
   resolved contract. Load these fields from [TENT-format JSON](docs/async-batches.md#json-qos-configuration)
   or typed Rust configuration; reusable policy handles avoid parsing and name
-  lookup during submission.
+  lookup during submission. [QoS delay/reject](docs/async-batches.md#qos-admission-actions)
+  either waits for whole-group capacity through the runtime queue or rejects
+  pressure; waiting work cannot partially reserve QoS or receiver credit.
   Optional [automatic receiver windows](docs/async-batches.md#automatic-receiver-windows)
   issue bounded peer grants and coalesce successful-owner completion updates;
   credit sync runs only on demand through existing waiters. Optional

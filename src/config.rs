@@ -93,7 +93,9 @@ pub struct EngineConfig {
     /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
     pub runtime_queue: Option<RuntimeQueueConfig>,
     /// Immutable typed QoS contracts. None preserves caller priorities and adds
-    /// no QoS ledger. Resolved contract budgets cover retained payload owners.
+    /// no QoS ledger. Resolved budgets cover admitted payload owners until drain.
+    /// Allowing QoS delay requires runtime_queue; waiting groups still consume
+    /// max_inflight_batches/bytes but acquire QoS capacity at dispatch.
     pub qos: Option<crate::QosConfig>,
     /// Zero disables receiver credit gating. A positive limit (at most 4096)
     /// requires an activated peer session for every nonempty data submission.

@@ -52,6 +52,64 @@ fn tent_json_preserves_enablement_units_and_compiled_overlays() {
             Some(priority)
         );
     }
+    for (value, delay, reject) in [
+        ("[]", false, false),
+        (r#"[" DELAY "]"#, true, false),
+        (r#"["Reject"]"#, false, true),
+        (r#"["reject","delay","delay"]"#, true, true),
+    ] {
+        let input = format!(r#"{{"qos":{{"defaults":{{"allowed_degraded_actions":{value}}}}}}}"#);
+        let fields = QosConfig::from_json(&input).unwrap().unwrap().defaults;
+        assert_eq!(
+            fields.allowed_degraded_actions,
+            Some(QosDegradedActions { delay, reject })
+        );
+    }
+    // Actions replace the inherited field, including an explicit empty list.
+    let actions = QosConfig::from_json(
+        r#"{"qos":{
+        "defaults":{"allowed_degraded_actions":["delay","reject"]},
+        "tenants":[{"name":"a","defaults":{"allowed_degraded_actions":["reject"]},
+            "intents":{"empty":{"allowed_degraded_actions":[]}}}]
+    }}"#,
+    )
+    .unwrap()
+    .unwrap();
+    let queue = crate::runtime::admission_queue::LocalTransferAdmissionQueue::new(
+        crate::RuntimeQueueConfig::default(),
+    );
+    let resolver = QosContractResolver::new(&actions, Some(&queue)).unwrap();
+    for (tenant, intent, expected) in [
+        (
+            "missing",
+            "unspec",
+            QosDegradedActions {
+                delay: true,
+                reject: true,
+            },
+        ),
+        (
+            "a",
+            "unspec",
+            QosDegradedActions {
+                delay: false,
+                reject: true,
+            },
+        ),
+        ("a", "empty", QosDegradedActions::default()),
+    ] {
+        let policy = QosContractResolver::resolve(
+            Some(&resolver),
+            SourceEpoch([1; 16]),
+            &QosRequestContext {
+                tenant_id: tenant.into(),
+                intent: intent.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(policy.fields().allowed_degraded_actions, Some(expected));
+    }
     let input = r#"{
         "transports": ["rdma", "tcp"],
         "qos": {
@@ -73,7 +131,7 @@ fn tent_json_preserves_enablement_units_and_compiled_overlays() {
         QosConfig::from_json_file(&path),
         Err(Error::Io(_))
     ));
-    let resolver = QosContractResolver::new(&config).unwrap();
+    let resolver = QosContractResolver::new(&config, None).unwrap();
     for (tenant, intent, priority, bytes, requests) in [
         (
             "tenant-a",
@@ -149,7 +207,12 @@ fn json_rejects_ambiguous_or_unconsumed_qos_and_bounded_input() {
         r#"{"qos":{"defaults":{"priority":0,"priority":2}}}"#,
         r#"{"qos":null,"qos":{"defaults":{}}}"#,
         r#"{"qos":{"strict_mode":true}}"#,
-        r#"{"qos":{"defaults":{"allowed_degraded_actions":[]}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":null}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":"delay"}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":[1]}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":["fallback_transport"]}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":["local_recompute"]}}}"#,
+        r#"{"qos":{"defaults":{"allowed_degraded_actions":["compress"]}}}"#,
         r#"{"qos":{"defaults":{"min_bandwidth_gbps":20}}}"#,
         r#"{"qos":{"defaults":{"max_inflight_requests":"128"}}}"#,
         r#"{"qos":{"defaults":{"max_inflight_requests":-1}}}"#,
@@ -187,7 +250,7 @@ fn json_rejects_ambiguous_or_unconsumed_qos_and_bounded_input() {
         Err(Error::InvalidQosConfig(_))
     ));
     let error =
-        QosConfig::from_json(r#"{"qos":{"defaults":{"allowed_degraded_actions":["delay"]}}}"#)
+        QosConfig::from_json(r#"{"qos":{"defaults":{"allowed_degraded_actions":["unknown"]}}}"#)
             .unwrap_err();
     assert!(error.to_string().contains("allowed_degraded_actions"));
 }

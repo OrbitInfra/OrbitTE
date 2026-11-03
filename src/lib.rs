@@ -73,7 +73,8 @@ pub use memory::{
 pub use notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus};
 pub use runtime::admission_queue::RuntimeQueueStats;
 pub use runtime::qos_contract::{
-    EffectiveQosPolicy, QosConfig, QosPolicyFields, QosRequestContext, QosTenantContract, QosUsage,
+    EffectiveQosPolicy, QosConfig, QosDegradedActions, QosPolicyFields, QosRequestContext,
+    QosTenantContract, QosUsage,
 };
 pub use runtime::receiver_credit::{
     CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditConfig,

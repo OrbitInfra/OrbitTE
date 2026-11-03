@@ -157,10 +157,11 @@ pub struct TransferEngine {
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
+        let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let qos = config
             .qos
             .as_ref()
-            .map(QosContractResolver::new)
+            .map(|qos| QosContractResolver::new(qos, runtime_queue.as_ref()))
             .transpose()?;
         let epoch = SourceEpoch::generate()?;
         #[cfg(feature = "cuda")]
@@ -222,7 +223,6 @@ impl TransferEngine {
             drained: Condvar::new(),
         });
         let control = ControlService::start(Arc::clone(&source), &config)?;
-        let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
         });
@@ -704,6 +704,7 @@ impl TransferEngine {
                     credit
                         .as_ref()
                         .map(|credit| Arc::clone(&credit.reservation)),
+                    qos.as_ref().and_then(QosPermit::reservation),
                 )
             })
             .transpose()?;
@@ -1233,11 +1234,12 @@ pub(crate) struct PreparedSubmission {
     pub(crate) requests: Vec<PreparedTransfer>,
     pub(crate) notification: Option<Notification>,
     pub(crate) deadline: Instant,
-    // Field drop order returns dispatch and admission charges after backing.
-    queue: Option<QueuePermit>,
-    // Remove queue metadata before rollback can wake/refill that same queue.
-    pub(crate) credit: Option<CreditPermit>,
+    // Backing drops first. Return QoS before advancing the Batch head so a
+    // reject-only successor does not see its predecessor's retiring charge.
     _qos: Option<QosPermit>,
+    queue: Option<QueuePermit>,
+    // Remove queue metadata before credit rollback can wake/refill the queue.
+    pub(crate) credit: Option<CreditPermit>,
     _admission: BatchPermit,
 }
 

@@ -183,12 +183,13 @@ parent/child charging: an intent budget is independent of its tenant-default
 bucket. Existing engine-wide inflight budgets remain the aggregate outer bound.
 These cooperative identities are application-supplied, not authentication.
 
-Preparation groups mixed-contract requests by static slot and atomically checks
-the entire submission before charging any slot or publishing public tasks.
+Preparation groups mixed-contract requests by static slot. Without an effective
+delay action anywhere in the engine, it atomically checks the entire submission
+before charging any slot or publishing public tasks.
 `max_inflight_bytes` counts payload lengths; `max_inflight_requests` counts public
 requests, not submissions or native slices. Attached notifications are covered
-by existing global budgets. Over-cap groups return `ResourceExhausted` immediately
-without queueing for QoS space. Existing accepted work, including credit waits,
+by existing global budgets. In this default reject mode, over-cap groups return
+`ResourceExhausted` immediately. Existing accepted work, including credit waits,
 dispatch waits and uncertain DMA, retains the charge. Clean cancellation, expiry
 or failure releases it only when actual prepared ownership ends; Unquiesced
 retains it. Internal staging legs are not charged again. Empty groups, standalone
@@ -198,8 +199,9 @@ notifications and registration/control calls have no QoS data charge.
 identity accessors explain resolution. `policy.usage()` returns that contract's
 current owners, payload bytes and public request count, or `None` for an uncapped
 policy. A priority-only configuration creates no quota ledger. Resolution is
-reusable; submission uses numeric slots, one atomic admission lock per bounded
-group and no additional per-slice policy lookup or network message.
+reusable; submission uses numeric slots and no additional per-slice policy
+lookup or network message. Default admission uses one quota lock per bounded
+group; delay-enabled scheduling rechecks quota only at admission/wakeup boundaries.
 
 Frozen TENT's `QosContractResolver` resolves policy and reports
 `diagnostic_scope=resolution_only`; it has no runtime consumer in the frozen
@@ -207,10 +209,71 @@ tree. OrbitTE now consumes priority and retained-resource limits. Typed Rust
 configuration, rejecting normalized duplicate intent keys and treating all-blank
 request identity as the default are deliberate differences. The supported JSON
 fields can also load into this same configuration, as described below.
-Degraded-action execution, parent/child and cluster-wide quotas, native fairness
-and full QoS remain open. Receiver-credit `qos_class` is still a separate peer
+The consumed delay/reject subset is described below. Transport fallback,
+local recompute, compression, parent/child and cluster-wide quotas, native
+fairness and full QoS remain open. Receiver-credit `qos_class` is still a separate peer
 binding and is not implicitly mapped from these contracts. See the
 [source qualification](qualification.md#qos-contract-consumption).
+
+### QoS admission actions
+
+`allowed_degraded_actions` follows TENT's field-level overlay: an explicit
+tenant/intent list replaces the inherited list, including an empty list. Typed
+Rust uses `Option<QosDegradedActions>` with `delay` and `reject` flags. JSON uses
+an array of normalized action names; order and repeated names do not affect the
+allowlist. Unsupported actions are errors.
+
+| Effective actions | On contract quota pressure |
+| --- | --- |
+| Absent, `[]`, or `["reject"]` | Return `ResourceExhausted` |
+| `["delay"]` or `["delay", "reject"]` | Wait for temporary pressure until the original deadline |
+| Any action with a group intrinsically larger than its cap | Reject during preparation; drain cannot make the group fit |
+
+Allowing delay requires explicit `EngineConfig::runtime_queue`; engine creation
+otherwise returns `InvalidConfig`. For example:
+
+```rust
+use orbit_te::{EngineConfig, QosConfig, RuntimeQueueConfig, TransferEngine};
+
+let engine = TransferEngine::new(EngineConfig {
+    runtime_queue: Some(RuntimeQueueConfig::default()),
+    qos: QosConfig::from_json(r#"{"qos":{"defaults":{
+        "max_inflight_bytes":"64MiB", "max_inflight_requests":128,
+        "allowed_degraded_actions":["delay","reject"]
+    }}}"#)?,
+    ..Default::default()
+})?;
+# Ok::<(), orbit_te::Error>(())
+```
+
+In a delay-enabled engine **all bounded QoS contracts**, including reject-only
+overrides, acquire capacity at their eligible Batch head. Later groups cannot
+reserve quota ahead of their predecessor. The runtime queue acquires every
+contract slot, receiver credit and dispatch window together, with no partial
+charge while waiting. Independent eligible batches may bypass a QoS-blocked
+head. Queued buffers and registrations remain bounded by the engine-wide
+`max_inflight_batches/bytes`; `policy.usage()` counts acquired QoS capacity only.
+
+Preparation still rejects an intrinsically oversized group or a currently full
+reject-only slot without publishing tasks. If a reject-only slot fills after
+enqueue, that accepted submission fails at dispatch: its first task reports
+`ResourceExhausted` with no remote effect, and later tasks are skipped. A full
+reject-only slot wins over a delay slot in the same mixed-contract group.
+Waiting does not extend the submission deadline. Cancellation and expiry use
+the existing batch state machine and finish before data I/O. Synchronous calls
+wait in the same queue; no new worker or polling loop is added.
+
+Once acquired, quota remains owned through backing cleanup, even after logical
+completion. Actual prepared-owner Drop returns it and wakes the queue;
+Unquiesced retains it. Every exiting owner atomically retires its reservation,
+including one cancelled before acquiring quota; remaining queue metadata cannot
+reacquire capacity during Drop. Receiver credit sync runs only when QoS is eligible and
+keeps network I/O outside admission locks. Wire v23 is unchanged.
+
+Frozen TENT parses and overlays these action names but labels the resolver
+`resolution_only`. The executable rules above are OrbitTE's defined extension,
+not a claim that the frozen engine already implements them. See
+[source qualification](qualification.md#qos-admission-actions).
 
 ### JSON QoS configuration
 
@@ -278,11 +341,13 @@ keys are errors. The loader reports JSON schema diagnostics through
 parser. Existing typed identifier/count checks may return `InvalidConfig`, and
 file access errors return `Io`. A failed load returns no partially usable config.
 
-`allowed_degraded_actions` is deliberately rejected, including an empty list,
-until its execution policy is implemented. Bandwidth, weight and deadline fields
-not consumed by the engine are also rejected. Frozen TENT's parser accepts its
-degraded-action metadata but marks resolution as `resolution_only`; OrbitTE
-accepts the priority and inflight limits that its runtime actually consumes.
+`allowed_degraded_actions` accepts arrays containing `delay` and `reject`,
+including an empty array. Names use ASCII trimming and lowercase. Explicit null,
+non-string entries, `fallback_transport`, `local_recompute`, `compress` and
+unknown names are rejected. Bandwidth, weight and deadline fields not consumed
+by the engine remain rejected. Frozen TENT accepts all five action names as
+resolution-only metadata; OrbitTE accepts only the priority, inflight limits and
+[admission actions](#qos-admission-actions) that its runtime consumes.
 This is supported-field compatibility, not the full TENT engine configuration API.
 
 JSON/file processing runs once before engine creation, using the existing serde

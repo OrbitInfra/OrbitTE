@@ -50,7 +50,7 @@ fn tent_layers_override_fields_and_compile_bounded_shared_slots() {
         }],
         ..Default::default()
     };
-    let resolver = QosContractResolver::new(&config).unwrap();
+    let resolver = QosContractResolver::new(&config, None).unwrap();
     let owner = SourceEpoch([1; 16]);
     for (tenant, intent, name, priority, bytes, requests, matched) in [
         (
@@ -143,7 +143,10 @@ fn tent_layers_override_fields_and_compile_bounded_shared_slots() {
             4 => config.tenants[0].name = "x".repeat(257),
             _ => unreachable!(),
         }
-        assert!(QosContractResolver::new(&config).is_err(), "case {invalid}");
+        assert!(
+            QosContractResolver::new(&config, None).is_err(),
+            "case {invalid}"
+        );
     }
     let excessive = QosConfig {
         tenants: (0..4096)
@@ -154,7 +157,7 @@ fn tent_layers_override_fields_and_compile_bounded_shared_slots() {
             .collect(),
         ..Default::default()
     };
-    assert!(QosContractResolver::new(&excessive).is_err());
+    assert!(QosContractResolver::new(&excessive, None).is_err());
 }
 
 fn request(local: u64, remote: u64, policy: Option<EffectiveQosPolicy>) -> TransferRequest {
@@ -342,6 +345,7 @@ fn implicit_default_intent_enforces_hard_zero_and_effective_transport_priority()
                             priority: Some(priority),
                             max_inflight_bytes: bytes,
                             max_inflight_requests: requests,
+                            ..Default::default()
                         },
                     )]),
                     ..Default::default()
@@ -492,3 +496,6 @@ fn queued_credit_waits_retain_qos_and_clean_failures_return_only_inflight_budget
         1
     );
 }
+
+#[path = "qos_contract/actions.rs"]
+mod actions;

@@ -5,6 +5,7 @@ use std::time::Instant;
 use crate::engine::remaining;
 use crate::{BatchId, Error, Result, RuntimeQueueConfig};
 
+use super::qos_contract::QosReservation;
 use super::receiver_credit::CreditReservation;
 
 /// Reservations for whole submissions, not a native WR/byte counter.
@@ -28,6 +29,8 @@ struct QueueOwner {
     key: DispatchKey,
     dispatching: bool,
     credit: Option<Arc<CreditReservation>>,
+    qos: Option<Arc<QosReservation>>,
+    rejected: bool,
 }
 
 #[derive(Default)]
@@ -71,6 +74,7 @@ impl LocalTransferAdmissionQueue {
         deadline: Instant,
         batch: Option<BatchId>,
         credit: Option<Arc<CreditReservation>>,
+        qos: Option<Arc<QosReservation>>,
     ) -> Result<QueuePermit> {
         if bytes > self.config.max_dispatch_bytes {
             return Err(Error::ResourceExhausted);
@@ -102,6 +106,8 @@ impl LocalTransferAdmissionQueue {
                 key,
                 dispatching: false,
                 credit,
+                qos,
+                rejected: false,
             },
         );
         state.next_id = id;
@@ -111,6 +117,13 @@ impl LocalTransferAdmissionQueue {
         }
         if state.refill_dispatch_window(self.config) {
             self.changed.notify_all();
+        }
+        if state.owners[&id].rejected {
+            state.release(id);
+            if state.refill_dispatch_window(self.config) {
+                self.changed.notify_all();
+            }
+            return Err(Error::ResourceExhausted);
         }
         Ok(QueuePermit {
             queue: Arc::clone(self),
@@ -155,6 +168,18 @@ impl QueueState {
             previous = Some(key);
             let owner = self.owners.get_mut(&key.1).expect("ready owner exists");
             if owner.bytes > config.max_dispatch_bytes - self.dispatching_bytes {
+                if let Some(qos) = &owner.qos {
+                    match qos.availability() {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(_) => {
+                            owner.rejected = true;
+                            self.ready.remove(&key);
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
                 if let Some(credit) = &owner.credit {
                     let (eligible, expires) = credit.availability().unwrap_or((false, None));
                     if !eligible {
@@ -165,12 +190,25 @@ impl QueueState {
                 }
                 break;
             }
-            if owner
-                .credit
-                .as_ref()
-                .is_some_and(|credit| !credit.try_reserve().unwrap_or(false))
-            {
-                continue;
+            let reserve_credit = || {
+                owner
+                    .credit
+                    .as_ref()
+                    .is_none_or(|credit| credit.try_reserve().unwrap_or(false))
+            };
+            let admitted = match &owner.qos {
+                Some(qos) => qos.try_reserve(reserve_credit),
+                None => Ok(reserve_credit()),
+            };
+            match admitted {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(_) => {
+                    owner.rejected = true;
+                    self.ready.remove(&key);
+                    changed = true;
+                    continue;
+                }
             }
             self.ready.remove(&key);
             owner.dispatching = true;
@@ -218,8 +256,8 @@ pub(crate) struct QueuePermit {
 
 impl QueuePermit {
     /// The predicate only reads the first public task's cancellation flag. Lock
-    /// order is queue -> BatchProgress; cancellation releases BatchProgress
-    /// before wake. Credit synchronization releases the queue lock before I/O;
+    /// order is queue -> QoS -> credit and queue -> BatchProgress. Cancellation
+    /// releases BatchProgress before wake. Credit sync releases all locks before I/O;
     /// no backing drop or progress mutation runs while the lock is held.
     pub(crate) fn wait(&self, cancelled: impl Fn() -> bool + Sync) -> Result<()> {
         let mut state = self.queue.lock();
@@ -237,6 +275,9 @@ impl QueuePermit {
                 .get(&self.id)
                 .ok_or(Error::Internal("runtime queue owner missing"))?;
             let mut timeout = remaining(owner.deadline)?;
+            if owner.rejected {
+                return Err(Error::ResourceExhausted);
+            }
             if let Some(wakeup) = state.credit_wakeup {
                 timeout = timeout.min(wakeup.saturating_duration_since(Instant::now()));
             }
@@ -247,7 +288,14 @@ impl QueuePermit {
                 return Ok(());
             }
             if let Some(credit) = &owner.credit {
-                if credit.needs_sync()? {
+                if credit.needs_sync()?
+                    && owner
+                        .qos
+                        .as_ref()
+                        .map(|qos| qos.availability())
+                        .transpose()?
+                        .unwrap_or(true)
+                {
                     let credit = Arc::clone(credit);
                     let deadline = owner.deadline;
                     drop(state);

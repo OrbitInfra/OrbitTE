@@ -173,7 +173,7 @@ pub(crate) fn rdma_fixture_with_config(
         qos: config
             .qos
             .as_ref()
-            .map(QosContractResolver::new)
+            .map(|qos| QosContractResolver::new(qos, runtime_queue.as_ref()))
             .transpose()
             .unwrap(),
         runtime_queue,
@@ -392,14 +392,21 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
     ));
     requester.receiver_credits = Some(SenderCreditLedger::new(1, requester.runtime_queue.as_ref()));
     requester.qos = Some(
-        QosContractResolver::new(&crate::QosConfig {
-            defaults: crate::QosPolicyFields {
-                max_inflight_bytes: Some(8),
-                max_inflight_requests: Some(1),
+        QosContractResolver::new(
+            &crate::QosConfig {
+                defaults: crate::QosPolicyFields {
+                    max_inflight_bytes: Some(8),
+                    max_inflight_requests: Some(1),
+                    allowed_degraded_actions: Some(crate::QosDegradedActions {
+                        delay: true,
+                        reject: true,
+                    }),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        })
+            requester.runtime_queue.as_ref(),
+        )
         .unwrap(),
     );
     let qos = requester
@@ -1097,15 +1104,16 @@ pub(crate) fn staging_fixture(
         drained: Condvar::new(),
     });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
+    let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     TransferEngine {
         receiver_credits: None,
         qos: config
             .qos
             .as_ref()
-            .map(QosContractResolver::new)
+            .map(|qos| QosContractResolver::new(qos, runtime_queue.as_ref()))
             .transpose()
             .unwrap(),
-        runtime_queue: config.runtime_queue.map(LocalTransferAdmissionQueue::new),
+        runtime_queue,
         config,
         source,
         control,
