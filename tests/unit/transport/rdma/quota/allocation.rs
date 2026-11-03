@@ -145,7 +145,8 @@ fn baseline_parents_rotate_first_tier_and_concurrent_reservations_balance() {
         .unwrap();
     assert_eq!(a.devices[..5], [0, 2, 0, 2, 0]);
     assert_eq!(b.devices[..5], [2, 0, 2, 0, 2]);
-    assert_eq!(selector.state.lock().unwrap().inflight, [41, 0, 41, 0]);
+    assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
+    assert_eq!(selector.state.lock().unwrap().allocated, [41, 0, 41, 0]);
     drop((a, b));
     let barrier = Arc::new(std::sync::Barrier::new(9));
     std::thread::scope(|scope| {
@@ -162,9 +163,61 @@ fn baseline_parents_rotate_first_tier_and_concurrent_reservations_balance() {
             });
         }
         barrier.wait();
-        assert_eq!(selector.state.lock().unwrap().inflight, [164, 0, 164, 0]);
+        assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
+        assert_eq!(selector.state.lock().unwrap().allocated, [205, 0, 205, 0]);
         barrier.wait();
     });
     assert_eq!(selector.state.lock().unwrap().inflight, [0; 4]);
     assert_eq!(selector.state.lock().unwrap().multipath_calls, 0);
+}
+
+#[test]
+fn quota_follows_exact_slices_through_the_plan_tail_and_release() {
+    let base = 65536;
+    let mut cases = vec![(1000, 250, 4), (1000, 300, 4), (1000, 300, 3)];
+    for cap in [32, 64] {
+        for length in [
+            base + 1,
+            8 * base + 8192,
+            8 * base + base / 2,
+            3 << 20,
+            10 << 20,
+            100 * base + 7,
+        ] {
+            let (block, count) =
+                crate::transport::rdma::slice::plan_rdma_slices(length, base, cap).unwrap();
+            cases.push((length, block, count));
+        }
+    }
+    for (length, block, count) in cases {
+        let selector = selector(true, false);
+        let mut plan = selector
+            .allocate(length, block, count, MemoryLocation::Cpu(None), 5)
+            .unwrap();
+        let totals = || {
+            selector
+                .stats()
+                .into_iter()
+                .fold((0, 0), |(live, total), s| {
+                    (live + s.inflight_bytes, total + s.allocated_bytes)
+                })
+        };
+        let mut remaining = length;
+        for i in 0..count {
+            assert_eq!(totals(), (remaining, length as u64));
+            let lease = plan.next().unwrap();
+            let expected = if i + 1 == count { remaining } else { block };
+            assert_eq!(lease.length(), expected);
+            remaining -= expected;
+            drop(lease);
+        }
+        assert_eq!(remaining, 0);
+        assert_eq!(totals(), (0, length as u64));
+        assert!(
+            selector
+                .allocate(4096, 4096, 1, MemoryLocation::Cpu(None), 2)
+                .is_err()
+        );
+        assert_eq!(totals(), (0, length as u64));
+    }
 }

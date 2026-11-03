@@ -493,7 +493,7 @@ fn lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable() 
     let entry = ledger.lock();
     assert_eq!(
         entry.entries[&CreditKey::from(&relay.peer)].committed,
-        [4, 2]
+        [4, 2, 0, 0]
     );
     drop(entry);
     relay.lose.store(true, Ordering::Release);

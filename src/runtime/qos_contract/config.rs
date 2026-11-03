@@ -200,7 +200,8 @@ fn bytes<'de, D: Deserializer<'de>>(
 fn requests<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<usize>, D::Error> {
-    let count = u64::deserialize(deserializer)?;
+    let count = u64::deserialize(deserializer)
+        .map_err(|e| de::Error::custom(format_args!("max_inflight_requests: {e}")))?;
     usize::try_from(count).map(Some).map_err(|_| {
         de::Error::custom("max_inflight_requests must be a nonnegative integer fitting usize")
     })
@@ -209,7 +210,8 @@ fn requests<'de, D: Deserializer<'de>>(
 fn actions<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<QosDegradedActions>, D::Error> {
-    let values = Vec::<String>::deserialize(deserializer)?;
+    let values = Vec::<String>::deserialize(deserializer)
+        .map_err(|e| de::Error::custom(format_args!("allowed_degraded_actions: {e}")))?;
     let mut actions = QosDegradedActions::default();
     for value in values {
         match value.trim_ascii().to_ascii_lowercase().as_str() {

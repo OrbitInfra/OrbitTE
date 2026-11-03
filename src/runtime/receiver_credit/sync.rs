@@ -15,16 +15,17 @@ impl Entry {
             !owner.reserved
                 && !self.fits(owner.charge)
                 && !automatic.syncing
-                && self.completed != automatic.reported_completed
+                && self.completed[..2] != automatic.reported_completed
         })
     }
 
-    pub(super) fn exceeds_window(&self, charge: [u64; 2]) -> bool {
+    pub(super) fn exceeds_window(&self, charge: CreditVector) -> bool {
         self.automatic.as_ref().is_some_and(|automatic| {
-            charge
-                .iter()
-                .zip(automatic.window)
-                .any(|(charge, window)| *charge > window)
+            charge[2..].iter().any(|&n| n != 0)
+                || charge
+                    .iter()
+                    .zip(automatic.window)
+                    .any(|(charge, window)| *charge > window)
         })
     }
 }
@@ -119,7 +120,7 @@ impl SenderCreditLedger {
             ));
         }
         entry.open = false;
-        let busy = entry.active != 0 || entry.committed != entry.completed || automatic.syncing;
+        let busy = entry.undrained() || automatic.syncing;
         drop(state);
         self.notify();
         if busy {
@@ -159,7 +160,9 @@ impl SenderCreditLedger {
                 return Err(Error::BatchBusy);
             }
             if automatic.syncing
-                || (!close && entry.epoch != 0 && entry.completed == automatic.reported_completed)
+                || (!close
+                    && entry.epoch != 0
+                    && entry.completed[..2] == automatic.reported_completed)
             {
                 return Ok(false);
             }
@@ -168,8 +171,8 @@ impl SenderCreditLedger {
                 sender: automatic.sender,
                 epoch: entry.epoch,
                 qos_class: entry.qos_class,
-                committed: entry.committed,
-                completed: entry.completed,
+                committed: [entry.committed[0], entry.committed[1]],
+                completed: [entry.completed[0], entry.completed[1]],
             }
         };
         // This is the only network boundary. Neither ledger nor queue lock is held.
@@ -248,7 +251,7 @@ impl Entry {
         }
         self.epoch = snapshot.epoch;
         self.sequence = snapshot.sequence;
-        self.grants = snapshot.grants;
+        self.grants[..2].copy_from_slice(&snapshot.grants);
         self.expires = None;
         automatic.window = snapshot.window;
         automatic.reported_completed = report.completed;

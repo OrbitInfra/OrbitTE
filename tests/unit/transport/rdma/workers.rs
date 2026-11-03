@@ -8,6 +8,7 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
     for count in [1, 2, 4] {
         let config = RdmaConfig {
             num_lanes: count,
+            shared_quota_shm_path: (count == 2).then(String::new),
             ..RdmaConfig::new("copy")
         };
         let usage: Arc<Mutex<RdmaStats>> = Arc::default();
@@ -49,7 +50,10 @@ fn pool_size_is_independent_of_contexts_and_empty_workers_join() {
             .unwrap()
             .workers
             .iter()
-            .map(|(_, handle)| handle.thread().id())
+            .map(|(ctx, handle)| {
+                assert!(ctx.shared_slots.is_none());
+                handle.thread().id()
+            })
             .collect();
         for state in &progress {
             state

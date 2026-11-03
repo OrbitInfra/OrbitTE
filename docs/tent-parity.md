@@ -113,7 +113,7 @@ that every branch or provider has already been qualified upstream.
 | F12 | Policy ordering; priority HIGH/MEDIUM/LOW; named policy; segment, location and size filters; device masks; QP pools; explicit transport hint and unavailable-path behavior | `transport_selector*`, `transport_hint_test`, `qos_contract*`, `qp_pool_layout_test` | P4/P6 |
 | F13 | All request intents: unspecified, foreground get, prefetch, migration, checkpoint, weight loading and internal staging; policy binding and merge isolation | `common/types.h`, `qos_contract*`, `transport_selector_test` | P6 |
 | F14 | Request/byte admission; FIFO/EDF and urgency promotion; dispatch windows; staging reserves; deadline-feasibility drop; transport-aware bandwidth provider | `admission_queue*`, `deadline_mlu.h`, `admission_queue_test`, `runtime_queue_dispatch_test` | P6 |
-| F15 | Per-worker priority queues, shared cross-process quotas, accounting and recovery, priority filtering, named QP pools and receiver credit/pacing | `rdma/quota*`, `shared_quota*`, `receiver_credit*`, `quota_accounting_test`, `receiver_credit_test` | P4/P6 |
+| F15 | Per-worker priority queues, host-shared priority slots, process-local per-NIC byte accounting, named QP pools and four-resource cumulative sender credit | `rdma/quota*`, `shared_quota*`, `receiver_credit*`, `quota_accounting_test`, `receiver_credit_test` | P4/P6 |
 | F16 | Slicing/spraying; round-robin and bandwidth-aware choices; separate selection EWMA and transmit estimate; NUMA penalties, masks and strict-local rules | `rdma/workers*`, `bw_arbitration*`, `device_selector_test`, `bw_arbitration_test` | P4/P6 |
 | F17 | Submit- and completion-stage fallback; per-owner retry budgets; merged aliases; no terminal resurrection; explicit-progress versus poll semantics | `transfer_engine_impl.cpp`, `engine_failover_e2e_test` | P6/P10 |
 | F18 | RDMA endpoint caches, bootstrap concurrency, per-rail health, cooldown/probe/half-open recovery, device loss, retirement and failed-cleanup quarantine | `rdma/endpoint*`, `rail_monitor*`, endpoint/rail/async-event teardown tests | P4/P6/P10 |
@@ -121,6 +121,12 @@ that every branch or provider has already been qualified upstream.
 | F20 | Transfer/attempt/queue/failure-stage and deadline observations; labels and histograms; HTTP/JSON/Prometheus output; configuration, disabled mode and available-NIC load snapshots | `metrics/*`, `common/qos_metrics*`, metrics tests, `getNicLoadStats` | P2/P6/P9 |
 | F21 | Native C++, C and Python surfaces; classic-TE-to-TENT shim, including its synchronous/wait helpers and explicit unavailable operations | public headers, `src/python/pybind.cpp`, parent `src/transfer_engine.cpp`, `test_python_guards.py` | P9 |
 | F22 | Transport/platform feature selection, missing-provider errors, installed artifacts, SDK/runtime discovery, examples and reproducible byte-checking benchmarks | TENT/parent CMake, provider adapters, CI, benchmark sources | Every stage/P11 |
+
+For F15 the frozen RDMA shared header publishes one rotating priority slot.
+The local selector owns NIC byte charges. QoS inherits policy fields without
+charging a parent or cluster budget. The private receiver ledger accepts named
+resources and monotone grants. Frozen TENT supplies neither a window-sizing
+algorithm, a dead-sender reaper nor an application-resource mapping.
 
 Primary sources: [runtime implementation][impl], [runtime directory][runtime],
 [tests][tests], [configuration][config], [C++ compatibility shim][shim],

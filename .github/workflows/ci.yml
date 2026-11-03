@@ -106,6 +106,13 @@ jobs:
           binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary"
+      - name: Repeat Linux shared quota and receiver credit controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
+        run: |
+          test "$(findmnt -n -o FSTYPE -T /dev/shm)" = tmpfs
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" quotas
       - name: Parse a real TENT metrics scrape
         if: matrix.features == 'metrics'
         run: |

@@ -17,7 +17,10 @@ pub struct NicLoadStats {
     pub device_id: usize,
     pub device_name: String,
     pub link_speed_gbps: Option<f64>,
+    /// Live slice reservations for smart selection. Round-robin keeps this zero.
     pub inflight_bytes: usize,
+    /// Lifetime bytes assigned to this NIC, including retries before posting.
+    pub allocated_bytes: u64,
     pub posted_bytes: u64,
     pub completed_bytes: u64,
     pub ewma_bandwidth_bps: f64,
@@ -196,7 +199,7 @@ impl DeviceInfo {
         elapsed: Duration,
         generation: u64,
     ) {
-        if bytes == 0 || elapsed.is_zero() {
+        if !self.params.smart_selection || bytes == 0 || elapsed.is_zero() {
             return;
         }
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -224,6 +227,7 @@ impl DeviceInfo {
         id: usize,
         name: &str,
         inflight: usize,
+        allocated_bytes: u64,
     ) -> NicLoadStats {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         NicLoadStats {
@@ -234,6 +238,7 @@ impl DeviceInfo {
             device_name: name.into(),
             link_speed_gbps: state.link_speed_mbps.map(|rate| rate as f64 / 1000.0),
             inflight_bytes: inflight,
+            allocated_bytes,
             posted_bytes: state.posted,
             completed_bytes: state.completed,
             ewma_bandwidth_bps: self.bandwidth(),

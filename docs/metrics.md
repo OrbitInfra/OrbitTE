@@ -98,6 +98,15 @@ batches, requester workers and bytes. Configured owners also report queued
 and dispatching owners and bytes, deadline drops, QoS inflight reservations,
 active and reserved receiver credits, and RDMA rail errors, probes, recoveries
 and open rails. The scrape carries no peer identity, raw addresses or keys.
+
+| OrbitTE owner series | Type and unit |
+| --- | --- |
+| `orbitte_rdma_inflight_bytes`, `orbitte_rdma_allocated_bytes_total` | Live smart-selection bytes (gauge) and lifetime assigned slice bytes (counter), including paused NICs |
+| `orbitte_receiver_credit_available_{bytes,requests,staging_slots,consumer_slots}`, `orbitte_receiver_credit_consumed_{bytes,requests,staging_slots,consumer_slots}` | Sender balances across retained bindings (gauges) |
+| `orbitte_receiver_active_senders`, `orbitte_receiver_retired_senders_total` | Receiver sessions (live gauge and retired counter) |
+| `orbitte_receiver_reserved_{bytes,requests,staging_slots,consumer_slots}` | Capacity committed to receiver-issued windows (gauges) |
+| `orbitte_receiver_{active,retained}_{staging_slots,consumer_slots}` | Physical Pin owners and the subset with unconfirmed cleanup (gauges) |
+
 TENT's `qos_metrics.cpp` calculates goodput, Jain fairness and isolation
 leakage from benchmark class samples. Those quantities need an experiment with
 class timings, weights and isolated throughput and have no live exporter series.

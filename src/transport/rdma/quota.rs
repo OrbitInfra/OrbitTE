@@ -65,6 +65,7 @@ fn location_key(location: MemoryLocation) -> MemoryLocation {
 struct State {
     available: u64,
     inflight: Vec<usize>,
+    allocated: Vec<u64>,
     cursor: usize,
     multipath_calls: u8,
     probe_cursor: usize,
@@ -91,6 +92,9 @@ impl DeviceLease {
 
 impl Drop for DeviceLease {
     fn drop(&mut self) {
+        if !self.selector.scheduling.smart_selection {
+            return;
+        }
         let mut state = self
             .selector
             .state
@@ -217,6 +221,7 @@ impl DeviceSelector {
             state: Mutex::new(State {
                 available: available & all,
                 inflight: vec![0; count],
+                allocated: vec![0; count],
                 cursor: 0,
                 multipath_calls: 0,
                 probe_cursor: 0,
@@ -264,17 +269,32 @@ impl DeviceSelector {
             .unwrap_or(0.0)
     }
 
+    #[cfg(feature = "metrics")]
+    pub(super) fn quota_totals(&self) -> (u64, u64) {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        // Include paused NICs. Their real leases survive port recovery.
+        (
+            state
+                .inflight
+                .iter()
+                .fold(0u64, |sum, &n| sum.saturating_add(n as u64)),
+            state.allocated.iter().copied().fold(0, u64::saturating_add),
+        )
+    }
+
     pub(super) fn stats(&self) -> Vec<NicLoadStats> {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.devices
             .iter()
             .enumerate()
             .filter(|(id, _)| state.available & (1u64 << id) != 0)
-            .map(|(id, info)| info.snapshot(id, &self.names[id], state.inflight[id]))
+            .map(|(id, info)| {
+                info.snapshot(id, &self.names[id], state.inflight[id], state.allocated[id])
+            })
             .collect()
     }
 }
 
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/rdma/quota.rs"]
-mod tests;
+pub(super) mod tests;

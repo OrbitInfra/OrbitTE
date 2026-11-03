@@ -259,6 +259,22 @@ All contexts share aggregate byte, QP, grant and SQ/RQ limits. Fully drained
 faulted lanes can be replaced while the PD, MRs and worker pool stay alive.
 Workers bind to NUMA CPU sets; this does not move application pages.
 
+The frozen RDMA quota has two scopes. The selector charges exact slice bytes
+in one process. A configured POSIX shm name shares priority eligibility among
+processes on the same host. OrbitTE uses a same-UID header, bounded nonblocking
+file locks and an aligned atomic slot. A process killed under the lock cannot
+strand its peers. A stale Low slot cannot extend eligibility past its clock
+boundary. The Linux controls kill a publisher with a live device lease, check
+the surviving NIC charge and reject a foreign header without modifying it.
+
+TENT's receiver ledger names four resources and assumes its caller has fenced
+the old epoch. OrbitTE checks its physical permits and their completion
+receipts before retiring even a manual epoch. The lost TCP WRITE acknowledgement
+control checks that an applied payload with no receipt cannot free credit.
+Manual grant updates never release automatic Pin leases. QoS uses one resolved
+budget per contract. The parser controls reject unexecutable actions by name
+at every policy layer.
+
 ## Periodic monitor reclaim and port recovery
 
 The monitor scans contexts once per second, even without traffic, using
@@ -386,7 +402,7 @@ or string work, preserving TENT's `CudaProbe → Topology → DeviceSelector` ch
 | `quota/allocation.rs` | `buildCandidates`, `selectSinglePath`, `selectMultiPath` |
 | `sys/port.c`, `sys/port.rs`, `RdmaContext` | `recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes` |
 | `workers/post_queue.rs`, `bw_arbitration.rs`, `promotion_policy.rs` | Priority tiers, `OrderByUrgency`, request promotion |
-| `shared_quota.rs::SharedSlotManager` | Shared priority slots, derived from the monotonic clock instead of a rotation thread |
+| `shared_quota.rs::SharedSlotManager` | Mapped current priority slot and joined monotonic publisher; per-NIC leases remain in DeviceSelector |
 
 Physical grant release stays separate from payload sampling, and route identity
 excludes link speed, so a rate change keeps existing QPs. See

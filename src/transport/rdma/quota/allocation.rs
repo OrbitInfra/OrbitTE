@@ -51,7 +51,7 @@ impl ExactSizeIterator for DeviceAllocation {}
 
 impl Drop for DeviceAllocation {
     fn drop(&mut self) {
-        if self.cursor == self.count {
+        if self.cursor == self.count || !self.selector.scheduling.smart_selection {
             return;
         }
         let mut state = self
@@ -177,13 +177,18 @@ impl DeviceSelector {
             };
             charges[usize::from(id)] += bytes;
         }
-        for (id, &charge) in charges[..device_count].iter().enumerate() {
-            state.inflight[id]
-                .checked_add(charge)
-                .ok_or(Error::ResourceExhausted)?;
+        if self.scheduling.smart_selection {
+            for (id, &charge) in charges[..device_count].iter().enumerate() {
+                state.inflight[id]
+                    .checked_add(charge)
+                    .ok_or(Error::ResourceExhausted)?;
+            }
+            for (id, &charge) in charges[..device_count].iter().enumerate() {
+                state.inflight[id] += charge;
+            }
         }
         for (id, &charge) in charges[..device_count].iter().enumerate() {
-            state.inflight[id] += charge;
+            state.allocated[id] = state.allocated[id].saturating_add(charge as u64);
         }
         state.cursor = (usize::from(devices[count - 1]) + 1) % device_count;
         if self.scheduling.smart_selection && count > 1 {

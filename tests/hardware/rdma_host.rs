@@ -30,6 +30,8 @@ mod inflight;
 mod interruption;
 #[path = "rdma_host/memory.rs"]
 mod memory;
+#[path = "rdma_host/quota.rs"]
+mod quota;
 #[path = "rdma_host/rail_health.rs"]
 mod rail_health;
 #[path = "rdma_host/resources.rs"]
@@ -408,6 +410,9 @@ fn result(case: &Case) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    if env::args().skip(1).eq(["--quota"]) {
+        return quota::run();
+    }
     if env::args().skip(1).eq(["--failover"]) {
         return failover::run();
     }

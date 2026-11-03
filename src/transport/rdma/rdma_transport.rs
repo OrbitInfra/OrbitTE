@@ -279,6 +279,14 @@ impl RdmaTransport {
             .as_ref()
             .map_or(0.0, |selector| selector.admission_bandwidth(mask))
     }
+    #[cfg(feature = "metrics")]
+    pub(crate) fn quota_totals(&self) -> (u64, u64) {
+        let contexts = self.context_set.lock().unwrap_or_else(|p| p.into_inner());
+        contexts
+            .selector
+            .as_ref()
+            .map_or((0, contexts.retired_allocated_bytes), |s| s.quota_totals())
+    }
     pub(crate) fn nic_load_stats(&self) -> Result<Vec<super::NicLoadStats>> {
         let contexts = self
             .context_set

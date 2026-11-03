@@ -183,7 +183,11 @@ impl RdmaConfig {
         {
             return Err(Error::InvalidConfig("invalid RDMA priority timing"));
         }
-        if let Some(name) = &self.shared_quota_shm_path {
+        if let Some(name) = self
+            .shared_quota_shm_path
+            .as_deref()
+            .filter(|name| !name.is_empty())
+        {
             super::shared_quota::SharedSlotManager::validate(name, self.slot_rotation_interval)?;
         }
         if self.cuda_memory == RdmaCudaMemory::Direct

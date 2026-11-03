@@ -114,6 +114,7 @@ impl Workers {
                 .config
                 .shared_quota_shm_path
                 .as_deref()
+                .filter(|name| !name.is_empty())
                 .map(|name| {
                     super::shared_quota::SharedSlotManager::attach(
                         name,
@@ -455,7 +456,7 @@ impl WorkerContext {
                                 allowed = None;
                                 for lane in &exit.lanes {
                                     lane.state.fail(super::cq_lane::Fault::Backend(
-                                        "RDMA shared slot clock",
+                                        "RDMA shared priority slot",
                                         libc::EIO,
                                     ));
                                 }

@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Admission, selection and explicit progress implemented. The P6 section tracks recovery and qualification. Metrics implemented; quotas open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -276,7 +276,7 @@ CPU shims cannot pass this stage's device gates.
 
 Requirements: F08–F20; every implemented transport consumes the same owners.
 
-Done (source scope, CPU controls):
+Source-level exit complete. The following contracts have CPU controls.
 
 - **Transport selection (S6, F12/F13).** First-match and named policies use
   segment, original memory types, size, effective priority, intent and boot
@@ -296,9 +296,11 @@ Done (source scope, CPU controls):
   slots; TCP and NVLink accept every priority as advisory.
 - **QoS contracts.** Typed and TENT-format JSON global/tenant/intent policies
   with per-contract byte/request caps and delay/reject admission.
-- **Receiver credits.** Sender credit gating, bounded automatic receiver
-  windows with cumulative sync, and staging/consumer owner credits for remote
-  Pin.
+- **Quotas and credits (S11, F15).** Each NIC accounts its own slices. Host
+  processes share the mapped priority slot. The sender ledger atomically
+  reserves four named resources. Fixed receiver windows and remote Pin
+  staging/consumer charges retire only on confirmed drain. Frozen TENT has
+  no cluster byte allocator, adaptive window controller or dead-sender reaper.
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.
@@ -310,15 +312,12 @@ Done (source scope, CPU controls):
   EWMA, weighted whole-parent distribution, periodic rail exploration and
   effective link-rate discovery.
 
-Open:
-
-- [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
-  reclamation and manual resource mapping (F15).
-- [ ] Installed transport failover and physical rail fault qualification (F17/F18).
-
-Exit: deterministic-clock and fault-provider state-machine tests, race detection
-and real backends; fairness and byte accounting under contention; installed
-cross-process quota recovery; no duplicate physical submit from merged aliases.
+Exit evidence includes real TCP credit loss, deterministic rail faults and
+alias accounting, plus two Linux processes sharing a tmpfs slot through
+publisher death. The [verification queue](qualification.md#verification-queue)
+retains installed RNIC selection and QP pools, shared slots and receiver
+credits under contention, transport failover and physical rail faults.
+Hardware fairness and throughput still need measurement.
 
 ## P7 — Storage transports
 

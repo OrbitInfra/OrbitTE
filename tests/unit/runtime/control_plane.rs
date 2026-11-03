@@ -1260,19 +1260,51 @@ fn background_progress_publishes_a_lost_write_receipt_without_replay() {
     let engine = Arc::new(
         TransferEngine::new(EngineConfig {
             enable_progress_worker: true,
+            max_receiver_credit_sessions: 1,
             ..Default::default()
         })
         .unwrap(),
     );
     let (listener, peer) = fault_peer();
-    let mut b = engine
-        .submit_async(
-            TransferOp::Write,
+    engine.activate_receiver_credit(&peer, 1, 0).unwrap();
+    engine
+        .apply_receiver_credit(
             &peer,
-            &[fault_request(&engine, &peer)],
-            None,
-            timeout,
+            &crate::ReceiverCreditUpdateV1 {
+                schema_version: 1,
+                flags: 0,
+                receiver_session_id: peer.epoch,
+                qos_class: 0,
+                epoch: 1,
+                sequence: 1,
+                freshness_ttl_ms: 0,
+                grants: vec![
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::DataBytes,
+                        grant_total: 8,
+                    },
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::RequestSlots,
+                        grant_total: 1,
+                    },
+                ],
+            },
         )
+        .unwrap();
+    let local = engine
+        .register_memory(
+            vec![0xec, 1, 2, 3, 4, 5, 6, 7, 8, 0xed].into(),
+            Permission::LocalOnly,
+        )
+        .unwrap();
+    let request = TransferRequest::new(
+        crate::Transport::Tcp,
+        local.base_address() + 1,
+        peer.regions[0].base_address(),
+        8,
+    );
+    let mut b = engine
+        .submit_async(TransferOp::Write, &peer, &[request], None, timeout)
         .unwrap();
     let (mut stream, _) = listener.accept().unwrap();
     stream.set_read_timeout(Some(timeout)).unwrap();
@@ -1289,9 +1321,9 @@ fn background_progress_publishes_a_lost_write_receipt_without_replay() {
             .encode(),
         )
         .unwrap();
-    let mut bytes = [0; 8];
-    stream.read_exact(&mut bytes).unwrap();
-    assert_eq!(bytes, [7; 8]);
+    let mut dest = [0xce; 10];
+    stream.read_exact(&mut dest[1..9]).unwrap();
+    assert_eq!(dest, [0xce, 1, 2, 3, 4, 5, 6, 7, 8, 0xce]);
     drop(stream);
     // No status or progress call is needed to publish the physical failure.
     let status = b.wait(timeout).unwrap();
@@ -1310,6 +1342,33 @@ fn background_progress_publishes_a_lost_write_receipt_without_replay() {
     listener.set_nonblocking(true).unwrap();
     assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
     b.free().unwrap();
+    let stats = engine.receiver_credit_stats(&peer).unwrap();
+    assert_eq!(
+        (
+            stats.active_owners,
+            stats.completed_bytes,
+            stats.consumed_bytes
+        ),
+        (0, 0, 8)
+    );
+    assert!(matches!(
+        engine.deactivate_receiver_credit(&peer, 1),
+        Err(Error::BatchBusy)
+    ));
+    assert!(matches!(
+        engine.activate_receiver_credit(&peer, 2, 0),
+        Err(Error::BatchBusy)
+    ));
+    assert_eq!(
+        engine
+            .receiver_credit_stats(&peer)
+            .unwrap()
+            .available_requests,
+        0
+    );
+    let mut source = [0; 10];
+    local.read(0, &mut source).unwrap();
+    assert_eq!(source, [0xec, 1, 2, 3, 4, 5, 6, 7, 8, 0xed]);
 }
 
 #[test]

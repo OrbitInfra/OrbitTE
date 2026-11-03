@@ -25,7 +25,7 @@ fn completed_work(info: &Arc<DeviceInfo>, start: Instant, end: Instant, length: 
         start,
     )
     .unwrap();
-    let samples_before = info.snapshot(0, "nic", 0).transmit_samples;
+    let samples_before = info.snapshot(0, "nic", 0, 0).transmit_samples;
     for wr in wrs {
         work.complete(
             sys::Completion {
@@ -40,7 +40,7 @@ fn completed_work(info: &Arc<DeviceInfo>, start: Instant, end: Instant, length: 
         .unwrap();
     }
     assert_eq!(
-        info.snapshot(0, "nic", 0).transmit_samples,
+        info.snapshot(0, "nic", 0, 0).transmit_samples,
         samples_before,
         "one CQ pass must account all payload CQEs before closing its meter interval"
     );
@@ -58,7 +58,7 @@ fn actual_payload_completions_learn_selection_and_exclude_idle_time_from_transmi
         t + Duration::from_millis(40),
         25_000_000,
     );
-    let stats = info.snapshot(2, "nic2", 99);
+    let stats = info.snapshot(2, "nic2", 99, 0);
     assert_eq!(
         (
             stats.completed_bytes,
@@ -96,7 +96,7 @@ fn actual_payload_completions_learn_selection_and_exclude_idle_time_from_transmi
         t + Duration::from_millis(42),
     )
     .unwrap();
-    let after = info.snapshot(2, "nic2", 99);
+    let after = info.snapshot(2, "nic2", 99, 0);
     assert_eq!(
         (
             after.completed_bytes,
@@ -147,18 +147,18 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
         }
         sq.fence();
         drop(work);
-        let held = info.snapshot(0, "nic", 0);
+        let held = info.snapshot(0, "nic", 0, 0);
         assert_eq!(held.posted_bytes, owed);
         assert_eq!((held.selection_samples, held.transmit_samples), (0, 0));
         sq.quiesce();
-        assert_eq!(info.snapshot(0, "nic", 0).posted_bytes, 0);
+        assert_eq!(info.snapshot(0, "nic", 0, 0).posted_bytes, 0);
         completed_work(
             &info,
             t + Duration::from_millis(100),
             t + Duration::from_millis(110),
             25_000_000,
         );
-        assert_eq!(info.snapshot(0, "nic", 0).selection_samples, 1);
+        assert_eq!(info.snapshot(0, "nic", 0, 0).selection_samples, 1);
     }
     for fail_on_post in [true, false] {
         let info = info();
@@ -223,7 +223,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
             )
             .unwrap();
         info.sample(t + Duration::from_millis(10));
-        let stats = info.snapshot(0, "nic", 0);
+        let stats = info.snapshot(0, "nic", 0, 0);
         assert_eq!(
             (stats.selection_samples, stats.transmit_samples),
             (0, 0),
@@ -243,7 +243,7 @@ fn rate_changes_reseed_once_and_reject_samples_from_an_older_link_generation() {
     info.ended(10, true, t + Duration::from_millis(10));
     info.observe(10, Duration::from_millis(10), generation);
     assert_eq!(info.bandwidth(), 25e9);
-    assert_eq!(info.snapshot(0, "nic", 0).selection_samples, 0);
+    assert_eq!(info.snapshot(0, "nic", 0, 0).selection_samples, 0);
     completed_work(
         &info,
         t + Duration::from_millis(100),
@@ -259,5 +259,21 @@ fn rate_changes_reseed_once_and_reject_samples_from_an_older_link_generation() {
     );
     info.set_bandwidth(None);
     assert_eq!(info.bandwidth(), 50e9);
-    assert_eq!(info.snapshot(0, "nic", 0).link_speed_gbps, None);
+    assert_eq!(info.snapshot(0, "nic", 0, 0).link_speed_gbps, None);
+}
+
+#[test]
+fn baseline_payload_receipts_count_bytes_without_training_selection() {
+    let info = Arc::new(DeviceInfo::new(SchedulingParams {
+        smart_selection: false,
+        ..Default::default()
+    }));
+    info.set_bandwidth(Some(100_000));
+    let before = info.bandwidth();
+    let now = Instant::now();
+    completed_work(&info, now, now + Duration::from_millis(10), 1000);
+    let s = info.snapshot(0, "nic", 0, 1000);
+    assert_eq!(s.completed_bytes, 1000);
+    assert_eq!(s.ewma_bandwidth_bps, before);
+    assert_eq!(s.selection_samples, 0);
 }

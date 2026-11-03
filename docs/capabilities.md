@@ -53,9 +53,10 @@ behind every hardware result.
 | RDMA rail health | Implemented; installed profile unqualified | Policy-masked slices use eligible pairs. A real link-fault and two-RNIC gate is queued. See [rail health](rdma-cuda.md#rail-health) |
 | CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
 | Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
+| RDMA quota accounting | Implemented, installed gate unrun | Per-NIC smart inflight bytes and exact slice charges. A POSIX shared-memory name enables host-wide priority slots. See [shared slots](rdma-cuda.md#priority-promotion-and-shared-slots) |
 | Runtime FIFO/EDF admission | Implemented | Merged memory requests, public alias status, physical dispatch windows, staging reserves and transport-aware deadline drops. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
-| QoS contracts | Implemented | TENT-format global, tenant and intent policies with byte/request caps and delay/reject. Hierarchical quotas are open. See [QoS](async-batches.md#qos-contracts) |
-| Receiver credits | Implemented | Cumulative peer grants and automatic receiver windows. They authorize requests; they are not a rate limiter. See [credits](async-batches.md#receiver-credit-gating) |
+| QoS contracts | Implemented | Global, tenant and intent fields resolve to one local byte/request budget. Delay and reject execute. Unsupported actions return a field-specific error. See [QoS](async-batches.md#qos-contracts) |
+| Receiver credits | Implemented | Four named cumulative grants, configured receiver windows and drain-fenced epoch retirement. See [credits](async-batches.md#receiver-credit-gating) |
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
 | RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
 | TENT metrics and HTTP export | Implemented (P6, opt-in) | [Metrics](metrics.md) |

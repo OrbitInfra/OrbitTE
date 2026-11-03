@@ -2,7 +2,7 @@ use super::*;
 use crate::transport::rdma::RdmaConfig;
 use crate::{MemEntry, MemType, NicEntry, NicType};
 
-pub(super) fn topology() -> Topology {
+pub(in crate::transport::rdma) fn topology() -> Topology {
     let mut topology = Topology {
         nic_list: (0..4)
             .map(|id| NicEntry {
@@ -129,7 +129,8 @@ fn concurrent_allocations_and_overflow_never_lose_or_wrap_a_charge() {
 #[test]
 fn failed_native_cleanup_keeps_the_actual_device_charge_after_public_handle_drop() {
     use std::time::{Duration, Instant};
-    let runtime = crate::transport::rdma::tests::runtime("direct:close0");
+    let mut runtime = crate::transport::rdma::tests::runtime("direct:close0");
+    runtime.config.scheduling.smart_selection = true;
     let mut endpoint = runtime.staging_endpoint(8, 0).unwrap();
     let selector = Arc::clone(
         runtime
@@ -359,7 +360,7 @@ fn adaptive_selection_uses_rate_and_backlog_while_baseline_rotates() {
                 .iter()
                 .map(|s| s.inflight_bytes)
                 .sum::<usize>(),
-            1200
+            if smart { 1200 } else { 0 }
         );
         drop((first, second, third));
         assert_eq!(

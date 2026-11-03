@@ -258,8 +258,9 @@ Accepted work keeps its charge until its prepared owner is actually released;
 resolution, and `policy.usage()` reports current owners, bytes and requests.
 Submission uses numeric slots with no per-slice lookup. TENT's
 `QosContractResolver` only resolves policy (`diagnostic_scope=resolution_only`);
-OrbitTE also enforces priority and caps. Transport fallback, local recompute,
-compression and hierarchical or cluster quotas are open. See
+OrbitTE also enforces priority and caps. QoS actions `fallback_transport`,
+`local_recompute` and `compress` fail configuration. Each matched contract
+has its own local cap. See
 [qualification](qualification.md#qos-contract-consumption).
 
 ### QoS admission actions
@@ -369,7 +370,7 @@ API, not a TENT wire message). Totals are **cumulative**, not increments:
 | --- | --- |
 | `DataBytes` | Sum of payload lengths, excluding notification bytes |
 | `RequestSlots` | One per physical owner |
-| `StagingSlots`, `ConsumerSlots` | Automatic remote Pin owners only (below) |
+| `StagingSlots`, `ConsumerSlots` | Manual grants are observable by tag. On an automatic binding the receiver charges the actual Pin staging and session owners separately. |
 
 Decreasing totals or repeated resources reject the update; old or duplicate
 sequences are ignored. A credit-starved head waits without reserving the dispatch
@@ -379,8 +380,11 @@ committed at that handoff, even if the transfer later fails. Completion does not
 return credit; the issuer grants new cumulative totals.
 
 `freshness_ttl_ms` gates new reservations only. `deactivate_receiver_credit`
-fences new and uncommitted work and returns `BatchBusy` until every owner drains.
-`receiver_credit_stats(peer)` reports owners and consumption. TENT's
+fences new and uncommitted work and returns `BatchBusy` while a permit is live
+or a committed charge has no completion receipt. A lost WRITE acknowledgement
+keeps that epoch fenced even after local drain. A fresh epoch cannot replace
+it. `ReceiverCreditStats::resource(tag)` exposes each grant, consumption
+and currently available balance. TENT's
 `SenderCreditLedger` provides this accounting model but is not wired into its
 admission path; OrbitTE consumes it per physical owner. See
 [qualification](qualification.md#receiver-credit-gating).

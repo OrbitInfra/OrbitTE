@@ -1,25 +1,112 @@
-//! TENT's process-wide priority slots, with no rotating thread or hot-path lock.
-
-use std::ffi::CString;
-use std::fs::File;
-use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::fs::{FileExt, MetadataExt};
-use std::thread;
-use std::time::{Duration, Instant};
+//! Cross-process priority arbitration. The mapped slot controls dispatch;
+//! byte charges and native release receipts belong to the local DeviceSelector.
+mod sys;
 
 use crate::{Error, Priority, Result};
+use std::{
+    ffi::CString,
+    fs::File,
+    io,
+    mem::ManuallyDrop,
+    os::unix::fs::{FileExt, MetadataExt},
+    ptr::NonNull,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
-const MAGIC: [u8; 8] = *b"ORTEQ001";
-const HEADER_SIZE: u64 = 32;
+const MAGIC: [u8; 8] = *b"ORTESLOT";
+const FORMAT: u32 = 1;
+const SLOT_OFFSET: usize = 12;
+const HEADER_SIZE: usize = 40;
+const TICK: Duration = Duration::from_millis(1);
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(1);
 
-pub(super) struct SharedSlotManager {
-    // Pin the coordination object and clock namespace until all workers exit.
-    _object: File,
-    _clock_domain: File,
-    interval_ns: u64,
+fn header(interval: u64, clock: &File) -> Result<[u8; HEADER_SIZE]> {
+    let domain = clock.metadata()?;
+    let mut out = [0; HEADER_SIZE];
+    out[..8].copy_from_slice(&MAGIC);
+    out[8..12].copy_from_slice(&FORMAT.to_ne_bytes());
+    out[16..24].copy_from_slice(&interval.to_ne_bytes());
+    out[24..32].copy_from_slice(&domain.dev().to_ne_bytes());
+    out[32..].copy_from_slice(&domain.ino().to_ne_bytes());
+    Ok(out)
+}
+fn priority(slot: u32) -> Result<Priority> {
+    match slot {
+        0 => Ok(Priority::High),
+        1 => Ok(Priority::Medium),
+        2 => Ok(Priority::Low),
+        _ => Err(Error::InvalidConfig("invalid RDMA shared quota slot")),
+    }
+}
+fn slot_at(now: u64, interval: u64) -> (Priority, Duration) {
+    let p = match (now / interval) % 3 {
+        0 => Priority::High,
+        1 => Priority::Medium,
+        _ => Priority::Low,
+    };
+    (p, Duration::from_nanos(interval - now % interval))
+}
+struct Mapping {
+    base: NonNull<u8>,
+    object: ManuallyDrop<File>,
+    // Pin the clock namespace used to compute slot boundaries.
+    _clock: File,
+    calls: &'static sys::Calls,
+    interval: u64,
+}
+// SAFETY: the owned fixed-size shared mapping outlives every Arc. The slot is
+// the only mutable field. Every reader and writer uses an aligned atomic.
+unsafe impl Send for Mapping {}
+// SAFETY: immutable metadata was verified under an exclusive creation lock;
+// concurrent publishers serialize with a kernel lock and publish atomically.
+unsafe impl Sync for Mapping {}
+impl Mapping {
+    fn slot(&self) -> &AtomicU32 {
+        // SAFETY: mmap returns a page-aligned base and SLOT_OFFSET is aligned for
+        // AtomicU32. Attachment initialized and pins all four bytes until Drop.
+        unsafe { &*self.base.as_ptr().add(SLOT_OFFSET).cast::<AtomicU32>() }
+    }
+    fn refresh(&self) -> Result<()> {
+        if !(self.calls.lock)(&self.object)? {
+            return Ok(());
+        }
+        let update = (|| {
+            priority(self.slot().load(Ordering::Acquire))?;
+            let now = (self.calls.now)()?;
+            self.slot()
+                .store(slot_at(now, self.interval).0 as u32, Ordering::Release);
+            Ok(())
+        })();
+        (self.calls.unlock)(&self.object)?;
+        update
+    }
+}
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        // SAFETY: the last Arc owns the mapping and there are no remaining readers.
+        if let Err(e) = unsafe { (self.calls.unmap)(self.base) } {
+            log::error!("RDMA slot munmap failed; retaining its descriptor: {e}");
+            return;
+        }
+        // SAFETY: unmap succeeded and this is the sole destruction of the fd.
+        unsafe { ManuallyDrop::drop(&mut self.object) };
+    }
 }
 
+struct Publisher {
+    mapping: Arc<Mapping>,
+    stop: AtomicBool,
+    failed: AtomicBool,
+}
+pub(super) struct SharedSlotManager {
+    publisher: Arc<Publisher>,
+    worker: Option<thread::JoinHandle<()>>,
+}
 impl SharedSlotManager {
     pub(super) fn validate(name: &str, interval: Duration) -> Result<()> {
         if !name.starts_with('/')
@@ -36,129 +123,117 @@ impl SharedSlotManager {
         }
         Ok(())
     }
-
     pub(super) fn attach(name: &str, interval: Duration) -> Result<Self> {
+        Self::attach_with(name, interval, &sys::OS)
+    }
+    fn attach_with(name: &str, interval: Duration, calls: &'static sys::Calls) -> Result<Self> {
         Self::validate(name, interval)?;
-        let name =
-            CString::new(name).map_err(|_| Error::InvalidConfig("invalid shared quota name"))?;
+        let name = CString::new(name)
+            .map_err(|_| Error::InvalidConfig("invalid RDMA shared quota name"))?;
         let clock = File::open("/proc/self/ns/time")?;
-        let domain = clock.metadata()?;
-        // shm_open sets CLOEXEC. Never truncate an existing coordination object.
-        // SAFETY: The CString remains NUL-terminated through shm_open, which returns a new
-        // descriptor on success.
-        let fd = unsafe {
-            libc::shm_open(
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW,
-                0o600,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        // SAFETY: shm_open succeeded and transfers sole ownership of this descriptor to File.
-        let object = unsafe { File::from_raw_fd(fd) };
-        let metadata = object.metadata()?;
-        if !metadata.is_file()
-            // SAFETY: geteuid takes no arguments and returns the effective UID of this process.
-            || metadata.uid() != unsafe { libc::geteuid() }
-            || metadata.mode() & 0o022 != 0
-        {
+        let expected = header(interval.as_nanos() as u64, &clock)?;
+        let (object, created) = (calls.open)(&name)?;
+        let meta = object.metadata()?;
+        // SAFETY: geteuid reads the effective UID and takes no arguments.
+        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o022 != 0 {
             return Err(Error::PermissionDenied);
         }
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + ATTACH_TIMEOUT;
         loop {
-            // SAFETY: object owns fd throughout the nonblocking lock attempt.
-            if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            if (calls.lock)(&object)? {
+                let size = object.metadata()?.len();
+                if created {
+                    if size != 0 {
+                        return Err(Error::InvalidConfig(
+                            "unexpected data in new RDMA shared quota object",
+                        ));
+                    }
+                    object.write_all_at(&expected, 0)?;
+                } else if size == 0 && Instant::now() < deadline {
+                    // A joiner can open the name before its creator takes the lock.
+                    (calls.unlock)(&object)?;
+                    thread::sleep(TICK);
+                    continue;
+                } else {
+                    let mut found = [0; HEADER_SIZE];
+                    if size != HEADER_SIZE as u64 {
+                        return Err(Error::InvalidConfig(
+                            "incompatible RDMA shared quota object size",
+                        ));
+                    }
+                    object.read_exact_at(&mut found, 0)?;
+                    priority(u32::from_ne_bytes([
+                        found[12], found[13], found[14], found[15],
+                    ]))?;
+                    if found[..12] != expected[..12] || found[16..] != expected[16..] {
+                        return Err(Error::InvalidConfig(
+                            "RDMA shared quota identity, interval or clock mismatch",
+                        ));
+                    }
+                }
                 break;
-            }
-            let error = io::Error::last_os_error();
-            if !matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-            ) {
-                return Err(error.into());
             }
             if Instant::now() >= deadline {
                 return Err(Error::Timeout);
             }
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(TICK);
         }
-        let interval_ns = interval.as_nanos() as u64;
-        let mut expected = [0u8; HEADER_SIZE as usize];
-        expected[..8].copy_from_slice(&MAGIC);
-        expected[8..16].copy_from_slice(&interval_ns.to_le_bytes());
-        expected[16..24].copy_from_slice(&domain.dev().to_le_bytes());
-        expected[24..32].copy_from_slice(&domain.ino().to_le_bytes());
-        let length = object.metadata()?.len();
-        let mut header = [0u8; HEADER_SIZE as usize];
-        if length == HEADER_SIZE {
-            object.read_exact_at(&mut header, 0)?;
-        } else if length != 0 {
-            return Err(Error::InvalidConfig(
-                "incompatible RDMA shared quota object size",
-            ));
-        }
-        if header[..8] == [0; 8] {
-            // A creator may die before publishing magic. The kernel releases
-            // its file lock; the next opener can finish initialization safely.
-            object.set_len(HEADER_SIZE)?;
-            object.write_all_at(&expected[8..], 8)?;
-            object.write_all_at(&MAGIC, 0)?;
-        } else if header != expected {
-            return Err(Error::InvalidConfig(
-                "RDMA shared quota version, interval or clock namespace mismatch",
-            ));
-        }
-        // SAFETY: object still owns the descriptor whose initialization lock is being released.
-        if unsafe { libc::flock(object.as_raw_fd(), libc::LOCK_UN) } != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-        let manager = Self {
-            _object: object,
-            _clock_domain: clock,
-            interval_ns,
-        };
-        manager.current_slot()?;
-        Ok(manager)
+        let base = (calls.map)(&object)?;
+        let mapping = Arc::new(Mapping {
+            base,
+            object: ManuallyDrop::new(object),
+            _clock: clock,
+            calls,
+            interval: interval.as_nanos() as u64,
+        });
+        (calls.unlock)(&mapping.object)?;
+        mapping.refresh()?;
+        let publisher = Arc::new(Publisher {
+            mapping,
+            stop: AtomicBool::default(),
+            failed: AtomicBool::default(),
+        });
+        let owner = publisher.clone();
+        let worker = thread::Builder::new()
+            .name("orbitte-rdma-slot".into())
+            .spawn(move || {
+                while !owner.stop.load(Ordering::Acquire) {
+                    if let Err(e) = owner.mapping.refresh() {
+                        owner.failed.store(true, Ordering::Release);
+                        log::error!("RDMA shared slot publisher stopped: {e}");
+                        break;
+                    }
+                    thread::park_timeout(TICK);
+                }
+            })?;
+        Ok(Self {
+            publisher,
+            worker: Some(worker),
+        })
     }
-
     pub(super) fn current_slot(&self) -> Result<(Priority, Duration)> {
-        let mut time = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        // SAFETY: time is writable timespec storage and CLOCK_MONOTONIC needs no user pointers
-        // besides that output.
-        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } != 0 {
-            return Err(io::Error::last_os_error().into());
+        if self.publisher.failed.load(Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA shared slot publisher failed"));
         }
-        let now = u64::try_from(time.tv_sec)
-            .ok()
-            .and_then(|seconds| seconds.checked_mul(1_000_000_000))
-            .zip(
-                u64::try_from(time.tv_nsec)
-                    .ok()
-                    .filter(|&nanos| nanos < 1_000_000_000),
-            )
-            .and_then(|(seconds, nanos)| seconds.checked_add(nanos))
-            .ok_or(Error::Unavailable("invalid RDMA shared slot clock"))?;
-        Ok(self.slot_at(now))
-    }
-
-    fn slot_at(&self, now: u64) -> (Priority, Duration) {
-        let priority = match (now / self.interval_ns) % 3 {
-            0 => Priority::High,
-            1 => Priority::Medium,
-            _ => Priority::Low,
-        };
-        (
-            priority,
-            Duration::from_nanos(self.interval_ns - now % self.interval_ns),
-        )
+        let m = &self.publisher.mapping;
+        let published = priority(m.slot().load(Ordering::Acquire))?;
+        let (current, delay) = slot_at((m.calls.now)()?, m.interval);
+        // A delayed or killed writer cannot extend a permissive slot past the
+        // clock boundary. The mapped slot can only narrow this worker's tier.
+        Ok((published.min(current), delay))
     }
 }
-
+impl Drop for SharedSlotManager {
+    fn drop(&mut self) {
+        self.publisher.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            if worker.join().is_err() {
+                log::error!("RDMA shared slot publisher panicked");
+            }
+        }
+    }
+}
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/rdma/shared_quota.rs"]
-mod tests;
+pub(super) mod tests;
