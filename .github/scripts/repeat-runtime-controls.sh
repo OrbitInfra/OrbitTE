@@ -4,6 +4,8 @@ set -euo pipefail
 binary=$1
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$(nproc)}
 controls=(
+  engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch
+  transport::gds::tests::a_drained_file_read_can_switch_but_a_posted_write_and_a_short_read_cannot
   engine::failover::tests::missing_descriptor_refreshes_once_in_the_original_epoch_before_admission
   engine::failover::tests::a_refresh_cannot_rebind_an_admitted_write_to_a_replaced_registration
   engine::failover::tests::native::submit_rejection_walks_the_pinned_policy_once_per_physical_owner

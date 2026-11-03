@@ -417,3 +417,35 @@ fn a_refresh_cannot_rebind_an_admitted_write_to_a_replaced_registration() -> Res
     assert_eq!(bytes, [0x45; 8]);
     Ok(())
 }
+
+#[test]
+fn foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch() -> Result<()> {
+    let requester = TransferEngine::new(Default::default())?;
+    let (endpoint, old) = {
+        let source = TransferEngine::new(Default::default())?;
+        (source.endpoint(), source.source_epoch())
+    };
+    let source = TransferEngine::new(EngineConfig {
+        bind_addr: endpoint,
+        ..Default::default()
+    })?;
+    let remote = source.register_memory(vec![1, 3, 5, 7].into(), Permission::RemoteReadWrite)?;
+    std::thread::scope(|s| -> Result<()> {
+        let read = || -> Result<()> {
+            assert!(matches!(
+                requester.open_segment(endpoint, old, WAIT),
+                Err(Error::EpochMismatch)
+            ));
+            let peer = requester.open_segment(endpoint, source.source_epoch(), WAIT)?;
+            assert_eq!(peer.regions()[0].id(), remote.id());
+            Ok(())
+        };
+        let worker = s.spawn(read);
+        read()?;
+        worker.join().unwrap()
+    })?;
+    let mut bytes = [0; 4];
+    remote.read(0, &mut bytes)?;
+    assert_eq!(bytes, [1, 3, 5, 7]);
+    Ok(())
+}

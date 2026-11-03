@@ -998,3 +998,57 @@ fn clean_file_submit_rejection_retries_each_owner_without_reissuing_its_neighbou
     assert_eq!(mock.submits.load(Ordering::Acquire), 0);
     Ok(())
 }
+
+#[cfg(feature = "io-uring")]
+#[test]
+fn a_drained_file_read_can_switch_but_a_posted_write_and_a_short_read_cannot() -> Result<()> {
+    for (op, first) in [
+        (TransferOp::Read, (FAILED, 0)),
+        (TransferOp::Write, (FAILED, 0)),
+        (TransferOp::Read, (COMPLETE, 1)),
+    ] {
+        let mock = Mock::new(GdsMode::CompatAllowed);
+        mock.script.lock().unwrap().push(first);
+        let f = Fixture::new(&mock, Default::default(), 16)?;
+        let pattern: [u8; 16] = std::array::from_fn(|i| i as u8);
+        fs::write(&f.path, pattern)?;
+        let local = f.host(16)?;
+        let requests = [request(&local, 2, 1, 3), request(&local, 8, 10, 4)];
+        let b = f
+            .engine
+            .submit_async(op, &f.segment, &requests, None, WAIT)?;
+        b.wait(WAIT)?;
+        let tasks = b.task_statuses()?;
+        let recovered = op == TransferOp::Read && first.0 == FAILED;
+        assert_eq!(
+            tasks[0].state,
+            if recovered {
+                TaskState::Completed
+            } else {
+                TaskState::Failed
+            }
+        );
+        assert_eq!(tasks[0].failover_count, usize::from(recovered));
+        assert_eq!(tasks[1].failover_count, 0);
+        assert_eq!(tasks[1].state, TaskState::Completed);
+        assert_eq!(mock.submits.load(Ordering::Acquire), 1);
+        let mut bytes = [0; 16];
+        local.read(0, &mut bytes)?;
+        let mut expected = [0x6b; 16];
+        let mut file = pattern;
+        if op == TransferOp::Read {
+            let n = if recovered { 3 } else { 1 };
+            expected[2..2 + n].copy_from_slice(&pattern[1..1 + n]);
+            expected[8..12].copy_from_slice(&pattern[10..14]);
+        } else {
+            file[10..14].fill(0x6b);
+            assert_eq!(
+                tasks[0].failure.as_ref().unwrap().remote_effect,
+                RemoteEffect::Unknown
+            );
+        }
+        assert_eq!(expected, bytes);
+        assert_eq!(fs::read(&f.path)?, file);
+    }
+    Ok(())
+}
