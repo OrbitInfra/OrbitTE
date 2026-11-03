@@ -1,10 +1,12 @@
-//! Test-only wire-v23 relay. Hold READY after the source posts its completion RQ.
+//! Test-only control relay. Hold READY after the source posts its completion RQ.
 //! Payload opcodes are rejected; RDMA bytes never pass through this listener.
 
 use std::net::Shutdown;
 use std::sync::{Arc, Condvar, Mutex};
 
 use super::*;
+
+const WIRE_VERSION: u16 = 1;
 
 #[derive(Default)]
 struct State {
@@ -162,8 +164,8 @@ fn frame<const N: usize>(stream: &mut TcpStream) -> Result<[u8; N]> {
 }
 
 fn header(bytes: &[u8]) -> Result<(u8, usize)> {
-    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != 23u16.to_be_bytes() || bytes[11] != 0 {
-        return Err("relay only supports the frozen wire-v23 header".into());
+    if bytes[..8] != *b"ORBITTE\0" || bytes[8..10] != WIRE_VERSION.to_be_bytes() || bytes[11] != 0 {
+        return Err("relay only supports the OrbitTE development wire header".into());
     }
     Ok((
         bytes[10],

@@ -17,7 +17,7 @@ Rust callers construct a `TransferRequest` with an explicit transport and
 two absolute addresses. TENT's `Request` in `tent/common/types.h` also
 defaults to high priority. OrbitTE takes the READ/WRITE operation at submission
 and uses an engine-resolved QoS handle. The Rust request, transport and error
-types are non-exhaustive so their public API can grow independently of wire v23.
+types are non-exhaustive so their public API can grow independently of the wire format.
 
 `TransferEngine` owns registration, batches, admission and directional shutdown.
 `RegisteredMemory` retains actual backing; aliases share allocation-level
@@ -27,8 +27,8 @@ request framing and source handlers. It dispatches payload work to sibling
 
 RDMA uses the control connection to negotiate paths, connections and exact
 memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
-OrbitTE v23 messages; moving them into their own module does not make this
-protocol compatible with TENT's native RPC or metadata.
+OrbitTE rendezvous messages. The [wire and consumer boundaries](tent-parity.md#wire-and-consumer-boundaries)
+describe the distinction from TENT's native RPC and metadata.
 
 ## Runtime queue ownership
 
@@ -235,7 +235,7 @@ send namespace, and CQ lookup resolves the exact record before checking QPN,
 WR identity and operation. Submission borrows the SQ directly so a sibling's
 native QP call cannot block logical work admission. Native access follows
 grant → QP → context lock order; connection identity is published under the
-QP creation lock. The public v23 handshake can attach independent grants to a
+QP creation lock. The public handshake can attach independent grants to a
 connected QP. The observed previous grant is a lower bound, while both process
 and connection identities still match exactly. Endpoint observations only move
 forward when concurrent handshakes arrive out of order. Cold construction

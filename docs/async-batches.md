@@ -268,7 +268,7 @@ completion. Actual prepared-owner Drop returns it and wakes the queue;
 Unquiesced retains it. Every exiting owner atomically retires its reservation,
 including one cancelled before acquiring quota; remaining queue metadata cannot
 reacquire capacity during Drop. Receiver credit sync runs only when QoS is eligible and
-keeps network I/O outside admission locks. Wire v23 is unchanged.
+keeps network I/O outside admission locks.
 
 Frozen TENT parses and overlays these action names but labels the resolver
 `resolution_only`. The executable rules above are OrbitTE's defined extension,
@@ -527,9 +527,8 @@ window bytes/requests. These are cooperative scheduling grants, not measured
 receiver buffer/RQ occupancy, authorization or a native rate guarantee. Fixed
 windows do not redistribute idle capacity or map QoS intent into credit classes.
 
-OrbitTE wire **v22** adds fixed-size `CreditSync`/`CreditClose` metadata frames;
-the current wire is **v23**, and both peers must use it even when automatic
-credits are disabled. Pin adds its session binding; other payload framing is unchanged. Frozen TENT supplies the sender ledger
+OrbitTE uses fixed-size `CreditSync` and `CreditClose` metadata frames.
+Pin reserves space for the session binding even when automatic credits are disabled. Frozen TENT supplies the sender ledger
 and resource/epoch/sequence model, but has no receiver issuer or network consumer.
 This bounded issuer is an OrbitTE extension. Automatic staging/consumer owner
 charges are described below; manual resource mapping, adaptive windows,
@@ -587,7 +586,7 @@ crashed-sender recovery and generic consumer credits remain open.
 Frozen TENT defines the four credit resource tags and a private sender ledger,
 but does not connect that ledger to network admission. Its `ProxyManager` owns
 bitmap chunks and per-chunk locks. OrbitTE keeps that resource boundary and adds
-this automatic owner mapping; its v23 framing and consumer semantics are OrbitTE
+this automatic owner mapping. Its framing and consumer semantics are OrbitTE
 extensions. See [source controls](qualification.md#staging-and-consumer-owner-credits).
 
 ## Results, cancellation and quiescence
@@ -662,7 +661,7 @@ Per-request `remote_staging=true` also permits remote Pin/Delegate/Unpin over
 TCP/RDMA in the same engine and batch; only the source needs its incoming Pin
 capability enabled. The source validates the actual CUDA allocation. Private
 host staging grants follow host RDMA policy independently of GPU Direct. See
-[remote selection](staging.md#serial-remote-staging). Installed v23 DMA,
+[remote selection](staging.md#serial-remote-staging). Installed DMA,
 concurrent transport dispatch and end-to-end throughput remain separate work.
 
 Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and

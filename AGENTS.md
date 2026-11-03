@@ -72,7 +72,7 @@ Done: S0 ([PR #120](https://github.com/OrbitInfra/OrbitTE/pull/120), `82ebf10`).
 
 In flight: [PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118)
 (`feat/transport-selector`, draft) delivers the first part of S6. It predates
-S0 and bumps the wire to v24, so after S0b it must be rebased onto `main`,
+S0 and changes the wire version, so after S0b it must be rebased onto `main`,
 adopt `TransferRequest::new` and drop that bump. Check `gh pr list` for open
 work before starting a step.
 
@@ -131,13 +131,13 @@ Code:
 - Record every deliberate difference from TENT (especially safety fixes) in
   [docs/architecture.md](docs/architecture.md) or the transport's guide, with a
   negative control test.
-- Before the first release, never bump `VERSION` in
-  `src/runtime/control_plane.rs`. From S0b on it stays 1, and the build
-  fingerprint in every frame header rejects peers built from different source.
-  A wire change needs no version edit; keep
+- Keep `VERSION` in `src/runtime/control_plane.rs` fixed at 1 before the
+  first release. Deploy the same build on both peers. The header cannot
+  detect a build mismatch. Keep
   `relay_tracks_the_public_engines_current_wire`
   (`tests/hardware/rdma_host/gate.rs`) passing. Do not put wire numbers in
-  code comments or current-state docs.
+  code comments or current-state docs outside the
+  [wire policy](docs/tent-parity.md#wire-and-consumer-boundaries).
 - Leave `tests/reference/tent_driver.cpp`'s list of 18 upstream transports
   alone; it disables everything except TCP in the oracle.
 
@@ -237,39 +237,23 @@ Do this first: later steps add request fields and transports.
   `src/platform/numa.rs:63`.
 - Done when CI is green on every combination with no behavior change.
 
-### S0b — Development wire v1 with build fingerprint [CPU]
+### S0b — Freeze the pre-release development wire [CPU]
 
-The wire was bumped 22 times before any release. Freeze the number and let the
-build reject mismatched peers instead.
-
-- **Version:** set `VERSION` in `src/runtime/control_plane.rs` to 1 and
-  document it as the pre-release development protocol, never bumped before
-  the first release.
-- **Fingerprint:** `build.rs` computes a fixed 64-bit FNV-1a hash over
-  `CARGO_PKG_VERSION`, then each file under `src/` in sorted `/`-separated
-  relative-path order (path, NUL, contents). It writes the low 32 bits to
-  `OUT_DIR` as a constant and emits `cargo:rerun-if-changed=src`.
-  - Never use `DefaultHasher`, timestamps or git metadata: a source checkout
-    and the packaged `.crate`, on stable and Rust 1.85, must produce the same
-    value.
-  - Exclude Cargo features, so CPU-only and `rdma`/`cuda` builds of the same
-    source still interoperate.
-- **Header:** keep every frame size and offset. Replace the 8-byte
-  `ORBITTE\0` magic with a 4-byte `ORTE` magic plus the 4-byte fingerprint.
-  Validate magic, fingerprint, version and reserved flags in one place, and
-  reject a mismatch with `Error::Protocol` before any other field is read.
-- **Relay:** `tests/hardware/rdma_host/gate.rs` validates magic and version 1,
-  forwards the fingerprint unchanged and hardcodes no build value. Update
-  `gate_tests.rs` to match.
-- **Tests:** CPU controls reject a different fingerprint, an old
-  `ORBITTE\0`/v23 header and a wrong version, and two engines from one build
-  still connect.
-- **Docs:** describe the rule once in [tent-parity.md](docs/tent-parity.md)
-  (wire boundaries). Remove wire numbers from code comments and current-state
-  text. In [qualification.md](docs/qualification.md), keep historical v3–v23
-  labels and add one sentence that they identify historical artifacts.
-- **Done:** all CI combinations, the CPU oracle and the installed-consumer
-  builds pass; no other behavior changes.
+- Set `VERSION` in `src/runtime/control_plane.rs` to 1. Comment that it stays
+  fixed before the first release and both peers must run the same build.
+- Preserve the eight-byte `ORBITTE\0` magic, every frame size and every field
+  offset. The existing prefix validator rejects other versions with
+  `Error::Protocol`.
+- Use one named version constant in `tests/hardware/rdma_host/gate.rs` for
+  the relay and its fixtures in `gate_tests.rs`.
+- Test rejection of the old v23 header and all unsupported versions on CPU.
+  Show that two engines from the same build still connect.
+- State the rule once under [wire and consumer boundaries](docs/tent-parity.md#wire-and-consumer-boundaries),
+  including when an explicit compatibility policy begins. Remove wire
+  numbers from code comments and other current-state text. Preserve historical
+  artifact labels in [qualification.md](docs/qualification.md).
+- Finish when all CI feature combinations, the CPU oracle and the
+  installed-consumer builds pass.
 
 ### S1 — P7.1 file segments (F05) [CPU]
 

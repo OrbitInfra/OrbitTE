@@ -18,7 +18,9 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"ORBITTE\0";
-const VERSION: u16 = 23;
+// Pre-release development protocol. Keep this fixed until the first release.
+// Both peers must run the same build.
+const VERSION: u16 = 1;
 pub(crate) const REQUEST_SIZE: usize = 52;
 pub(crate) const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;

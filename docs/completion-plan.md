@@ -225,8 +225,7 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   ordinary transfer defaults and setters for QoS, priority and remote staging.
   Requests, transports and errors are non-exhaustive for Rust callers.
   Clippy checks unsafe blocks for safety notes and native features require a
-  Linux target. These source changes keep the v23 protocol and existing
-  transfer behavior. Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
+  Linux target. These source changes preserve transfer behavior. Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
   and retain actual backing through completion. Host range batches preflight
   bounds, alias locks, references, IDs and retained budgets before one atomic
   publication. Real external allocations, multi-region TCP bytes and concurrent
@@ -296,7 +295,10 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   prefix accounting, source-side validation, staged complete-slice commits,
   final WRITE ACK, absolute I/O deadlines and bounded handlers. Real loopback,
   concurrent and independent-process restart/byte tests pass. The development
-  protocol is OrbitTE-only; TENT mixed-peer tests, physical two-host tests,
+  protocol is OrbitTE-only. S0b (Implemented) freezes its version and preserves
+  both frame layouts. CPU controls reject unsupported versions on requests
+  and replies. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries).
+  TENT mixed-peer tests, physical two-host tests,
   transport notification fallback, automatic updates and the reference oracle
   remain open.
 - [x] **P2.2 — bounded CPU notifications (Implemented, not Accepted).** TENT-style
@@ -306,7 +308,7 @@ Requirements: B01; F05-F08, F11, F20 foundations.
   leaves queued messages readable. Data results remain intact if notification
   delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
   malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. The original substage used OrbitTE wire v3 (now v7); native C allocation/free, asynchronous
+  pass. Native C allocation/free, asynchronous
   multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
 - [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
   scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
@@ -524,7 +526,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
 - [x] **P5.3 — Explicit GPU direct RDMA (Source and bounded installed profile accepted with limits).**
   Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
   persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
-  without unsupported PeerDirect MWs. v15 binds an ordinary SEND receipt to the
+  without unsupported PeerDirect MWs. The protocol binds an ordinary SEND receipt to the
   grant; source ACK follows native close and GPU visibility. Failed registration
   never selects staging. CPU controls cover aliases, partial construction,
   payload/RQ MR and PD cleanup, context restore and retained owners/budgets.
@@ -646,7 +648,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   repeats and their cleanup audit pass; source and this healthy profile are
   accepted. Independent source review accepts the first bounded requester stage
   at `460d825`, including negotiated chunk sizes, exclusive GPU range loans and
-  clean package provenance; its v19 installed profile remains unqualified.
+  clean package provenance. Its installed profile remains unqualified.
   The requester now has an independent bounded PRE/POST ring, per-slot pending
   ownership and final local drain before Unpin. Independent source review accepts
   `c87c403`, including recovered submit/record errors, native context uncertainty
@@ -710,7 +712,7 @@ Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
   worker, with busy cleanup locks yielding and retained output awaiting a complete
   lane receipt. Independent source review accepts `b2a0aba`; see
   [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
-  Reconcile remaining resource/source control boundaries with frozen TENT and current v23 qualification before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
+  Reconcile remaining resource/source control boundaries with frozen TENT and qualify the current build before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
   and [qualification](qualification.md#bounded-remote-cuda-pipeline).
 - [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
   completion without early source, destination or staging-buffer reuse.
@@ -772,7 +774,7 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   windows, single-flight sync, endpoint-alias rejection and terminal retirement
   preserve authority across lost responses. Automatic source-owned remote Pin
   staging/consumer charges now follow negotiated slot and session owners through
-  native cleanup; v23 binds each Pin to its automatic sender session. Manual
+  native cleanup. Each Pin is bound to its automatic sender session. Manual
   resource mapping, adaptive windows, uncertain-sender reclamation, full QoS/pacing and native
   fairness remain open; see [automatic windows](async-batches.md#automatic-receiver-windows). Typed global/tenant/intent QoS resolution now feeds
   effective RDMA priority and atomic per-contract retained byte/request caps.
@@ -1042,7 +1044,7 @@ source and this healthy profile are accepted. Independent source review accepts
 requester chunk-size negotiation, GPU range loans and chunk-visible failures at
 `460d825`. Independent requester PRE/POST rings, shared pending-copy ownership
 and final drain before Unpin are source-accepted at `c87c403`, with recovered
-submission and uncertain CUDA/MR cleanup controls. Installed v19 qualification
+submission and uncertain CUDA/MR cleanup controls. Installed qualification
 remains open. At the user's direction, continue source work without requesting
 new hardware tasks; qualify the current artifact on fresh nodes when hardware
 work resumes. Bounded CROSS windows and a session worker now decouple local CUDA
@@ -1056,7 +1058,7 @@ per-slot event queries and immediate refill is source-accepted at `1ac1d01`.
 Bounded concurrent RDMA CROSS is implemented with shared native workers,
 independent payload query, per-slot FinishCross and aggregate cleanup. Independent
 source review accepts `adc803f`; see [the evidence](qualification.md#concurrent-rdma-cross).
-Remote Delegate progress is now implemented in v21, separating acceptance from
+Remote Delegate progress separates acceptance from
 scoped event-query completion and retaining per-slot generations through pending
 results. Independent source review accepts `3767dc5`; see [the evidence](qualification.md#remote-delegate-progress).
 TCP payload and scoped staging control receipts now have bounded nonblocking
@@ -1097,7 +1099,7 @@ independent incoming Pin capability and actual source authorization. Prepared
 owners retain staging intent; payload CROSS stays in TCP/RDMA and private host
 MRs follow host policy. See [remote selection](qualification.md#per-request-remote-staging).
 Producer readiness remains an explicit caller handoff; automatic routing/QoS
-remains P6. Current v23 installed qualification and full P5 remain open.
+remains P6. Qualification of the current installed build and full P5 remain open.
 
 P5.4d idle LRU reclaim and continuing flush are implemented at `fd55f15`.
 Changing working sets can continue within the entry limit; a replacement
@@ -1208,16 +1210,15 @@ This follows frozen TENT's resolution fields and adds real consumption; it does
 not establish parent/child tenant limits or full QoS parity; delay/reject
 consumption is recorded below.
 See [source controls](qualification.md#qos-contract-consumption).
-Receiver issuance/update synchronization is implemented at source scope in
-wire v22. Source-owned windows bound aggregate authorization; actual successful
+The source implements receiver issuance and update synchronization. Source-owned windows bound aggregate authorization; actual successful
 data-owner Drop publishes completion totals, and existing waiters coalesce
 single-flight cumulative sync without extra threads or per-slice RPCs. Unknown
 Open outcomes retain identity; endpoint aliases cannot clone authority; close
 requires successful drain and preserves terminal tombstones. This does not
 qualify physical receiver capacity, adaptive sharing or crashed-sender recovery.
 See [source controls](qualification.md#automatic-receiver-credit-windows).
-Automatic staging/consumer resource charging is implemented at source scope in
-wire v23. Pin binds an automatic sender session; the source charges its actual
+The source implements automatic staging and consumer resource charging.
+Pin binds an automatic sender session. The source charges its actual
 negotiated ring depth and one session. Stage leases return credits only after
 cleanup, and the consumer requires every child stage to drain. Native constructor
 failure and retained owners preserve charges. This extends the frozen credit

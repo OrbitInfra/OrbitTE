@@ -75,7 +75,7 @@ mean node zero. Auto then selects the first eligible host node, as TENT's
 `Topology::findNearMem` does after failing to find a matching NUMA location.
 Discovery errors, an empty eligible set and a selected node's allocation/binding
 failure are errors. They do not silently switch to the wildcard allocator.
-No topology is exchanged in the v23 wire protocol.
+The protocol does not exchange topology.
 
 `Any` preserves OrbitTE's existing driver policy. TENT also spells a wildcard
 location `*`, but its frozen host allocator resolves that wildcard to node zero;
@@ -271,12 +271,10 @@ Self-peer overlap is rejected rather than providing snapshot-copy semantics.
 A busy metadata mutex fails admission with `ResourceExhausted`. Pool exhaustion
 also fails explicitly; no hidden pool or silent reduction of source depth is used.
 
-Wire version 17 introduced PinRead/PinWrite, Delegate, CROSS and Unpin; version
-18 added pipeline width and version 19 added the requester chunk cap.
-Version 20 introduced a separate CROSS capacity and `FinishCross`.
-Version **21** introduced `QueryDelegate`: Delegate acceptance no longer
-permits READ CROSS, WRITE slot reuse or final Unpin. Both peers must use
-version 22; older headers are rejected.
+PinRead and PinWrite negotiate pipeline width, requester chunk size and a
+separate CROSS capacity. Delegate starts the remote copy. `QueryDelegate`
+must confirm completion before READ CROSS, WRITE slot reuse or final Unpin.
+`FinishCross` completes the CROSS exchange.
 Each frame binds a fresh nonce, original registration, phase and logical range;
 success receipts echo that full scope. A repeated prior receipt cannot stand in
 for Unpin. Private chunk descriptors never appear in Describe and cannot be used
@@ -415,7 +413,7 @@ Socket work is bounded to the small header and at most two small reads per turn;
 precede any state transition. An incomplete socket result differs from a fully
 received QueryDelegate NOT_READY. Initial queries follow Delegate acceptance
 before admission of more CROSS work; later queries rotate across pending slots.
-The current wire is v23. Pin's 11-byte transport/depth/chunk-cap/CROSS-width
+Pin's 11-byte transport/depth/chunk-cap/CROSS-width
 header is followed by a 24-byte sender-session/credit-epoch binding. Zeroes mean
 no automatic binding. A source with enabled owner windows rejects an unbound Pin
 before allocation. Delegate/CROSS/Unpin layouts remain unchanged; see
@@ -514,7 +512,7 @@ the [subsequent setup boundary](#native-rdma-setup-progress). Native provider ca
 and locks are not preemptible. One shard still executes one session at a time.
 No public active-cancel or engine-close ordering changes are introduced.
 [Source qualification](qualification.md#native-rdma-finish-progress) is separate
-from installed v21 execution, real DMA overlap and performance.
+from installed execution, real DMA overlap and performance.
 
 ### Nonreusable QP retirement progress
 
@@ -545,7 +543,7 @@ controls explicitly hold `destroy_qp` while observing entry to failure cleanup;
 they do not assert early terminal, copyback, POST, Unpin or buffer release.
 The held context and other CROSS use verified distinct worker IDs. A provider
 call still blocks its own worker, including other lanes assigned to that worker.
-There is no per-QP thread, provider preemption or wire change (v21).
+There is no per-QP thread, provider preemption or wire change.
 
 Frozen TENT `e2d6e8e` provides the corresponding split: `EndpointStore` unpublishes
 an endpoint and queues it for reclamation; `Workers::reclaimEndpoints` visits
@@ -660,12 +658,12 @@ priority over admitting another ready FinishCross.
 This follows frozen TENT `e2d6e8e`'s ProxyManager/transport/Workers ownership split
 and submitted-batch observation. TENT's Workers can themselves perform endpoint
 bootstrap outside the endpoint lock; this change does not imply that TENT has
-universally asynchronous connection setup. OrbitTE uses its own v23 framing
+universally asynchronous connection setup. OrbitTE uses its own framing
 and exact-grant completion protocol. Passive/source cold-builder waits in
 `connection()`, native resource creation/open/connect/fill, failure drain and
 source handlers remain synchronous; locks and provider calls are not preemptible.
 Each shard still runs one session. [Source qualification](qualification.md#native-rdma-setup-progress)
-does not qualify installed v21 execution, real DMA overlap or performance.
+does not qualify installed execution, real DMA overlap or performance.
 
 ### Session progress and completion
 
@@ -774,7 +772,7 @@ An error after a partial native wire exchange may still require closing the
 connection with an unknown remote effect. A requester still writing CROSS may
 observe a socket error before it can read the source's error receipt. Long RDMA sessions rotate exhausted
 MW key indices through the [PD-owned key domain](rdma-cuda.md).
-The earlier v18 pipeline profile passes 24 two-host cases on stable/MSRV
+The earlier pipeline profile passes 24 two-host cases on stable/MSRV
 plus four independent repeats. That exact source and healthy profile are accepted;
 see [qualification](qualification.md#bounded-remote-cuda-pipeline).
 Scheduling overlap and native completion receipts do not establish GPU execution
@@ -858,12 +856,13 @@ are also checked. Native slot copies are matched by exact address/length
 multiplicity within each payload phase; setup/update/readback ordering and
 per-slot generations remain strict. Tests distinguish unconfirmed submissions from physical DMA
 execution: native receipts do not establish execution overlap or throughput.
-The historical 24-case installed matrix uses wire v18 and the generation-aware
-observer. Four fresh independent repeats and their cleanup audit also pass;
-earlier serial evidence remains bound to its original observer and wire version.
-The current v23 requester ring, concurrent RDMA CROSS and remote Delegate queries require their own artifact and evidence. The
-controller supports independent widths and conservative local capacity, but
-hardware execution is deferred while new resource requests are paused. The
+The historical 24-case installed matrix used the generation-aware observer.
+Four independent repeats and their cleanup audit also passed. Earlier serial
+evidence remains bound to its original observer and wire version.
+The current requester ring, concurrent RDMA CROSS and remote Delegate queries
+require their own artifact and evidence. The controller supports independent
+widths and conservative local capacity, but hardware execution is deferred
+while new resource requests are paused. The
 shared worker shards and requester query event loop also require fresh installed
 evidence; the CPU controls prove ownership and scheduling only. The shared-QP
 control holds the first native payload completion while a second CROSS finishes,
