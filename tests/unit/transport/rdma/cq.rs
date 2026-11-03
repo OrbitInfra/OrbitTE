@@ -550,6 +550,9 @@ fn lost_event_consumer_retains_the_actual_lane_and_never_fabricates_an_ack() {
         runtime.close(deadline()),
         Err(Error::Unquiesced { .. })
     ));
+    // Close can report a retained endpoint while its lane is still recording
+    // the channel. Detach publishes the lane's final ownership counters.
+    wait_until(|| runtime.stats().unwrap().progress_lanes == 0);
     let stats = runtime.stats().unwrap();
     assert_eq!(
         (
