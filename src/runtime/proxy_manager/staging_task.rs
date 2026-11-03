@@ -491,6 +491,8 @@ impl<'a> StagingTask<'a> {
                 address: 0,
                 length: self.chunk,
                 permission: Permission::RemoteReadWrite,
+                memory_type: crate::MemoryType::Cpu,
+                ipc_exportable: false,
             },
             remote_offset: 0,
             length,

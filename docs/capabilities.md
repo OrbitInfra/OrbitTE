@@ -16,6 +16,7 @@ for the exact artifacts and profiles behind each result.
 | Reusable QP arrays and concurrent grants | Implemented | Fixed-width cold construction, multiplexing on the public wire, exact WR/receipt dispatch and shared physical SQ/RQ limits |
 | Multirail slices and shared quotas | Implemented | Selected folded-tail and concurrent-parent profiles verify bytes, whole-parent admission and native drain. The installed two-physical-rail profile joins every payload WR/CQE and verifies shared-QP contention/accounting; bandwidth/fairness policy remains P6 |
 | Transport workers, CQ lanes and NUMA binding | Implemented | Scoped native worker/lane routing, CPU-mask and polling/event profiles; broader scheduling policy remains later work |
+| Transport policy selection | Implemented; source controls | Ordered memory/size/priority rules, source-owned type/IPC facts and strict hints feed actual sync/async submission. Named policies, intent/device/QP-pool filters, file selection and installed performance remain open; see [contract](transport-selection.md) |
 | Runtime FIFO/EDF admission | Implemented; CPU/source controls | Opt-in whole-submission scheduling, independent owner/byte dispatch windows, same-Batch dependencies, queue timeout/cancel and retained uncertain DMA charges. Physical-request scheduling, staging reserves, deadline-infeasible cancellation and native performance remain open; see [contract](async-batches.md#runtime-admission-and-dispatch-window) |
 | QoS contract consumption | Implemented; CPU/source controls | Typed or bounded TENT-format JSON global/tenant/intent inheritance, reusable engine-bound policies, effective RDMA priority and atomic per-contract retained byte/request caps. Unknown identities share compiled fallback buckets. Delay/reject actions join QoS, receiver credit and runtime-window admission without partial charges. Unsupported actions fail closed; hierarchical/cluster quotas and native fairness remain open; see [contract](async-batches.md#qos-contracts) and [actions](async-batches.md#qos-admission-actions) |
 | Receiver credits (sender) | Implemented; CPU/source controls | Opt-in cumulative peer byte/request grants gate sync/async transport handoff and queue eligibility. Applications may supply updates or connect to bounded automatic receiver windows. Demand-driven cumulative sync, lost-reply recovery and fenced retirement are implemented. Automatic source-owned remote Pin staging/consumer charges follow actual native cleanup; manual resource mapping, adaptive windows and full QoS remain open. This is request authorization, not proven receiver/RQ capacity or a rate limiter; see [contract](async-batches.md#receiver-credit-gating) |
@@ -42,7 +43,9 @@ for the exact artifacts and profiles behind each result.
 
 ## Provider selection
 
-CPU/TCP is the default. `rdma` and `cuda` are independent Cargo features.
+Explicit CPU/TCP routing remains available without configuration.
+`Transport::Unspec` uses [eligible transport selection](transport-selection.md).
+`rdma` and `cuda` are independent Cargo features.
 Enabling a feature makes its provider code available; runtime use requires the
 actual device, driver and resources.
 

@@ -10,8 +10,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::MemoryType;
 use crate::engine::{Source, deadline, remaining};
 use crate::memory::checked_range;
+use crate::segment::SegmentMetadata;
 use crate::{
     EngineConfig, Error, Notification, NotificationEffect, NotificationFailure, Permission,
     RemoteRegion, RemoteSegment, Result, SourceEpoch,
@@ -25,6 +27,7 @@ pub(crate) const REQUEST_SIZE: usize = 52;
 pub(crate) const REPLY_SIZE: usize = 36;
 const MAX_REGIONS: usize = 4096;
 const REGION_SIZE: usize = 32;
+const DESCRIPTOR_HEADER: usize = 4 + SegmentMetadata::WIRE_SIZE;
 const IO_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -244,23 +247,24 @@ pub(crate) fn open_segment(
     )?;
     let reply = Reply::read(&mut channel, epoch)?;
     if reply.status != 0
-        || reply.length < 4
-        || reply.length > (4 + MAX_REGIONS * REGION_SIZE) as u64
+        || reply.length < DESCRIPTOR_HEADER as u64
+        || reply.length > (DESCRIPTOR_HEADER + MAX_REGIONS * REGION_SIZE) as u64
     {
         return Err(Error::Protocol("descriptor payload length"));
     }
     let mut bytes = buffer(reply.length as usize)?;
     channel.read_exact(&mut bytes)?;
     let count = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-    if count > MAX_REGIONS || bytes.len() != 4 + count * REGION_SIZE {
+    if count > MAX_REGIONS || bytes.len() != DESCRIPTOR_HEADER + count * REGION_SIZE {
         return Err(Error::Protocol("descriptor count"));
     }
+    let metadata = SegmentMetadata::decode(&bytes[4..DESCRIPTOR_HEADER])?;
     let mut regions = Vec::new();
     regions
         .try_reserve_exact(count)
         .map_err(|_| Error::ResourceExhausted)?;
     let mut previous = 0;
-    for entry in bytes[4..].chunks_exact(REGION_SIZE) {
+    for entry in bytes[DESCRIPTOR_HEADER..].chunks_exact(REGION_SIZE) {
         let id = u64_at(entry, 0);
         let address = u64_at(entry, 8);
         let length = usize::try_from(u64_at(entry, 16))
@@ -269,7 +273,10 @@ pub(crate) fn open_segment(
             || address == 0
             || length == 0
             || address.checked_add(length as u64).is_none()
-            || entry[25..].iter().any(|b| *b != 0)
+            || entry[25] > 1
+            || entry[26] > 1
+            || (entry[26] != 0 && entry[25] != 1)
+            || entry[27..].iter().any(|b| *b != 0)
         {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
         }
@@ -279,6 +286,12 @@ pub(crate) fn open_segment(
             address,
             length,
             permission: Permission::decode(entry[24])?,
+            memory_type: if entry[25] == 0 {
+                MemoryType::Cpu
+            } else {
+                MemoryType::Cuda
+            },
+            ipc_exportable: entry[26] != 0,
         });
         previous = id;
     }
@@ -286,6 +299,7 @@ pub(crate) fn open_segment(
         endpoint,
         epoch,
         regions,
+        metadata,
     })
 }
 
@@ -611,16 +625,19 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
     let prepared = (|| {
         if request.operation == Operation::Describe {
             let regions = source.registry.descriptors()?;
-            let mut payload = buffer(4 + regions.len() * REGION_SIZE)?;
+            let mut payload = buffer(DESCRIPTOR_HEADER + regions.len() * REGION_SIZE)?;
             payload[..4].copy_from_slice(&(regions.len() as u32).to_be_bytes());
+            source.metadata.encode(&mut payload[4..DESCRIPTOR_HEADER]);
             for (region, entry) in regions
                 .iter()
-                .zip(payload[4..].chunks_exact_mut(REGION_SIZE))
+                .zip(payload[DESCRIPTOR_HEADER..].chunks_exact_mut(REGION_SIZE))
             {
                 entry[..8].copy_from_slice(&region.id.to_be_bytes());
                 entry[8..16].copy_from_slice(&region.address.to_be_bytes());
                 entry[16..24].copy_from_slice(&(region.length as u64).to_be_bytes());
                 entry[24] = region.permission as u8;
+                entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
+                entry[26] = u8::from(region.ipc_exportable);
             }
             channel.reply(source.epoch, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;

@@ -5,7 +5,12 @@ use std::io::Read;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-use crate::{Error, Permission, Result};
+mod metadata;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) use metadata::ProcessIdentity;
+pub(crate) use metadata::SegmentMetadata;
+
+use crate::{Error, MemoryType, Permission, Result};
 
 /// Random source-instance identity, not an authentication credential.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -52,9 +57,16 @@ pub struct RemoteRegion {
     pub(crate) address: u64,
     pub(crate) length: usize,
     pub(crate) permission: Permission,
+    pub(crate) memory_type: MemoryType,
+    pub(crate) ipc_exportable: bool,
 }
 
 impl RemoteRegion {
+    /// Source-owned backing classification from the descriptor snapshot.
+    pub fn memory_type(&self) -> MemoryType {
+        self.memory_type
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -84,6 +96,7 @@ pub struct RemoteSegment {
     pub(crate) endpoint: SocketAddr,
     pub(crate) epoch: SourceEpoch,
     pub(crate) regions: Vec<RemoteRegion>,
+    pub(crate) metadata: SegmentMetadata,
 }
 
 impl RemoteSegment {

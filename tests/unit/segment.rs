@@ -20,6 +20,8 @@ fn epoch_roundtrip_rejects_malformed_authority() {
 fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_ranges() {
     let epoch = SourceEpoch([1; 16]);
     let region = |id, address, length| RemoteRegion {
+        memory_type: crate::MemoryType::Cpu,
+        ipc_exportable: false,
         epoch,
         id,
         address,
@@ -27,6 +29,7 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
         permission: Permission::RemoteRead,
     };
     let peer = RemoteSegment {
+        metadata: Default::default(),
         endpoint: "127.0.0.1:1".parse().unwrap(),
         epoch,
         regions: vec![

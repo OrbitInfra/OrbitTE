@@ -265,7 +265,10 @@ version, a one-byte operation or status, and one zero reserved byte.
 | --- | --- |
 | Request, 52 bytes | Expected epoch (16), registration ID (8), offset (8), length (8) |
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
-| Descriptor payload | Region count (4), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1) and zero reserved bytes (7) |
+| Descriptor payload | Region count (4), segment capabilities (36), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), zero reserved bytes (5) |
+
+The [selector guide](transport-selection.md#protocol-and-qualification) describes
+the capability fields and validation. Each transfer still requires a grant.
 
 Operations: `0` describe, `1` TCP READ, `2` TCP WRITE, `3` notify, `4` RDMA READ,
 `5` RDMA WRITE, `6` sliced RDMA READ and `7` sliced RDMA WRITE. See the [RDMA/CUDA contract](rdma-cuda.md) for bootstrap/commit sequencing. Describe requires zero
@@ -284,7 +287,7 @@ READ: request → success header and exactly the requested bytes. WRITE:
 request → ready → exactly the requested bytes → final success. The source
 commits only a complete WRITE body; the requester commits only a complete READ
 body. A dropped or invalid reply never authorizes replay. Describe replies are
-bounded independently of the transfer payload limit, at 4 + 4,096 × 32 bytes.
+bounded independently of the transfer payload limit, at 40 + 4,096 × 32 bytes.
 Notify: request → reserve inbox and reply ready → complete body and marker →
 validate/enqueue → final success with zero length. Rejection before ready
 proves no enqueue; lost final receipt leaves delivery uncertain. Incomplete

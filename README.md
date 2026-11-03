@@ -54,6 +54,8 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 - **Bounded admission and QoS.** High/Medium/Low priority, FIFO/EDF dispatch
   windows, per-tenant QoS budgets and receiver credits limit what each peer
   can hold in flight.
+- [Transport selection](docs/transport-selection.md) chooses an eligible NVLink,
+  RDMA or TCP path once per request and honors explicit hints.
 
 ## Supported paths
 

@@ -11,6 +11,8 @@ use crate::runtime::admission_queue::{
 use crate::runtime::control_plane::{self, ControlService};
 use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
 use crate::runtime::receiver_credit::{CreditPermit, ReceiverCreditIssuer, SenderCreditLedger};
+use crate::runtime::transport_selector::{SelectionContext, TransportSelector};
+use crate::segment::SegmentMetadata;
 use crate::transport::tcp::TcpTransport;
 use crate::{
     CreditUpdateDisposition, EngineConfig, Error, HostMemory, Notification, NotificationFailure,
@@ -24,13 +26,15 @@ pub enum TransferOp {
     Write,
 }
 
-/// Explicit byte transport; unsupported hints fail before batch I/O.
+/// Byte transport or policy selection. Explicit hints never silently downgrade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Transport {
     Tcp,
     Rdma,
     Nvlink,
+    /// Choose an eligible transport before any payload I/O. No failure replay.
+    Unspec,
 }
 
 /// TENT request priority; smaller discriminants are served first by RDMA workers.
@@ -195,11 +199,17 @@ pub struct TransferEngine {
     runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
     receiver_credits: Option<Arc<SenderCreditLedger>>,
     qos: Option<QosContractResolver>,
+    selector: Option<TransportSelector>,
 }
 
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
+        let selector = config
+            .selector
+            .as_ref()
+            .map(TransportSelector::new)
+            .transpose()?;
         let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let qos = config
             .qos
@@ -236,7 +246,19 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
+        #[allow(unused_mut)]
+        let mut metadata = SegmentMetadata::default();
+        #[cfg(feature = "rdma")]
+        {
+            metadata.rdma = rdma.is_some();
+        }
+        #[cfg(feature = "cuda")]
+        {
+            metadata.nvlink = nvlink.as_ref().map(|transport| transport.identity);
+            metadata.remote_staging = config.remote_staging;
+        }
         let source = Arc::new(Source {
+            metadata,
             credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
             #[cfg(feature = "cuda")]
             remote_staging: config.remote_staging,
@@ -273,6 +295,7 @@ impl TransferEngine {
             runtime_queue,
             receiver_credits,
             qos,
+            selector,
             config,
             source,
             control,
@@ -651,10 +674,43 @@ impl TransferEngine {
                     )
                 }
             };
-            if priority != Priority::High && request.transport != Transport::Rdma {
+            if request.length > self.config.max_transfer_bytes {
+                return Err(Error::ResourceExhausted);
+            }
+            let (local, local_offset) = self
+                .source
+                .registry
+                .resolve_address(request.local_address, request.length)?;
+            let (remote, remote_offset) =
+                peer.resolve_address(request.remote_address, request.length)?;
+            if !remote.permission.allows(operation == TransferOp::Write) {
+                return Err(Error::PermissionDenied);
+            }
+            let transport = if self.selector.is_none() && request.transport != Transport::Unspec {
+                request.transport
+            } else {
+                let context = SelectionContext {
+                    local_memory: local.memory_type(),
+                    #[cfg(feature = "cuda")]
+                    local_ipc: local.ipc_requester(),
+                    #[cfg(not(feature = "cuda"))]
+                    local_ipc: false,
+                    remote: &remote,
+                    local_segment: self.source.metadata,
+                    remote_segment: peer.metadata,
+                    transfer_size: request.length,
+                    priority,
+                    remote_staging: request.remote_staging,
+                };
+                match &self.selector {
+                    Some(selector) => selector.select(&context, request.transport)?,
+                    None => TransportSelector::select_default(&context)?,
+                }
+            };
+            if priority != Priority::High && transport != Transport::Rdma {
                 return Err(Error::Unavailable("request priority requires RDMA"));
             }
-            if request.remote_staging && request.transport == Transport::Nvlink {
+            if request.remote_staging && transport == Transport::Nvlink {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }
             #[cfg(not(feature = "cuda"))]
@@ -663,7 +719,7 @@ impl TransferEngine {
                     "remote staging requires --features cuda",
                 ));
             }
-            if request.transport == Transport::Rdma {
+            if transport == Transport::Rdma {
                 #[cfg(feature = "rdma")]
                 {
                     if !rdma_ready {
@@ -678,14 +734,7 @@ impl TransferEngine {
                 #[cfg(not(feature = "rdma"))]
                 return Err(Error::Unavailable("build with --features rdma"));
             }
-            if request.length > self.config.max_transfer_bytes {
-                return Err(Error::ResourceExhausted);
-            }
-            let (local, local_offset) = self
-                .source
-                .registry
-                .resolve_address(request.local_address, request.length)?;
-            if request.transport == Transport::Nvlink {
+            if transport == Transport::Nvlink {
                 #[cfg(feature = "cuda")]
                 {
                     self.source
@@ -700,11 +749,6 @@ impl TransferEngine {
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
             }
-            let (remote, remote_offset) =
-                peer.resolve_address(request.remote_address, request.length)?;
-            if !remote.permission.allows(operation == TransferOp::Write) {
-                return Err(Error::PermissionDenied);
-            }
             total_bytes = total_bytes
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
@@ -716,7 +760,7 @@ impl TransferEngine {
                 priority,
                 #[cfg(feature = "cuda")]
                 remote_staging: request.remote_staging,
-                transport: request.transport,
+                transport,
                 local,
                 local_offset,
                 remote,
@@ -860,6 +904,10 @@ impl TransferEngine {
                     })
             };
             let result = match request.transport {
+                Transport::Unspec => single(Err((
+                    Error::Internal("unresolved transport"),
+                    RemoteEffect::None,
+                ))),
                 #[cfg(feature = "cuda")]
                 Transport::Tcp | Transport::Rdma if request.remote_staging => single(
                     self.source
@@ -1218,6 +1266,7 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
+    pub(crate) metadata: SegmentMetadata,
     pub(crate) credit_issuer: Option<Arc<ReceiverCreditIssuer>>,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,

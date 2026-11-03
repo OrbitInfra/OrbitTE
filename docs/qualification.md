@@ -2427,3 +2427,24 @@ Exact source, CI and independent review are recorded outside Git at
 `/root/orbitte-artifacts/qos-actions-20261103/`. There is no new wire version,
 background thread or per-slice policy allocation. No hardware task, installed
 v23 qualification or matched throughput/fairness result is claimed.
+
+
+## Transport policy selection
+
+Source implementation adds first-match memory/size/priority policies and actual
+Unspec transport selection. Explicit hints fail when excluded/unavailable;
+no data-plane failure triggers re-selection. Describe publishes actual
+owner memory type and IPC consent plus configured source capabilities. Boot and
+process identities share the existing IPC handshake implementation.
+
+Focused controls cover typed/JSON boundaries, selected TCP sync/async bytes,
+atomic multi-request preflight, CUDA/pinned/ordinary owner metadata without
+payload locks, and existing RDMA and CUDA IPC native-ABI handoff/drain fixtures
+using Unspec. Prior QoS object validation is rerun after sharing its decoder.
+Protocol controls reject unsupported headers, old Describe layouts and malformed
+capabilities. [PR #118](https://github.com/OrbitInfra/OrbitTE/pull/118) links
+the gate results and packaged artifacts for this source.
+
+Native-ABI fixtures run on CPU. Installed hardware routing, physical DMA,
+bandwidth and latency still require their own qualification. See the
+[selector contract and remaining limits](transport-selection.md).

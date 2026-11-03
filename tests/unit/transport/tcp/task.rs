@@ -18,6 +18,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
         let peer = RemoteSegment {
+            metadata: Default::default(),
             endpoint: listener.local_addr().unwrap(),
             epoch,
             regions: vec![],
@@ -31,6 +32,8 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             local: local.clone(),
             local_offset: 3,
             remote: RemoteRegion {
+                memory_type: crate::MemoryType::Cpu,
+                ipc_exportable: false,
                 epoch,
                 id: 1,
                 address: 1,
@@ -124,6 +127,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch([8; 16]);
     let peer = RemoteSegment {
+        metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![],
@@ -137,6 +141,8 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         local: local.clone(),
         local_offset: 0,
         remote: RemoteRegion {
+            memory_type: crate::MemoryType::Cpu,
+            ipc_exportable: false,
             epoch,
             id: 1,
             address: 1,

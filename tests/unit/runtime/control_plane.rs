@@ -256,9 +256,12 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let peer = RemoteSegment {
+        metadata: Default::default(),
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![RemoteRegion {
+            memory_type: crate::MemoryType::Cpu,
+            ipc_exportable: false,
             epoch,
             id: 1,
             address: 0x1000,
@@ -467,7 +470,7 @@ fn external_owner_survives_unregister_until_the_handler_really_exits() {
 
 #[test]
 fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
-    for case in 0..7 {
+    for case in 0..13 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let epoch = SourceEpoch::generate().unwrap();
@@ -481,20 +484,28 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
             };
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             let count = if case == 5 { 2 } else { 1 };
-            let mut payload = vec![0; 4 + count * REGION_SIZE];
+            let mut payload = vec![0; DESCRIPTOR_HEADER + count * REGION_SIZE];
             payload[..4].copy_from_slice(&(count as u32).to_be_bytes());
-            for entry in payload[4..].chunks_exact_mut(REGION_SIZE) {
+            for entry in payload[DESCRIPTOR_HEADER..].chunks_exact_mut(REGION_SIZE) {
                 entry[..8].copy_from_slice(&1u64.to_be_bytes());
                 entry[8..16].copy_from_slice(&0x1000u64.to_be_bytes());
                 entry[16..24].copy_from_slice(&8u64.to_be_bytes());
                 entry[24] = 3;
             }
+            let entry = &mut payload[DESCRIPTOR_HEADER..];
             match case {
-                0 => payload[12..20].copy_from_slice(&0u64.to_be_bytes()),
-                1 => payload[12..20].copy_from_slice(&(u64::MAX - 2).to_be_bytes()),
-                2 => payload[20..28].copy_from_slice(&0u64.to_be_bytes()),
-                3 => payload[28] = 7,
-                4 => payload[29] = 1,
+                0 => entry[8..16].copy_from_slice(&0u64.to_be_bytes()),
+                1 => entry[8..16].copy_from_slice(&(u64::MAX - 2).to_be_bytes()),
+                2 => entry[16..24].copy_from_slice(&0u64.to_be_bytes()),
+                3 => entry[24] = 7,
+                4 => entry[27] = 1,
+                7 => entry[25] = 2,
+                8 => entry[26] = 1, // Host memory cannot authorize CUDA IPC export.
+                9 => entry[26] = 2,
+                10 => payload[4] = 8,
+                11 => payload[8] = 1, // Identity bytes require the NVLink capability.
+                // A pre-selector peer can send the same header with the old Describe layout.
+                12 => drop(payload.drain(4..DESCRIPTOR_HEADER)),
                 _ => {}
             }
             let mut reply = Reply {

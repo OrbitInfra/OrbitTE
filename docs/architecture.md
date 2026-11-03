@@ -30,16 +30,32 @@ memory grants. Payload bytes go through verbs. `rdma::protocol` defines the
 OrbitTE rendezvous messages. The [wire and consumer boundaries](tent-parity.md#wire-and-consumer-boundaries)
 describe the distinction from TENT's native RPC and metadata.
 
+## Transport selector ownership
+
+`runtime/transport_selector.rs` owns TENT-style first-match selection;
+`transport_selector/config.rs` bounds and compiles typed/JSON policies. Existing
+QoS and selector loaders share `runtime/config.rs` for strict object decoding.
+`segment/metadata.rs` owns versioned placement/provider metadata and the process
+identity also used by CUDA IPC. Allocation owners retain immutable IPC capability
+facts; registrations publish these without entering payload locks.
+
+`TransferEngine::prepare` resolves memory and QoS before selecting one concrete
+transport. `PreparedTransfer` carries that result, so queue admission, staging,
+RDMA slice planning and CUDA groups use their existing execution owners. The
+selector neither wraps payload transports in TCP nor runs during completion.
+Selection does not change explicit staging policy, retry a failed transfer or
+claim a device is healthy. See [semantics and reference](transport-selection.md).
+
 ## Runtime queue ownership
 
 `runtime/admission_queue.rs::LocalTransferAdmissionQueue` corresponds to frozen
 TENT's `LocalTransferAdmissionQueue` and `refillDispatchWindow`. It owns the
 ordered eligible-owner set, per-Batch dependency chains and dispatch counters.
-`PreparedSubmission` owns, in release order, its real memory references, a
-`QueuePermit`, an optional `CreditPermit`, an optional `QosPermit`, and its
-requester-admission permit.
-Drop removes scheduling metadata before refunding unstarted credit and releasing
-global capacity. Unquiesced quarantine retains all of these actual owners.
+`PreparedSubmission` owns, in release order, its real memory references, an
+optional `QosPermit`, an optional `QueuePermit`, an optional `CreditPermit`, and
+its requester-admission permit. QoS retirement precedes queue removal so another
+dispatch cannot reacquire a releasing owner's quota. Drop removes scheduling
+metadata before refunding unstarted credit and releasing global capacity. Unquiesced quarantine retains all of these actual owners.
 
 The opt-in queue uses admission sequence for FIFO and `(absolute deadline,
 sequence)` for EDF. A balanced tree orders admission/activation in O(log n);

@@ -75,7 +75,7 @@ mean node zero. Auto then selects the first eligible host node, as TENT's
 `Topology::findNearMem` does after failing to find a matching NUMA location.
 Discovery errors, an empty eligible set and a selected node's allocation/binding
 failure are errors. They do not silently switch to the wildcard allocator.
-The protocol does not exchange topology.
+Describe advertises the memory type and IPC placement used for [transport selection](transport-selection.md). It does not exchange NUMA topology.
 
 `Any` preserves OrbitTE's existing driver policy. TENT also spells a wildcard
 location `*`, but its frozen host allocator resolves that wildcard to node zero;

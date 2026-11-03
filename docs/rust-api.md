@@ -87,6 +87,18 @@ inflight budget; `usage()` counts only acquired QoS capacity. See
 [configuration and scope](async-batches.md#qos-contracts) and
 [action semantics](async-batches.md#qos-admission-actions).
 
+## Transport policy selection
+
+`EngineConfig::selector: Option<TransportSelectorConfig>` compiles ordered
+`SelectionPolicy` rules. `TransportSelectorConfig::from_json` loads the supported
+TENT root `policy` array. Pass `Transport::Unspec` to `TransferRequest::new`
+for automatic selection.
+Configured explicit hints must be both allowed and available. The engine resolves
+both registrations and effective QoS priority before choosing once, then retains
+the chosen transport through queueing and drain. `RemoteRegion::memory_type()`
+exposes the source-owned descriptor classification. See
+[configuration and TENT correspondence](transport-selection.md).
+
 ## Memory type and location
 
 `RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the

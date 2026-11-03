@@ -63,9 +63,12 @@ impl Relay {
     fn peer(&self, engine: &TransferEngine, memory: &crate::RegisteredMemory) -> RemoteSegment {
         let epoch = engine.source_epoch();
         RemoteSegment {
+            metadata: Default::default(),
             endpoint: self.endpoint,
             epoch,
             regions: vec![RemoteRegion {
+                memory_type: crate::MemoryType::Cuda,
+                ipc_exportable: true,
                 epoch,
                 id: memory.id(),
                 address: memory.base_address(),

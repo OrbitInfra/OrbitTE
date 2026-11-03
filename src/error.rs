@@ -9,6 +9,7 @@ pub enum Error {
     InvalidConfig(&'static str),
     /// JSON syntax/schema diagnostics, including the offending QoS field.
     InvalidQosConfig(String),
+    InvalidSelectorConfig(String),
     BatchBusy,
     BatchClosed,
     BatchOpen,
@@ -45,6 +46,9 @@ impl fmt::Display for Error {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid configuration: {message}"),
             Self::InvalidQosConfig(message) => write!(f, "invalid QoS configuration: {message}"),
+            Self::InvalidSelectorConfig(message) => {
+                write!(f, "invalid selector configuration: {message}")
+            }
             Self::BatchBusy => f.write_str("batch work is not physically drained"),
             Self::BatchClosed => f.write_str("batch is sealed or freed"),
             Self::BatchOpen => {
