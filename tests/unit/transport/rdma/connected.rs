@@ -29,6 +29,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
         assert!(resources.grant.is_none());
         let connection = resources.connection.lock().unwrap();
         assert!(!connection.closed && !connection.handles.qp.is_null());
+        // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
         let native = unsafe { &*connection.handles.qp.cast::<ibverbs_sys::ibv_qp>() };
         assert_eq!(native.qp_num, connection.local.qpn);
         assert_eq!(native.state, ibverbs_sys::ibv_qp_state::IBV_QPS_RTS);
@@ -196,15 +197,12 @@ fn connected_endpoint_peer() {
                 .submit_and_wait(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: memory.base_address() + local_offset as u64,
-                        remote_address: remote + remote_offset as u64,
-                        length: count,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        memory.base_address() + local_offset as u64,
+                        remote + remote_offset as u64,
+                        count,
+                    )],
                     TIMEOUT,
                 )
                 .unwrap();

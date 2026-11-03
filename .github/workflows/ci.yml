@@ -36,6 +36,23 @@ jobs:
         run: cargo fmt --check
       - name: Check
         run: cargo check --locked --features "$ORBITTE_FEATURES"
+      - name: Check portable build and Linux-only features
+        if: matrix.features == ''
+        run: |
+          target=aarch64-apple-darwin
+          rustup target add "$target"
+          cargo check --locked --target "$target" --no-default-features
+          for features in rdma cuda rdma,cuda; do
+            log="$RUNNER_TEMP/non-linux-$features.log"
+            if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
+              echo "unexpected success for $target with $features"
+              exit 1
+            fi
+            if ! grep -Eq '^error: OrbitTE.*features require a Linux target$' "$log" || grep -q '^error\[' "$log"; then
+              cat "$log"
+              exit 1
+            fi
+          done
       - name: Clippy
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Test CPU TCP and ownership

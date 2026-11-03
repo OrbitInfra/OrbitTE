@@ -22,6 +22,7 @@ pub(super) struct Snapshot {
     pub sequence: u64,
 }
 type Command = unsafe extern "C" fn(u32, u32, *const c_char, *mut Snapshot) -> i32;
+// SAFETY: dlsym uses the platform loader ABI with an opaque handle and a NUL-terminated C name.
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;

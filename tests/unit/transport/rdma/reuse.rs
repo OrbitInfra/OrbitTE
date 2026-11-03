@@ -18,15 +18,12 @@ fn transfer(
         .submit_and_wait(
             operation,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address() + offset as u64,
-                remote_address: remote.base_address() + offset as u64,
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + offset as u64,
+                remote.base_address() + offset as u64,
                 length,
-            }],
+            )],
             TIMEOUT,
         )
         .unwrap();
@@ -552,15 +549,12 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
             .submit_and_wait(
                 TransferOp::Write,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )],
                 TIMEOUT,
             )
             .unwrap();
@@ -901,15 +895,12 @@ fn reused_offer_and_fresh_after_miss_cannot_replay_grants_or_refresh_the_expecte
                 .submit_and_wait(
                     TransferOp::Write,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address(),
-                        remote_address: remote.base_address(),
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address(),
+                        remote.base_address(),
+                        8,
+                    )],
                     TIMEOUT,
                 )
                 .unwrap()
@@ -1091,15 +1082,12 @@ fn ready_reuse_revalidates_each_peer_route_before_claim_without_replacing_the_pd
             .submit_and_wait(
                 TransferOp::Read,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )],
                 TIMEOUT,
             )
             .unwrap();

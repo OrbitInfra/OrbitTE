@@ -17,6 +17,8 @@ impl DeviceAllocation {
         let context = &self.context;
         let ordering = context.current(|| {
             let mut ordered = 0;
+            // SAFETY: The retained device belongs to the current context and ordered is a
+            // writable C int.
             check("cuDeviceGetAttribute RDMA ordering", unsafe {
                 (context.driver.device_attribute)(&mut ordered,
                     sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING,
@@ -26,6 +28,7 @@ impl DeviceAllocation {
                 Ordering::Device
             } else {
                 let mut options = 0;
+                // SAFETY: The same live device is queried into a separate writable integer.
                 check("cuDeviceGetAttribute RDMA flush", unsafe {
                     (context.driver.device_attribute)(&mut options,
                         sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS,
@@ -37,6 +40,8 @@ impl DeviceAllocation {
                 Ordering::Flush
             };
             let enabled = 1u32;
+            // SAFETY: The allocation owns this device address and SYNC_MEMOPS reads one
+            // unsigned integer.
             check("cuPointerSetAttribute SYNC_MEMOPS", unsafe {
                 (context.driver.set_pointer_attribute)((&enabled as *const u32).cast(),
                     PointerAttribute::CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, self.address)
@@ -93,6 +98,8 @@ impl CudaMemory {
         let context = Arc::clone(&allocation.context);
         let result = context.current(|| match allocation.rdma {
             Some(Ordering::Device) => Ok(()),
+            // SAFETY: The registered allocation still owns the current context, whose host
+            // flush capability was checked at registration.
             Some(Ordering::Flush) => check("cuFlushGPUDirectRDMAWrites", unsafe {
                 (context.driver.flush_rdma)(
                     sys::CUflushGPUDirectRDMAWritesTarget::CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TARGET_CURRENT_CTX,

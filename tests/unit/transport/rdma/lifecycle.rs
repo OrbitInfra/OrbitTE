@@ -28,36 +28,51 @@ struct Trace {
 static TRACE: OnceLock<Mutex<Trace>> = OnceLock::new();
 
 fn matches(context: *mut ffi::ibv_context, trace: &Trace) -> bool {
+    // SAFETY: The test retains the opened context and its device while asking for the provider-
+    // owned name.
     let name = unsafe { ffi::ibv_get_device_name((*context).device) };
+    // SAFETY: The live verbs context retains its device and the provider-owned NUL-terminated
+    // name during inspection.
     unsafe { std::ffi::CStr::from_ptr(name) }.to_str().unwrap() == trace.rail
 }
 
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
+    // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
     let mr = unsafe { (*h).mr.cast::<ffi::ibv_mr>() };
     if trace.mode != "mr-cleanup-error" || !trace.target || mr.is_null() {
+        // SAFETY: The registration owner retains the MR and backing through the deregistration
+        // attempt.
         return unsafe { (sys::REAL.deregister)(h) };
     }
     assert!(
         trace.mr == 0 || trace.mr != mr as usize,
         "retained MR cleanup was retried"
     );
+    // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
     let native = unsafe { &*mr };
     if !trace.armed
         || trace.injections != 0
         || native.addr as u64 != trace.base
         || !matches(native.context, &trace)
     {
+        // SAFETY: The registration owner retains the MR and backing through the deregistration
+        // attempt.
         return unsafe { (sys::REAL.deregister)(h) };
     }
     trace.mr = mr as usize;
     trace.pd = native.pd as usize;
     trace.context = native.context as usize;
+    // SAFETY: The provider resource retains its device context while the fixture reads the uverbs
+    // descriptor.
     uverbs_fault::deny_commands(unsafe { (*native.context).cmd_fd });
     trace.injections += 1;
     trace.attempts += 1;
+    // SAFETY: The registration owner retains the MR and backing through the deregistration
+    // attempt.
     trace.error = unsafe { (sys::REAL.deregister)(h) };
     assert_eq!(trace.error, libc::EIO);
+    // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
     assert_eq!(unsafe { (*h).mr } as usize, trace.mr);
     println!(
         "ORBITTE_COMMAND_ERROR {{\"kind\":\"mr\",\"code\":{},\"attempts\":{},\"mr\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
@@ -68,27 +83,39 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
 
 unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
+    // SAFETY: The grant owns this window handle slot even during an injected teardown failure.
     let mw = unsafe { (*h).mw.cast::<ffi::ibv_mw>() };
     if trace.mode != "mw-cleanup-error" || !trace.target || mw.is_null() {
+        // SAFETY: The grant retains its window and protection domain through the deallocation
+        // attempt.
         return unsafe { (sys::REAL.dealloc_window)(h) };
     }
     assert!(
         trace.mw == 0 || trace.mw != mw as usize,
         "retained MW cleanup was retried"
     );
+    // SAFETY: The window remains allocated while this callback inspects it before deallocation.
     let native = unsafe { &*mw };
     if !trace.armed || trace.injections != 0 || !matches(native.context, &trace) {
+        // SAFETY: The grant retains its window and protection domain through the deallocation
+        // attempt.
         return unsafe { (sys::REAL.dealloc_window)(h) };
     }
+    // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
     trace.mr = unsafe { (*h).mr } as usize;
     trace.mw = mw as usize;
     trace.pd = native.pd as usize;
     trace.context = native.context as usize;
+    // SAFETY: The provider resource retains its device context while the fixture reads the uverbs
+    // descriptor.
     uverbs_fault::deny_commands(unsafe { (*native.context).cmd_fd });
     trace.injections += 1;
     trace.attempts += 1;
+    // SAFETY: The grant retains its window and protection domain through the deallocation
+    // attempt.
     trace.error = unsafe { (sys::REAL.dealloc_window)(h) };
     assert_eq!(trace.error, libc::EIO);
+    // SAFETY: The grant owns this window handle slot even during an injected teardown failure.
     assert_eq!(unsafe { (*h).mw } as usize, trace.mw);
     println!(
         "ORBITTE_COMMAND_ERROR {{\"kind\":\"mw\",\"code\":{},\"attempts\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
@@ -111,10 +138,13 @@ unsafe extern "C" fn post(
 ) -> c_int {
     {
         let mut trace = TRACE.get().unwrap().lock().unwrap();
+        // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
         let qp = unsafe { (*h).qp.cast::<ffi::ibv_qp>() };
         if trace.mode == "live-reconnect"
             && trace.target
             && trace.armed
+            // SAFETY: The live QP or MR retains the device context while this callback inspects
+            // it.
             && matches(unsafe { (*qp).context }, &trace)
         {
             trace.armed = false;
@@ -123,6 +153,8 @@ unsafe extern "C" fn post(
                 ..Default::default()
             };
             assert_eq!(
+                // SAFETY: The connection retains the native QP and the fixture supplies
+                // initialized attribute storage for this call.
                 unsafe {
                     ffi::ibv_modify_qp(
                         qp,
@@ -135,6 +167,8 @@ unsafe extern "C" fn post(
             trace.qp_errors += 1;
         }
     }
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     unsafe {
         (sys::REAL.post)(
             h, memory, requests, count, local, length, remote, rkey, write, result,
@@ -143,6 +177,8 @@ unsafe extern "C" fn post(
 }
 
 unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> i32 {
+    // SAFETY: The polling lane supplies live CQ handles; the observer borrows them within the
+    // poll callback.
     unsafe {
         worker_pool::observe(h);
         (sys::REAL.poll)(h, out)
@@ -239,6 +275,8 @@ fn snapshot(engine: &TransferEngine) -> Snapshot {
             assert!(
                 state.phase == Phase::Ready && state.resources.as_ref().unwrap().grant.is_none()
             );
+            // SAFETY: The connection owns the native ibv_qp while the fixture inspects its
+            // fields.
             let native = unsafe { &*connection.handles.qp.cast::<ffi::ibv_qp>() };
             rows.push((
                 connection.incarnation.unwrap().generation,
@@ -293,25 +331,22 @@ fn round(
             .submit_and_wait(
                 operation,
                 peer.unwrap(),
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: memory.base_address()
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    memory.base_address()
                         + if operation == TransferOp::Read {
                             DESTINATION
                         } else {
                             GUARD
                         } as u64,
-                    remote_address: remote
+                    remote
                         + if operation == TransferOp::Read {
                             GUARD
                         } else {
                             DESTINATION
                         } as u64,
-                    length: PAYLOAD,
-                }],
+                    PAYLOAD,
+                )],
                 Duration::from_secs(5),
             )
             .unwrap();
@@ -669,15 +704,12 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
                 .submit_and_wait(
                     operation,
                     old,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: memory.base_address() + GUARD as u64,
-                        remote_address: old.regions()[0].base_address() + GUARD as u64,
-                        length: PAYLOAD,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        memory.base_address() + GUARD as u64,
+                        old.regions()[0].base_address() + GUARD as u64,
+                        PAYLOAD,
+                    )],
                     Duration::from_secs(5),
                 )
                 .unwrap();

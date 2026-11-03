@@ -53,6 +53,7 @@ impl Retirement {
         trace: &Trace,
         handles: *mut sys::ConnectionHandles,
     ) -> Option<i32> {
+        // SAFETY: The connection supplies a live QP handle slot for the callback.
         let qp = unsafe { (*handles).qp } as usize;
         if self.kind != "qp" || qp == 0 {
             return None;
@@ -71,11 +72,17 @@ impl Retirement {
         self.qp = qp;
         self.cq = owner.cq;
         self.pd = owner.pd;
+        // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
         self.context = unsafe { (*(qp as *const ffi::ibv_qp)).context } as usize;
+        // SAFETY: The provider resource retains its device context while the fixture reads the
+        // uverbs descriptor.
         uverbs_fault::deny_commands(unsafe { (*(self.context as *const ffi::ibv_context)).cmd_fd });
         self.attempts += 1;
+        // SAFETY: The retiring connection exclusively owns these QP handles through the destroy
+        // attempt.
         self.error = unsafe { (sys::REAL.destroy_qp)(handles) };
         assert_eq!(self.error, libc::EIO);
+        // SAFETY: The connection supplies a live QP handle slot for the callback.
         assert_eq!(unsafe { (*handles).qp } as usize, qp);
         // This worker's command FD is filtered; query from the proof thread later.
         println!(
@@ -90,6 +97,7 @@ impl Retirement {
         trace: &Trace,
         handles: *mut sys::ChannelHandles,
     ) -> Option<i32> {
+        // SAFETY: The monitor owner retains this channel handle slot through the close attempt.
         let channel = unsafe { (*handles).channel } as usize;
         if self.kind != "channel" || channel == 0 {
             return None;
@@ -101,18 +109,24 @@ impl Retirement {
         if self.error != 0 {
             return None;
         }
+        // SAFETY: The recorded dependent resource keeps its provider handle and parent context
+        // live at this observation.
         let context = unsafe { (*(channel as *const ffi::ibv_comp_channel)).context };
         let injected = trace.injected_record.as_ref()?;
         trace.owners.iter().find(|owner| {
             owner.nic == trace.fault_rail
                 && owner.channel == channel
                 && Arc::ptr_eq(&owner.record, injected)
+                // SAFETY: The recorded dependent resource keeps its provider handle and parent
+                // context live at this observation.
                 && unsafe { (*(owner.pd as *const ffi::ibv_pd)).context } == context
         })?;
         self.context = context as usize;
         self.channel = channel;
         // A real child CQ makes libibverbs reject channel destruction. The
         // blocker is not registered with OrbitTE and remains until process exit.
+        // SAFETY: The fault fixture retains the context and channel while constructing their
+        // dependent CQ.
         self.cq = unsafe {
             ffi::ibv_create_cq(
                 context,
@@ -124,8 +138,10 @@ impl Retirement {
         } as usize;
         assert_ne!(self.cq, 0, "native channel blocker creation failed");
         self.attempts += 1;
+        // SAFETY: The channel owner supplies its exclusively owned handles on this close attempt.
         self.error = unsafe { (sys::REAL.completion.unwrap().close)(handles) };
         assert_eq!(self.error, libc::EBUSY);
+        // SAFETY: The monitor owner retains this channel handle slot through the close attempt.
         assert_eq!(unsafe { (*handles).channel } as usize, channel);
         self.check();
         println!(
@@ -143,6 +159,7 @@ impl Retirement {
         if self.kind != "cq" {
             return None;
         }
+        // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
         let cq = unsafe { (*handles).cq } as usize;
         assert!(
             self.error == 0 || cq != self.cq,
@@ -160,6 +177,8 @@ impl Retirement {
         self.attempts += 1;
         assert_eq!(self.attempts, 1, "retained CQ cleanup was retried");
         self.pd = owner.pd;
+        // SAFETY: The recorded dependent resource keeps its provider handle and parent context
+        // live at this observation.
         self.context = unsafe { (*(self.pd as *const ffi::ibv_pd)).context } as usize;
         self.cq = cq;
         let mut attributes = ffi::ibv_qp_init_attr {
@@ -175,15 +194,20 @@ impl Retirement {
             },
             ..Default::default()
         };
+        // SAFETY: The retained PD and CQ outlive the test QP and attributes is writable for the
+        // create call.
         self.qp =
             unsafe { ffi::ibv_create_qp(self.pd as *mut ffi::ibv_pd, &mut attributes) } as usize;
         assert_ne!(self.qp, 0, "native dependent QP creation failed");
+        // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy
+        // attempt.
         self.error = unsafe { (sys::REAL.destroy_cq)(handles) };
         assert_eq!(
             self.error,
             libc::EBUSY,
             "expected a real dependent-CQ error"
         );
+        // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
         assert_eq!(unsafe { (*handles).cq } as usize, cq);
         self.check();
         println!(
@@ -201,6 +225,7 @@ impl Retirement {
         if self.kind != "pd" {
             return None;
         }
+        // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         let pd = unsafe { (*handles).pd } as usize;
         assert!(
             self.error == 0 || pd != self.pd,
@@ -213,18 +238,27 @@ impl Retirement {
         self.attempts += 1;
         assert_eq!(self.attempts, 1, "retained PD cleanup was retried");
         self.pd = pd;
+        // SAFETY: The device owner keeps this context handle slot valid through the callback.
         self.context = unsafe { (*handles).context } as usize;
+        // SAFETY: The open provider context owns this initialized operations table and outlives
+        // the saved callback.
         let allocate =
             unsafe { (*(self.context as *const ffi::ibv_context)).ops.alloc_mw }.unwrap();
+        // SAFETY: The function belongs to the retained context and the supplied PD stays live
+        // with its dependent MW.
         self.mw = unsafe { allocate(pd as *mut ffi::ibv_pd, ffi::IBV_MW_TYPE_2) } as usize;
         assert_ne!(self.mw, 0, "native dependent MW allocation failed");
+        // SAFETY: The retiring owner keeps its protection domain handles live through
+        // deallocation.
         self.error = unsafe { (sys::REAL.dealloc_pd)(handles) };
         assert_eq!(
             self.error,
             libc::EBUSY,
             "expected a real dependent-PD error"
         );
+        // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(unsafe { (*handles).pd } as usize, pd);
+        // SAFETY: The device owner keeps this context handle slot valid through the callback.
         assert_eq!(unsafe { (*handles).context } as usize, self.context);
         self.check();
         println!(
@@ -258,6 +292,8 @@ impl Retirement {
             let mut observed = ffi::ibv_qp_attr::default();
             let mut attributes = ffi::ibv_qp_init_attr::default();
             assert_eq!(
+                // SAFETY: This fault fixture deliberately retains these native resources after
+                // failed teardown, keeping their handles and dependencies live for inspection.
                 unsafe {
                     ffi::ibv_query_qp(
                         qp,
@@ -271,18 +307,29 @@ impl Retirement {
             if self.kind == "cq" {
                 assert_eq!(observed.qp_state, ffi::ibv_qp_state::IBV_QPS_RESET);
             }
+            // SAFETY: This fault fixture deliberately retains these native resources after failed
+            // teardown, keeping their handles and dependencies live for inspection.
             assert_eq!(unsafe { (*qp).pd } as usize, self.pd);
+            // SAFETY: This fault fixture deliberately retains these native resources after failed
+            // teardown, keeping their handles and dependencies live for inspection.
             assert_eq!(unsafe { (*qp).send_cq } as usize, self.cq);
         } else if self.kind == "channel" {
             assert_eq!(
+                // SAFETY: This fault fixture deliberately retains these native resources after
+                // failed teardown, keeping their handles and dependencies live for inspection.
                 unsafe { (*(self.cq as *const ffi::ibv_cq)).channel } as usize,
                 self.channel
             );
+            // SAFETY: This fault fixture deliberately retains these native resources after failed
+            // teardown, keeping their handles and dependencies live for inspection.
             let native = unsafe { &*(self.channel as *const ffi::ibv_comp_channel) };
             assert_eq!(native.context as usize, self.context);
+            // SAFETY: The retained channel still owns this fd; F_GETFD takes no pointer argument.
             assert!(native.refcnt > 0 && unsafe { libc::fcntl(native.fd, libc::F_GETFD) } >= 0);
         } else {
             assert_eq!(
+                // SAFETY: This fault fixture deliberately retains these native resources after
+                // failed teardown, keeping their handles and dependencies live for inspection.
                 unsafe { (*(self.mw as *const ffi::ibv_mw)).pd } as usize,
                 self.pd
             );

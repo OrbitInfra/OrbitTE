@@ -8,6 +8,8 @@ fn local(device: &Arc<Device>, batch: bool) -> Arc<CudaMemory> {
     if batch {
         Arc::get_mut(&mut api).unwrap().copy_batch = Some(shim::copy_batch);
     }
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let bytes = unsafe { &*device.bytes.get() };
     let memory = Arc::new(
         CudaMemory::register(bytes.as_ptr() as u64, bytes.len(), device.clone(), api).unwrap(),
@@ -68,6 +70,8 @@ fn ipc_native_batch_read_write_mixed_owners_and_ordered_fallback() {
                 let pool = CUDAStreamPool::new(1).unwrap();
                 let mut mapping = IpcMapping::new(&owner, deadline()).unwrap();
                 mapping.open(export.handle).unwrap();
+                // SAFETY: The export is open but the group has not submitted any copies to
+                // this buffer.
                 let mut expected_remote = unsafe { &*source.bytes.get() }.to_vec();
                 let mut expected_device = vec![0xa5; 128];
                 let mut expected_host = vec![0x5a; 128];
@@ -112,7 +116,11 @@ fn ipc_native_batch_read_write_mixed_owners_and_ordered_fallback() {
                 );
                 assert_eq!(events.iter().filter(|&&e| e == "record").count(), 1);
                 assert!(!events.contains(&"stream-sync"));
+                // SAFETY: The group finished its copy event and the fixture still owns the
+                // fixed allocation.
                 assert_eq!(&**unsafe { &*source.bytes.get() }, &expected_remote);
+                // SAFETY: The group finished its copy event and the fixture still owns the
+                // fixed allocation.
                 assert_eq!(&**unsafe { &*destination.bytes.get() }, &expected_device);
                 let mut actual_host = vec![0; 128];
                 host.read(0, &mut actual_host).unwrap();
@@ -163,6 +171,8 @@ fn ipc_native_batch_cancel_only_submits_and_completes_admitted_prefix() {
             (accepted, accepted)
         );
         assert_eq!(destination.ipc_copies.load(Ordering::Acquire), accepted);
+        // SAFETY: The accepted prefix has completed and cancellation prevented copies for the
+        // tail.
         let actual = unsafe { &*destination.bytes.get() };
         assert!(actual[..accepted * 16].iter().all(|&b| b == 0x5a));
         assert!(actual[accepted * 16..].iter().all(|&b| b == 0xa5));
@@ -249,6 +259,8 @@ fn ipc_native_batch_partial_error_never_replays_or_claims_a_completed_prefix() {
         assert_eq!(local.allocation.lock().unwrap().uncertain, uncertain);
         assert_eq!(pool.stats().unwrap(), (1, 0, usize::from(uncertain)));
         if fault == "batch" {
+            // SAFETY: The shim finished the submitted subset before the batch error was
+            // inspected.
             let bytes = unsafe { &*destination.bytes.get() };
             assert_eq!(&bytes[..16], &[0xa5; 16]);
             assert_eq!(&bytes[32..48], &[0x5a; 16]);

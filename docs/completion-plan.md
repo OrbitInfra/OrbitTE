@@ -221,7 +221,12 @@ Requirements: F01-F04, F08-F10 foundations, F22.
   consumer bridge; whole-pool integration and native free-failure qualification
   remain open.
 - [x] **P1.3 — native host batch inputs (Implemented, not Accepted).**
-  Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
+  The Rust API hygiene step (S0, Implemented) adds a request constructor with
+  ordinary transfer defaults and setters for QoS, priority and remote staging.
+  Requests, transports and errors are non-exhaustive for Rust callers.
+  Clippy checks unsafe blocks for safety notes and native features require a
+  Linux target. These source changes keep the v23 protocol and existing
+  transfer behavior. Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
   and retain actual backing through completion. Host range batches preflight
   bounds, alias locks, references, IDs and retained budgets before one atomic
   publication. Real external allocations, multi-region TCP bytes and concurrent

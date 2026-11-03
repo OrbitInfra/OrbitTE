@@ -30,6 +30,8 @@ unsafe extern "C" fn capture_post(
     bad: *mut *mut ffi::ibv_send_wr,
 ) -> c_int {
     // CPU ABI control: consume only stable linked descriptors, never DMA.
+    // SAFETY: The fixture installs Posted as qp_context; the submitted WR chain and writable bad-
+    // WR slot live through the callback.
     unsafe {
         let state = &mut *(*qp).qp_context.cast::<Posted>();
         state.requests.clear();
@@ -106,6 +108,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
     ];
     let mut result = PostResult::default();
     assert_eq!(
+        // SAFETY: The test owns the QP, registration and call buffers and installs a synchronous
+        // capture callback for this verbs operation.
         unsafe {
             post(
                 &mut handles,
@@ -148,6 +152,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
             state.foreign_bad = foreign_bad;
             state.bad_byte_offset = bad_byte_offset;
             assert_eq!(
+                // SAFETY: The test owns the QP, registration and call buffers and installs a
+                // synchronous capture callback for this verbs operation.
                 unsafe {
                     post(
                         &mut handles,
@@ -201,6 +207,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         },
     ] {
         assert_eq!(
+            // SAFETY: The test owns the QP, registration and call buffers and installs a
+            // synchronous capture callback for this verbs operation.
             unsafe {
                 post(
                     &mut handles,
@@ -227,6 +235,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
     ] {
         state.requests.clear();
         assert_eq!(
+            // SAFETY: The test owns the QP, registration and call buffers and installs a
+            // synchronous capture callback for this verbs operation.
             unsafe {
                 post(
                     &mut handles,
@@ -260,6 +270,8 @@ unsafe extern "C" fn capture_poll(
 ) -> c_int {
     // A native-layout fixture writes the published binding's private CQ fields.
     // This is a CPU ABI control, not an emulated completion or device receipt.
+    // SAFETY: The fixture keeps NativeCq in cq_context; the polling caller provides writable
+    // completion entries.
     unsafe {
         let state = &*(*cq).cq_context.cast::<NativeCq>();
         if state.count == 1 {
@@ -288,12 +300,16 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     };
     let mut output = Completion::default();
     assert_eq!(
+        // SAFETY: The test owns the CQ handles, its callback state and the writable completion
+        // output.
         unsafe { poll(&mut handles, &mut output) },
         -libc::EOPNOTSUPP
     );
     context.ops.poll_cq = Some(capture_poll);
     for count in [0, -libc::EIO] {
         state.count = count;
+        // SAFETY: The test owns the CQ handles, its callback state and the writable completion
+        // output.
         assert_eq!(unsafe { poll(&mut handles, &mut output) }, count);
         assert_eq!(output.id, 0);
     }
@@ -336,6 +352,8 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         state.bytes[key..key + 4].copy_from_slice(&0x01020304u32.to_ne_bytes());
         let qpn = std::mem::offset_of!(ffi::ibv_wc, qp_num);
         state.bytes[qpn..qpn + 4].copy_from_slice(&0x12345u32.to_ne_bytes());
+        // SAFETY: The test owns the CQ handles, its callback state and the writable completion
+        // output.
         assert_eq!(unsafe { poll(&mut handles, &mut output) }, 1);
         assert_eq!(
             (output.id, output.status, output.vendor_error, output.qpn),
@@ -372,6 +390,8 @@ unsafe extern "C" fn capture_window(
     wr: *mut ffi::ibv_send_wr,
     bad: *mut *mut ffi::ibv_send_wr,
 ) -> c_int {
+    // SAFETY: The fixture installs WindowPost in qp_context and keeps the posted WR and bad-WR
+    // slot live.
     unsafe {
         let s = &*(*qp).qp_context.cast::<WindowPost>();
         let w = &*wr;
@@ -439,6 +459,8 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
             };
             let mut result = PostResult::default();
             assert_eq!(
+                // SAFETY: The test owns the QP, registration and call buffers and installs a
+                // synchronous capture callback for this verbs operation.
                 unsafe {
                     window(
                         &mut handles,
@@ -475,6 +497,8 @@ unsafe extern "C" fn capture_receive(
     wr: *mut ffi::ibv_recv_wr,
     bad: *mut *mut ffi::ibv_recv_wr,
 ) -> c_int {
+    // SAFETY: The fixture installs MessagePost in qp_context; receive WRs and their SGEs live
+    // through this callback.
     unsafe {
         let state = &mut *(*qp).qp_context.cast::<MessagePost>();
         let request = &*wr;
@@ -507,6 +531,8 @@ unsafe extern "C" fn capture_message(
     wr: *mut ffi::ibv_send_wr,
     bad: *mut *mut ffi::ibv_send_wr,
 ) -> c_int {
+    // SAFETY: The fixture installs MessagePost in qp_context; the send WR and its embedded
+    // message SGE live through the call.
     unsafe {
         let state = &mut *(*qp).qp_context.cast::<MessagePost>();
         let request = &*wr;
@@ -589,6 +615,8 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
             state.code = code;
             state.foreign_bad = foreign_bad;
             let mut result = PostResult::default();
+            // SAFETY: The test owns the QP, registration and call buffers and installs a
+            // synchronous capture callback for this verbs operation.
             let actual = unsafe {
                 if receive {
                     post_receive(
@@ -626,6 +654,8 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
             (1, state.address, length - 1),
         ] {
             let mut result = PostResult::default();
+            // SAFETY: The test owns the QP, registration and call buffers and installs a
+            // synchronous capture callback for this verbs operation.
             let actual = unsafe {
                 if receive {
                     post_receive(&mut handles, &memory, id, address, size, &mut result)
@@ -685,6 +715,8 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
         };
         match field {
             0 => {}
+            // SAFETY: The fixture initialized all 16 raw GID bytes; the selected byte has no
+            // invalid bit patterns.
             1 => unsafe { entry.gid.raw[15] ^= 1 },
             2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
             3 => entry.ndev_ifindex += 1,
@@ -769,6 +801,7 @@ pub(super) fn take_address_read(device: *const DeviceHandles) -> Option<AddressR
 #[test]
 fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
     let name = std::ffi::CString::new("lo").unwrap();
+    // SAFETY: The CString remains NUL-terminated for the interface lookup.
     let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
     assert_ne!(index, 0, "Linux loopback interface must have an index");
     let handles = DeviceHandles::default();
@@ -804,6 +837,8 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
         };
         match field {
             0 => {}
+            // SAFETY: The fixture initialized all 16 raw GID bytes; the selected byte has no
+            // invalid bit patterns.
             1 => unsafe { entry.gid.raw[15] ^= 1 },
             2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
             3 => entry.ndev_ifindex += 1,
@@ -826,6 +861,8 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
             );
         });
         let _reset = AddressReadGuard;
+        // SAFETY: The locked device owner retains its context and selected address for the
+        // synchronous query.
         let result = unsafe { (REAL.query_address)(&handles, &address, Some(address.gid_index)) };
         assert_eq!(result.is_ok(), field == 0, "{field}: {result:?}");
         ADDRESS_READ.with(|slot| {
@@ -842,6 +879,8 @@ unsafe extern "C" fn capture_notify(cq: *mut ffi::ibv_cq, solicited_only: c_int)
         solicited_only, 0,
         "ordinary data completions must wake the worker"
     );
+    // SAFETY: The test installs a live, exclusively borrowed counter in cq_context for the
+    // synchronous callback.
     let calls = unsafe { &mut *(*cq).cq_context.cast::<usize>() };
     *calls += 1;
     libc::ENOMEM
@@ -858,11 +897,15 @@ fn notification_dispatch_uses_generated_context_ops_and_all_completion_types() {
     };
     let native = REAL.completion.unwrap();
     assert_eq!(
+        // SAFETY: The mock CQ and its installed notification callback remain live for this
+        // synchronous call.
         unsafe { (native.arm)((&mut cq as *mut ffi::ibv_cq).cast()) },
         libc::EOPNOTSUPP
     );
     context.ops.req_notify_cq = Some(capture_notify);
     assert_eq!(
+        // SAFETY: The mock CQ and its installed notification callback remain live for this
+        // synchronous call.
         unsafe { (native.arm)((&mut cq as *mut ffi::ibv_cq).cast()) },
         libc::ENOMEM
     );

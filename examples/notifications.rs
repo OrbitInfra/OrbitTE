@@ -24,15 +24,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let report = requester.submit_and_notify(
         TransferOp::Read,
         &peer,
-        &[TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: orbit_te::Transport::Tcp,
-            local_address: local.base_address(),
-            remote_address: peer.regions()[0].base_address(),
-            length: 32,
-        }],
+        &[TransferRequest::new(
+            orbit_te::Transport::Tcp,
+            local.base_address(),
+            peer.regions()[0].base_address(),
+            32,
+        )],
         &notification,
         Duration::from_secs(2),
     )?;

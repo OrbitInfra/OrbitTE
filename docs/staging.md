@@ -185,7 +185,7 @@ lifetime; physical DMA overlap and throughput require hardware measurement.
 
 Build with `cuda` and set `EngineConfig.remote_staging = true` on the source
 whose CUDA registrations may accept Pin. Select
-`TransferRequest.remote_staging = true` for each outgoing TCP/RDMA request that
+`request.with_remote_staging(true)` for each outgoing TCP/RDMA request that
 should use Pin/Delegate/Unpin.
 The requester need not accept incoming Pin itself. Both CUDA Direct registration
 and incoming Pin may be enabled in one engine.
@@ -195,9 +195,9 @@ and incoming Pin may be enabled in one engine.
 | `EngineConfig.remote_staging` | Source capability: allow Pin against actual CUDA ranges; defaults to false |
 | `TransferRequest.remote_staging` | Per-request choice: true selects remote staging, false uses ordinary transport/memory policy |
 
-Every request literal now supplies `remote_staging`. Migrate ordinary requests
-with `false` and old remote-staging submissions with `true`; enabling only the
-engine capability no longer redirects outgoing traffic. False does not force
+`TransferRequest::new` selects ordinary transfers by default. To migrate a
+staged request, chain `.with_remote_staging(true)`. Enabling the source
+capability alone leaves outgoing requests on the ordinary path. False does not force
 GPUDirect: `RdmaCudaMemory` still selects Direct or local staging for ordinary
 RDMA, and ordinary GPU-over-TCP still uses local staging.
 

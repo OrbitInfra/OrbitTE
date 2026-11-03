@@ -129,6 +129,8 @@ pub(super) unsafe extern "C" fn open_device(
     h: *mut sys::DeviceHandles,
     name: *const c_char,
 ) -> c_int {
+    // SAFETY: open_device receives the live NUL-terminated device name from the context
+    // constructor.
     let mode = unsafe { CStr::from_ptr(name) }.to_str().unwrap().to_owned();
     if mode == "device_missing" {
         return libc::ENODEV;
@@ -161,6 +163,8 @@ pub(super) unsafe extern "C" fn open_device(
         cqs: AtomicUsize::new(0),
         pause: Arc::default(),
     }));
+    // SAFETY: The caller provides exclusive output handles and the fixture transfers its boxed
+    // device into them.
     unsafe {
         (*h).context = state.cast();
         if let Some((read, _)) = &(*state).asynchronous {
@@ -185,9 +189,12 @@ unsafe extern "C" fn create_cq(
     _: u32,
     _: *mut c_void,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push("create_cq");
     let ordinal = device.cqs.fetch_add(1, Ordering::SeqCst) + 1;
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     unsafe {
         (*h).cq = Box::into_raw(Box::new(FakeCq {
             device,
@@ -222,6 +229,8 @@ unsafe extern "C" fn register_memory(
     length: usize,
     window_bind: bool,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push(if window_bind {
         "register_parent"
@@ -229,14 +238,22 @@ unsafe extern "C" fn register_memory(
         "register_local"
     });
     device.mrs.fetch_add(1, Ordering::SeqCst);
+    // SAFETY: The device or connection owner keeps the supplied PD handle storage live throughout
+    // this call.
     let private_pd = if unsafe { (*handles).pd as usize } == 1 {
         std::ptr::null_mut()
     } else {
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         unsafe { (*handles).pd.cast::<FakePd>() }
     };
     if !private_pd.is_null() {
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         unsafe { &*private_pd }.mrs.fetch_add(1, Ordering::SeqCst);
     }
+    // SAFETY: The grant supplies exclusive MR handle storage and retains the device and
+    // registered bytes through deregistration.
     unsafe {
         (*h).mr = Box::into_raw(Box::new(FakeMr {
             private_pd,
@@ -272,7 +289,11 @@ unsafe extern "C" fn allocate_window(
     memory: *mut sys::MemoryHandles,
     handles: *const sys::DeviceHandles,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let memory = unsafe { &mut *memory };
     assert!(memory.mw.is_null());
     device.events.lock().unwrap().push("alloc_window");
@@ -330,12 +351,18 @@ unsafe extern "C" fn prepare_grant(
     length: usize,
     permission: u32,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let qp = unsafe { &*(*h).qp.cast::<Fake>() };
     assert!(
         !qp.grants.lock().unwrap().contains_key(&(memory as usize)),
         "grant handles cannot be reused before their own completion"
     );
+    // SAFETY: The caller retains the grant registration and its handle storage through this
+    // callback.
     unsafe {
         if (*memory).mr.is_null() {
             if !(*h).private_pd.is_null() {
@@ -394,6 +421,8 @@ unsafe extern "C" fn prepare_grant(
     if device.mode.starts_with("copy_cross_hold") && permission == 0 {
         let _ = device.first_payload_mr.compare_exchange(
             0,
+            // SAFETY: The caller retains the grant registration and its handle storage through
+            // this callback.
             unsafe { (*memory).mr } as usize,
             Ordering::AcqRel,
             Ordering::Acquire,
@@ -402,7 +431,11 @@ unsafe extern "C" fn prepare_grant(
     qp.grants.lock().unwrap().insert(
         memory as usize,
         FakeGrant {
+            // SAFETY: The caller retains the grant registration and its handle storage through
+            // this callback.
             mr: unsafe { (*memory).mr } as usize,
+            // SAFETY: The caller retains the grant registration and its handle storage through
+            // this callback.
             window: unsafe { (*memory).mw } as usize,
             address: bytes as u64,
             length,
@@ -426,7 +459,10 @@ unsafe extern "C" fn open(
     _: u32,
     descriptor: *mut Descriptor,
 ) -> c_int {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let cq = unsafe { &*(*h).cq.cast::<FakeCq>() };
     assert_eq!(cq.device, device as *const FakeDevice);
     device.events.lock().unwrap().push("open_endpoint");
@@ -436,12 +472,16 @@ unsafe extern "C" fn open(
     if cq.retiring.load(Ordering::Acquire) {
         return libc::EIO;
     }
+    // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+    // their lifetime.
     if unsafe { (*memory).remote_mr } {
         let pd = Box::into_raw(Box::new(FakePd {
             device,
             mrs: AtomicUsize::new(0),
             qps: AtomicUsize::new(0),
         }));
+        // SAFETY: The connection owner provides writable handle slots and takes ownership of the
+        // installed fixture resources.
         unsafe {
             (*h).private_pd = pd.cast();
         }
@@ -450,6 +490,8 @@ unsafe extern "C" fn open(
             return libc::EIO;
         }
         if device.mode == "gpu_partial_mr" {
+            // SAFETY: The grant supplies exclusive MR handle storage and retains the device and
+            // registered bytes through deregistration.
             unsafe {
                 (*memory).mr = Box::into_raw(Box::new(FakeMr {
                     private_pd: pd,
@@ -463,14 +505,19 @@ unsafe extern "C" fn open(
                 }))
                 .cast();
             }
+            // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is
+            // within their lifetime.
             unsafe { &*pd }.mrs.fetch_add(1, Ordering::SeqCst);
             device.mrs.fetch_add(1, Ordering::SeqCst);
             return libc::EIO;
         }
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         unsafe { &*pd }.qps.fetch_add(1, Ordering::SeqCst);
     }
     device.endpoints.fetch_add(1, Ordering::SeqCst);
     cq.qps.fetch_add(1, Ordering::SeqCst);
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let receive_cq = unsafe { &*(*h).receive_cq.cast::<FakeCq>() };
     receive_cq.qps.fetch_add(1, Ordering::SeqCst);
     static NEXT_QPN: AtomicU32 = AtomicU32::new(9);
@@ -495,16 +542,22 @@ unsafe extern "C" fn open(
         window: AtomicUsize::new(0),
         mr: AtomicUsize::new(0),
     }));
+    // SAFETY: The connection owner provides writable handle slots and takes ownership of the
+    // installed fixture resources.
     unsafe {
         (*h).qp = qp.cast();
     }
     native_qps().lock().unwrap().insert(qpn, qp as usize);
     cq.owners.lock().unwrap().insert(qpn, qp as usize);
     receive_cq.owners.lock().unwrap().insert(qpn, qp as usize);
+    // SAFETY: The open callback forwards its live device, connection, memory and registered range
+    // to prepare_grant.
     let code = unsafe { prepare_grant(h, memory, handles, bytes, length, permission) };
     if code != 0 {
         return code;
     }
+    // SAFETY: The endpoint owner supplies writable descriptor output and retains the associated
+    // QP.
     unsafe {
         *descriptor = Descriptor {
             address: bytes as u64,
@@ -539,6 +592,8 @@ fn detach_grant(qp: &Fake, key: usize) {
     };
     let mr = std::mem::take(&mut grant.mr);
     if mr != 0 {
+        // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
+        // to it.
         unsafe { &*(mr as *const FakeMr) }
             .qps
             .fetch_sub(1, Ordering::SeqCst);
@@ -553,6 +608,8 @@ fn detach_grant(qp: &Fake, key: usize) {
 
 fn detach_message(qp: &Fake, id: u64) {
     if let Some(mr) = qp.messages.lock().unwrap().remove(&id) {
+        // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
+        // to it.
         unsafe { &*(mr as *const FakeMr) }
             .qps
             .fetch_sub(1, Ordering::SeqCst);
@@ -569,14 +626,27 @@ unsafe extern "C" fn window(
     bind: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let h = unsafe { &mut *handles };
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let qp = unsafe { &*h.qp.cast::<Fake>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*qp.device };
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let cq = unsafe { &*qp.cq };
+    // SAFETY: The grant retains the boxed FakeWindow from allocation until it detaches and
+    // deallocates the window.
     let native_window = unsafe { &*(*memory).mw.cast::<FakeWindow>() };
     if bind {
+        // SAFETY: The caller retains the grant registration and its handle storage through this
+        // callback.
         let mr = unsafe { (*memory).mr } as usize;
         assert_eq!(native_window.mr.swap(mr, Ordering::SeqCst), 0);
+        // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
+        // to it.
         unsafe { &*(mr as *const FakeMr) }
             .windows
             .fetch_add(1, Ordering::SeqCst);
@@ -589,19 +659,29 @@ unsafe extern "C" fn window(
             .unwrap()
             .get_mut(&(memory as usize))
             .unwrap()
+            // SAFETY: The caller retains the grant registration and its handle storage through
+            // this callback.
             .window = unsafe { (*memory).mw } as usize;
     }
     let state = &native_window.bound;
     qp.window_key
+        // SAFETY: The caller retains the grant registration and its handle storage through this
+        // callback.
         .store(unsafe { (*memory).window_key }, Ordering::Release);
     qp.window
+        // SAFETY: The caller retains the grant registration and its handle storage through this
+        // callback.
         .store(unsafe { (*memory).mw } as usize, Ordering::Release);
     {
         let grants = qp.grants.lock().unwrap();
         let grant = &grants[&(memory as usize)];
         assert_eq!((address, length), (grant.address, grant.length));
+        // SAFETY: The grant retains the boxed FakeWindow from allocation until it detaches and
+        // deallocates the window.
         unsafe { &*(grant.window as *const FakeWindow) }
             .key
+            // SAFETY: The caller retains the grant registration and its handle storage through
+            // this callback.
             .store(unsafe { (*memory).window_key }, Ordering::Release);
     }
     assert!(matches!(permission, 1 | 2));
@@ -615,6 +695,8 @@ unsafe extern "C" fn window(
         .mode
         .strip_suffix("_close0")
         .unwrap_or(device.mode.as_str());
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let result = unsafe { &mut *result };
     *result = sys::PostResult::default();
     if (bind && fault == "window_bind_post") || (!bind && fault == "window_inv_post") {
@@ -646,24 +728,34 @@ unsafe extern "C" fn window(
 }
 
 unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let h = unsafe { &mut *handles };
     if h.mw.is_null() {
         return 0;
     }
+    // SAFETY: The grant retains the boxed FakeWindow from allocation until it detaches and
+    // deallocates the window.
     let window = unsafe { &*h.mw.cast::<FakeWindow>() };
     let mr = window.mr.load(Ordering::Acquire);
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     let mr = (mr != 0).then(|| unsafe { &*(mr as *const FakeMr) });
     assert!(
         !window.qp_alive.load(Ordering::Acquire)
             || (!window.bound.load(Ordering::Acquire) && window.received.load(Ordering::Acquire)),
         "MW cleanup requires creating QP close or actual receive/invalidation"
     );
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*window.device };
     device.events.lock().unwrap().push("dealloc_window");
     if device.mode == "window_close" || (device.mode == "window_rollover_close" && mr.is_none()) {
         return libc::EIO;
     }
     if window.qp_alive.load(Ordering::Acquire) {
+        // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight
+        // work is referenced.
         let qp = unsafe { &*(window.qp.load(Ordering::Acquire) as *const Fake) };
         let mut grants = qp.grants.lock().unwrap();
         let key = *grants
@@ -686,6 +778,8 @@ unsafe extern "C" fn dealloc_window(handles: *mut sys::MemoryHandles) -> c_int {
     if *count == 0 {
         indices.remove(&window.index);
     }
+    // SAFETY: This handle owns the Box installed by the matching fixture constructor; successful
+    // teardown consumes it once.
     unsafe {
         drop(Box::from_raw(h.mw.cast::<FakeWindow>()));
     }
@@ -706,10 +800,16 @@ unsafe extern "C" fn connect(
     _: u8,
     _: u8,
 ) -> c_int {
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let state = unsafe { &*(*h).qp.cast::<Fake>() };
     state
         .remote_qpn
+        // SAFETY: The remote descriptor is borrowed by the connect caller for this synchronous
+        // callback.
         .store(unsafe { (*remote).qpn }, Ordering::Release);
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
     device.events.lock().unwrap().push("connect");
     i32::from(device.mode == "connect")
@@ -727,8 +827,13 @@ unsafe extern "C" fn post(
     write: c_int,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let state = unsafe { &*(*h).qp.cast::<Fake>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let cq = unsafe { &*state.cq };
     let mode = device.mode.as_str();
     let ordinal = device.payload_posts.fetch_add(1, Ordering::AcqRel) + 1;
@@ -739,6 +844,8 @@ unsafe extern "C" fn post(
     }
     state.payloads.lock().unwrap().insert(rkey, memory as usize);
     state.remote_address.store(remote, Ordering::Release);
+    // SAFETY: The posting caller supplies count initialized descriptors that remain live for this
+    // synchronous call.
     let requests = unsafe { std::slice::from_raw_parts(requests, count) };
     if state.first_id.load(Ordering::Acquire) == 0 {
         state.first_id.store(requests[0].id, Ordering::Release);
@@ -754,6 +861,8 @@ unsafe extern "C" fn post(
         count
     };
     let first_mr = device.first_payload_mr.load(Ordering::Acquire);
+    // SAFETY: The caller retains the grant registration and its handle storage through this
+    // callback.
     let own_mr = unsafe { (*memory).mr } as usize;
     if mode.starts_with("copy_cross_hold") && own_mr == first_mr && accepted > 0 {
         // A post can refill a slice or fill the whole CQ. Hold one exact WR
@@ -785,6 +894,8 @@ unsafe extern "C" fn post(
         assert!(request.offset as usize + request.length as usize <= local_length);
         if mode.contains("copy") {
             // CPU mutation under production leases, not a DMA receipt.
+            // SAFETY: The admitted slice is within both registered ranges, and their transfer
+            // leases exclude competing access.
             unsafe {
                 let local = (local as *mut u8).add(request.offset as usize);
                 let remote = (remote as usize as *mut u8).add(request.offset as usize);
@@ -825,6 +936,7 @@ unsafe extern "C" fn post(
     if mode == "pause_copy" || mode.starts_with("pause_post") {
         block(device);
     }
+    // SAFETY: The posting owner provides exclusive writable result storage for this callback.
     unsafe {
         *result = sys::PostResult {
             accepted: if uncertain { 0 } else { accepted },
@@ -846,26 +958,41 @@ unsafe extern "C" fn post_receive(
     length: usize,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let qp = unsafe { &*(*handles).qp.cast::<Fake>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*qp.device };
     device.events.lock().unwrap().push("post_receive");
     assert_eq!(length, COMPLETION_MESSAGE_SIZE);
     assert_ne!(
+        // SAFETY: The caller retains the grant registration and its handle storage through this
+        // callback.
         unsafe { (*memory).mr },
         qp.mr.load(Ordering::Acquire) as *mut c_void
     );
+    // SAFETY: The posting owner provides exclusive writable result storage for this callback.
     unsafe {
         *result = sys::PostResult::default();
     }
     if device.mode.starts_with("receive_post_fail") {
         return libc::ENOMEM;
     }
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
     assert_eq!(
+        // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
+        // to it.
         unsafe { &*mr }.private_pd.cast::<c_void>(),
+        // SAFETY: The device or connection owner keeps the supplied PD handle storage live
+        // throughout this call.
         unsafe { (*handles).private_pd },
         "RQ MR must be in its QP PD"
     );
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
     assert!(
         qp.messages
@@ -876,11 +1003,13 @@ unsafe extern "C" fn post_receive(
     );
     qp.receive.lock().unwrap().push_back((id, address, length));
     if device.mode.contains("receive_unknown") {
+        // SAFETY: The posting owner provides exclusive writable result storage for this callback.
         unsafe {
             (*result).uncertain = true;
         }
         return libc::EIO;
     }
+    // SAFETY: The posting owner provides exclusive writable result storage for this callback.
     unsafe {
         (*result).accepted = 1;
     }
@@ -897,16 +1026,27 @@ unsafe extern "C" fn send_completion(
     invalidate: bool,
     result: *mut sys::PostResult,
 ) -> c_int {
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let qp = unsafe { &*(*handles).qp.cast::<Fake>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*qp.device };
     device.events.lock().unwrap().push("send_completion");
     assert_eq!(length, COMPLETION_MESSAGE_SIZE);
     assert_ne!(
+        // SAFETY: The caller retains the grant registration and its handle storage through this
+        // callback.
         unsafe { (*memory).mr },
         qp.mr.load(Ordering::Acquire) as *mut c_void
     );
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     assert_eq!(unsafe { &*mr }.address, address as usize);
+    // SAFETY: The posting owner provides exclusive writable result storage for this callback.
     unsafe {
         *result = sys::PostResult::default();
     }
@@ -914,6 +1054,8 @@ unsafe extern "C" fn send_completion(
         return libc::ENOMEM;
     }
     qp.send_id.store(id, Ordering::Release);
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     unsafe { &*mr }.qps.fetch_add(1, Ordering::SeqCst);
     assert!(
         qp.messages
@@ -923,11 +1065,13 @@ unsafe extern "C" fn send_completion(
             .is_none()
     );
     if device.mode.contains("send_completion_unknown") {
+        // SAFETY: The posting owner provides exclusive writable result storage for this callback.
         unsafe {
             (*result).uncertain = true;
         }
         return libc::EIO;
     }
+    // SAFETY: The posting owner provides exclusive writable result storage for this callback.
     unsafe {
         (*result).accepted = 1;
     }
@@ -940,6 +1084,8 @@ unsafe extern "C" fn send_completion(
     qp.completed_grants.lock().unwrap().insert(id, key);
     let routes = native_qps().lock().unwrap();
     if let Some(target) = routes.get(&qp.remote_qpn.load(Ordering::Acquire)) {
+        // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight
+        // work is referenced.
         let source = unsafe { &*(*target as *const Fake) };
         let grant = source
             .grants
@@ -951,6 +1097,8 @@ unsafe extern "C" fn send_completion(
                     return (!invalidate && rkey == 0x707).then_some((*key, 0));
                 }
                 assert!(invalidate);
+                // SAFETY: The grant retains the boxed FakeWindow from allocation until it
+                // detaches and deallocates the window.
                 let window = unsafe { &*(grant.window as *const FakeWindow) };
                 (window.bound.load(Ordering::Acquire) && window.key.load(Ordering::Acquire) == rkey)
                     .then_some((*key, grant.window))
@@ -963,6 +1111,8 @@ unsafe extern "C" fn send_completion(
                 .pop_front()
                 .expect("SEND requires a posted receive");
             assert_eq!(receive_length, length);
+            // SAFETY: The receive WQE retains its destination; the completion message source is
+            // disjoint and both cover the posted length.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     address as *const u8,
@@ -980,6 +1130,8 @@ unsafe extern "C" fn send_completion(
                 .lock()
                 .unwrap()
                 .insert(receive_id, grant_key);
+            // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been
+            // detached.
             unsafe { &*source.receive_cq }
                 .completions
                 .lock()
@@ -1000,6 +1152,7 @@ unsafe extern "C" fn send_completion(
         device.pause.0.lock().unwrap().0 = true;
         device.pause.1.notify_all();
     }
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     unsafe { &*qp.cq }
         .completions
         .lock()
@@ -1017,7 +1170,10 @@ unsafe extern "C" fn poll(
     h: *mut sys::ConnectionHandles,
     completion: *mut sys::Completion,
 ) -> c_int {
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let state = unsafe { &*(*h).cq.cast::<FakeCq>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
     if device.mode.starts_with("timeout") {
         return 0;
@@ -1052,12 +1208,16 @@ unsafe extern "C" fn poll(
     if let Some(value) = value {
         if value.status == 0 && matches!(value.opcode, 0 | 128) {
             if let Some(owner) = state.owners.lock().unwrap().get(&value.qpn).copied() {
+                // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-
+                // flight work is referenced.
                 let qp = unsafe { &*(owner as *const Fake) };
                 let grant = qp.completed_grants.lock().unwrap().remove(&value.id);
                 if let Some(key) = grant {
                     if value.opcode == 128 {
                         if let Some(grant) = qp.grants.lock().unwrap().get(&key) {
                             if grant.window != 0 {
+                                // SAFETY: The grant retains the boxed FakeWindow from allocation
+                                // until it detaches and deallocates the window.
                                 unsafe { &*(grant.window as *const FakeWindow) }
                                     .received
                                     .store(true, Ordering::Release);
@@ -1069,6 +1229,7 @@ unsafe extern "C" fn poll(
                 }
             }
         }
+        // SAFETY: The polling lane supplies writable storage for the returned completion.
         unsafe {
             *completion = value;
         }
@@ -1079,11 +1240,17 @@ unsafe extern "C" fn poll(
 }
 
 unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let handles = unsafe { &mut *h };
     if handles.qp.is_null() {
         return 0;
     }
+    // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
+    // referenced.
     let state = unsafe { &*handles.qp.cast::<Fake>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
     device.events.lock().unwrap().push("destroy_qp");
     if device.mode == "async_destroy" {
@@ -1108,11 +1275,14 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
         return 16;
     }
     native_qps().lock().unwrap().remove(&state.qpn);
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let cq = unsafe { &*state.cq };
     let keys: Vec<_> = {
         let grants = state.grants.lock().unwrap();
         for grant in grants.values() {
             if grant.window != 0 {
+                // SAFETY: The grant retains the boxed FakeWindow from allocation until it
+                // detaches and deallocates the window.
                 unsafe { &*(grant.window as *const FakeWindow) }
                     .qp_alive
                     .store(false, Ordering::Release);
@@ -1128,21 +1298,27 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
         detach_message(state, id);
     }
     cq.owners.lock().unwrap().remove(&state.qpn);
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     unsafe { &*state.receive_cq }
         .owners
         .lock()
         .unwrap()
         .remove(&state.qpn);
     cq.qps.fetch_sub(1, Ordering::SeqCst);
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     unsafe { &*state.receive_cq }
         .qps
         .fetch_sub(1, Ordering::SeqCst);
     device.endpoints.fetch_sub(1, Ordering::SeqCst);
     if !handles.private_pd.is_null() {
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         unsafe { &*handles.private_pd.cast::<FakePd>() }
             .qps
             .fetch_sub(1, Ordering::SeqCst);
     }
+    // SAFETY: This handle owns the Box installed by the matching fixture constructor; successful
+    // teardown consumes it once.
     unsafe {
         drop(Box::from_raw(handles.qp.cast::<Fake>()));
     }
@@ -1151,11 +1327,17 @@ unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
 }
 
 unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let handles = unsafe { &mut *h };
     if handles.mr.is_null() {
         return 0;
     }
+    // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
+    // it.
     let state = unsafe { &*handles.mr.cast::<FakeMr>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
     device
         .events
@@ -1196,10 +1378,14 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
     }
     device.mrs.fetch_sub(1, Ordering::SeqCst);
     if !state.private_pd.is_null() {
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         unsafe { &*state.private_pd }
             .mrs
             .fetch_sub(1, Ordering::SeqCst);
     }
+    // SAFETY: This handle owns the Box installed by the matching fixture constructor; successful
+    // teardown consumes it once.
     unsafe {
         drop(Box::from_raw(handles.mr.cast::<FakeMr>()));
     }
@@ -1208,11 +1394,16 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
 }
 
 unsafe extern "C" fn cq(h: *mut sys::CqHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let handles = unsafe { &mut *h };
     if handles.cq.is_null() {
         return 0;
     }
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let state = unsafe { &*handles.cq.cast::<FakeCq>() };
+    // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
+    // constructing the resource.
     let device = unsafe { &*state.device };
     assert_eq!(
         state.qps.load(Ordering::SeqCst),
@@ -1230,6 +1421,8 @@ unsafe extern "C" fn cq(h: *mut sys::CqHandles) -> c_int {
         return 16;
     }
     device.cqs.fetch_sub(1, Ordering::SeqCst);
+    // SAFETY: This handle owns the Box installed by the matching fixture constructor; successful
+    // teardown consumes it once.
     unsafe {
         drop(Box::from_raw(handles.cq.cast::<FakeCq>()));
     }
@@ -1238,12 +1431,18 @@ unsafe extern "C" fn cq(h: *mut sys::CqHandles) -> c_int {
 }
 
 unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let h = unsafe { &mut *h };
     if h.pd.is_null() {
         return 0;
     }
     if h.context.is_null() {
+        // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
+        // their lifetime.
         let pd = unsafe { &*h.pd.cast::<FakePd>() };
+        // SAFETY: The device outlives this dependent resource; the fixture installs its pointer
+        // when constructing the resource.
         let state = unsafe { &*pd.device };
         assert_eq!(pd.qps.load(Ordering::SeqCst), 0, "private QP before PD");
         assert_eq!(
@@ -1255,12 +1454,16 @@ unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
         if state.mode == "gpu_pd_close" {
             return libc::EBUSY;
         }
+        // SAFETY: This handle owns the Box installed by the matching fixture constructor;
+        // successful teardown consumes it once.
         unsafe {
             drop(Box::from_raw(h.pd.cast::<FakePd>()));
         }
         h.pd = std::ptr::null_mut();
         return 0;
     }
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
     assert_eq!(state.endpoints.load(Ordering::SeqCst), 0);
     assert_eq!(state.mrs.load(Ordering::SeqCst), 0, "MRs close before PD");
@@ -1279,10 +1482,14 @@ unsafe extern "C" fn pd(h: *mut sys::DeviceHandles) -> c_int {
 }
 
 unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
+    // SAFETY: The owner lends this aligned handle or result slot exclusively for the duration of
+    // the verbs callback.
     let h = unsafe { &mut *h };
     if h.context.is_null() {
         return 0;
     }
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let state = unsafe { &*h.context.cast::<FakeDevice>() };
     assert!(h.pd.is_null(), "PD closes before context");
     assert_eq!(state.endpoints.load(Ordering::SeqCst), 0);
@@ -1290,6 +1497,8 @@ unsafe extern "C" fn ctx(h: *mut sys::DeviceHandles) -> c_int {
     if matches!(state.mode.as_str(), "close4" | "device_open_close") {
         return 16;
     }
+    // SAFETY: This handle owns the Box installed by the matching fixture constructor; successful
+    // teardown consumes it once.
     unsafe {
         drop(Box::from_raw(h.context.cast::<FakeDevice>()));
     }
@@ -1335,6 +1544,8 @@ unsafe fn query_address(
     address: &discovery::RdmaAddress,
     gid_index: Option<u8>,
 ) -> Result<discovery::RdmaAddress> {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     device.route_queries.lock().unwrap().push(gid_index);
     let code = device.route_error.load(Ordering::Acquire);
@@ -1404,6 +1615,8 @@ impl FakeDevice {
 
 unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent) -> c_int {
     use std::io::Read;
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*context.cast::<FakeDevice>() };
     let mut kind = [0];
     if let Err(error) = device
@@ -1420,6 +1633,8 @@ unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent
     if kind[0] == 255 {
         return libc::EIO;
     }
+    // SAFETY: The monitor supplies writable event storage; the fixture has read a complete event
+    // from its channel.
     unsafe {
         (*event).kind = kind[0] as u32;
         (*event).port = 1;
@@ -1427,6 +1642,8 @@ unsafe extern "C" fn async_get(context: *mut c_void, event: *mut sys::AsyncEvent
     0
 }
 unsafe extern "C" fn async_ack(context: *mut c_void, _: *mut sys::AsyncEvent) {
+    // SAFETY: The fixture stores a boxed FakeDevice in the context handle and retains it through
+    // this call.
     let device = unsafe { &*context.cast::<FakeDevice>() };
     device.events.lock().unwrap().push("async_ack");
     *device.async_acks.0.lock().unwrap() += 1;
@@ -1823,6 +2040,8 @@ fn direct_registration_uses_exact_range_and_keeps_capacity_separate_from_staging
     {
         let state = first.record.lock().unwrap();
         let resources = state.resources.as_ref().unwrap();
+        // SAFETY: The locked resource owner retains the boxed fixture handle while it is
+        // inspected.
         let fake = unsafe {
             &*resources
                 .connection
@@ -2108,6 +2327,7 @@ pub(super) fn deliver_completion(
 ) {
     let request = endpoint.record.lock().unwrap();
     let resources = request.resources.as_ref().unwrap();
+    // SAFETY: The locked resource owner retains the boxed fixture handle while it is inspected.
     let qp = unsafe {
         &*resources
             .connection
@@ -2133,6 +2353,8 @@ pub(super) fn deliver_completion(
     qp.completed_grants.lock().unwrap().insert(id, grant_key);
     assert_eq!(length, bytes.len());
     // CPU owner/routing control only; this cannot qualify provider DMA ordering.
+    // SAFETY: The receive WQE retains its destination; the completion message source is disjoint
+    // and both cover the posted length.
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), address as *mut u8, length);
     }
@@ -2147,6 +2369,7 @@ pub(super) fn deliver_completion(
     };
     mutate(&mut completion);
     let cq = if send_cq { qp.cq } else { qp.receive_cq };
+    // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     unsafe { &*cq }
         .completions
         .lock()

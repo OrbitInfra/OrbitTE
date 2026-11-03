@@ -54,6 +54,7 @@ static NUMA: Numa = Numa {
             .lock()
             .unwrap()
             .remove(&(pointer.as_ptr() as usize));
+        // SAFETY: The shim is releasing the exact base and length of its owned mmap allocation.
         assert_eq!(unsafe { libc::munmap(pointer.as_ptr().cast(), length) }, 0);
         Ok(())
     },
@@ -312,15 +313,13 @@ fn both_endpoints_select_their_own_gpu_location_for_public_tcp_and_rdma_transfer
                     Duration::from_secs(3),
                 )
                 .unwrap();
-            let request = TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: true,
+            let request = TransferRequest::new(
                 transport,
-                local_address: local.base_address() + 2,
-                remote_address: remote.base_address() + 1,
-                length: 41,
-            };
+                local.base_address() + 2,
+                remote.base_address() + 1,
+                41,
+            )
+            .with_remote_staging(true);
             // A repeat consumes the same idle mapped slots, preserving both real locations.
             for _ in 0..2 {
                 let report = requester
@@ -416,6 +415,8 @@ fn unmap_failure_preserves_its_errno_and_mapping_after_successful_unregister() {
     );
     let mut resident = 0u8;
     assert_eq!(
+        // SAFETY: The fixture supplies a page-aligned mapping address and a writable residency
+        // byte per queried page.
         unsafe {
             libc::mincore(
                 address.as_ptr().cast(),

@@ -62,15 +62,13 @@ fn local_slot_advances_while_remote_delegate_completion_is_pending() {
                 .submit_async(
                     operation,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
+                    &[TransferRequest::new(
                         transport,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 17,
-                    }],
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        17,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(5),
                 )
@@ -161,15 +159,13 @@ fn last_cross_ready_does_not_succeed_or_unpin_without_last_delegate_completion()
             .submit_async(
                 TransferOp::Write,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
+                &[TransferRequest::new(
                     transport,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(1),
             )
@@ -268,15 +264,13 @@ fn cancellation_joins_active_cross_discards_queue_and_preserves_native_uncertain
             .submit_async(
                 TransferOp::Read,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
+                &[TransferRequest::new(
                     transport,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 17,
-                }],
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    17,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(5),
             )
@@ -408,15 +402,13 @@ fn worker_panic_retains_actual_owners_and_possible_write_effect() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(5),
             )

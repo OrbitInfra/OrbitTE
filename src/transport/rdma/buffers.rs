@@ -53,7 +53,7 @@ struct Resources {
     usage: Arc<Mutex<RdmaStats>>,
 }
 
-// Only the MR field is used by MemoryRegion; its mutex serializes provider calls.
+// SAFETY: Only the MR field is used by MemoryRegion; its mutex serializes provider calls.
 unsafe impl Send for Resources {}
 
 impl Drop for Resources {

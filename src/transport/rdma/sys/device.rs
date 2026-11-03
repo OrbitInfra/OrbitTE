@@ -4,6 +4,8 @@ use super::*;
 
 pub(in crate::transport::rdma) fn devices() -> Result<Vec<(String, String)>> {
     // This inventory operation never opens a provider context.
+    // SAFETY: The provider owns count device pointers and their C names until
+    // ibv_free_device_list.
     unsafe {
         let mut count = 0;
         let list = ffi::ibv_get_device_list(&mut count);
@@ -42,6 +44,7 @@ pub(super) unsafe fn query_descriptor(
     port: u8,
     gid_index: u8,
 ) -> std::result::Result<Descriptor, c_int> {
+    // SAFETY: The caller retains the opened device throughout the synchronous descriptor query.
     let (descriptor, active, _) = unsafe { read_descriptor(device, port, gid_index) }?;
     if !active {
         return Err(libc::ENETDOWN);
@@ -54,6 +57,8 @@ unsafe fn read_descriptor(
     port: u8,
     gid_index: u8,
 ) -> std::result::Result<(Descriptor, bool, Option<u64>), c_int> {
+    // SAFETY: The caller retains the device context; the port query and gid query write to
+    // local outputs.
     unsafe {
         let attr = super::port::query_port((*device).context.cast(), port)?;
         let active = attr.state == ffi::ibv_port_state::IBV_PORT_ACTIVE;
@@ -101,6 +106,8 @@ pub(super) fn validate_gid_entry(entry: &ffi::ibv_gid_entry, address: &RdmaAddre
     };
     if entry.gid_index != u32::from(address.gid_index)
         || entry.port_num != u32::from(address.port)
+        // SAFETY: The queried GID is initialized and its raw arm is 16 bytes with no invalid
+        // bit patterns.
         || unsafe { entry.gid.raw } != address.descriptor.gid
         || entry.gid_type != kind
         || address.descriptor.link_layer != link_layer
@@ -123,6 +130,7 @@ unsafe fn read_address(
         return result;
     }
 
+    // SAFETY: The caller keeps the device and its selected port alive through both queries.
     let (descriptor, active, link_speed_mbps) = unsafe {
         read_descriptor(device, expected.port, expected.gid_index)
     }
@@ -130,7 +138,10 @@ unsafe fn read_address(
         operation: "ibverbs route query",
         code,
     })?;
+    // SAFETY: ibv_gid_entry is a C output struct of integers and a raw GID; zero initializes
+    // every field.
     let mut entry: ffi::ibv_gid_entry = unsafe { std::mem::zeroed() };
+    // SAFETY: The open device is retained and entry is writable for its exact ABI size.
     let code = unsafe {
         ffi::_ibv_query_gid_ex(
             (*device).context.cast(),
@@ -171,6 +182,7 @@ pub(super) unsafe fn query_address(
             gid_index,
             ..expected.clone()
         };
+        // SAFETY: The caller's device handle stays live while querying the pinned GID index.
         return unsafe { query_selected_address(device, &pinned) };
     }
     let candidates = discovery::port_addresses(
@@ -181,6 +193,7 @@ pub(super) unsafe fn query_address(
     );
     let mut error = Error::Unavailable("no valid GID on the selected RDMA port");
     for candidate in candidates {
+        // SAFETY: Each candidate is queried synchronously against the same caller-held device.
         match unsafe { query_selected_address(device, &candidate) } {
             Ok(address) => return Ok(address),
             Err(fault) => error = fault,
@@ -193,10 +206,12 @@ unsafe fn query_selected_address(
     device: *const DeviceHandles,
     expected: &RdmaAddress,
 ) -> Result<RdmaAddress> {
+    // SAFETY: The caller retains the open device throughout the selected address query.
     let (observed, entry) = unsafe { read_address(device, expected) }?;
     validate_gid_entry(&entry, &observed)?;
     if entry.ndev_ifindex != 0 {
         let mut name = [0; libc::IF_NAMESIZE];
+        // SAFETY: name provides IF_NAMESIZE writable bytes for the interface name.
         let value = unsafe { libc::if_indextoname(entry.ndev_ifindex, name.as_mut_ptr()) };
         if value.is_null() {
             return Err(Error::Backend {
@@ -204,6 +219,8 @@ unsafe fn query_selected_address(
                 code: failure(),
             });
         }
+        // SAFETY: On success if_indextoname returns a NUL-terminated string in the still-live
+        // name array.
         if unsafe { CStr::from_ptr(value) }.to_str().ok() != observed.net_device.as_deref() {
             return Err(Error::Backend {
                 operation: "RDMA network device changed",

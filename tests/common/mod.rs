@@ -41,10 +41,9 @@ pub fn external_memory(bytes: &[u8]) -> ExternalFixture {
     let owner = Arc::downgrade(&allocation);
     // SAFETY: the private box remains stable and its owner cannot expose any
     // uncoordinated byte access. HostMemory retains the actual allocation.
-    let memory =
-        Arc::new(unsafe { HostMemory::from_raw_parts(address, bytes.len(), allocation) }.unwrap());
+    let memory = unsafe { HostMemory::from_raw_parts(address, bytes.len(), allocation) }.unwrap();
     ExternalFixture {
-        memory,
+        memory: Arc::new(memory),
         owner,
         drops,
     }

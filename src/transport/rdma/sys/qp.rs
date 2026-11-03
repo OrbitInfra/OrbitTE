@@ -265,6 +265,8 @@ fn message_sge(
     if memory.mr.is_null() || length != crate::transport::rdma::COMPLETION_MESSAGE_SIZE {
         return Err(libc::EINVAL);
     }
+    // SAFETY: The caller's message registration retains this non-null ibv_mr and its backing
+    // through posting.
     let mr = unsafe { &*memory.mr.cast::<ffi::ibv_mr>() };
     let offset = address.checked_sub(mr.addr as u64).ok_or(libc::EINVAL)?;
     if offset
@@ -288,6 +290,8 @@ pub(super) unsafe extern "C" fn post_receive(
     length: usize,
     result: *mut PostResult,
 ) -> c_int {
+    // SAFETY: The grant holds the QP and message MR through completion; result is writable and
+    // the WR/SGE live through post.
     unsafe {
         *result = PostResult::default();
         if (*handles).qp.is_null() || id == 0 {
@@ -326,6 +330,8 @@ pub(super) unsafe extern "C" fn send_completion(
     invalidate: bool,
     result: *mut PostResult,
 ) -> c_int {
+    // SAFETY: The completion owner retains its QP and message MR through CQ completion; result
+    // and the stack WR are live during post.
     unsafe {
         *result = PostResult::default();
         if (*handles).qp.is_null() || id == 0 {

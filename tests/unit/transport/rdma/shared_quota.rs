@@ -23,6 +23,8 @@ impl Object {
 }
 impl Drop for Object {
     fn drop(&mut self) {
+        // SAFETY: The fixture owns the NUL-terminated shared-memory name for the duration of the
+        // call.
         unsafe {
             libc::shm_unlink(self.0.as_ptr());
         }
@@ -132,9 +134,14 @@ fn shared_slot_subprocess() {
     let mode = std::env::var("ORBITTE_TEST_SLOT_MODE").unwrap();
     if mode == "initialize" {
         let name = CString::new(name).unwrap();
+        // SAFETY: The fixture owns the NUL-terminated shared-memory name for the duration of the
+        // call.
         let fd = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o600) };
         assert!(fd >= 0);
+        // SAFETY: shm_open returned this new descriptor; ownership transfers exactly once to
+        // File.
         let file = unsafe { File::from_raw_fd(fd) };
+        // SAFETY: The fixture File owns this descriptor while the kernel acquires its lock.
         assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX) }, 0);
         file.set_len(HEADER_SIZE).unwrap();
         file.write_all_at(&999u64.to_le_bytes(), 8).unwrap();

@@ -43,6 +43,7 @@ unsafe extern "C" fn destroy_cq(handles: *mut sys::CqHandles) -> i32 {
         );
         probe.pending.push(pending);
     }
+    // SAFETY: The retiring lane exclusively owns these CQ handles through the destroy attempt.
     let code = unsafe { (sys::REAL.destroy_cq)(handles) };
     if code == 0 {
         if let Some(probe) = state.as_mut() {

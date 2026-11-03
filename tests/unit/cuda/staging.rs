@@ -53,15 +53,12 @@ fn tcp_and_rdma_share_bounded_chunks_and_preserve_partial_ranges() {
                 Duration::from_secs(2),
             )
             .unwrap();
-        let mut request = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: route[0],
-            local_address: local.base_address() + 2,
-            remote_address: remote.base_address() + 1,
-            length: 8,
-        };
+        let mut request = TransferRequest::new(
+            route[0],
+            local.base_address() + 2,
+            remote.base_address() + 1,
+            8,
+        );
         let pattern = [3, 19, 21, 29, 37, 43, 51, 61];
         for (op, transport) in [TransferOp::Read, TransferOp::Write].into_iter().zip(route) {
             request.transport = transport;
@@ -324,14 +321,13 @@ fn queued_cancellation_does_not_release_the_running_chunk_or_report_partial_succ
         .unwrap();
     let requests: Vec<_> = [0, 8]
         .into_iter()
-        .map(|offset| TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Tcp,
-            local_address: local.base_address() + offset,
-            remote_address: remote.base_address(),
-            length: 8,
+        .map(|offset| {
+            TransferRequest::new(
+                Transport::Tcp,
+                local.base_address() + offset,
+                remote.base_address(),
+                8,
+            )
         })
         .collect();
     let (entered, wait) = std::sync::mpsc::sync_channel(0);
@@ -421,15 +417,12 @@ fn staged_rdma_cuda_failure_survives_a_drained_cq_cleanup_error() {
                     TransferOp::Write
                 },
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )],
                 None,
                 Duration::from_secs(2),
             )

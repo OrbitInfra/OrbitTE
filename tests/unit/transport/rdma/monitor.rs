@@ -18,10 +18,14 @@ struct Native {
 }
 
 unsafe extern "C" fn get(context: *mut c_void, event: *mut sys::AsyncEvent) -> i32 {
+    // SAFETY: The monitor fixture retains the boxed Native context until its event registration
+    // has stopped.
     let native = unsafe { &*context.cast::<Native>() };
     let mut byte = [0];
     match native.reader.lock().unwrap().read(&mut byte) {
         Ok(1) => {
+            // SAFETY: The monitor supplies an exclusive event output slot for the event read by
+            // this callback.
             unsafe {
                 (*event).kind = byte[0] as u32;
                 (*event).port = native.port.load(Ordering::Acquire);
@@ -34,6 +38,8 @@ unsafe extern "C" fn get(context: *mut c_void, event: *mut sys::AsyncEvent) -> i
 }
 
 unsafe extern "C" fn ack(context: *mut c_void, _: *mut sys::AsyncEvent) {
+    // SAFETY: The monitor fixture retains the boxed Native context until its event registration
+    // has stopped.
     let native = unsafe { &*context.cast::<Native>() };
     if let Some(gate) = &native.gate {
         let mut state = gate.0.lock().unwrap();

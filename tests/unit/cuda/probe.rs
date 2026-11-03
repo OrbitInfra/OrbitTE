@@ -6,6 +6,8 @@ fn owner_locations_bound_registrations_without_reprobing_or_waiting_for_payloads
     let owner = allocation(&[0x57; 32]);
     owner.ordinal.store(3, Ordering::Release);
     let weak = Arc::downgrade(&owner);
+    // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture never
+    // replaces the box.
     let address = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
     let memory = Arc::new(CudaMemory::register(address + 4, 24, owner.clone(), driver()).unwrap());
     let expected = MemoryLocation::Cuda {
@@ -86,6 +88,8 @@ fn pointer_probe_rejects_unknown_managed_bounds_and_driver_errors_without_host_a
         owner.managed.store(managed, Ordering::Release);
         owner.ordinal.store(device, Ordering::Release);
         owner.probe_error.store(code, Ordering::Release);
+        // SAFETY: The Device owner keeps this boxed allocation at a fixed address; the fixture
+        // never replaces the box.
         let address = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
         let result = CudaMemory::register(address + offset, len, owner.clone(), driver());
         if code != 0 {
@@ -95,6 +99,8 @@ fn pointer_probe_rejects_unknown_managed_bounds_and_driver_errors_without_host_a
         } else {
             assert!(result.is_err());
         }
+        // SAFETY: The pointer query only reads metadata and submits no copy to the owned
+        // allocation.
         assert_eq!(unsafe { &**owner.bytes.get() }, &[0xa5; 16]);
         assert!(
             owner

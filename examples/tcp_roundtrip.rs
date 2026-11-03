@@ -23,15 +23,12 @@ fn main() -> orbit_te::Result<()> {
         .iter()
         .find(|region| region.id() == exported.id())
         .ok_or(orbit_te::Error::RegionNotFound)?;
-    let request = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: orbit_te::Transport::Tcp,
-        local_address: destination.base_address(),
-        remote_address: remote.base_address(),
-        length: exported.len(),
-    };
+    let request = TransferRequest::new(
+        orbit_te::Transport::Tcp,
+        destination.base_address(),
+        remote.base_address(),
+        exported.len(),
+    );
     let report =
         requester.submit_and_wait(TransferOp::Read, &peer, &[request], Duration::from_secs(1))?;
     if let Some(failure) = report.failure {

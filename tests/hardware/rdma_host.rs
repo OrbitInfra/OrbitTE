@@ -286,21 +286,18 @@ fn rounds(
                                 TransferOp::Write
                             },
                             segment,
-                            &[TransferRequest {
-                                qos: None,
-                                priority: Default::default(),
-                                remote_staging: false,
-                                transport: Transport::Rdma,
-                                local_address: memory.base_address()
+                            &[TransferRequest::new(
+                                Transport::Rdma,
+                                memory.base_address()
                                     + (parent * case.bank()
                                         + if case.read { case.destination() } else { GUARD })
                                         as u64,
-                                remote_address: remote
+                                remote
                                     + (parent * case.bank()
                                         + if case.read { GUARD } else { case.destination() })
                                         as u64,
-                                length: case.payload,
-                            }],
+                                case.payload,
+                            )],
                             TIMEOUT,
                         )?;
                         if report.failure.is_some()

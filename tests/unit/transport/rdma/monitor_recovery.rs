@@ -7,6 +7,8 @@ pub(super) unsafe fn query_address(
     address: &RdmaAddress,
     gid_index: Option<u8>,
 ) -> crate::Result<RdmaAddress> {
+    // SAFETY: The locked device owner retains its context and selected address for the
+    // synchronous query.
     let observed = unsafe { (sys::REAL.query_address)(handles, address, gid_index) }?;
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     if trace.mode == "monitor-recovery" && trace.target && address.device == trace.rail {

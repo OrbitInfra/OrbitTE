@@ -553,6 +553,8 @@ impl ProgressState {
                 };
                 for _ in 0..64 {
                     let mut completion = sys::Completion::default();
+                    // SAFETY: This lane owns the CQ through polling and supplies writable
+                    // completion storage.
                     let count = unsafe { (self.verbs.poll)(&mut handles, &mut completion) };
                     match count {
                         0 => break,

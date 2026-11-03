@@ -140,15 +140,13 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Tcp,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 17,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    17,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(10),
             )
@@ -229,6 +227,8 @@ fn local_failure_joins_partial_tcp_or_control_io_before_peer_release() {
         } else {
             assert!(requester.stats().unwrap().staging.retained_chunks > 0);
             assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+            // SAFETY: The peer withheld the remaining frame and the failed local path cannot
+            // enqueue copy-back.
             assert_eq!(unsafe { &**b.bytes.get() }, &[0xcc; 32]);
         }
         drop(batch);

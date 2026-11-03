@@ -62,7 +62,11 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        // SAFETY: The test loads its freshly compiled fixture library, whose initializer and ABI
+        // it controls.
         let library = unsafe { Library::new(&library) }.unwrap();
+        // SAFETY: The fixture exports this exact C signature, and the Library outlives its
+        // symbol.
         let make_context = unsafe {
             library.get::<unsafe extern "C" fn(c_int) -> *mut ffi::ibv_context>(
                 b"orbitte_test_context\0",
@@ -70,7 +74,11 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
         }
         .unwrap();
         for mode in 0..3 {
+            // SAFETY: The typed fixture symbol is loaded from the live library and returns its
+            // own context.
             let context = unsafe { make_context(mode) };
+            // SAFETY: The fixture library owns the returned verbs context and stays loaded during
+            // the port query.
             let result = unsafe { query_port(context, 7) };
             if mode == 2 {
                 assert!(matches!(result, Err(libc::EIO)));
@@ -91,12 +99,16 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
         if let Some(query) = query {
             for (port, expected) in [(1, 200_000), (4, 0)] {
                 assert_eq!(
+                    // SAFETY: This fixture symbol explicitly accepts a null context and remains
+                    // loaded by the query owner.
                     unsafe { effective_speed(query.query, std::ptr::null_mut(), port) }.unwrap(),
                     expected
                 );
             }
             for (port, code) in [(2, libc::EIO), (3, libc::EOVERFLOW)] {
                 assert!(
+                    // SAFETY: This fixture symbol explicitly accepts a null context and remains
+                    // loaded by the query owner.
                     matches!(unsafe { effective_speed(query.query,std::ptr::null_mut(),port) },Err(Error::Backend {code:observed,..}) if observed==code)
                 );
             }

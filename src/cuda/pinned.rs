@@ -26,6 +26,8 @@ pub(crate) struct PinnedAllocation {
 // SAFETY: stable CUDA-pinned host bytes are only exposed through the shared
 // HostMemory lock or privately owned staging. The allocation never reallocates.
 unsafe impl Send for PinnedAllocation {}
+// SAFETY: Shared host access is serialized by HostMemory or held exclusively by a staging
+// lease.
 unsafe impl Sync for PinnedAllocation {}
 
 impl PinnedAllocation {
@@ -138,6 +140,8 @@ impl PinnedAllocation {
         let result = context.current(|| {
             attempted = true;
             // Portable registration is owned together with this fresh mapping.
+            // SAFETY: The owned mapping remains page-aligned and mapped through unregister in
+            // this context.
             check("cuMemHostRegister", unsafe {
                 (context.driver.host_register)(mapping.address.as_ptr().cast(), mapping.length, 1)
             })
@@ -222,9 +226,13 @@ impl PinnedAllocation {
                 self.context.current(|| {
                     // Record native release before restoring the caller context.
                     let (operation, status) = match &self.backing {
+                        // SAFETY: Driver backing owns this cuMemHostAlloc pointer through the
+                        // single release attempt.
                         Backing::Driver => ("cuMemFreeHost", unsafe {
                             (self.context.driver.host_free)(self.address.as_ptr().cast())
                         }),
+                        // SAFETY: Mapped backing retains the registered mapping until
+                        // unregister completes.
                         Backing::Mapped(_) => ("cuMemHostUnregister", unsafe {
                             (self.context.driver.host_unregister)(self.address.as_ptr().cast())
                         }),

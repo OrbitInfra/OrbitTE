@@ -230,15 +230,12 @@ fn remote_rdma_teardown_failure_retains_source_while_requester_is_locally_draine
         .submit_and_wait(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address(),
-                remote_address: remote.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address(),
+                remote.base_address(),
+                8,
+            )],
             Duration::from_secs(2),
         )
         .unwrap();
@@ -448,15 +445,12 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
         .submit_and_wait(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address(),
-                remote_address: remote.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address(),
+                remote.base_address(),
+                8,
+            )],
             Duration::from_secs(2),
         )
         .unwrap();
@@ -605,15 +599,12 @@ fn source_ack_follows_output_drop_and_native_quota_reuse() {
                 .submit_and_wait(
                     TransferOp::Read,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address(),
-                        remote_address: address,
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address(),
+                        address,
+                        8,
+                    )],
                     Duration::from_secs(2),
                 )
                 .unwrap();
@@ -698,15 +689,12 @@ fn direct_and_staged_peers_preserve_read_write_bytes_across_all_policy_pairs() {
                     Duration::from_secs(2),
                 )
                 .unwrap();
-            let request = TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address() + 3,
-                remote_address: remote.base_address() + 9,
-                length: 8,
-            };
+            let request = TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + 3,
+                remote.base_address() + 9,
+                8,
+            );
             let report = requester
                 .submit_and_wait(
                     TransferOp::Read,
@@ -780,15 +768,12 @@ fn failed_direct_write_can_change_remote_bytes_without_done_and_always_reports_u
             .submit_and_wait(
                 TransferOp::Write,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: Transport::Rdma,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )],
                 Duration::from_secs(2),
             )
             .unwrap();
@@ -833,15 +818,12 @@ fn failed_direct_read_receipt_preserves_local_changes_and_retains_remote_access_
         .submit_and_wait(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address(),
-                remote_address: remote.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address(),
+                remote.base_address(),
+                8,
+            )],
             Duration::from_secs(2),
         )
         .unwrap();
@@ -909,15 +891,12 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
         .submit_async(
             TransferOp::Read,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address(),
-                remote_address: remote.base_address(),
-                length: 8,
-            }],
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address(),
+                remote.base_address(),
+                8,
+            )],
             None,
             Duration::from_secs(2),
         )
@@ -1024,15 +1003,12 @@ fn expired_rdma_data_deadline_preserves_failure_and_waits_for_native_destroy() {
                 observed.store(true, std::sync::atomic::Ordering::Release);
             });
         }
-        let request = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Rdma,
-            local_address: local.base_address(),
-            remote_address: remote.base_address(),
-            length: 8,
-        };
+        let request = TransferRequest::new(
+            Transport::Rdma,
+            local.base_address(),
+            remote.base_address(),
+            8,
+        );
         if asynchronous {
             let mut batch = requester.allocate_batch(1).unwrap();
             batch

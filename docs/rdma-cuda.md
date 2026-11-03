@@ -206,10 +206,9 @@ and [multipath evidence](qualification.md#rdma-weighted-multipath).
 
 ## Request priority and bandwidth arbitration
 
-Set `TransferRequest::priority` to `Priority::High`, `Medium` or `Low`.
-`High` is TENT's default; existing Rust request literals must now supply this
-field (`priority: Default::default()` preserves the default). Non-High priorities
-require `Transport::Rdma`; TCP and NVLink reject them during preflight.
+Use `request.with_priority(...)` to select `Priority::High`, `Medium` or `Low`.
+`TransferRequest::new` defaults to `High`, as in TENT. Medium and Low
+require `Transport::Rdma`. TCP and NVLink reject them during preflight.
 The priority propagates through ordinary grants, multirail slices and remote
 CUDA staging CROSS work. It is local dispatch metadata and changes no wire format.
 

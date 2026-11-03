@@ -44,6 +44,8 @@ unsafe extern "C" fn gated_post(
         }
     }
     drop(state);
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     unsafe {
         (sys::REAL.post)(
             h, memory, requests, count, local, length, remote, rkey, write, result,
@@ -720,6 +722,8 @@ fn source_window_peer() {
                 .as_ref()
                 .unwrap()
                 .handles;
+            // SAFETY: The registration retains this native ibv_mr until the deregistration call
+            // returns.
             grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
         }
         let binding = [0x42; COMPLETION_MESSAGE_SIZE];

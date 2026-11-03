@@ -70,14 +70,14 @@ fn eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_wo
                     Duration::from_secs(3),
                 )
                 .unwrap();
-            let request = |index: usize| TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: true,
-                transport,
-                local_address: local[index].base_address() + 2,
-                remote_address: remote[index].base_address() + 1,
-                length: 8,
+            let request = |index: usize| {
+                TransferRequest::new(
+                    transport,
+                    local[index].base_address() + 2,
+                    remote[index].base_address() + 1,
+                    8,
+                )
+                .with_remote_staging(true)
             };
             let mut active = Vec::new();
             for (index, device) in devices.iter().take(8).enumerate() {

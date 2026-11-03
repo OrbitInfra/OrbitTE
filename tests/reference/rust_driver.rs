@@ -204,17 +204,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let [local_offset, remote_offset, length] = parts.as_slice() else {
                             return Err("invalid slice".into());
                         };
-                        requests.push(TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: false,
-                            transport: orbit_te::Transport::Tcp,
-                            local_address: buffers["local"].memory.base_address()
-                                + *local_offset as u64,
-                            remote_address: buffers["source"].memory.base_address()
-                                + *remote_offset as u64,
-                            length: *length,
-                        });
+                        requests.push(TransferRequest::new(
+                            orbit_te::Transport::Tcp,
+                            buffers["local"].memory.base_address() + *local_offset as u64,
+                            buffers["source"].memory.base_address() + *remote_offset as u64,
+                            *length,
+                        ));
                     }
                 }
                 let split = *operation == "READ_SPLIT";

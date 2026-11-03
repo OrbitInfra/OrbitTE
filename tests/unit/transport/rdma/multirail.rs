@@ -171,6 +171,7 @@ fn multirail_peer() {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: limit is a valid initialized rlimit for the duration of the syscall.
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) }, 0);
     println!();
     let source = env::var("ORBITTE_SHARED_ROLE").unwrap() == "source";
@@ -369,20 +370,17 @@ fn multirail_peer() {
                             .submit_and_wait(
                                 operation,
                                 &peer,
-                                &[TransferRequest {
-                                    qos: None,
-                                    priority: Default::default(),
-                                    remote_staging: false,
-                                    transport: Transport::Rdma,
-                                    local_address: local,
-                                    remote_address: remote
+                                &[TransferRequest::new(
+                                    Transport::Rdma,
+                                    local,
+                                    remote
                                         + (if operation == TransferOp::Read {
                                             GUARD
                                         } else {
                                             DESTINATION
                                         }) as u64,
-                                    length: PAYLOAD,
-                                }],
+                                    PAYLOAD,
+                                )],
                                 TIMEOUT,
                             )
                             .unwrap()
@@ -559,6 +557,8 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
                 let request = record.lock().unwrap();
                 let resources = request.resources.as_ref().unwrap();
                 assert!(resources.grant.is_none());
+                // SAFETY: The locked connection retains its live native QP while this fixture
+                // reads it.
                 let qp = unsafe {
                     &*resources
                         .connection

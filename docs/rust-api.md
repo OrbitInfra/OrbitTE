@@ -10,6 +10,18 @@ cargo doc --locked --no-deps --open
 Add `--features rdma,cuda` when documenting native providers in an environment
 with the [build prerequisites](build.md).
 
+## Transfer requests
+
+Create a request with `TransferRequest::new(transport, local_address,
+remote_address, length)`. It starts with high priority, the engine's default
+QoS contract and remote staging disabled. Use `.with_qos(policy)`,
+`.with_priority(priority)` and `.with_remote_staging(true)` to override these
+fields. An explicit QoS policy supplies its own priority.
+
+Construct requests through this API when migrating from struct literals.
+`TransferRequest`, `Transport` and `Error` are non-exhaustive. Include a
+wildcard when matching a transport or error outside the crate.
+
 ## Engine and registration
 
 `TransferEngine::new(EngineConfig)` starts a source control service and owns
@@ -157,8 +169,8 @@ to use the new process's allocations.
 ## Requests and reports
 
 `TransferRequest` names the transport, priority, local address, remote address
-and length. Supply `priority: Priority::High` (or `Default::default()`) for the
-default. Medium/Low currently require RDMA and affect ready payloads competing
+and length. The constructor defaults to `Priority::High`. Medium and Low
+currently require RDMA and affect ready payloads competing
 on a worker; they do not reorder the batch. Optional
 `RdmaConfig::deadline_bw_arbitration` consumes the existing transmit meter.
 `priority_promotion_timeout` defaults to 10 ms and `priority_promotion_per_entry`

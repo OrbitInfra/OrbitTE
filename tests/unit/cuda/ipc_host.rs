@@ -145,6 +145,8 @@ fn ipc_host_and_mixed_subbatches_keep_failure_scope_and_actual_owners() {
 #[test]
 fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
     let ordinary = Arc::new(HostMemory::new(vec![0; 128].into_boxed_slice()).unwrap());
+    // SAFETY: The retained HostMemory owns this exact stable range; the test does not access it
+    // through competing aliases.
     let external = unsafe {
         HostMemory::from_raw_parts(
             NonNull::new(ordinary.base_address() as usize as *mut u8).unwrap(),

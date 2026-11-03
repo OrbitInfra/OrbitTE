@@ -70,21 +70,18 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
     let requests = spans
         .iter()
         .enumerate()
-        .map(
-            |(i, &(local_offset, remote_offset, length))| TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: if i == 1 {
+        .map(|(i, &(local_offset, remote_offset, length))| {
+            TransferRequest::new(
+                if i == 1 {
                     Transport::Tcp
                 } else {
                     Transport::Rdma
                 },
-                local_address: local.base_address() + local_offset,
-                remote_address: remote.base_address() + remote_offset,
+                local.base_address() + local_offset,
+                remote.base_address() + remote_offset,
                 length,
-            },
-        )
+            )
+        })
         .collect::<Vec<_>>();
     let notification = Notification {
         name: "mixed".into(),
@@ -151,7 +148,11 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
         }
     };
     apply(&mut expected_a, &mut expected_b, 2, 4, 5);
+    // SAFETY: The pending chunk is held at the test gate; the completed prefix is the only
+    // writer so far.
     assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &expected_a);
+    // SAFETY: The pending chunk is held at the test gate; the completed prefix is the only
+    // writer so far.
     assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
     resume.send(()).unwrap();
     let status = batch.wait(Duration::from_secs(3)).unwrap();
@@ -254,7 +255,11 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
             batch.free().unwrap();
         }
     }
+    // SAFETY: The shim has finished the submitted copies and the failed batch cannot post its
+    // tail.
     assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &expected_a);
+    // SAFETY: The shim has finished the submitted copies and the failed batch cannot post its
+    // tail.
     assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
     if !retained {
         requester.close(Duration::from_secs(3)).unwrap();
@@ -326,17 +331,15 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
             let requests: Vec<_> = spans
                 .iter()
                 .enumerate()
-                .map(
-                    |(i, &(local_offset, remote_offset, length))| TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: i == 1,
-                        transport: if i == 1 { transport } else { Transport::Rdma },
-                        local_address: local.base_address() + local_offset,
-                        remote_address: remote.base_address() + remote_offset,
+                .map(|(i, &(local_offset, remote_offset, length))| {
+                    TransferRequest::new(
+                        if i == 1 { transport } else { Transport::Rdma },
+                        local.base_address() + local_offset,
+                        remote.base_address() + remote_offset,
                         length,
-                    },
-                )
+                    )
+                    .with_remote_staging(i == 1)
+                })
                 .collect();
             let notification = Notification {
                 name: "mixed-remote".into(),

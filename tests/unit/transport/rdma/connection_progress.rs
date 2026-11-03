@@ -128,22 +128,36 @@ mod staging {
     }
 
     unsafe fn open_mode(h: *mut sys::DeviceHandles, name: *const c_char, mode: &CStr) -> i32 {
+        // SAFETY: The context constructor supplies a NUL-terminated device name that lives
+        // through the open callback.
         match unsafe { CStr::from_ptr(name) }.to_bytes() {
+            // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name
+            // to the fixture opener.
             b"rail0" => unsafe { fixture::open_device(h, mode.as_ptr()) },
+            // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name
+            // to the fixture opener.
             b"rail2" => unsafe { fixture::open_device(h, c"copy".as_ptr()) },
             _ => libc::ENODEV,
         }
     }
     unsafe extern "C" fn open_copy(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_mode(h, n, c"copy") }
     }
     unsafe extern "C" fn open_hold(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_mode(h, n, c"copy_cross_hold") }
     }
     unsafe extern "C" fn open_error(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_mode(h, n, c"copy_cross_hold_first_error") }
     }
     unsafe extern "C" fn open_retain(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_mode(h, n, c"copy_cross_hold_first_error_close0") }
     }
 
@@ -153,6 +167,8 @@ mod staging {
         failure: bool,
         error: bool,
     ) -> i32 {
+        // SAFETY: The context constructor supplies a NUL-terminated device name that lives
+        // through the open callback.
         let mode = match unsafe { CStr::from_ptr(n) }.to_bytes() {
             b"rail0" if error => c"copy_cross_hold_first_error",
             b"rail0" => c"copy_cross_hold",
@@ -160,15 +176,23 @@ mod staging {
             b"rail2" => c"copy_qp_pause",
             _ => return libc::ENODEV,
         };
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { fixture::open_device(h, mode.as_ptr()) }
     }
     unsafe extern "C" fn open_retire(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_retirement(h, n, false, false) }
     }
     unsafe extern "C" fn open_retire_error(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_retirement(h, n, false, true) }
     }
     unsafe extern "C" fn open_retire_failure(h: *mut sys::DeviceHandles, n: *const c_char) -> i32 {
+        // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to
+        // the fixture opener.
         unsafe { open_retirement(h, n, true, true) }
     }
 

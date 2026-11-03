@@ -271,15 +271,13 @@ fn requester(
     let requests: Vec<_> = slices
         .iter()
         .enumerate()
-        .map(|(index, &(offset, length))| TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Nvlink,
-            local_address: registered[index % memories.len()].base_address()
-                + (GUARD + offset) as u64,
-            remote_address: address + (GUARD + offset) as u64,
-            length,
+        .map(|(index, &(offset, length))| {
+            TransferRequest::new(
+                Transport::Nvlink,
+                registered[index % memories.len()].base_address() + (GUARD + offset) as u64,
+                address + (GUARD + offset) as u64,
+                length,
+            )
         })
         .collect();
     if mode == "healthy" {

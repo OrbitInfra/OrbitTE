@@ -1,8 +1,15 @@
-#[cfg(not(feature = "rdma"))]
-fn main() {}
+fn main() {
+    println!("cargo:rustc-check-cfg=cfg(unsupported_native_target)");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        #[cfg(feature = "rdma")]
+        build_port_shim();
+    } else if cfg!(any(feature = "cuda", feature = "rdma")) {
+        println!("cargo:rustc-cfg=unsupported_native_target");
+    }
+}
 
 #[cfg(feature = "rdma")]
-fn main() {
+fn build_port_shim() {
     use std::{env, fs, path::PathBuf};
 
     const HEADER: &str = "src/transport/rdma/sys/port.h";

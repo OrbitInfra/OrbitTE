@@ -153,7 +153,7 @@ let policy = requester.resolve_qos(&QosRequestContext {
     requested_priority: Priority::Low,
 })?;
 assert_eq!(policy.effective_priority(), Priority::High);
-// Set TransferRequest::qos to Some(policy.clone()) for repeated submissions.
+// Use request.with_qos(policy.clone()) for repeated submissions.
 # Ok::<(), orbit_te::Error>(())
 ```
 
@@ -634,7 +634,7 @@ invalidate existing status/free operations or claim that a remote ACK was read.
 
 One submission can alternate explicit `Transport::Rdma` GPU Direct requests and
 `Transport::Tcp` GPU staging requests. Configure RDMA `cuda_memory=Direct` and
-set `TransferRequest.remote_staging=false` for these ordinary transfers. Each
+use the constructor's default staging setting for these ordinary transfers. Each
 request keeps its own transport and checked
 local/remote ranges; requests execute in input order. A completed RDMA operation
 releases its range loan before the next CUDA copy. The TCP copy drains its event

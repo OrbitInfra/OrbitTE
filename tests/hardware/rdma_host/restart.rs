@@ -69,17 +69,13 @@ fn stale(
             TransferOp::Write
         },
         old,
-        &[TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: Transport::Rdma,
-            local_address: memory.base_address()
-                + if case.read { case.destination() } else { GUARD } as u64,
-            remote_address: old.regions()[0].base_address()
+        &[TransferRequest::new(
+            Transport::Rdma,
+            memory.base_address() + if case.read { case.destination() } else { GUARD } as u64,
+            old.regions()[0].base_address()
                 + if case.read { GUARD } else { case.destination() } as u64,
-            length: case.payload,
-        }],
+            case.payload,
+        )],
         TIMEOUT,
     )?;
     let failure = report.failure.ok_or("stale request succeeded")?;

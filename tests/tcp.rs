@@ -22,15 +22,12 @@ fn request(
     remote_offset: usize,
     length: usize,
 ) -> TransferRequest {
-    TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: orbit_te::Transport::Tcp,
-        local_address: local.base_address() + local_offset as u64,
-        remote_address: remote.base_address() + remote_offset as u64,
+    TransferRequest::new(
+        orbit_te::Transport::Tcp,
+        local.base_address() + local_offset as u64,
+        remote.base_address() + remote_offset as u64,
         length,
-    }
+    )
 }
 
 fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
@@ -39,6 +36,39 @@ fn region(peer: &RemoteSegment, id: u64) -> orbit_te::RemoteRegion {
         .iter()
         .find(|region| region.id() == id)
         .expect("exported registration")
+}
+
+#[test]
+fn request_options_preserve_the_selected_transport_and_ranges() {
+    use orbit_te::{Priority, Transport};
+
+    let request = TransferRequest::new(Transport::Rdma, 3, 17, 8);
+    assert_eq!(request.priority, Priority::High);
+    assert!(request.qos.is_none());
+    assert!(!request.remote_staging);
+
+    let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    let policy = engine.resolve_qos(&Default::default()).unwrap();
+    let request = request
+        .with_qos(policy)
+        .with_priority(Priority::Low)
+        .with_remote_staging(true);
+    assert_eq!(
+        (
+            request.transport,
+            request.local_address,
+            request.remote_address,
+            request.length
+        ),
+        (Transport::Rdma, 3, 17, 8)
+    );
+    assert_eq!(request.priority, Priority::Low);
+    assert!(request.qos.is_some());
+    assert!(request.remote_staging);
+    let request = request.with_qos(None).with_remote_staging(false);
+    assert!(request.qos.is_none());
+    assert!(!request.remote_staging);
+    assert_eq!(request.priority, Priority::Low);
 }
 
 #[test]
@@ -175,15 +205,12 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
             false,
         ),
     ] {
-        let invalid = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: orbit_te::Transport::Tcp,
+        let invalid = TransferRequest::new(
+            orbit_te::Transport::Tcp,
             local_address,
             remote_address,
             length,
-        };
+        );
         let error = requester
             .submit_and_wait(TransferOp::Write, &peer, &[valid.clone(), invalid], TIMEOUT)
             .unwrap_err();
@@ -457,24 +484,18 @@ fn two_process_restart_fences_old_authority() {
     let remote = region(&peer, process.region);
     assert_eq!(remote.base_address(), process.address);
     let requests = [
-        TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: orbit_te::Transport::Tcp,
-            local_address: local.base_address(),
-            remote_address: process.address + 8192,
-            length: 512,
-        },
-        TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: orbit_te::Transport::Tcp,
-            local_address: local.base_address() + 512,
-            remote_address: process.address + 16384,
-            length: 512,
-        },
+        TransferRequest::new(
+            orbit_te::Transport::Tcp,
+            local.base_address(),
+            process.address + 8192,
+            512,
+        ),
+        TransferRequest::new(
+            orbit_te::Transport::Tcp,
+            local.base_address() + 512,
+            process.address + 16384,
+            512,
+        ),
     ];
     let report = requester
         .submit_and_notify(
@@ -510,15 +531,12 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_notify(
                 TransferOp::Write,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: orbit_te::Transport::Tcp,
-                    local_address: local.base_address(),
-                    remote_address: process.address + 128,
-                    length: 256
-                }],
+                &[TransferRequest::new(
+                    orbit_te::Transport::Tcp,
+                    local.base_address(),
+                    process.address + 128,
+                    256
+                )],
                 &Notification {
                     name: "write".into(),
                     message: "256".into()
@@ -572,15 +590,12 @@ fn two_process_restart_fences_old_authority() {
             .submit_and_wait(
                 TransferOp::Read,
                 &refreshed,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: false,
-                    transport: orbit_te::Transport::Tcp,
-                    local_address: local.base_address(),
-                    remote_address: replacement.address,
-                    length: 256
-                }],
+                &[TransferRequest::new(
+                    orbit_te::Transport::Tcp,
+                    local.base_address(),
+                    replacement.address,
+                    256
+                )],
                 TIMEOUT
             )
             .unwrap()

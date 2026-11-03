@@ -29,6 +29,8 @@ pub(super) enum Source {
 }
 
 // Registration::stop serializes with get/ACK before the native owner can close.
+// SAFETY: Registrations hold their native sources until the monitor has detached; the monitor
+// serializes event access.
 unsafe impl Send for Source {}
 
 impl Source {
@@ -74,11 +76,15 @@ impl Source {
                     ..
                 } => {
                     let mut event = sys::AsyncEvent::default();
+                    // SAFETY: The async registration keeps its device context alive and
+                    // supplies writable event storage.
                     let code = unsafe { (verbs.get)(context.as_ptr(), &mut event) };
                     if code == 0 {
                         if !events::port_event(event.kind) || event.port == *port {
                             state.event(event.kind);
                         }
+                        // SAFETY: The successful get filled this event for the same live
+                        // context; acknowledge it once.
                         unsafe { (verbs.ack)(context.as_ptr(), &mut event) };
                         counters
                             .acknowledged_async_events
@@ -88,11 +94,15 @@ impl Source {
                 }
                 Self::Completion { channel, verbs, .. } => {
                     let mut cq = std::ptr::null_mut();
+                    // SAFETY: The registered event channel remains open and cq is writable
+                    // output for one event.
                     let code = unsafe { (verbs.get)(channel.as_ptr(), &mut cq) };
                     if code == 0 {
                         if cq.is_null() {
                             return Err(libc::EPROTO);
                         }
+                        // SAFETY: The successful get returned this event's live CQ and exactly
+                        // one acknowledgement is owed.
                         unsafe { (verbs.ack)(cq) };
                         counters.completion_events.fetch_add(1, Ordering::Relaxed);
                     }
@@ -220,6 +230,7 @@ impl Shared {
             }
             let timeout = next_reclaim.saturating_duration_since(Instant::now());
             let milliseconds = timeout.as_millis().saturating_add(1).min(1000) as i32;
+            // SAFETY: fds is a writable array of exactly the pollfd count passed to poll.
             let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, milliseconds) };
             if ready < 0 {
                 if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {

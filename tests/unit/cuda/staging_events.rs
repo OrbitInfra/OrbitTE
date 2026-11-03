@@ -46,15 +46,13 @@ fn completed_slot_refills_while_another_generation_stays_not_ready() {
                     .submit_async(
                         operation,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: true,
+                        &[TransferRequest::new(
                             transport,
-                            local_address: base as u64,
-                            remote_address: remote.base_address() + 1,
-                            length: 14,
-                        }],
+                            base as u64,
+                            remote.base_address() + 1,
+                            14,
+                        )
+                        .with_remote_staging(true)],
                         None,
                         Duration::from_secs(5),
                     )
@@ -169,15 +167,13 @@ fn not_ready_followed_by_context_restore_failure_retains_actual_owners() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Tcp,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(5),
             )

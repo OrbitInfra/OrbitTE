@@ -238,18 +238,15 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
 }
 
 fn fault_request(engine: &TransferEngine, peer: &RemoteSegment) -> TransferRequest {
-    TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: crate::Transport::Tcp,
-        local_address: engine
+    TransferRequest::new(
+        crate::Transport::Tcp,
+        engine
             .register_memory(vec![7; 8].into_boxed_slice(), Permission::LocalOnly)
             .unwrap()
             .base_address(),
-        remote_address: peer.regions[0].base_address(),
-        length: 8,
-    }
+        peer.regions[0].base_address(),
+        8,
+    )
 }
 
 #[test]
@@ -745,15 +742,12 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
     let local = engine
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
-    let request = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: crate::Transport::Tcp,
-        local_address: local.base_address(),
-        remote_address: peer.regions[0].base_address(),
-        length: 8,
-    };
+    let request = TransferRequest::new(
+        crate::Transport::Tcp,
+        local.base_address(),
+        peer.regions[0].base_address(),
+        8,
+    );
     let requester = {
         let engine = Arc::clone(&engine);
         let peer = peer.clone();
@@ -841,15 +835,12 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
         let local = engine
             .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
             .unwrap();
-        let request = TransferRequest {
-            qos: None,
-            priority: Default::default(),
-            remote_staging: false,
-            transport: crate::Transport::Tcp,
-            local_address: local.base_address(),
-            remote_address: peer.regions[0].base_address(),
-            length: 8,
-        };
+        let request = TransferRequest::new(
+            crate::Transport::Tcp,
+            local.base_address(),
+            peer.regions[0].base_address(),
+            8,
+        );
         let mut batch = engine.allocate_batch(2).unwrap();
         batch
             .submit(
@@ -994,15 +985,12 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     let local = engine
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
         .unwrap();
-    let request = TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: false,
-        transport: crate::Transport::Tcp,
-        local_address: local.base_address(),
-        remote_address: peer.regions[0].base_address(),
-        length: 8,
-    };
+    let request = TransferRequest::new(
+        crate::Transport::Tcp,
+        local.base_address(),
+        peer.regions[0].base_address(),
+        8,
+    );
     let mut batch = engine.allocate_batch(2).unwrap();
     batch
         .submit(

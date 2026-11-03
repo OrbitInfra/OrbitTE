@@ -388,6 +388,8 @@ fn batch_rejects_foreign_alias_locks_before_publication_or_reference_changes() {
         // SAFETY: this negative-control wrapper retains the real owner and is
         // never dereferenced. Its registration must fail before publication.
         let conflicting = Arc::new(
+            // SAFETY: The supplied owner keeps the allocation at this exact address and length
+            // throughout the test.
             unsafe { HostMemory::from_raw_parts(address, 16, fixture.owner.upgrade().unwrap()) }
                 .unwrap(),
         );

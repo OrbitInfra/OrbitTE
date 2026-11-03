@@ -22,6 +22,8 @@ fn native(owner: &RdmaContext, apply: impl FnOnce(&FakeDevice)) {
     let State::Open(resources) = &*state else {
         panic!("closed context");
     };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     apply(unsafe { &*resources.handles.context.cast::<FakeDevice>() });
 }
 
@@ -413,6 +415,8 @@ unsafe fn query_port_speed(
     handles: *const sys::DeviceHandles,
     _: u8,
 ) -> crate::Result<Option<u64>> {
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     let mut state = device.effective_speed.lock().unwrap();
     state.2 += 1;

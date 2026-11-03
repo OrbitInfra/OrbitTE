@@ -16,6 +16,8 @@ pub(crate) fn events(runtime: &RdmaTransport) -> Arc<Mutex<Vec<&'static str>>> {
     let State::Open(resources) = &*state else {
         panic!("device is not open");
     };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.events)
 }
 
@@ -26,6 +28,8 @@ pub(crate) fn after_open(runtime: &RdmaTransport, hook: impl FnOnce() + Send + '
     let State::Open(resources) = &*state else {
         panic!("device is not open");
     };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     let device = unsafe { &*resources.handles.context.cast::<FakeDevice>() };
     assert!(
         device
@@ -48,6 +52,8 @@ pub(in crate::transport::rdma) fn pause_device(
     let State::Open(resources) = &*state else {
         panic!("device is not open");
     };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.pause)
 }
 
@@ -292,6 +298,8 @@ pub(crate) fn emit_async(runtime: &RdmaTransport, kind: u8) {
     let State::Open(resources) = &*state else {
         panic!("device is not open");
     };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     unsafe { &*resources.handles.context.cast::<FakeDevice>() }.emit_async(kind);
 }
 
@@ -553,15 +561,12 @@ fn reused_grant_exhaustion_and_pre_open_async_fault_preserve_its_creating_identi
                 .submit_and_wait(
                     TransferOp::Read,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address(),
-                        remote_address: remote.base_address(),
-                        length: 8,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address(),
+                        remote.base_address(),
+                        8
+                    )],
                     Duration::from_secs(3)
                 )
                 .unwrap()
@@ -674,6 +679,8 @@ pub(in crate::transport::rdma) fn change_route(
     };
     let mut route = resources.address.clone();
     change(&mut route);
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     *unsafe { &*resources.handles.context.cast::<FakeDevice>() }
         .route
         .lock()
@@ -716,6 +723,8 @@ fn every_frozen_route_field_fences_the_same_pd_permanently() {
         };
         assert_eq!(resources.domain, domain);
         assert_eq!(runtime.stats().unwrap().opened_devices, 1);
+        // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps
+        // it alive for the borrow.
         *unsafe { &*resources.handles.context.cast::<FakeDevice>() }
             .route
             .lock()
@@ -799,7 +808,11 @@ unsafe extern "C" fn probe_open(
     handles: *mut sys::DeviceHandles,
     name: *const std::ffi::c_char,
 ) -> i32 {
+    // SAFETY: The wrapper forwards writable device handles and a live NUL-terminated name to the
+    // fixture opener.
     let code = unsafe { super::super::tests::open_device(handles, name) };
+    // SAFETY: The fixture stores a boxed FakeDevice in this handle; the context owner keeps it
+    // alive for the borrow.
     let device = unsafe { &*(*handles).context.cast::<FakeDevice>() };
     PROBES.with(|probes| {
         probes

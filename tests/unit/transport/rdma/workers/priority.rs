@@ -59,6 +59,8 @@ unsafe extern "C" fn post(
     } else {
         &fixture::VERBS
     };
+    // SAFETY: The posting record retains its QP, MR and buffers; the request array and result
+    // slot live throughout the provider call.
     unsafe {
         (verbs.post)(
             handles, memory, requests, count, local, length, remote, rkey, write, result,
@@ -221,19 +223,17 @@ fn public_single_and_sliced_requests_preserve_priority_before_native_post() {
         let peer = requester
             .open_segment(source.endpoint(), source.source_epoch(), timeout)
             .unwrap();
-        let request = TransferRequest {
-            qos: (lanes == 2).then(|| {
-                requester
-                    .resolve_qos(&crate::QosRequestContext::default())
-                    .unwrap()
-            }),
-            priority: Priority::High,
-            remote_staging: false,
-            transport: Transport::Rdma,
-            local_address: local.base_address(),
-            remote_address: remote.base_address(),
-            length: 8,
-        };
+        let request = TransferRequest::new(
+            Transport::Rdma,
+            local.base_address(),
+            remote.base_address(),
+            8,
+        )
+        .with_qos((lanes == 2).then(|| {
+            requester
+                .resolve_qos(&crate::QosRequestContext::default())
+                .unwrap()
+        }));
         for transport in [Transport::Tcp, Transport::Nvlink] {
             let mut unsupported = request.clone();
             unsupported.transport = transport;
@@ -388,6 +388,8 @@ fn promotion_preserves_tier_fifo_across_context_rotation_and_recollection() {
                 // without invoking the real worker's detach protocol.
                 for lane in self.0.drain(..) {
                     let mut snapshot = std::mem::ManuallyDrop::new(lane);
+                    // SAFETY: ManuallyDrop suppresses the lane destructor; each initialized owned
+                    // field is dropped exactly once.
                     unsafe {
                         std::ptr::drop_in_place(&mut snapshot.records);
                         std::ptr::drop_in_place(&mut snapshot.state);
@@ -473,6 +475,8 @@ fn event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe() {
         struct Remove(std::ffi::CString);
         impl Drop for Remove {
             fn drop(&mut self) {
+                // SAFETY: The fixture owns the NUL-terminated shared-memory name for the duration
+                // of the call.
                 unsafe {
                     libc::shm_unlink(self.0.as_ptr());
                 }
@@ -484,6 +488,7 @@ fn event_worker_wakes_for_promotion_and_shared_slots_without_a_cqe() {
             tv_nsec: 0,
         };
         assert_eq!(
+            // SAFETY: clock is writable timespec storage for the monotonic clock sample.
             unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut clock) },
             0
         );

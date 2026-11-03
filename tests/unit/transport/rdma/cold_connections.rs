@@ -54,15 +54,12 @@ fn simultaneous_first_parents_wait_for_fixed_width_then_share_without_reopening(
                 for parent in 0..PARENTS {
                     let requester = Arc::clone(&requester);
                     let peer = peer.clone();
-                    let request = TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: false,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + (parent * LENGTH) as u64,
-                        remote_address: remote.base_address() + (parent * LENGTH) as u64,
-                        length: LENGTH,
-                    };
+                    let request = TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + (parent * LENGTH) as u64,
+                        remote.base_address() + (parent * LENGTH) as u64,
+                        LENGTH,
+                    );
                     handles.push(thread::spawn(move || {
                         requester
                             .submit_and_wait(operation, &peer, &[request], WAIT)
@@ -223,15 +220,12 @@ fn simultaneous_bidirectional_first_contact_does_not_wait_on_the_opposite_role()
             let engine = Arc::clone(engine);
             let peer = peer.clone();
             let start = Arc::clone(&start);
-            let request = TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: local.base_address() + (parent * LENGTH) as u64,
-                remote_address: remote.base_address() + (parent * LENGTH) as u64,
-                length: LENGTH,
-            };
+            let request = TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + (parent * LENGTH) as u64,
+                remote.base_address() + (parent * LENGTH) as u64,
+                LENGTH,
+            );
             handles.push(thread::spawn(move || {
                 start.wait();
                 engine

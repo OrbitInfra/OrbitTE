@@ -107,15 +107,13 @@ fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
     });
     let retained = matches!(outcome, Outcome::Retain)
         || (registration && !matches!(outcome, Outcome::Complete));
-    let requests = [TransferRequest {
-        qos: None,
-        priority: Default::default(),
-        remote_staging: true,
-        transport: Transport::Rdma,
-        local_address: local.base_address() + 2,
-        remote_address: remote.base_address() + 1,
-        length: 41,
-    }];
+    let requests = [TransferRequest::new(
+        Transport::Rdma,
+        local.base_address() + 2,
+        remote.base_address() + 1,
+        41,
+    )
+    .with_remote_staging(true)];
     let mut batch = requester
         .submit_async(
             operation,
@@ -209,7 +207,9 @@ fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
         } else {
             expected_a[1..42].copy_from_slice(&local_bytes[2..43]);
         }
+        // SAFETY: The completed batch finished its shim copies before this byte check.
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &expected_a);
+        // SAFETY: The completed batch finished its shim copies before this byte check.
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &expected_b);
         for engine in [&*requester, &source] {
             let stats = engine.stats().unwrap().rdma.unwrap();
@@ -276,7 +276,9 @@ fn pending_cross(operation: TransferOp, outcome: Outcome, registration: bool) {
             stats.grant_credits,
             usize::from(matches!(outcome, Outcome::Retain))
         );
+        // SAFETY: The failed grant never authorized payload access to these device bytes.
         assert_eq!(unsafe { &*a.bytes.get() }.as_ref(), &source_bytes);
+        // SAFETY: The failed grant never authorized payload access to these device bytes.
         assert_eq!(unsafe { &*b.bytes.get() }.as_ref(), &local_bytes);
         drop(cold.take());
         if retained {

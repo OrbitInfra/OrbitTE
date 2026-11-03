@@ -206,6 +206,8 @@ impl CopyStream {
         });
         if let Err(error) = result {
             // An old event cannot prove a failed submit/record drained.
+            // SAFETY: The copy stream is still owned in its current context and its buffers
+            // remain held while it drains.
             let drained = unsafe { (self.context.driver.stream_synchronize)(stream.as_ptr()) };
             if drained != SUCCESS {
                 return Err(Error::Unquiesced {
@@ -260,12 +262,16 @@ impl CopyStream {
             // Destroy is cleanup, not proof of DMA completion. Clear each
             // handle only after its release; a failed attempt is never repeated.
             if let Some(event) = self.event {
+                // SAFETY: The copy is quiescent; this owner holds the event and its current
+                // context through the single destroy attempt.
                 check("cuEventDestroy", unsafe {
                     (context.driver.event_destroy)(event.as_ptr())
                 })?;
                 self.event = None;
             }
             if let Some(stream) = self.stream {
+                // SAFETY: The copy is quiescent; this owner holds the stream and its current
+                // context through the single destroy attempt.
                 check("cuStreamDestroy", unsafe {
                     (context.driver.stream_destroy)(stream.as_ptr())
                 })?;

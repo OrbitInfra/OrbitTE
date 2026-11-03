@@ -24,6 +24,7 @@ struct Snapshot {
 }
 
 type Command = unsafe extern "C" fn(u32, u32, *mut Snapshot) -> i32;
+// SAFETY: dlsym uses the platform loader ABI with an opaque handle and a NUL-terminated C name.
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
@@ -152,17 +153,13 @@ pub(super) fn run(case: &Case) -> Result<()> {
                 TransferOp::Write
             },
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: false,
-                transport: Transport::Rdma,
-                local_address: memory.base_address()
-                    + if case.read { case.destination() } else { GUARD } as u64,
-                remote_address: peer.regions()[0].base_address()
+            &[TransferRequest::new(
+                Transport::Rdma,
+                memory.base_address() + if case.read { case.destination() } else { GUARD } as u64,
+                peer.regions()[0].base_address()
                     + if case.read { GUARD } else { case.destination() } as u64,
-                length: case.payload,
-            }],
+                case.payload,
+            )],
             None,
             TIMEOUT,
         )?;

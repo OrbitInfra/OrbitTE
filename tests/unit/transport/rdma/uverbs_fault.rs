@@ -52,8 +52,12 @@ pub(super) fn deny_commands(fd: libc::c_int) {
         filter: instructions.as_mut_ptr(),
     };
     assert_eq!(
+        // SAFETY: This prctl operation takes only integer arguments and applies to the current
+        // test thread.
         unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
         0
     );
+    // SAFETY: The program and its instruction buffer remain valid while the kernel copies the
+    // seccomp filter.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_SECCOMP, 2, &program) }, 0);
 }

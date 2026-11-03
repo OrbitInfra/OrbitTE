@@ -7,7 +7,7 @@ pub(super) struct ExhaustedWindow {
     index: u32,
 }
 
-// The context mutex serializes these never-bound MWs; their actual PD outlives them.
+// SAFETY: The context mutex serializes these never-bound MWs; their actual PD outlives them.
 unsafe impl Send for ExhaustedWindow {}
 
 impl Resources {

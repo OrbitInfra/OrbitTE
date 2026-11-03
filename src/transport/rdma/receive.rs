@@ -61,6 +61,8 @@ impl MessageBuffer {
         verbs: &sys::Verbs,
     ) -> std::result::Result<(), (&'static str, i32)> {
         if !self.handles.mr.is_null() {
+            // SAFETY: The receive owner retains the registered message backing until
+            // deregistration succeeds.
             let code = unsafe { (verbs.deregister)(&mut self.handles) };
             if code != 0 {
                 return Err(("ibv_dereg_mr completion message", code));

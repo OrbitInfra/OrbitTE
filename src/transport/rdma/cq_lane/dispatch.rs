@@ -162,6 +162,8 @@ impl ProgressState {
         let owner = Arc::clone(&resources.connection);
         let mut connection = owner.retiring();
         let posted_at = Instant::now();
+        // SAFETY: The locked record retains its QP, registration, message buffers and work
+        // descriptors through the post.
         let code = unsafe {
             match work.operation {
                 slice::Operation::Read | slice::Operation::Write => (self.verbs.post)(

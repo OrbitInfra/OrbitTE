@@ -29,7 +29,9 @@ unsafe extern "C" fn post(
     _: usize,
     result: *mut sys::PostResult,
 ) -> i32 {
+    // SAFETY: The connection supplies a live QP handle slot for the callback.
     let mode = unsafe { (*handles).qp as usize };
+    // SAFETY: The posting owner supplies a writable PostResult slot for the simulated outcome.
     unsafe {
         *result = sys::PostResult {
             accepted: usize::from(mode == 0),

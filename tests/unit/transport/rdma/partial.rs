@@ -22,13 +22,18 @@ struct Provider {
 static PROVIDER: OnceLock<Mutex<Option<Provider>>> = OnceLock::new();
 
 unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char) -> c_int {
+    // SAFETY: The context constructor supplies initialized handle storage and a live device-name
+    // C string.
     let code = unsafe { (sys::REAL.open_device)(h, name) };
     if code == 0 {
+        // SAFETY: The device owner keeps this context handle slot valid through the callback.
         let context = unsafe { (*h).context.cast::<ffi::ibv_context>() };
         let mut state = PROVIDER.get_or_init(Default::default).lock().unwrap();
         assert!(state.is_none());
         *state = Some(Provider {
             context: context as usize,
+            // SAFETY: The open provider context owns this initialized operations table and
+            // outlives the saved callback.
             post: unsafe { (*context).ops.post_send.unwrap() },
             calls: 0,
             restored: false,
@@ -36,6 +41,8 @@ unsafe extern "C" fn open_device(h: *mut sys::DeviceHandles, name: *const c_char
         });
         // This context is private to the exact native test. Install before any
         // event/progress worker starts; all other provider operations stay native.
+        // SAFETY: The fixture controls this context and installs or restores its callback before
+        // concurrent provider use.
         unsafe { (*context).ops.post_send = Some(post_send) };
     }
     code
@@ -49,11 +56,14 @@ unsafe extern "C" fn post_send(
     let post = {
         let mut state = PROVIDER.get().unwrap().lock().unwrap();
         let provider = state.as_mut().unwrap();
+        // SAFETY: The live QP or MR retains the device context while this callback inspects it.
         assert_eq!(unsafe { (*qp).context } as usize, provider.context);
         assert_eq!(provider.calls, 0, "a failed WRITE must never be replayed");
         provider.calls += 1;
         provider.post
     };
+    // SAFETY: The provider lends the linked WRs and writable bad-WR pointer through this
+    // post_send callback.
     unsafe {
         let second = (*first).next;
         assert!(!second.is_null() && !(*second).next.is_null());
@@ -79,12 +89,16 @@ unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
     {
         let mut state = PROVIDER.get().unwrap().lock().unwrap();
         let provider = state.as_mut().unwrap();
+        // SAFETY: The device owner keeps this context handle slot valid through the callback.
         let context = unsafe { (*h).context.cast::<ffi::ibv_context>() };
         assert_eq!(context as usize, provider.context);
         // RdmaContext joins its children before closing the native context.
+        // SAFETY: The fixture controls this context and installs or restores its callback before
+        // concurrent provider use.
         unsafe { (*context).ops.post_send = Some(provider.post) };
         provider.restored = true;
     }
+    // SAFETY: The retiring context supplies its own live handles for this close attempt.
     let code = unsafe { (sys::REAL.close_device)(h) };
     if code == 0 {
         PROVIDER

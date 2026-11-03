@@ -115,7 +115,7 @@ impl Drop for Staging {
     }
 }
 
-// Grant state is serialized by its record; connection calls also lock the shared QP.
+// SAFETY: Grant state is serialized by its record; connection calls also lock the shared QP.
 unsafe impl Send for GrantResources {}
 
 pub(super) struct GrantResources {
@@ -167,6 +167,8 @@ impl GrantResources {
             return Err((operation, code));
         }
         if !self.handles.mw.is_null() {
+            // SAFETY: The grant owns this window and its PD throughout teardown, including a
+            // failed deallocation.
             let code = unsafe { (verbs.dealloc_window)(&mut self.handles) };
             if code != 0 {
                 return Err(("ibv_dealloc_mw", code));
@@ -184,6 +186,8 @@ impl GrantResources {
             })?;
             self.handles.mr = std::ptr::null_mut();
         } else {
+            // SAFETY: The grant owns the registration and its backing until deregistration
+            // succeeds.
             let code = unsafe { (verbs.deregister)(&mut self.handles) };
             if code != 0 {
                 return Err(("ibv_dereg_mr", code));

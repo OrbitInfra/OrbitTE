@@ -6,6 +6,11 @@ current installed v23 hardware execution. The receiver-window and resource-owner
 source gates are recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows)
 and [staging/consumer owner credits](#staging-and-consumer-owner-credits).
 
+The source CI builds public request consumers with the default, `rdma`,
+`cuda` and combined features on Linux. On a non-Linux target it checks the
+CPU-only build and the explicit rejection of each native feature combination.
+These compile checks do not exercise devices.
+
 Qualification belongs to an exact source, artifact and execution profile.
 The [capability matrix](capabilities.md) describes current behavior; the
 [completion plan](completion-plan.md#p4-remaining-delivery) is the only queue
@@ -42,7 +47,8 @@ request's remote-staging choice. One engine/batch can mix GPU Direct RDMA and
 Pin/Delegate/Unpin over TCP/RDMA. Private host grants retain their existing host
 registration policy, per-context lazy MR reuse and session retirement; source
 epoch/range/permission/allocation checks remain authoritative. Wire v21 is
-unchanged. The public `TransferRequest` gains a required `remote_staging` field;
+unchanged. That revision added the per-request `remote_staging` field. Current
+callers opt in with `.with_remote_staging(true)`;
 see [selection and caller migration](staging.md#serial-remote-staging).
 
 One six-branch public control covers READ/WRITE with remote TCP, RDMA host Staged

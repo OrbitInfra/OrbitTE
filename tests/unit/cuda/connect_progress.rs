@@ -56,15 +56,13 @@ fn partial_pin(operation: TransferOp, stop: bool) {
         .submit_async(
             operation,
             &peer,
-            &[TransferRequest {
-                qos: None,
-                priority: Default::default(),
-                remote_staging: true,
-                transport: Transport::Tcp,
-                local_address: local.base_address() + 2,
-                remote_address: remote.base_address() + 1,
-                length: 17,
-            }],
+            &[TransferRequest::new(
+                Transport::Tcp,
+                local.base_address() + 2,
+                remote.base_address() + 1,
+                17,
+            )
+            .with_remote_staging(true)],
             None,
             if stop {
                 Duration::from_secs(10)
@@ -192,15 +190,13 @@ fn pin_error_and_invalid_negotiation_never_wait_for_a_success_tail_or_start_cros
             .submit_async(
                 TransferOp::Write,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Tcp,
-                    local_address: local.base_address(),
-                    remote_address: remote.base_address(),
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    local.base_address(),
+                    remote.base_address(),
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(10),
             )
@@ -320,15 +316,13 @@ fn native_socket_stop_drains_accepted_cross_and_preserves_cleanup_uncertainty() 
                 .submit_async(
                     TransferOp::Read,
                     &peer,
-                    &[TransferRequest {
-                        qos: None,
-                        priority: Default::default(),
-                        remote_staging: true,
-                        transport: Transport::Rdma,
-                        local_address: local.base_address() + 2,
-                        remote_address: remote.base_address() + 1,
-                        length: 17,
-                    }],
+                    &[TransferRequest::new(
+                        Transport::Rdma,
+                        local.base_address() + 2,
+                        remote.base_address() + 1,
+                        17,
+                    )
+                    .with_remote_staging(true)],
                     None,
                     Duration::from_secs(10),
                 )

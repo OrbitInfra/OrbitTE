@@ -49,6 +49,8 @@ struct Resources {
 impl Resources {
     fn refresh_port_speed(&self, verbs: &sys::Verbs, address: &mut RdmaAddress) {
         let observed = match verbs.query_port_speed {
+            // SAFETY: The open Resources owns the device handle for the duration of the port
+            // query.
             Some(query) => unsafe { query(&self.handles, address.port) },
             None => Ok(None),
         };
@@ -127,6 +129,8 @@ impl RdmaContext {
             // SAFETY: RdmaContext retains initialized handles even on partial open.
             let code = unsafe { (verbs.open_device)(&mut resources.handles, name.as_ptr()) };
             check("ibverbs device construction", code).and_then(|()| {
+                // SAFETY: open_device succeeded and the context state lock holds its handles
+                // open during discovery.
                 let mut observed = unsafe {
                     (verbs.query_address)(
                         &resources.handles,
@@ -205,6 +209,8 @@ impl RdmaContext {
         } else {
             Some(resources.address.gid_index)
         };
+        // SAFETY: The locked Open state owns the device handles and address for the entire
+        // query.
         let observed = unsafe {
             (self.verbs.query_address)(&resources.handles, &resources.address, gid_index)
         };
@@ -248,6 +254,8 @@ impl RdmaContext {
 
     fn verify_address(&self, resources: &Resources) -> Result<()> {
         self.asynchronous.check()?;
+        // SAFETY: The borrowed Open resources keep the context and its selected address live
+        // during verification.
         let observed = unsafe {
             (self.verbs.query_address)(
                 &resources.handles,
@@ -293,6 +301,8 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.verify_address(resources)?;
+        // SAFETY: The context lock pins the device while the endpoint owner supplies its live
+        // QP and both descriptors.
         check("ibv_modify_qp RTR/RTS", unsafe {
             (self.verbs.connect)(
                 handles,
@@ -322,6 +332,8 @@ impl RdmaContext {
         self.asynchronous.check_device()?;
         // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
         memory.with_rdma_context(|| {
+            // SAFETY: The registration owner retains the exact allocation and the locked Open
+            // state holds its protection domain.
             check("ibv_reg_mr", unsafe {
                 (self.verbs.register_memory)(
                     handles,
@@ -359,6 +371,8 @@ impl RdmaContext {
             async_fd: resources.handles.async_fd,
         };
         // The send grant or physical RQ owns these bytes through native teardown.
+        // SAFETY: The message owner keeps its buffer live through deregistration; the locked
+        // context supplies the PD.
         check("ibv_reg_mr completion message", unsafe {
             (self.verbs.register_memory)(handles, &device, address.as_ptr().cast(), length, false)
         })
@@ -377,6 +391,8 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.asynchronous.check()?;
+        // SAFETY: The locked context outlives the channel and the channel owner provides
+        // writable output handles.
         check("ibv_create_comp_channel", unsafe {
             (verbs.create)(handles, &resources.handles)
         })
@@ -454,6 +470,8 @@ impl RdmaContext {
                     .grant
                     .as_mut()
                     .ok_or(Error::Internal("missing reused grant"))?;
+                // SAFETY: The locked context owns the PD; the endpoint and grant supply live,
+                // exclusively borrowed handle slots.
                 unsafe {
                     (self.verbs.prepare_grant)(
                         &mut connection.handles,
@@ -469,6 +487,8 @@ impl RdmaContext {
                     .grant
                     .as_mut()
                     .ok_or(Error::Internal("missing new grant"))?;
+                // SAFETY: The endpoint owner retains the native CQ, connection and registration
+                // through construction or cleanup.
                 unsafe {
                     (self.verbs.open)(
                         &mut connection.handles,

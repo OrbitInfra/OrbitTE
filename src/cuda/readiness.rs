@@ -53,6 +53,8 @@ impl CallerSyncEvent {
             }
             context.current(|| {
                 let mut capture = sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE;
+                // SAFETY: The caller retains the stream and its context was verified above;
+                // capture is writable.
                 check("cuStreamIsCapturing producer", unsafe {
                     (context.driver.stream_capture)(stream, &mut capture)
                 })?;
@@ -61,6 +63,8 @@ impl CallerSyncEvent {
                 }
                 if self.event.is_none() {
                     let mut event = std::ptr::null_mut();
+                    // SAFETY: The retained context is current and event is writable storage for
+                    // the new handle.
                     let code = unsafe {
                         (context.driver.event_create)(
                             &mut event,
@@ -74,10 +78,14 @@ impl CallerSyncEvent {
                 let event = self
                     .event
                     .ok_or(Error::Internal("CUDA producer event missing"))?;
+                // SAFETY: The event and the caller-held stream belong to the same current
+                // context.
                 let code = unsafe { (context.driver.event_record)(event.as_ptr(), stream) };
                 if code != SUCCESS {
                     // Only this original thread can recover a special stream.
                     // Never synchronize an older event generation after failure.
+                    // SAFETY: The caller retains the original stream on this producer thread
+                    // throughout recovery.
                     check("cuStreamSynchronize producer recovery", unsafe {
                         (context.driver.stream_synchronize)(stream)
                     })?;

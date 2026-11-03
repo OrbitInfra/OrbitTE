@@ -52,15 +52,13 @@ fn requester_refill_errors_drain_other_slots_and_preserve_effects() {
                     .submit_async(
                         operation,
                         &peer,
-                        &[TransferRequest {
-                            qos: None,
-                            priority: Default::default(),
-                            remote_staging: true,
+                        &[TransferRequest::new(
                             transport,
-                            local_address: local.base_address() + 2,
-                            remote_address: remote.base_address() + 1,
-                            length: 32,
-                        }],
+                            local.base_address() + 2,
+                            remote.base_address() + 1,
+                            32,
+                        )
+                        .with_remote_staging(true)],
                         None,
                         Duration::from_secs(5),
                     )
@@ -218,15 +216,13 @@ fn requester_context_restore_failure_retains_all_accepted_slots() {
             .submit_async(
                 operation,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    remote_staging: true,
-                    transport: Transport::Tcp,
-                    local_address: local.base_address() + 2,
-                    remote_address: remote.base_address() + 1,
-                    length: 8,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    local.base_address() + 2,
+                    remote.base_address() + 1,
+                    8,
+                )
+                .with_remote_staging(true)],
                 None,
                 Duration::from_secs(5),
             )
@@ -317,15 +313,13 @@ fn requester_native_copy_failure_drains_siblings_and_retains_range_and_admission
                         requester.submit_and_wait(
                             operation,
                             &peer,
-                            &[TransferRequest {
-                                qos: None,
-                                priority: Default::default(),
-                                remote_staging: true,
+                            &[TransferRequest::new(
                                 transport,
-                                local_address: local.base_address() + 2,
-                                remote_address: remote.base_address() + 1,
-                                length: 8,
-                            }],
+                                local.base_address() + 2,
+                                remote.base_address() + 1,
+                                8,
+                            )
+                            .with_remote_staging(true)],
                             Duration::from_secs(3),
                         )
                     });

@@ -19,6 +19,8 @@ impl Producer {
             context
                 .current(|| {
                     let mut stream = std::ptr::null_mut();
+                    // SAFETY: The producer context is current, and stream is writable storage for
+                    // the handle it will own.
                     check("test producer stream", unsafe {
                         (context.driver.stream_create)(&mut stream, 1)
                     })?;
@@ -36,6 +38,8 @@ impl Producer {
     fn enqueue(&self, address: u64, length: usize) {
         self.context
             .current(|| {
+                // SAFETY: The producer owns the host input and stream, and the fixture retains
+                // the destination range through the copy.
                 check("test producer enqueue", unsafe {
                     (self.context.driver.to_device)(
                         address,
@@ -49,6 +53,8 @@ impl Producer {
     }
 
     fn record(self: &Arc<Self>, memory: &CudaMemory) -> Result<()> {
+        // SAFETY: The producer owns this live stream and the cloned owner retains its copy inputs
+        // through completion.
         self.context.current(|| unsafe {
             memory.record_producer_stream(self.stream as *mut _, self.clone())
         })
@@ -67,6 +73,8 @@ fn cuda_producer_readiness_captures_calling_thread_generation_and_reuses_event()
             producer.record(&gpu).unwrap();
         } else {
             assert!(STACK.with(|s| s.borrow().is_empty()));
+            // SAFETY: The producer owns this live stream and the cloned owner retains its copy
+            // inputs through completion.
             unsafe { gpu.record_producer_stream(producer.stream as *mut _, producer.clone()) }
                 .unwrap();
         }
@@ -99,6 +107,8 @@ fn cuda_producer_readiness_captures_calling_thread_generation_and_reuses_event()
             let context = foreign_gpu.allocation.lock().unwrap().context.clone();
             context
                 .current(|| {
+                    // SAFETY: The producer owns this live stream and the cloned owner retains its
+                    // copy inputs through completion.
                     unsafe {
                         gpu.record_producer_stream(producer.stream as *mut _, producer.clone())
                     }?;
@@ -196,6 +206,8 @@ fn cuda_producer_readiness_is_consumed_by_copy_staging_ipc_and_dma_owners() {
             }
             _ => unreachable!(),
         }
+        // SAFETY: The tested path consumed the producer event and finished accessing this
+        // fixture allocation.
         let bytes = unsafe { &*device.bytes.get() };
         let mut expected = [0xa5; 64];
         expected[8..24].fill(0x57);
@@ -242,15 +254,12 @@ fn cuda_producer_readiness_orders_public_tcp_source_and_destination() {
             .submit_and_wait(
                 op,
                 &peer,
-                &[TransferRequest {
-                    qos: None,
-                    priority: Default::default(),
-                    transport: Transport::Tcp,
-                    remote_staging: false,
-                    local_address: host.base_address(),
-                    remote_address: remote.base_address() + 8,
-                    length: 16,
-                }],
+                &[TransferRequest::new(
+                    Transport::Tcp,
+                    host.base_address(),
+                    remote.base_address() + 8,
+                    16,
+                )],
                 Duration::from_secs(2),
             )
             .unwrap();
@@ -263,6 +272,8 @@ fn cuda_producer_readiness_orders_public_tcp_source_and_destination() {
         );
         let mut expected = [0xa5; 64];
         expected[8..24].fill(if op == TransferOp::Read { 0x57 } else { 0xcc });
+        // SAFETY: The TCP report confirms the transfer has drained; the Device still owns its
+        // backing.
         assert_eq!(&**unsafe { &*device.bytes.get() }, &expected);
         source.close(Duration::from_secs(2)).unwrap();
         requester.close(Duration::from_secs(2)).unwrap();
@@ -302,6 +313,8 @@ fn cuda_producer_failures_recover_only_original_stream_or_retain_real_owners() {
             let foreign = allocation(&[0; 32]);
             let foreign_gpu = memory(&foreign);
             let foreign_producer = Producer::new(&foreign_gpu, 0x77, false);
+            // SAFETY: The foreign producer keeps this stream live during context validation; the
+            // rejected stream is never enqueued.
             unsafe {
                 gpu.record_producer_stream(foreign_producer.stream as *mut _, producer.clone())
             }
@@ -343,6 +356,8 @@ fn cuda_producer_failures_recover_only_original_stream_or_retain_real_owners() {
         );
         drop(gpu);
         if fault == "drop" {
+            // SAFETY: The fixture has synchronized the producer stream before checking its
+            // original input bytes.
             assert_eq!(&unsafe { &*device.bytes.get() }[..16], &[0x57; 16]);
         }
         assert_eq!(weak_producer.upgrade().is_some(), uncertain, "{fault}");

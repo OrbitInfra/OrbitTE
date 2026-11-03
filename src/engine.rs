@@ -26,6 +26,7 @@ pub enum TransferOp {
 
 /// Explicit byte transport; unsupported hints fail before batch I/O.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Transport {
     Tcp,
     Rdma,
@@ -45,6 +46,7 @@ pub enum Priority {
 /// Absolute host/device addresses within active local and epoch-fenced peer ranges.
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TransferRequest {
     /// Pre-resolved engine-bound contract. None uses the engine's default/unspec
     /// contract, with `priority` as its fallback. Some captures its own requested
@@ -61,6 +63,47 @@ pub struct TransferRequest {
     pub local_address: u64,
     pub remote_address: u64,
     pub length: usize,
+}
+
+impl TransferRequest {
+    /// Request an ordinary transfer at the default priority without a QoS override.
+    pub fn new(
+        transport: Transport,
+        local_address: u64,
+        remote_address: u64,
+        length: usize,
+    ) -> Self {
+        Self {
+            transport,
+            local_address,
+            remote_address,
+            length,
+            qos: None,
+            priority: Priority::default(),
+            remote_staging: false,
+        }
+    }
+
+    /// Use an engine-resolved policy, or clear it to use the default contract.
+    #[must_use]
+    pub fn with_qos(mut self, policy: impl Into<Option<crate::EffectiveQosPolicy>>) -> Self {
+        self.qos = policy.into();
+        self
+    }
+
+    /// Set the dispatch priority used in the absence of a QoS override.
+    #[must_use]
+    pub fn with_priority(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// Select whether to stage the remote CUDA range over TCP or RDMA.
+    #[must_use]
+    pub fn with_remote_staging(mut self, enabled: bool) -> Self {
+        self.remote_staging = enabled;
+        self
+    }
 }
 
 #[derive(Clone)]

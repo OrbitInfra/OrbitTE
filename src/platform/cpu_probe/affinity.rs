@@ -16,6 +16,8 @@ pub(crate) fn allowed_cpus() -> Result<Vec<usize>> {
     let mut words = vec![0 as libc::c_ulong; 16];
     loop {
         let size = std::mem::size_of_val(words.as_slice());
+        // SAFETY: The word buffer is writable for size bytes; PID zero selects the calling
+        // thread.
         let code = unsafe { libc::sched_getaffinity(0, size, words.as_mut_ptr().cast()) };
         if code == 0 {
             return Ok((0..size * 8)
@@ -101,6 +103,8 @@ impl CpuAffinity {
         for &cpu in &self.cpus {
             words[cpu / bits] |= 1 << (cpu % bits);
         }
+        // SAFETY: The affinity buffer remains readable for the supplied byte count for this
+        // call.
         let code = unsafe {
             libc::sched_setaffinity(
                 0,
