@@ -107,6 +107,7 @@ jobs:
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary"
           .github/scripts/repeat-runtime-controls.sh "$binary" batch-release
+          .github/scripts/repeat-runtime-controls.sh "$binary" rail-recovery
       - name: Repeat Linux shared quota and receiver credit controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
         run: |

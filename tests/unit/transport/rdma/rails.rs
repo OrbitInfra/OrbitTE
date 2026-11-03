@@ -2146,6 +2146,36 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
             TIMEOUT,
         )
     };
+    // The requester's failed post retires locally first. The source CQ may
+    // still own that grant, or be detaching its failed lane. Only its own
+    // recovery receipt permits a fresh grant, even for a disjoint range.
+    let wait_source = || -> Result<()> {
+        let source_rdma = source_runtime(&source);
+        let until = Instant::now() + EVENTUAL_PROGRESS;
+        loop {
+            source_rdma.recover_progress()?;
+            let stats = source_rdma.stats()?;
+            assert_eq!(
+                (
+                    stats.retained_endpoints,
+                    stats.retained_grants,
+                    stats.retained_cqs
+                ),
+                (0, 0, 0)
+            );
+            if source.stats()?.active_source_operations == 0
+                && stats.active_grants == 0
+                && stats.progress_failures == stats.progress_recoveries
+            {
+                return Ok(());
+            }
+            assert!(
+                Instant::now() < until,
+                "source grant/lane never retired: {stats:?}"
+            );
+            std::thread::yield_now();
+        }
+    };
     FAIL.store(true, Ordering::Release);
     assert!(run("first", TransferOp::Read, 4)?.failure.is_some());
     let stats = source_runtime(&requester).stats()?;
@@ -2161,7 +2191,13 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
         source_runtime(&requester).stats()?.post_calls,
         stats.post_calls
     );
-    assert!(run("other", TransferOp::Read, 12)?.is_complete());
+    wait_source()?;
+    let other = run("other", TransferOp::Read, 12)?;
+    assert!(
+        other.is_complete(),
+        "healthy rail: {other:?}, source: {:?}",
+        source.stats()?
+    );
     let before = requester.nic_load_stats()?;
     assert!(
         requester
@@ -2197,17 +2233,7 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
         (open.rail_errors, open.open_rails, open.rail_probes),
         (2, 1, 1)
     );
-    // A failed requester post closes its own grant before returning. Wait for
-    // the separate source handler to retire its grant before asking it to
-    // authorize the *same* bytes for the trial.
-    let until = Instant::now() + EVENTUAL_PROGRESS;
-    while source.stats()?.active_source_operations != 0 {
-        assert!(
-            Instant::now() < until,
-            "source did not retire the failed grant"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    wait_source()?;
     rails.set_time(start + Duration::from_secs(5));
     let trial = run("first", TransferOp::Read, 4)?;
     assert!(
