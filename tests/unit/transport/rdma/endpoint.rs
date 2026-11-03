@@ -31,7 +31,7 @@ fn peer_qp_arrays_keep_lane_owners_and_retire_only_after_native_drain() {
         })
         .collect();
     for (grant, peer) in grants.iter_mut().zip(&peers) {
-        let endpoint = store.get_or_insert((*peer).into(), 6).unwrap();
+        let endpoint = store.get_or_insert((*peer).into(), 6, 8).unwrap();
         let slot = endpoint.reserve(None, None).unwrap().unwrap();
         slot.attach(grant).unwrap();
         endpoint.adopt(grant, *peer).unwrap();

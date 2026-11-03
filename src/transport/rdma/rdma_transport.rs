@@ -255,6 +255,7 @@ impl RdmaTransport {
             .load(Ordering::Relaxed);
         stats.completion_events = self.counters.completion_events.load(Ordering::Relaxed);
         self.workers.monitor.stats(&mut stats);
+        self.workers.monitor.rails.snapshot(&mut stats);
         Ok(stats)
     }
 
@@ -279,10 +280,13 @@ impl RdmaTransport {
         if contexts.closed {
             return Ok(Vec::new());
         }
-        Ok(contexts
+        let mut stats = contexts
             .selector
             .as_ref()
-            .map_or_else(Vec::new, |selector| selector.stats()))
+            .map_or_else(Vec::new, |s| s.stats());
+        drop(contexts);
+        self.workers.monitor.rails.nic_snapshot(&mut stats);
+        Ok(stats)
     }
 
     pub(crate) fn topology(&self) -> Result<Option<crate::Topology>> {
@@ -386,7 +390,8 @@ impl RdmaTransport {
                     paths.retain(|path| path.domain == local);
                     remote_paths.retain(|path| path.domain == remote);
                 }
-                let mask = path::local_device_mask(&paths, &remote_paths);
+                let rails = &self.workers.monitor.rails;
+                let (mask, _) = rails.mask(peer.epoch, &paths, &remote_paths, rails.now())?;
                 if mask == 0 {
                     return Err(request
                         .selection
@@ -397,7 +402,12 @@ impl RdmaTransport {
                     .iter()
                     .find(|path| path.nic_id == selection.device_id())
                     .ok_or(Error::Internal("RDMA selector returned a masked NIC path"))?;
-                let remote = path::remote_path(local, &remote_paths)?;
+                let (remote, rail) = rails
+                    .admit(peer.epoch, local, &remote_paths, rails.now())
+                    .map_err(|e| match e {
+                        Error::Unavailable(reason) => request.selection.rejected(reason),
+                        e => e,
+                    })?;
                 pinned = Some((local.domain, remote.domain));
                 let setup = requester::RequesterSetup::new(
                     wire,
@@ -411,7 +421,10 @@ impl RdmaTransport {
                     },
                     width,
                 );
-                let Some(mut slice) = self.requester_slice(&mut channel, setup)? else {
+                let pending = self
+                    .requester_slice(&mut channel, setup)
+                    .inspect_err(|e| rail.setup_failed(e))?;
+                let Some(mut slice) = pending else {
                     continue;
                 };
                 let transfer = (|| {
@@ -424,7 +437,9 @@ impl RdmaTransport {
                         .transfer(&slice.remote, operation, request, deadline)?;
                     self.finish_requester_slice(&mut channel, &mut slice, &request.local)
                 })();
-                return close_slices(std::slice::from_mut(&mut slice), transfer, true);
+                let drained = close_slices(std::slice::from_mut(&mut slice), transfer, true);
+                rail.receipt(&drained);
+                return drained;
             }
             Err(Error::Protocol("RDMA repeated cache miss"))
         })();

@@ -302,6 +302,9 @@ Done (source scope, CPU controls):
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.
+- **RDMA rail health (S9, F18).** A pair-level circuit under the existing
+  context monitor gates new slices. Recovery requires a native probe receipt.
+  Real link-loss qualification is queued. See [rail health](rdma-cuda.md#rail-health).
 - **Bandwidth-aware spraying.** Topology penalties, strict locality, rate-seeded
   EWMA, weighted whole-parent distribution, periodic rail exploration and
   effective link-rate discovery.

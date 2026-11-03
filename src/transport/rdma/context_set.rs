@@ -7,6 +7,7 @@ use super::{RdmaContext, cq_lane, quota};
 
 #[derive(Default)]
 pub(super) struct ContextSet {
+    pub(super) rails: Option<Arc<super::rail_monitor::RailMonitor>>,
     pub(super) closed: bool,
     pub(super) topology: Option<crate::Topology>,
     pub(super) slots: Vec<ContextSlot>,
@@ -67,6 +68,9 @@ impl ContextSet {
                     owner.asynchronous.fence_route();
                     available = false;
                 }
+            }
+            if let Some(rails) = &self.rails {
+                rails.port(id, owner.asynchronous.generation(), available, rails.now());
             }
             if let Some(selector) = &self.selector {
                 selector.set_available(id, available);

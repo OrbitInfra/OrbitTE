@@ -58,6 +58,15 @@ pub struct RdmaConfig {
     pub strict_local_numa: bool,
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
     pub device_mask: u64,
+    /// Frozen TENT rail circuit settings, per local/remote NIC pair.
+    pub rail_error_threshold: u32,
+    pub rail_error_window: Duration,
+    pub rail_cooldown: Duration,
+    pub rail_probe_interval: Duration,
+    /// Maximum distinct active or unhealthy pair identities retained by this engine.
+    pub max_rail_pairs: usize,
+    /// Optional TENT rail topology JSON with all/direct named pairs.
+    pub rail_topology: Option<String>,
     /// TENT bandwidth-aware selection and payload transmit meter.
     pub scheduling: super::SchedulingParams,
     /// TENT deadline_bw_arbitration: reorder ready payloads within a priority
@@ -113,6 +122,12 @@ impl Default for RdmaConfig {
             preferred_numa_node: None,
             strict_local_numa: false,
             device_mask: u64::MAX,
+            rail_error_threshold: 3,
+            rail_error_window: Duration::from_secs(10),
+            rail_cooldown: Duration::from_secs(30),
+            rail_probe_interval: Duration::from_secs(1),
+            max_rail_pairs: 4096,
+            rail_topology: None,
             scheduling: Default::default(),
             deadline_bw_arbitration: false,
             priority_promotion_timeout: Duration::from_millis(10),
@@ -152,6 +167,15 @@ impl RdmaConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.rail_error_threshold == 0
+            || self.max_rail_pairs == 0
+            || self
+                .rail_topology
+                .as_ref()
+                .is_some_and(|s| s.len() > 1 << 20)
+        {
+            return Err(Error::InvalidConfig("invalid RDMA rail health limits"));
+        }
         self.scheduling.validate()?;
         if self.priority_promotion_timeout.as_nanos() > u64::MAX as u128
             || self.slot_rotation_interval.is_zero()

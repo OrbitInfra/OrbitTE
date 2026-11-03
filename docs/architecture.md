@@ -137,6 +137,24 @@ deadline and epoch. A replaced registration cannot inherit an admitted WRITE.
 
 ## RDMA resource owners
 
+A bounded rail table is shared by requester workers and the existing port
+monitor. TENT keeps one table per worker. OrbitTE serializes only pair
+accounting so two workers cannot arm concurrent trials. A receipt identifies
+the admitted generation and trial. A late completion from before a port
+fault cannot close the new circuit. `an_open_pair_admits_one_probe_and_only_its_receipt_can_reopen_it`
+exercises that distinction. Discovery keeps peer epoch and NIC/PD identities,
+rather than borrowing remote topology pointers. The grant path advertises the
+remote memory owner's eligible NICs directly. A multi-slice submission uses
+healthy pairs, or one trial grant when every permitted pair is paused.
+
+The endpoint store fences admission before context shutdown. A record is
+reclaimable after both native QP close and terminal grant retirement. An
+external handle cannot construct into a fenced array. A finished logical grant
+can still point to a live physical QP shared by other grants. Candidates check
+the physical fence and claim the exact generation under the lane lock. The bounded store
+retains a live or uncertain entry under pressure.
+
+
 | Owner | Resource and lifetime | Frozen TENT correspondence |
 | --- | --- | --- |
 | `RdmaTransport` | Context slots, registrations, workers and parent dispatch | `RdmaTransport`, `context_set_`, `local_buffer_manager_`, `workers_` |
@@ -294,7 +312,7 @@ TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers
 | --- | --- | --- |
 | QP arrays | Fixed-width, lazily populated, concurrent grants, drain-aware rollback | TENT builds its QP list eagerly and shares it across directions |
 | Monitor | Unified get/ACK, periodic reclaim, paused contexts, GID reselection, rate refresh | OrbitTE keeps retained-resource quarantine |
-| Path metadata | `path.rs` validates NIC/PD descriptions and compatible pairs | TENT's `RailMonitor` failover and retry policy is still open (P6) |
+| Path metadata | `path.rs` validates NIC/PD descriptions and compatible pairs; `rail_monitor.rs` gates selection and tracks native receipts | TENT `RailMonitor` |
 | Grant authority | Exact-range host MW or private GPU PD/MR, with a bound source receipt | TENT publishes native MR keys; not wire parity |
 | CQ layout | Separate SQ and RQ CQ per lane | TENT uses one lane CQ for data QPs |
 | Worker load | Unfinished grant charge, including retained native work | Failover and remaining deadline policy are P6 |

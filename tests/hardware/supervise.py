@@ -168,6 +168,20 @@ def supervise(config_path):
                 write(root / 'inventory-after.json', observed)
             except Exception as error:
                 result.update(status='failed', inventory_error=str(error))
+        # The peer arms this marker after checking the RNIC/GID, admin state and
+        # independent control route. A killed peer cannot run its Rust Drop.
+        netdev = config.get('env', {}).get('ORBITTE_FAULT_NETDEV')
+        if (config.get('env', {}).get('ORBITTE_HOST_MODE') == 'installed-rail-health'
+                and netdev and (root / 'rail-link-armed').is_file()):
+            try:
+                if (root / 'rail-link-armed').read_text() != netdev:
+                    raise ValueError('dedicated fault netdev marker mismatch')
+                subprocess.run(['ip', 'link', 'set', 'dev', netdev, 'up'], check=True, timeout=10)
+                result['data_link_restored'] = bool(int((Path('/sys/class/net') / netdev / 'flags').read_text(), 16) & 1)
+                if not result['data_link_restored']:
+                    raise ValueError('data netdev did not return administratively up')
+            except Exception as error:
+                result.update(status='failed', restore_error=str(error))
         result['child_reaped'] = True
         result['finished_unix'] = time.time()
         for lock in locks:

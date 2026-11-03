@@ -309,6 +309,7 @@ impl RdmaTransport {
         })();
         match prepared {
             Ok((binding, remote, peer)) => Ok(Some(RdmaSlice {
+                rail: None,
                 grant: endpoint,
                 binding,
                 remote,

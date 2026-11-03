@@ -379,6 +379,7 @@ impl RequesterSetup {
             .ok_or(Error::Internal("missing requester grant"))?;
         match (self.offer, self.remote) {
             (Some(offer), Some(remote)) => Ok(Some(RdmaSlice {
+                rail: None,
                 grant: endpoint,
                 binding: offer.binding,
                 remote,

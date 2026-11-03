@@ -178,6 +178,12 @@ deadline yield an infeasible prediction. TCP, NVLink, files and proxy staging
 currently have no independent bandwidth estimate. An unknown rate leaves the
 owner eligible for ordinary dispatch. Ordinary execution timeouts still apply.
 
+RDMA rail cooldown gates new slices within the compiled device mask. A masked
+owner with no eligible pair receives a typed unavailable/policy error. A
+paused or half-open rail retains in-flight native work until its real receipt.
+A timeout or an accepted cancel cannot make such an owner reusable. See
+[rail health](rdma-cuda.md#rail-health).
+
 A drop removes queue accounting before I/O, publishes `Error::DeadlineInfeasible`
 to its aliases and increments `RuntimeQueueStats::deadline_infeasible_drops`
 once. Other eligible owners can run, including later tasks in the same submit.

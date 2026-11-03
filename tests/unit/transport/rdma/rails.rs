@@ -2048,3 +2048,183 @@ fn an_infeasible_merged_write_does_not_hide_a_later_feasible_tcp_owner() -> Resu
     }
     Ok(())
 }
+
+#[test]
+fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receipt() -> Result<()> {
+    use crate::engine::tests::{rdma_fixture_with_config, source_runtime};
+    use crate::{EngineConfig, TransportSelectorConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAIL: AtomicBool = AtomicBool::new(false);
+    unsafe extern "C" fn post(
+        h: *mut sys::ConnectionHandles,
+        m: *const sys::MemoryHandles,
+        w: *const sys::WorkRequest,
+        n: usize,
+        local: u64,
+        len: usize,
+        remote: u64,
+        rkey: u32,
+        write: i32,
+        r: *mut sys::PostResult,
+    ) -> i32 {
+        if FAIL.swap(false, Ordering::AcqRel) {
+            // SAFETY: the production post owner supplies its live output slot.
+            unsafe {
+                *r = sys::PostResult::default();
+            }
+            return libc::EIO;
+        }
+        // SAFETY: forward the live QP, registration, WR array and result from the production owner.
+        unsafe { (fixture::VERBS.post)(h, m, w, n, local, len, remote, rkey, write, r) }
+    }
+    static VERBS: sys::Verbs = sys::Verbs {
+        discover,
+        open_device: open,
+        post,
+        ..fixture::VERBS
+    };
+    let mut r = runtime(5, 16);
+    r.verbs = &VERBS;
+    r.registrations = buffers::LocalBufferManager::new(&r.config, r.usage.clone(), &VERBS);
+    r.config.block_size = 4;
+    r.config.rail_error_threshold = 1;
+    r.config.rail_cooldown = Duration::from_secs(5);
+    r.config.rail_probe_interval = Duration::from_secs(2);
+    r.config.rail_topology = Some(
+        r#"{"all":[{"local":"rail0","remote":"rail0"},{"local":"rail2","remote":"rail2"}]}"#.into(),
+    );
+    let rails = r.workers.monitor.rails.clone();
+    let start = Instant::now();
+    rails.set_time(start);
+    let source = rdma_fixture_with_runtime(runtime(5, 16));
+    let requester = rdma_fixture_with_config(
+        r,
+        EngineConfig {
+            selector: Some(TransportSelectorConfig::from_json(
+                r#"{"policy":[{"name":"first","segment_type":"memory","devices":["rail0"],"transports":["rdma"]},{"name":"other","segment_type":"memory","devices":["rail2"],"transports":["rdma"]},{"name":"both","segment_type":"memory","transports":["rdma"]}]}"#,
+            )?),
+            ..Default::default()
+        },
+    );
+    let local = requester.register_memory(vec![0xcc; 32].into(), Permission::LocalOnly)?;
+    let remote = source.register_memory(
+        (0..32u8).collect::<Vec<_>>().into(),
+        Permission::RemoteReadWrite,
+    )?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let run = |policy: &str, op: TransferOp, offset: u64| {
+        requester.submit_and_wait(
+            op,
+            &peer,
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + offset,
+                remote.base_address() + offset,
+                4,
+            )
+            .with_policy_name(policy)?],
+            TIMEOUT,
+        )
+    };
+    FAIL.store(true, Ordering::Release);
+    assert!(run("first", TransferOp::Read, 4)?.failure.is_some());
+    let stats = source_runtime(&requester).stats()?;
+    assert_eq!(
+        (stats.rail_errors, stats.open_rails, stats.rail_probes),
+        (1, 1, 0)
+    );
+    assert!(matches!(
+        run("first", TransferOp::Read, 4)?.failure.unwrap().error,
+        Error::TransportPolicy { .. }
+    ));
+    assert_eq!(
+        source_runtime(&requester).stats()?.post_calls,
+        stats.post_calls
+    );
+    assert!(run("other", TransferOp::Read, 12)?.is_complete());
+    let before = requester.nic_load_stats()?;
+    assert!(
+        requester
+            .submit_and_wait(
+                TransferOp::Read,
+                &peer,
+                &[TransferRequest::new(
+                    Transport::Rdma,
+                    local.base_address() + 16,
+                    remote.base_address() + 16,
+                    8
+                )
+                .with_policy_name("both")?],
+                TIMEOUT
+            )?
+            .is_complete()
+    );
+    let after = requester.nic_load_stats()?;
+    for old in before {
+        let delta = after
+            .iter()
+            .find(|n| n.device_id == old.device_id)
+            .unwrap()
+            .completed_bytes
+            - old.completed_bytes;
+        assert_eq!(delta, if old.device_name == "rail2" { 8 } else { 0 });
+    }
+    rails.set_time(start + Duration::from_secs(2));
+    FAIL.store(true, Ordering::Release);
+    assert!(run("first", TransferOp::Read, 4)?.failure.is_some());
+    let open = source_runtime(&requester).stats()?;
+    assert_eq!(
+        (open.rail_errors, open.open_rails, open.rail_probes),
+        (2, 1, 1)
+    );
+    // A failed requester post closes its own grant before returning. Wait for
+    // the separate source handler to retire its grant before asking it to
+    // authorize the *same* bytes for the trial.
+    let until = Instant::now() + EVENTUAL_PROGRESS;
+    while source.stats()?.active_source_operations != 0 {
+        assert!(
+            Instant::now() < until,
+            "source did not retire the failed grant"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    rails.set_time(start + Duration::from_secs(5));
+    let trial = run("first", TransferOp::Read, 4)?;
+    assert!(
+        trial.is_complete(),
+        "trial result {trial:?}; rail stats {:?}",
+        source_runtime(&requester).stats()?
+    );
+    let normal = run("first", TransferOp::Read, 20)?;
+    assert!(normal.is_complete(), "{normal:?}");
+    let stats = source_runtime(&requester).stats()?;
+    assert_eq!(
+        (stats.open_rails, stats.rail_probes, stats.rail_recoveries),
+        (0, 2, 1)
+    );
+    let nics = requester.nic_load_stats()?;
+    assert_eq!(
+        nics.iter()
+            .find(|n| n.device_name == "rail0")
+            .unwrap()
+            .rail_errors,
+        2
+    );
+    assert_eq!(
+        nics.iter()
+            .find(|n| n.device_name == "rail2")
+            .unwrap()
+            .rail_errors,
+        0
+    );
+    let mut actual = [0; 32];
+    local.read(0, &mut actual)?;
+    let mut expected = [0xcc; 32];
+    for i in (4..8).chain(12..24) {
+        expected[i] = i as u8;
+    }
+    assert_eq!(actual, expected);
+    remote.read(0, &mut actual)?;
+    assert_eq!(actual, std::array::from_fn(|i| i as u8));
+    Ok(())
+}

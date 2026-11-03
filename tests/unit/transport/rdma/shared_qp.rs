@@ -458,7 +458,7 @@ pub(super) fn run() {
                     })
                     .unwrap()
                     .endpoints
-                    .get_or_insert(pair.into(), 1)
+                    .get_or_insert(pair.into(), 1, 8)
                     .unwrap();
                 if let Some(construction) = owner.reserve(Some(pair.connection), None).unwrap() {
                     construction.attach(&mut grants[slot]).unwrap();

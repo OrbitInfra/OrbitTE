@@ -66,6 +66,7 @@ struct Qp {
 pub(super) type Candidate = (Arc<CqLane>, Arc<Record>, Peer);
 
 pub(super) struct RdmaEndpoint {
+    fenced: std::sync::atomic::AtomicBool,
     pub(super) key: EndpointKey,
     qp_list: Mutex<Vec<Option<Qp>>>,
     changed: Condvar,
@@ -76,6 +77,17 @@ pub(super) struct Construction {
     endpoint: Arc<RdmaEndpoint>,
     index: usize,
     token: Arc<()>,
+}
+
+impl Qp {
+    fn drained(&self) -> Result<bool> {
+        Ok(match &self.record {
+            Some(r) if r.connection.is_closed() => r
+                .try_lock()?
+                .is_some_and(|s| s.phase == super::Phase::Closed),
+            _ => false,
+        })
+    }
 }
 
 impl RdmaEndpoint {
@@ -90,9 +102,17 @@ impl RdmaEndpoint {
         qp_list.resize_with(width, || None);
         Ok(Self {
             key,
+            fenced: Default::default(),
             qp_list: Mutex::new(qp_list),
             changed: Condvar::new(),
         })
+    }
+
+    pub(super) fn fence(&self) {
+        let _guard = self.qp_list.lock().unwrap_or_else(|p| p.into_inner());
+        self.fenced
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.changed.notify_all();
     }
 
     pub(super) fn width(&self) -> Result<usize> {
@@ -112,8 +132,7 @@ impl RdmaEndpoint {
     fn reclaim(qps: &mut [Option<Qp>]) -> Result<()> {
         for entry in qps {
             if let Some(qp) = entry {
-                let closed = qp.record.as_ref().is_some_and(|r| r.connection.is_closed());
-                if closed {
+                if qp.drained()? {
                     *entry = None;
                 }
             }
@@ -127,6 +146,9 @@ impl RdmaEndpoint {
         slot: Option<usize>,
     ) -> Result<Option<Construction>> {
         let mut qps = self.lock()?;
+        if self.fenced.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA endpoint retired"));
+        }
         Self::reclaim(&mut qps)?;
         // Duplicate passive bootstraps must wait for this exact construction.
         if remote.is_some() && qps.iter().flatten().any(|qp| qp.remote == remote) {
@@ -159,6 +181,9 @@ impl RdmaEndpoint {
             return Err(Error::Protocol("RDMA endpoint peer identity changed"));
         }
         let mut qps = self.lock()?;
+        if self.fenced.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Unavailable("RDMA endpoint retired"));
+        }
         let qp = qps
             .iter_mut()
             .flatten()
@@ -197,6 +222,9 @@ impl RdmaEndpoint {
         matches: &impl Fn(&Peer) -> bool,
     ) -> Result<Vec<Candidate>> {
         let qps = self.lock()?;
+        if self.fenced.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(Vec::new());
+        }
         Ok(qps
             .iter()
             .enumerate()
@@ -238,6 +266,13 @@ impl RdmaEndpoint {
 impl Construction {
     pub(super) fn attach(&self, grant: &mut RdmaGrant) -> Result<()> {
         let mut qps = self.endpoint.lock()?;
+        if self
+            .endpoint
+            .fenced
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Error::Unavailable("RDMA endpoint retired"));
+        }
         let qp = qps[self.index]
             .as_mut()
             .filter(|qp| Arc::ptr_eq(&qp.token, &self.token))
@@ -262,7 +297,7 @@ impl Drop for Construction {
         if let Some(qp) = &qps[self.index] {
             if Arc::ptr_eq(&qp.token, &self.token)
                 && qp.peer.is_none()
-                && qp.record.as_ref().is_none_or(|r| r.connection.is_closed())
+                && (qp.record.is_none() || qp.drained().unwrap_or(false))
             {
                 qps[self.index] = None;
             }

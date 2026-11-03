@@ -22,6 +22,10 @@ impl RdmaTransport {
         if let Some((operation, code)) = contexts.failure {
             return Err(Error::Unquiesced { operation, code });
         }
+        if contexts.rails.is_none() {
+            self.workers.monitor.rails.configure(&self.config);
+            contexts.rails = Some(self.workers.monitor.rails.clone());
+        }
         if contexts.topology.is_some() {
             return Ok(());
         }
@@ -48,12 +52,24 @@ impl RdmaTransport {
                     Arc::clone(&self.workers.monitor),
                 ) {
                     Ok(owner) => {
+                        self.workers.monitor.rails.port(
+                            id,
+                            owner.asynchronous.generation(),
+                            owner.asynchronous.check().is_ok(),
+                            Instant::now(),
+                        );
                         if owner.asynchronous.check().is_ok() {
                             let address = owner.address()?;
                             address.publish(&mut topology)?;
                             selector.set_bandwidth(id, address.link_speed_mbps);
                             selector.set_available(id, true);
                         }
+                        self.workers.monitor.rails.port(
+                            id,
+                            owner.asynchronous.generation(),
+                            owner.asynchronous.check().is_ok(),
+                            Instant::now(),
+                        );
                         slot.owner = Some(owner);
                         break;
                     }
@@ -311,6 +327,9 @@ impl RdmaTransport {
                 .lock()
                 .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
             contexts.closed = true;
+            for slot in &mut contexts.slots {
+                slot.endpoints.fence();
+            }
             (
                 contexts
                     .slots

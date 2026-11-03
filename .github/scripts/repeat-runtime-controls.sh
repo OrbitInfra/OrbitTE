@@ -47,6 +47,17 @@ controls=(
   transport::rdma::rdma_transport::tests::rails::an_infeasible_merged_write_does_not_hide_a_later_feasible_tcp_owner
   cuda::tests::staging_pipeline::only_a_validated_proxy_session_can_take_internal_owner_and_byte_reserves
   cuda::tests::staging_credit::automatic_staging_credit_uses_negotiated_depth_and_only_committed_owners_finish_after_fence
+  transport::rdma::rail_monitor::tests::concurrent_workers_share_exactly_one_trial_until_its_own_receipt
+  transport::rdma::rdma_transport::tests::cold_connections::simultaneous_first_parents_wait_for_fixed_width_then_share_without_reopening
+  cuda::tests::staging_cross::second_cross_finishes_on_shared_qp_while_first_payload_completion_is_held
+  cuda::tests::staging_shards::eight_active_sessions_defer_pin_and_expired_ninth_does_not_block_on_native_work
+  transport::rdma::rdma_transport::tests::rails::a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receipt
+  transport::rdma::rdma_transport::tests::rails::periodic_source_recovery_retires_every_stale_array_entry_before_single_or_sliced_payload
+  transport::rdma::rdma_transport::tests::rails::initially_paused_rail_keeps_registration_without_blocking_its_healthy_sibling
+  transport::rdma::rdma_transport::tests::rails::one_unquiesced_rail_retains_its_exact_loan_and_other_rail_cleanup_cannot_report_parent_drain
+  transport::rdma::endpoint_store::tests::bounded_store_fences_an_external_handle_and_never_revives_its_slots
+  transport::rdma::rail_monitor::tests::an_open_pair_admits_one_probe_and_only_its_receipt_can_reopen_it
+  transport::rdma::rail_monitor::tests::half_open_failures_cap_at_five_minutes_and_prepost_abandonment_reopens_the_trial
 )
 for iteration in {1..50}; do
   echo "Iteration $iteration/50 with RUST_TEST_THREADS=$RUST_TEST_THREADS"

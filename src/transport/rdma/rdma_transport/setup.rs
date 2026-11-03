@@ -29,6 +29,7 @@ enum Phase {
 }
 
 struct PlannedSlice {
+    rail: Option<crate::transport::rdma::rail_monitor::RailLease>,
     range: SliceRequest,
     selection: Option<DeviceLease>,
     remote: NicPath,
@@ -236,7 +237,8 @@ impl RdmaSetup {
                     .active
                     .take()
                     .ok_or(Error::Internal("missing requester setup"))?;
-                if let Some(slice) = setup.finish()? {
+                if let Some(mut slice) = setup.finish()? {
+                    slice.rail = self.plan.front_mut().and_then(|e| e.rail.take());
                     self.slices.push(slice);
                     self.plan.pop_front();
                     self.retries = 0;
@@ -304,6 +306,22 @@ impl RdmaSetup {
                     64
                 },
             );
+        let rails = &transport.workers.monitor.rails;
+        let (ready, healthy) = rails.mask(
+            self.wire.epoch,
+            &self.local_paths,
+            &self.remote_paths,
+            rails.now(),
+        )?;
+        if ready == 0 {
+            return Err(self
+                .request
+                .selection
+                .rejected("no healthy permitted RDMA rail"));
+        }
+        // When every permitted pair is open, grant just one trial. Do not
+        // reserve the same probe for multiple slices of a single parent.
+        let cap = if healthy == 0 { 1 } else { cap };
         let (block, count) =
             plan_rdma_slices(self.request.length, transport.config.block_size, cap)?;
         self.credits = Some(GrantCredits::acquire(
@@ -317,13 +335,11 @@ impl RdmaSetup {
         self.slices
             .try_reserve_exact(count)
             .map_err(|_| Error::ResourceExhausted)?;
-        let mask = path::local_device_mask(&self.local_paths, &self.remote_paths);
-        if mask == 0 {
-            return Err(self
-                .request
-                .selection
-                .rejected("no permitted NIC has a compatible peer path"));
-        }
+        let mask = if count > 1 && healthy != 0 {
+            healthy
+        } else {
+            ready
+        };
         let location = self.request.local.location()?.location;
         let allocation =
             transport.allocate_slices(self.request.length, block, count, location, mask)?;
@@ -335,8 +351,14 @@ impl RdmaSetup {
                 .iter()
                 .find(|path| path.nic_id == selection.device_id())
                 .ok_or(Error::Internal("RDMA selector returned a masked NIC path"))?;
-            let remote = path::remote_path(local, &self.remote_paths)?;
+            let (remote, rail) = rails
+                .admit(self.wire.epoch, local, &self.remote_paths, rails.now())
+                .map_err(|e| match e {
+                    Error::Unavailable(reason) => self.request.selection.rejected(reason),
+                    e => e,
+                })?;
             self.plan.push_back(PlannedSlice {
+                rail: Some(rail),
                 range: SliceRequest {
                     offset,
                     length,
@@ -351,6 +373,9 @@ impl RdmaSetup {
     }
 
     pub(crate) fn abort(mut self, transport: &RdmaTransport, mut error: Error) -> Error {
+        if let Some(rail) = self.plan.front().and_then(|e| e.rail.as_ref()) {
+            rail.setup_failed(&error);
+        }
         if let Some(active) = self.active.take() {
             error = active.abort(transport, error);
         }

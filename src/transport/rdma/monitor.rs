@@ -140,6 +140,7 @@ impl Watch {
 
 #[derive(Default)]
 pub(super) struct Monitor {
+    pub(super) rails: Arc<super::rail_monitor::RailMonitor>,
     running: Mutex<Option<Running>>,
     counters: Arc<Counters>,
 }

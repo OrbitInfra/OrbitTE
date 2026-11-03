@@ -24,6 +24,7 @@ impl From<TransferOp> for Operation {
 
 /// One exact-range grant and native endpoint owned by a parent RDMA request.
 pub(super) struct RdmaSlice {
+    pub(super) rail: Option<super::rail_monitor::RailLease>,
     pub(super) grant: super::RdmaGrant,
     pub(super) binding: super::protocol::Binding,
     pub(super) remote: super::Descriptor,
