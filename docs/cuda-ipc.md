@@ -1,440 +1,208 @@
 # CUDA IPC and NVLink
 
-Build with `--features cuda`, set `EngineConfig { nvlink: true, ..Default::default() }`,
-and select `Transport::Nvlink`. This is a separate payload transport alongside
-TCP and RDMA. The shared control socket exchanges descriptors, CUDA handles and
-receipts; payload bytes use CUDA device/device or pinned host/device copies. It requires different cooperating
-processes on the same physical host, with compatible NVIDIA devices and driver.
+Build with `--features cuda`, set `EngineConfig { nvlink: true, ..Default::default() }`
+and select `Transport::Nvlink` (or let [transport selection](transport-selection.md)
+choose it). This payload transport sits beside TCP and RDMA: the shared control
+socket exchanges descriptors, CUDA IPC handles and receipts, and the bytes move
+as CUDA device/device or pinned host/device copies. Both peers must be different
+cooperating processes on the same physical host, with compatible NVIDIA devices
+and driver.
 
 ## Memory and permission contract
 
-The source explicitly opts in with `CudaMemory::allocate_ipc(device, length)`.
-Register that allocation with `register_cuda_memory_batch`, publish its engine
-endpoint/epoch through your application's trusted discovery, and open that
-segment from the requester. The requester uses owned `CudaMemory::allocate`
-or `allocate_ipc`, or `cuda::allocate_pinned_host` registered through
-`register_host_memory` / `register_host_memory_batch`. Requests use absolute
-registered addresses and retain the
-existing READ/WRITE bounds and permissions.
+The source opts in with `CudaMemory::allocate_ipc(device, length)`, registers it
+with `register_cuda_memory_batch` and publishes its endpoint and epoch through
+trusted discovery. The requester uses owned `CudaMemory::allocate` or
+`allocate_ipc`, or `cuda::allocate_pinned_host` memory registered with
+`register_host_memory`. Requests use absolute registered addresses with the
+normal bounds and permissions. GPU producers can hand off with
+[`record_producer_stream`](rdma-cuda.md#producer-stream-readiness) (or the
+[pinned host variant](rdma-cuda.md#pinned-host-producer-handoff)); consumers
+start after engine completion.
 
-GPU producers may use
-[`CudaMemory::record_producer_stream`](rdma-cuda.md#producer-stream-readiness)
-before handoff. Source export and requester GPU access consume the same
-allocation-owned event generation; this can block before transfer submission.
-The later group completion still uses shared event-query progress. Owned local
-CUDA-pinned host producers use
-[`HostMemory::record_producer_stream`](rdma-cuda.md#pinned-host-producer-handoff)
-before requester access; both entry and final group admission consume the same
-native owner's marker. Consumers start after engine completion; no consumer
-stream dependency is inserted.
+An exported CUDA IPC handle grants access to the **whole underlying
+allocation**. The driver does not enforce a registered subrange or read-only
+access, and a receipt cannot revoke a copied handle, so this requires trusted
+peers and is not an isolation boundary. External or managed GPU allocations and
+remote host exports are unsupported. The exporter must stay alive until every
+import is closed; killing it with a live import is unqualified.
 
-An exported legacy CUDA IPC handle grants access to its **whole underlying
-allocation**. Driver hardware does not enforce a registered subrange or a
-READ-only grant, and a receipt cannot revoke a copied handle. This interface
-requires trusted, cooperating peers that obey the protocol. It is not an
-isolation boundary. External/managed GPU allocations and remote host exports are unsupported
-in this profile. The exporter process and context must remain alive until every
-import is closed. Killing the exporter with a live import is unqualified;
-generation checks do not make that CUDA operation safe.
-
-`allocate_ipc` rounds physical allocation size up to 2 MiB and zeroes the entire
-extent, including padding. Its public length remains the requested logical size.
-An export exclusively borrows the whole logical allocation, including disjoint
-registered aliases, until the matching close receipt. Local access and other
-exports/RDMA uses cannot reuse it during that loan. Source exports and requester
-imports charge the **physical extent** against the transport's shared mapping
-budget, bounded by `max_inflight_bytes`, separately from normal request-byte
-admission. A 17-byte transfer from a 2 MiB allocation therefore charges 2 MiB of
-mapping quota. Configure enough space for the simultaneous mappings you allow.
+`allocate_ipc` rounds the physical size up to 2 MiB and zeroes it; the logical
+length stays as requested. An export exclusively borrows the whole allocation,
+including disjoint aliases, until its close receipt, and local access, other
+exports and RDMA wait. Exports and imports charge the **physical extent** against
+a mapping budget bounded by `max_inflight_bytes`, so a 17-byte transfer from a
+2 MiB allocation charges 2 MiB.
 
 ## Local pinned host directions
 
-A local owned pinned allocation can READ from or WRITE to the remote GPU export.
-Ordered READ uses `cuMemcpyDtoHAsync_v2`; ordered WRITE uses
-`cuMemcpyHtoDAsync_v2`. Eligible CUDA 13 groups use the pointer-array batch
-entry described below for either direction. The actual
-host pointer is copied directly, with no temporary staging allocation. The
-allocation retains the primary context selected by `allocate_pinned_host`; the
-NVLink group leases a matching stream/event from the shared pool. Ordinary/pageable and externally
-supplied `HostMemory` are rejected by this bounded profile; there is no implicit
-registration or staging fallback. This is an OrbitTE ownership restriction,
-not a claim that CUDA or native TENT always rejects pageable memory.
-
-The `HostMemory` access lock protects enqueue and publication of an exclusive
-whole-allocation IPC loan. The loan survives event queries and context
-restoration without holding the mutex. CPU access and new RDMA leases return
-`Unavailable` during the loan; subsequent NVLink groups wait for it within their
-request deadline. Uncertain owners return `Unquiesced`.
-Requester preflight conservatively rejects any existing RDMA loan on that host
-allocation, including disjoint ranges, as the existing device requester does.
-The actual slice is checked again at copy time. Uncertain completion or cleanup
-fences the whole host owner against subsequent CPU and RDMA access; dropping
-an unrelated RDMA lease cannot remove that fence. The native pinned allocation,
-context and transport charges remain retained when drain cannot be proven.
+A local owned pinned allocation can READ from or WRITE to a remote GPU export
+with `cuMemcpyDtoHAsync_v2` / `cuMemcpyHtoDAsync_v2` (or a native batch), copying
+the host pointer directly with no temporary staging. Pageable and externally
+supplied `HostMemory` are rejected; there is no implicit registration or staging
+fallback. While the group holds its whole-allocation loan, CPU access and new
+RDMA leases return `Unavailable` and other NVLink groups wait within their
+deadline. Uncertain completion fences the whole host owner and keeps the pinned
+allocation, context and charges.
 
 ## Subbatch import reuse
 
-Consecutive requests in one submission reuse an import when they name the same
-remote region and the same local **native CUDA context**. Separate `CudaMemory`
-and pinned `HostMemory` allocations on the same primary context can share it,
-including a mixed host/GPU group. The transport preserves
-the result of input order, including overlapping or out-of-order ranges. Dependent
-copies enqueue in order; independent copies may run in a native CUDA batch.
-Both use one exclusively leased stream and one trailing completion event.
+Consecutive requests in one submission share an import when they name the same
+remote region and the same local **native CUDA context**, even across different
+local GPU and pinned host allocations. Results keep input order, including
+overlapping ranges; dependent copies enqueue in order and independent copies may
+use a native batch, all on one stream with one trailing event.
 
-`OpenedMapping` holds one mapping and its physical-extent charge. The source
-grants the smallest enclosing remote range, bounded by `max_transfer_bytes`;
-logical byte accounting still adds only requested bytes, excluding gaps. A new
-region, context, transport or oversized envelope ends the group. If the source
-has a smaller limit, an explicit `ResourceExhausted` reply **before any grant**
-permits one retry as a single request. No ambiguous I/O, received grant or copy
-failure is retried.
-
-With the default `nvlink_cache_entries: 0`, the import closes at the group
-boundary. The optional cache below extends that lifetime explicitly.
+`OpenedMapping` holds one mapping and its physical charge. The source grants the
+smallest enclosing range up to `max_transfer_bytes`; byte accounting counts only
+requested bytes. A new region, context or oversized envelope ends the group. An
+explicit `ResourceExhausted` reply **before any grant** permits one retry as a
+single request; nothing else is retried. With the default
+`nvlink_cache_entries: 0`, the import closes at the group boundary.
 
 ## Native CUDA batch copies
 
-For groups with at least two independent copies, `cuda/ipc/batch.rs::CopyBatch`
-builds parallel destination, source and length arrays. The optional Driver API
-capability requires version 13000 or later and the exact
-`cuMemcpyBatchAsync_v2` symbol. CUDA 12.8's unversioned entry has a different
-signature and is never called through the CUDA 13 binding. Missing capability
-selects ordered enqueue before any copy is submitted.
+Groups with at least two independent copies can use `cuMemcpyBatchAsync_v2`
+(Driver API 13000+, exact v2 symbol; CUDA 12.8's different signature is never
+called). `cuda/ipc/batch.rs::CopyBatch` builds the destination, source and length
+arrays. CUDA does not order members inside a batch, so OrbitTE sorts the actual
+address intervals in O(n log n) and sends any group with overlapping destinations
+or a source/destination dependency through ordered enqueue instead.
 
-CUDA orders the whole batch against its stream, but does not order members
-inside the batch. OrbitTE sorts address intervals in O(n log n) and rejects
-overlapping destinations and any source/destination dependency from the native
-batch path. Overlapping reads remain eligible. Dependent groups keep their
-original ordered calls. The check uses resolved actual allocation addresses,
-including registration alias offsets; it never sorts the submitted descriptor
-arrays. One attribute with source access order `STREAM`, zero flags and no
-location hints covers the entire group. Local pinned-host and GPU owners can
-share that native call.
-
-Admission and cancellation are checked for each member before submission. A
-cancelled suffix leaves only the admitted prefix eligible to submit. On successful
-native submission followed by clean recovery, that prefix can be reported as
-completed through the existing receipt protocol. A native batch error provides
-no completed-prefix evidence: all passed descriptors are treated as attempted,
-the same stream is drained, and no copy is replayed. Failed drain or context
-restoration retains every touched owner and the stream/mapping charge. Successful
-batch submission records the same single trailing event and uses shared event
-progress, with unchanged source completion and import-close receipts.
-
-Frozen TENT's `NVLinkTransport::startTransfer` builds these arrays and calls
-`cudaMemcpyBatchAsync` with stream-ordered source access; its fallback enqueues
-individual copies. OrbitTE uses the corresponding CUDA 13 Driver API and checks
-dependencies to preserve its ordered overlapping-request contract. See
-[NVIDIA's CUDA 13.1 batch contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html)
-and [source qualification](qualification.md#cuda-ipc-native-batch-copy).
-Native call-count reduction does not establish a latency or bandwidth advantage.
+Admission and cancellation are checked before submission, so only an admitted
+prefix is submitted. A native batch error gives no completed-prefix evidence:
+every passed descriptor counts as attempted, the stream is drained, and nothing
+is replayed. TENT's `NVLinkTransport::startTransfer` builds the same arrays for
+`cudaMemcpyBatchAsync` and falls back to individual copies. See
+[qualification](qualification.md#cuda-ipc-native-batch-copy).
 
 ## Shared CUDA stream pool
 
-`NVLinkTransport` owns `cuda/stream_pool.rs::CUDAStreamPool`. Each group acquires
-an exclusive `CUDAStreamHandle` matched to its actual native CUDA context,
-independent of which local GPU or pinned host allocation starts the group.
-Completed groups return their stream/event for later allocations to reuse. Idle
-streams retain their context, not completed local buffers. This also works with
-`nvlink_cache_entries: 0`; stream reuse and import caching have separate lifetimes.
+`cuda/stream_pool.rs::CUDAStreamPool` lends each group an exclusive
+`CUDAStreamHandle` matched to its native context; completed groups return the
+stream and event for reuse, independent of the import cache.
+`nvlink_stream_count` (default 8, 1–4096) bounds slots across all contexts. At
+capacity, an idle slot in another context is replaced; otherwise callers wait
+until their deadline. Native calls run outside the pool mutex. Uncertain DMA,
+restoration or cleanup quarantines a slot without retrying destroy, and a fully
+quarantined pool returns `ResourceExhausted`.
 
-`nvlink_stream_count` defaults to 8 (1–4096) and bounds slots across all requester
-contexts in one engine. Native resources are created lazily after reserving a
-slot. At capacity, an idle slot in another context is closed before replacement;
-active slots wait on a condition variable until the request deadline. Waiting
-holds no local memory access lock. The pool mutex protects slot transitions only;
-creation, copy, completion and destruction run outside it. Native driver calls
-remain synchronous and cannot be interrupted by the deadline.
-
-A lease returns only after completion/recovery and context restoration. Uncertain
-DMA or restoration quarantines the slot; its mapping retains and fences actual
-touched allocations. Failed native creation/cleanup also keeps a charged slot
-when release cannot be proven. Native destroy is never retried, and a fully
-quarantined pool returns `ResourceExhausted`. Clean enqueue recovery permits reuse.
-Successful completion followed by idle stream-destroy failure retains native
-handles/context and capacity, without retaining already completed local buffers.
-
-`close_requester` fences outgoing admission, drains submissions, closes imports,
-then stops the completion worker and closes the stream pool. A timed-out close can wait again; quarantined slots
-remain `Unquiesced`. `flush_nvlink_cache` leaves the stream pool and completion worker usable.
-`EngineStats.nvlink` exposes `stream_slots` (including construction and retained
-slots), `active_streams` and `retained_streams`, separate from mapping bytes.
-`pending_groups` counts queued/polled completions; `progress_workers` is zero or
-one for the lazy shared worker.
-See [source evidence and current limits](qualification.md#cuda-ipc-stream-pool).
+`EngineStats.nvlink` reports `stream_slots`, `active_streams`,
+`retained_streams`, `pending_groups` and `progress_workers`. TENT's
+`getStreamFromPool` returns the same move-only handle; OrbitTE adds the
+cross-context bound and quarantine. See
+[qualification](qualification.md#cuda-ipc-stream-pool).
 
 ## Event completion progress
 
-After ordered or native batch enqueue and the trailing event record, the caller restores
-its CUDA context and queries the event once. Already-ready groups complete on
-the caller without a completion channel or worker wakeup. A NOT_READY result
-hands the `IpcCopyGroup` to shared progress. The group owns its exclusive stream
-handle and actual GPU/pinned host allocation loans. The submitting caller retains the import lease, source grant
-and control channel until the group returns its physical completion outcome.
+After enqueue and the trailing event record, the caller restores its context and
+queries the event once; an already-ready group completes without a worker hop.
+Otherwise the `IpcCopyGroup`, with its stream handle and allocation loans, moves
+to one lazy worker per transport that polls pending groups with `cuEventQuery` in
+their retained context, as TENT's `getTransferStatus` does. A ready query plus
+context restoration releases the loans and stream. Deadline expiry with a pending
+event, a failed query or failed restoration returns `Unquiesced` and keeps every
+touched owner and charge.
 
-One lazy worker per `NVLinkTransport` polls every pending group using
-`cuEventQuery` in the group's retained context. `NOT_READY` preserves the event
-generation and yields to other groups. After short polling bursts, the worker
-parks briefly when no event advances; new work wakes it immediately. Existing
-`nvlink_stream_count` admission bounds all queued and polled groups. A ready
-query must also restore its context before releasing the loans or returning the
-stream to the pool. Conflicting NVLink requests wait on their actual allocation
-owner, using the original request deadline. CPU/RDMA users receive a busy error
-while that whole-allocation loan exists.
-
-Deadline expiry with an event still pending, query failure or failed context
-restoration returns `Unquiesced` and retains/fences touched owners, mapping and
-stream capacity. It does not synchronize the event, claim cancellation drained
-DMA, or allow reuse. Clean partial ordered enqueue failure still uses the existing
-stream recovery before reporting its completed prefix. A failed native batch
-does not identify a completed prefix, even when recovery proves drain. Queued/per-slice
-cancellation is checked before enqueue; an already submitted group must reach
-physical completion or retention before reporting an outcome.
-
-This removes blocking event synchronization from healthy NVLink completion.
 Setup, mapping operations and source receipts still run synchronously on the
-submitting caller. Independent submissions can share event progress; one Batch's
-queued submissions still run in FIFO order. Individual CUDA driver calls cannot
-be preempted. This is not a throughput claim or a complete asynchronous NVLink
-scheduler. See [source evidence](qualification.md#cuda-ipc-event-progress).
+caller, and a Batch's submissions still run in FIFO order. See
+[qualification](qualification.md#cuda-ipc-event-progress).
 
 ## Cross-submission relocation cache
 
-Both cooperating engines can opt in with `nvlink_cache_entries: N` (1–4096).
-`NVLinkTransport` owns a bounded `RelocationCache`, keyed by peer endpoint,
-authoritative source epoch, region ID and the actual local CUDA context.
-Concurrent first submissions for the same key share one slot, including during
-initial grant/open. Waiting for a busy slot uses the submission deadline. The
-cache retains the native context, so its address cannot be recycled under a live
-mapping. Different contexts/regions never alias a cached entry.
+Both engines can opt in with `nvlink_cache_entries: N` (1–4096). `RelocationCache`
+is keyed by peer endpoint, source epoch, region ID and local native context;
+concurrent first submissions for a key share one slot. Every submission still
+asks the source to validate admission, epoch, registration, range and
+permission, so a cached pointer grants nothing by itself. The source
+`ExportCache` keeps the registration, whole-allocation loan and physical charge,
+so **source-side local access and RDMA stay excluded for the whole cache
+lifetime**, including idle time. This is cooperative caching, not transparent
+access to mutable buffers.
 
-Every submission still asks the source to validate admission, epoch, current
-registration, range and permission. A cached pointer alone grants no new
-operation. The source `ExportCache` retains the actual `RegisteredMemory`,
-`IpcExport` whole-allocation loan and physical mapping charge. One allocation
-therefore supports only one live export token/context in this profile, and
-**source-side local access and RDMA remain excluded for the entire cache
-lifetime**, including idle time. Idle reclamation or an explicit requester
-flush releases that source loan only after native close and the source receipt.
-This remains cooperative caching, not transparent access to mutable source buffers.
+The first request receives an offer without a handle; only the requester's answer
+exposes it, so a close that overtakes a queued first request cannot leave an
+exposed export behind. Each subbatch drains its event and sends an
+**operation-complete receipt**; completed local owners are released there, while
+the export and mapping stay cached.
 
-The first request reserves an active source entry and receives an offer with no
-handle. Only the requester's answer permits handle exposure. This ensures that
-an explicit close which overtakes a queued first request cannot leave a later
-exposed export behind: the requester closes its original socket before issuing
-close, so a delayed offer cannot receive its answer. An unexposed reservation is
-cleaned up on EOF. Once exposed, missing grant/completion bytes retain the entry.
+At capacity, a new key reclaims the least recently used idle mapping; active,
+constructing and uncertain entries are never evicted. The old key keeps its slot
+until native close **and** the source acknowledgement both succeed; a lost ACK
+permits a receipt-only retry, never a second native close. A full cache with no
+idle entry returns `ResourceExhausted`. `flush_nvlink_cache(timeout)` closes the
+current keys through the same receipts while admission stays open, so concurrent
+submissions can refill the cache.
 
-Each subbatch drains its shared completion event and restores its context before a bound
-**operation-complete receipt**. Its ACK determines the completed prefix; it does
-not release the export or mapping. Completed local GPU/pinned-host owners are
-released at this drain boundary, so an idle import cannot accumulate every prior
-requester's allocation. Uncertain current copies still retain their real owners.
-
-At entry capacity, a new key reclaims the least recently used idle mapping.
-Checked-out copies, initial constructions and uncertain native owners are never
-evicted. The old key and its cache slot remain reserved while `Reclaiming`
-reserves the replacement key. Duplicate cold requests wait on that reservation
-instead of evicting another entry or opening the same import twice. Hits keep
-the existing constant-time lookup; only misses scan the bounded map. Idle
-owners are boxed once, reused on replacement, and moved without copying the
-mapping state. Native close and control I/O run outside the map lock, so an
-unrelated hot key can progress while a release receipt is outstanding.
-
-Only successful native close **and** source acknowledgement commit a fresh
-token under the new key. Failure restores the old close obligation and wakes
-waiters. Lost ACKs permit receipt-only retries; uncertain native cleanup is
-never retried. A full cache without an eligible idle owner returns
-`ResourceExhausted`; waiting for the same key or its replacement obeys the
-submission deadline. The importer physical-byte charge can end at successful
-native close, but entry capacity stays occupied until the source ACK. These are
-separate budgets. Source exports cannot be evicted unilaterally; a smaller/full
-source cache may still reject a requester with spare local entry capacity.
-Automatic reclamation is triggered by entry pressure, not by byte-budget or
-source-capacity rejection.
-
-`flush_nvlink_cache(timeout)` captures the current import keys, waits for their
-exclusive leases and closes them through the same receipt protocol. Requester
-admission stays open. Replaced keys already closed by another caller may be
-skipped, and concurrent submissions may refill the cache; this is not a global
-submission barrier. Stop submitting first when a completely empty cache is
-required. Flush works after a failed requester close too, allowing safe receipt
-retries. With caching disabled it is a no-op. Native provider close cannot be
-preempted by the deadline. There is no background expiry thread.
-
-`close_requester` permanently fences new outgoing work, waits for accepted
-submissions, then closes cached imports, stops completion progress and closes
-the stream pool. Native close and context restoration
-must succeed before an independent **mapping-close receipt** releases the source
-entry. The close endpoint remains available after source admission closes or the
-region is unregistered. A lost close ACK leaves a non-reusable close obligation;
-a later `close_requester` retries only the idempotent receipt, never the native
-close. An uncertain native close poisons the slot and retains its native owner
-and physical quota without retry. `close()` releases outgoing imports before
-waiting for incoming exports, permitting two cooperating peers to close together.
-
-Both import and export entry counts are bounded by `nvlink_cache_entries`, and
-their physical extents share the existing mapping byte budget. Dropping the
-engine does not prove remote closure: explicit shutdown is required, and
-uncertain owners stay retained. A source-close timeout does not revoke an
-outstanding handle.
+`close_requester` fences outgoing work, waits for accepted submissions, closes
+cached imports, then stops completion progress and the stream pool. `close()`
+releases outgoing imports before waiting for incoming exports, so two peers can
+close together. Dropping an engine does not prove remote closure. TENT's cache
+closes in `uninstall`; the explicit receipts, LRU and continuing flush are
+OrbitTE extensions. See
+[qualification](qualification.md#cuda-ipc-cache-reclamation).
 
 ## Completion and shutdown
 
-The default per-subbatch profile proceeds as follows:
+1. The source validates epoch, bounds, permission, boot identity and requester
+   process identity, then retains the allocation and quota before exposing the
+   handle.
+2. The requester validates the grant (operation, range, both epochs, fresh
+   token), opens the handle in its primary context and relocates the offset.
+3. `NVLinkSubBatch` resolves local owners, leases a stream, locks each owner once
+   in address order, enqueues every slice and records one trailing event.
+   Destination bytes may change before the final report, even on failure.
+4. Only a successful native close and context restoration permit the success
+   receipt; the source then releases its loan and quota and acknowledges.
 
-1. The source validates the request's authoritative source epoch, memory bounds,
-   permission, boot identity and requester process identity. It retains the
-   whole allocation and quota before exposing the opaque CUDA handle.
-2. The requester validates a grant binding the operation/range, source and
-   requester epochs, and fresh grant token. It opens the handle in its local
-   primary context with lazy peer access, then relocates the granted offset.
-3. `NVLinkSubBatch` resolves the local allocation owners and offsets. The
-   requester leases a context-matched stream/event, then locks each actual
-   GPU/pinned host owner once in a common address order. All slices enqueue
-   in request order on that stream, using `cuMemcpyAsync` for device/device or
-   the direction-specific host/device API above. The requester records one
-   trailing event and restores context. A ready first query completes on the
-   caller; otherwise the stream/whole-allocation loans move to shared progress.
-   Guards end after enqueue; loans survive all queries. A
-   ready query plus context restoration establishes group completion, and the
-   mapping retains touched owners until close. Both READ and WRITE
-   may modify destination bytes before their final report, including on failure.
-4. Only a successful native IPC close and context restoration permit a matching
-   success/clean-abort receipt. The source releases its loan and quota, then
-   acknowledges. WRITE failure may have `RemoteEffect::Unknown`; do not replay it
-   automatically. An unproven local drain reports `locally_drained = false`.
+Only acknowledged requests count as completed. If a shared record, query, restore,
+native close or final ACK fails, every attempted request in the group is listed in
+`TransferFailure.affected_requests`, and WRITE may have `RemoteEffect::Unknown`.
+`close_source` waits for existing exports; a timeout, vanished process or lost
+receipt does not prove an import closed, so the allocation stays retained.
+Inspect `EngineStats.nvlink` and `cuda::retained_resources()`.
 
-Only source-acknowledged requests enter the completed prefix. If enqueue fails
-or a later task is cancelled, successful stream recovery and the shared close/ACK
-confirm only the earlier submitted prefix. Failure of the shared record, query or
-context restoration covers the entire attempted group, even if record recovery
-proved local drain. Native uncertainty retains actual touched owners. Memory
-loans release after proven completion/restoration and before control I/O, while
-the mapping/lease owns cleanup.
-If native cleanup or the final ACK fails, every attempted request
-in that group belongs to `TransferFailure.affected_requests`, starting at
-`request_index`. Async tasks in that span share the failure; they are never
-reported as skipped. Only requests after the span were not attempted. Uncertain
-native cleanup retains all touched owners and marks the whole span undrained.
-A lost ACK after a proven local close remains locally drained, with unknown
-remote WRITE effects. Earlier acknowledged groups retain their success.
-
-`close_source` stops new source admission and waits for existing exports. A
-deadline, process disappearance or malformed/lost receipt does not prove that
-an import closed. The source retains the real allocation and its quota on that
-ambiguity. Likewise, uncertain import/copy/close/context cleanup retains the
-actual requester allocation, context and admission; dropping a Batch or public
-memory handle cannot release it. Inspect `EngineStats.nvlink` and
-`cuda::retained_resources()` for retained resources. A missing receipt never
-proves closure; only a successful retry of the idempotent source release can
-retire that obligation.
-
-Boot/process identities and epochs detect stale or incompatible peers; they are
-not authentication. The development wire supports per-subbatch IPC opcodes 8/9
-(`NVL1`) and the previously added cached READ/WRITE/close opcodes 10/11/12 (`NVL2` hello). Initial cached offers use
-ready status 12 with no handle payload. TCP/RDMA layouts are unchanged; older
-wire versions are rejected rather than interpreted as cached completion.
-This is OrbitTE's protocol, not native TENT wire compatibility.
+Boot and process identities and epochs detect stale peers; they are not
+authentication. The protocol is OrbitTE's own, not TENT wire compatibility.
 
 ## Correspondence to TENT
 
-Frozen TENT's
-[NVLinkTransport](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/nvlink/nvlink_transport.cpp)
-exports the CUDA allocation base/extent, relocates imported addresses, and uses
-streams/events for peer-copy completion. OrbitTE keeps those responsibilities
-in `transport/nvlink.rs`, `cuda/ipc.rs` and `cuda/stream.rs`. Rust-owned source
-loans, explicit close receipts and retained budgets make the lifetime contract
-visible to callers.
+| OrbitTE owner | Frozen TENT counterpart |
+| --- | --- |
+| `transport/nvlink.rs`, `cuda/ipc.rs` | `NVLinkTransport` export, relocation and copies |
+| `transport/nvlink/cache.rs::RelocationCache` | `relocateSharedMemoryAddress` relocation map |
+| `transport/nvlink/subbatch.rs::NVLinkSubBatch` | `NVLinkSubBatch` with task stream and event |
+| `cuda/stream_pool.rs` | `getStreamFromPool` / `CUDAStreamHandle` |
+| `transport/nvlink/export.rs::ExportCache` | No counterpart; explicit source lifetime |
 
-TENT's `relocateSharedMemoryAddress` caches imports in its transport relocation
-map, while `NVLinkSubBatch` owns task streams/events. OrbitTE's
-`transport/nvlink/cache.rs::RelocationCache` follows that transport-level
-placement. `mapping.rs::OpenedMapping` owns one native import and its charge;
-`export.rs::ExportCache` separately owns source lifetime. `subbatch.rs::NVLinkSubBatch`
-resolves consecutive same-region/context slices and their actual owners.
-`cuda/ipc.rs::IpcMapping` owns the native reference, retained context and current
-touched allocations; `cuda/ipc/copy.rs` owns grouped access and submission.
-Like TENT's `startTransfer` ordered-copy fallback, all group copies use one
-stream and one trailing event. Its `platform_->getStreamFromPool` returns a
-move-only `CUDAStreamHandle`; destruction returns the stream to a per-device
-idle pool. OrbitTE uses the same names and exclusive handle lifetime in
-`cuda/stream_pool.rs`, retaining a reusable completion event with each stream.
-OrbitTE additionally bounds slots across contexts, keys by actual retained native
-context, and quarantines uncertain cleanup. The frozen TENT pool creates streams
-when a device's idle list is empty and has no corresponding global slot bound.
-TENT's `getTransferStatus` uses `cudaEventQuery` on the task completion event.
-OrbitTE now follows that event-query lifetime, with a shared completion worker
-adapting it to the existing batch API; the worker is an OrbitTE runtime choice.
-The source receipt still follows physical completion. Eligible groups also use
-the [native CUDA batch-copy counterpart](#native-cuda-batch-copies).
-TENT's cache closes in `uninstall`;
-OrbitTE additionally requires explicit cooperating source close receipts. Its
-bounded LRU and continuing flush extend that ownership model; they are not
-features copied from the frozen TENT cache. Grouped completion, shared stream
-ownership and event-query progress have source checks; their current installed DMA and
-performance qualification remain open. TENT's caller-sync event is implemented
-as an explicit allocation-owned GPU handoff; see
-[producer readiness](rdma-cuda.md#producer-stream-readiness).
-
-TENT advertises DRAM/GPU directions and optionally registers local host buffers
-(`transports/nvlink/host_register`, default false), but its remote relocation
-accepts only CUDA buffers. OrbitTE follows that distinction: `cuda/pinned.rs`
-owns local pinned backing, `HostMemory` owns CPU/RDMA exclusion, and
-`IpcMapping` retains the concrete host or device allocation. Remote grants
-remain GPU-only. Remote host exports, MNNVL/VMM and exporter-crash safety remain
-open in P5.4. Idle reclamation and continuing flush have source controls; their
-current installed dynamic-working-set DMA and performance remain unqualified.
-See [cache reclamation evidence](qualification.md#cuda-ipc-cache-reclamation).
-These limits follow the native
+TENT optionally registers local host buffers (`transports/nvlink/host_register`)
+but relocates only CUDA buffers remotely; OrbitTE keeps that split, so remote
+grants are GPU-only. Remote host exports, MNNVL and exporter-crash safety remain
+open. See the
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
 ## Installed qualification
 
-Build an independent public-API consumer from a clean packaged crate:
+Build an independent public-API consumer from the packaged crate:
 
 ```sh
 CC=gcc CXX=g++ python3 tests/hardware/build_installed.py \
   --consumer nvlink --toolchain stable --output /var/tmp/orbitte-ipc-install
 ```
 
-The package needs neither RDMA libraries nor the CUDA toolkit. Runtime needs the
-CUDA driver. The output includes an installed binary, native observer, bounded
-controller and manifest with hashes. On an allocated host, run `nvlink_run.py`
-with explicit `--binary`, `--observer`, their manifest hashes, `--devices 0,1`,
-`--lock-root`, `--output`, `--payload`, `--mode` and
-`--memory device|host|mixed` (mixed requires a batch or cache mode). Output must stay outside the
-source checkout. The controller locks the selected GPU UUIDs and requires an
-NVLink topology edge; it never claims measured fabric bandwidth from that fact.
+It needs no RDMA libraries or CUDA toolkit; runtime needs the CUDA driver. On an
+allocated host, run `nvlink_run.py` with `--binary`, `--observer`, their manifest
+hashes, `--devices 0,1`, `--lock-root`, `--output` (outside the checkout),
+`--payload`, `--mode` and `--memory device|host|mixed`. The controller locks the
+GPU UUIDs and requires an NVLink topology edge.
 
-Modes cover healthy READ/WRITE, source-close waiting for an open import,
-requester exit before close, and stale source identity rejection. The
-`batch-healthy`, `batch-graceful` and `batch-requester-exit` modes use three
-out-of-order slices across two requester allocations on one native context.
-They require one native import per group, distinct nonoverlapping local
-allocations before use and one matching trailing event drain for each group. Checks include
-full logical bytes/guards, native allocation initialization, exact imported
-handles/copy ranges, matched event drain and IPC close, process reaping, lock
-release and GPU allocation baselines. The observer forwards real Driver API
-results, including exact pinned allocation/free and HtoD/DtoH pointer ABIs.
-Host/mixed controls require native pinned owners and no temporary allocation
-inside an import/copy cycle; initialization/readback staging outside the cycle
-is accounted separately. CPU negative controls check its transparency and reject incomplete
-evidence. See [local pinned host qualification](qualification.md#local-pinned-host-cuda-ipc),
-[subbatch qualification](qualification.md#bounded-cuda-ipc-subbatches)
-and [the initial profile](qualification.md#cooperative-cuda-ipc-and-nvlink) for
-exact artifacts and profile limits.
-
-The `cache-healthy` mode starts four concurrent READ submissions, then a WRITE
-submission over the same three-slice mixed/host/device group: all fifteen payload
-copies must share one native import/export and one final close. `cache-graceful`
-and `cache-requester-exit` exercise the distinct persistent export lifetime.
-The latter is killed after event drain and before native close, and verifies
-retention without final source payload readback. Source admission is no longer
-held by an idle handler; the export table remains charged instead. Native ledger
-checks distinguish IPC payload from owned-device setup/readback, require exact
-copy directions/ranges and event/context completion, and validate final cleanup.
-A payload copy cannot borrow an event generation, query/wait or restoring context pop from later
-owned-device setup/readback. See [cache qualification](qualification.md#bounded-cross-submission-cuda-ipc-cache)
-for exact artifacts and the accepted profile.
+Modes cover healthy READ/WRITE, source close with an open import, requester exit
+and stale identity rejection; `batch-*` modes use three out-of-order slices over
+two allocations, and `cache-*` modes run four concurrent READs and a WRITE through
+one import and one final close. Checks cover full bytes and guards, exact handles
+and copy ranges, matched event drains and IPC close, process reaping, lock release
+and GPU allocation baselines; the observer forwards real Driver API results. See
+[cooperative IPC](qualification.md#cooperative-cuda-ipc-and-nvlink),
+[subbatches](qualification.md#bounded-cuda-ipc-subbatches),
+[pinned host](qualification.md#local-pinned-host-cuda-ipc) and
+[cache](qualification.md#bounded-cross-submission-cuda-ipc-cache) evidence.

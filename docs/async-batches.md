@@ -1,53 +1,43 @@
 # Asynchronous batches
 
-P1.4 implements a bounded CPU/TCP subset of TENT F08/F10. The
-[completion plan](completion-plan.md) remains the only execution queue. This
-source profile has CPU controls; RDMA/CUDA source controls and installed
-consumer qualification are recorded separately in the [qualification ledger](qualification.md).
+Batches are the engine's asynchronous submission API (TENT F08/F10). They work
+for every transport. This page also covers the opt-in admission controls that
+sit in front of all data submissions: the runtime queue, QoS contracts and
+receiver credits.
 
 ## Ownership and API
 
-Use `Arc<TransferEngine>::allocate_batch(capacity)` to reserve descriptor slots
-and an engine-scoped monotonically increasing `BatchId`. Capacity is positive
-and at most `max_batch_requests`. `max_allocated_batches` and
-`max_allocated_requests` bound all live reservations, including completed batches
-that have not been freed and dropped handles whose workers remain active.
+`Arc<TransferEngine>::allocate_batch(capacity)` reserves descriptor slots and an
+engine-scoped, increasing `BatchId`. Capacity is positive and at most
+`max_batch_requests`. `max_allocated_batches` and `max_allocated_requests` bound
+all live reservations, including finished batches not yet freed and dropped
+handles whose workers are still running.
 
 `Batch::submit(operation, peer, requests, notification, timeout)` appends a group
-and returns its stable public task range. All addresses, permissions, bytes and
-source authority are validated before enqueue. The group owns resolved local
-registrations and a requester-admission charge. A rejected group adds no public
-tasks; accepted earlier groups are never replayed or rolled back. Groups in one
-batch execute FIFO; different batches can progress concurrently. Each batch has
-at most one worker, bounded by its allocation reservation. Submission records,
-including empty submissions, are bounded by capacity too.
+and returns its stable task range. Addresses, permissions, bytes and source
+authority are validated before enqueue; a rejected group adds no tasks, and
+accepted groups are never replayed or rolled back. Groups in one batch run FIFO,
+one worker per batch; different batches progress concurrently.
 
-`seal()` stops append. `status()`, `task_status()`, `task_statuses()` and
-`submissions()` only read worker-published state; they perform no transfer,
-retry, notification or progress step. Before seal the overall state is `Open`,
-even if every task submitted so far has completed. After seal, `Pending` becomes
-`Completed`, `Failed` or `Cancelled` only after all accepted groups exit.
-Per-task terminal states never change, and the sealed overall terminal is stable.
+`seal()` stops appends. `status()`, `task_status()`, `task_statuses()` and
+`submissions()` only read published state. Before seal the overall state is
+`Open`; after seal it becomes `Completed`, `Failed` or `Cancelled` once every
+group exits, and terminal states never change. `wait(timeout)` requires seal;
+its timeout neither cancels nor releases work. Each submission's deadline starts
+at submit and covers validation, queueing, transfer and the attached
+notification.
 
-`wait(timeout)` requires seal and uses a condition variable. Its own timeout
-neither cancels nor releases work. A submission's independent absolute deadline
-begins at submit and includes validation/queue time and attached notification.
-
-`free()` returns `BatchBusy` while a group still owns local work, preserving the
-handle for retry. Once idle it seals, joins its worker, releases descriptor
-capacity and its engine reference, and invalidates further batch operations.
-Dropping an active handle instead disconnects the queue without discarding
-accepted groups: the detached worker retains the engine, registrations and both
-allocation/admission budgets until it exits. This prevents repeated handle drops
-from bypassing the thread or retained-owner limits.
-
-`submit_async(...)` allocates, submits one group and seals it. See the runnable
-[`async_batch` example](../examples/async_batch.rs) for multiple appends.
+`free()` returns `BatchBusy` while work still owns local memory, keeping the
+handle for retry; once idle it seals, joins the worker and releases capacity.
+Dropping an active handle detaches the worker, which keeps the engine,
+registrations and budgets until it exits. `submit_async(...)` allocates, submits
+one group and seals it; see the
+[`async_batch` example](../examples/async_batch.rs).
 
 ## Runtime admission and dispatch window
 
-`EngineConfig::runtime_queue` defaults to `None`. Enable it to limit actual
-dispatch independently from accepted-owner retention:
+`EngineConfig::runtime_queue` defaults to `None`. Enable it to limit dispatch
+independently of the retained-owner budgets:
 
 ```rust
 use orbit_te::{EngineConfig, RuntimeQueueConfig, TransferEngine};
@@ -65,63 +55,39 @@ let engine = TransferEngine::new(EngineConfig {
 # Ok::<(), orbit_te::Error>(())
 ```
 
-Each nonempty submission is one owner. `max_inflight_batches/bytes` retain their
-existing meaning: all accepted outgoing calls, queued work and uncertain native
-owners. The queue adds two positive limits on concurrently reserved submissions
-and their whole byte charges, including attached notification bytes. It is not
-a live WR count, bandwidth limiter or a separate pool of retained memory.
-A group exceeding `max_dispatch_bytes` returns `ResourceExhausted` before task
-publication or transfer. Default `RuntimeQueueConfig` uses 64 owners, 64 MiB and
-FIFO; the existing global budgets can impose tighter limits.
+Each nonempty submission is one owner. `max_inflight_batches/bytes` still bound
+everything accepted, queued or uncertain; the queue adds limits on concurrently
+dispatching submissions and their bytes (including notifications). A group
+larger than `max_dispatch_bytes` returns `ResourceExhausted` before any task is
+published. The default config allows 64 owners, 64 MiB and FIFO.
 
-FIFO uses original admission sequence. With `deadline_aware=true`, the eligible
-heads use earliest absolute submission deadline, with FIFO ties. All current
-submissions have a timeout/deadline; it includes preparation, queue residence,
-transport and attached notification. EDF only reorders heads that have not
-reserved a window; it does not preempt a reservation or posted DMA. RDMA
-`Priority` still independently orders payloads inside transport workers.
-Only the oldest retained submission in each Batch is eligible. Later submissions
-keep their original sequence and deadline when activated, so a short deadline
-cannot overtake its own dependency or cause self-deadlock. A head that does not
-fit remaining byte capacity blocks later eligible heads until capacity is released.
-When receiver credit gating is enabled, credit-starved or fenced heads are
-ineligible and may be bypassed; their same-Batch successors remain blocked.
+FIFO follows admission order. With `deadline_aware: true`, eligible heads go
+earliest-deadline-first with FIFO ties. Only the oldest submission in each batch
+is eligible, so a short deadline cannot overtake its own predecessor. A head that
+does not fit blocks later heads until capacity frees. EDF never preempts a
+reservation or posted DMA, and RDMA `Priority` orders payloads independently.
 
-Both synchronous and asynchronous data submissions use this queue across TCP,
-RDMA, NVLink and outer staged transfers. Existing caller/Batch workers wait on a
-condition variable; no additional scheduler thread is created. Cancellation of
-the first task and queue expiry return before transport I/O and attached
-notification. Canceling a later task preserves the uncanceled prefix. A later
-group in one Batch is still observed only when its worker reaches that group.
-Standalone notifications, segment open, batch allocation and empty submissions
-keep their existing admission paths and do not acquire dispatch reservations.
-Internal staging CROSS calls do not reacquire an outer window.
+The queue covers synchronous and asynchronous submissions on TCP, RDMA, NVLink
+and outer staged transfers, using existing caller and batch workers. Cancellation
+or expiry of a queued group returns before any I/O. Standalone notifications,
+segment open, batch allocation, empty submissions and internal staging CROSS work
+bypass the queue. `EngineStats::runtime_queue` reports queued and dispatching
+owners and bytes; `Unquiesced` keeps a reservation until reclaim is proven.
 
-`EngineStats::runtime_queue` is `None` when disabled; otherwise it reports
-`queued_owners/bytes` and `dispatching_owners/bytes`. Queued counts include
-dependency-blocked groups. Dispatching counts mean reserved capacity, including
-owners whose worker has not started I/O yet. Reservations end after backing
-release; Unquiesced retains them, including the same-Batch dependency, until a
-physical reclaim proof exists. `close_requester` fences new submissions while
-accepted work continues to drain through the same queue.
-
-This follows frozen TENT's separation of `tryAdmit`, `pickForDispatch` and
-`refillDispatchWindow`. TENT schedules physical requests, including merged-task
-aliases; OrbitTE currently schedules whole ordered submissions. Physical-request
-granularity, staging reserves, deadline-infeasible cancellation/MLU and
-local-recompute hooks remain open. The [source controls](qualification.md#runtime-admission-and-dispatch-window)
-do not establish native fairness or a performance advantage.
+TENT separates `tryAdmit`, `pickForDispatch` and `refillDispatchWindow` and
+schedules physical requests (including merged aliases); OrbitTE schedules whole
+ordered submissions. Physical-request granularity, staging reserves and
+deadline-infeasible cancellation are open. See
+[qualification](qualification.md#runtime-admission-and-dispatch-window).
 
 ## QoS contracts
 
-`EngineConfig::qos` defaults to `None`. `Some(QosConfig)` enables typed version-1
-contracts with the frozen TENT overlay order: global defaults, tenant defaults,
-then that tenant's intent override. Each field overrides independently. A field
-set to `None` inherits the earlier layer; an effective `None` has no contract cap.
-`Some(0)` is a hard zero budget. Empty/all-whitespace request identity resolves to
-`default`/`unspec`. Names use ASCII whitespace trimming and ASCII lowercase;
-configuration keys must be nonempty, at most 256 bytes and unique after
-normalization. At most 4096 compiled contracts, including defaults, are allowed.
+`EngineConfig::qos` defaults to `None`. `Some(QosConfig)` enables version-1
+contracts with TENT's overlay order: global defaults, tenant defaults, then the
+tenant's intent override. Each field overrides independently; `None` inherits,
+an effective `None` means no cap, and `Some(0)` is a hard zero. Blank identities
+resolve to `default`/`unspec`. Names are trimmed and lowercased, at most 256
+bytes and unique; at most 4096 contracts compile.
 
 ```rust
 use orbit_te::{EngineConfig, Priority, QosConfig, QosPolicyFields,
@@ -157,80 +123,45 @@ assert_eq!(policy.effective_priority(), Priority::High);
 # Ok::<(), orbit_te::Error>(())
 ```
 
-`EffectiveQosPolicy` is an immutable engine-bound handle. Explicit handles use
-the `requested_priority` captured at resolution when no layer overrides it;
-they replace the request's legacy `priority`. `TransferRequest::qos=None` still
-uses the engine's precompiled `default`/`unspec` contract, falling back to that
-request's `priority` only when no layer specifies one. It cannot bypass a
-configured default budget. With QoS disabled, ordinary `qos=None` requests keep
-their prior behavior; an explicitly resolved disabled handle retains its
-context priority. A handle from another engine returns `ForeignQosPolicy` during
-preparation. Use `request.with_qos(policy)` to attach a resolved handle.
+`EffectiveQosPolicy` is an immutable, engine-bound handle; attach it with
+`request.with_qos(policy)`. Its priority replaces the request's own. A request
+without a handle uses the precompiled `default`/`unspec` contract, so it cannot
+bypass a configured default budget. A handle from another engine returns
+`ForeignQosPolicy`. The effective priority feeds
+[transport selection](transport-selection.md) and RDMA dispatch; TCP and NVLink
+treat it as advisory. Caps apply to every data transport.
 
-All transports accept High, Medium and Low. A selector rule with a priority
-filter matches the effective priority exactly. TCP and NVLink treat the
-result as advisory. RDMA workers use it for ordinary and sliced payloads and
-staging CROSS work. Policies neither reorder requests within a Batch nor change
-FIFO/EDF selection. Byte/request caps apply to all data transports through the
-shared preparation owner.
+Each **resolved contract** has one budget: an unknown tenant shares the global
+default, an unknown intent shares its tenant's default, and an explicit intent
+has its own bucket. Unknown names cannot create new counters, and an intent
+budget is not also charged to its tenant default. `max_inflight_bytes` counts
+payload bytes and `max_inflight_requests` counts public requests. In the default
+reject mode, a group over its cap returns `ResourceExhausted` before any charge.
+Accepted work keeps its charge until its prepared owner is actually released;
+`Unquiesced` keeps it. Identities are application-supplied, not authentication.
 
-Each **resolved contract** has its own aggregate retained-byte/request budget:
-an unknown tenant shares `global_default`; an unknown intent of a known tenant
-shares that tenant's default bucket; an explicit intent uses its compiled bucket.
-Repeated resolution, different fallback priorities and arbitrary unknown names
-cannot create new counters. Field inheritance does not imply simultaneous
-parent/child charging: an intent budget is independent of its tenant-default
-bucket. Existing engine-wide inflight budgets remain the aggregate outer bound.
-These cooperative identities are application-supplied, not authentication.
-
-Preparation groups mixed-contract requests by static slot. Without an effective
-delay action anywhere in the engine, it atomically checks the entire submission
-before charging any slot or publishing public tasks.
-`max_inflight_bytes` counts payload lengths; `max_inflight_requests` counts public
-requests, not submissions or native slices. Attached notifications are covered
-by existing global budgets. In this default reject mode, over-cap groups return
-`ResourceExhausted` immediately. Existing accepted work, including credit waits,
-dispatch waits and uncertain DMA, retains the charge. Clean cancellation, expiry
-or failure releases it only when actual prepared ownership ends; Unquiesced
-retains it. Internal staging legs are not charged again. Empty groups, standalone
-notifications and registration/control calls have no QoS data charge.
-
-`policy.fields()`, `matched_contract()`, `effective_priority()` and the normalized
-identity accessors explain resolution. `policy.usage()` returns that contract's
-current owners, payload bytes and public request count, or `None` for an uncapped
-policy. A priority-only configuration creates no quota ledger. Resolution is
-reusable; submission uses numeric slots and no additional per-slice policy
-lookup or network message. Default admission uses one quota lock per bounded
-group; delay-enabled scheduling rechecks quota only at admission/wakeup boundaries.
-
-Frozen TENT's `QosContractResolver` resolves policy and reports
-`diagnostic_scope=resolution_only`; it has no runtime consumer in the frozen
-tree. OrbitTE now consumes priority and retained-resource limits. Typed Rust
-configuration, rejecting normalized duplicate intent keys and treating all-blank
-request identity as the default are deliberate differences. The supported JSON
-fields can also load into this same configuration, as described below.
-The consumed delay/reject subset is described below. Transport fallback,
-local recompute, compression, parent/child and cluster-wide quotas, native
-fairness and full QoS remain open. Receiver-credit `qos_class` is still a separate peer
-binding and is not implicitly mapped from these contracts. See the
-[source qualification](qualification.md#qos-contract-consumption).
+`policy.fields()`, `matched_contract()` and `effective_priority()` explain
+resolution, and `policy.usage()` reports current owners, bytes and requests.
+Submission uses numeric slots with no per-slice lookup. TENT's
+`QosContractResolver` only resolves policy (`diagnostic_scope=resolution_only`);
+OrbitTE also enforces priority and caps. Transport fallback, local recompute,
+compression and hierarchical or cluster quotas are open. See
+[qualification](qualification.md#qos-contract-consumption).
 
 ### QoS admission actions
 
-`allowed_degraded_actions` follows TENT's field-level overlay: an explicit
-tenant/intent list replaces the inherited list, including an empty list. Typed
-Rust uses `Option<QosDegradedActions>` with `delay` and `reject` flags. JSON uses
-an array of normalized action names; order and repeated names do not affect the
-allowlist. Unsupported actions are errors.
+`allowed_degraded_actions` overlays like other fields (an explicit list, even
+empty, replaces the inherited one). Typed Rust uses `QosDegradedActions` with
+`delay` and `reject` flags; JSON uses an array of names.
 
 | Effective actions | On contract quota pressure |
 | --- | --- |
-| Absent, `[]`, or `["reject"]` | Return `ResourceExhausted` |
-| `["delay"]` or `["delay", "reject"]` | Wait for temporary pressure until the original deadline |
-| Any action with a group intrinsically larger than its cap | Reject during preparation; drain cannot make the group fit |
+| Absent, `[]` or `["reject"]` | Return `ResourceExhausted` |
+| `["delay"]` or `["delay", "reject"]` | Wait until capacity frees or the original deadline passes |
+| Any, with a group larger than its cap | Reject during preparation |
 
-Allowing delay requires explicit `EngineConfig::runtime_queue`; engine creation
-otherwise returns `InvalidConfig`. For example:
+Delay requires `EngineConfig::runtime_queue`; otherwise engine creation returns
+`InvalidConfig`:
 
 ```rust
 use orbit_te::{EngineConfig, QosConfig, RuntimeQueueConfig, TransferEngine};
@@ -246,42 +177,20 @@ let engine = TransferEngine::new(EngineConfig {
 # Ok::<(), orbit_te::Error>(())
 ```
 
-In a delay-enabled engine **all bounded QoS contracts**, including reject-only
-overrides, acquire capacity at their eligible Batch head. Later groups cannot
-reserve quota ahead of their predecessor. The runtime queue acquires every
-contract slot, receiver credit and dispatch window together, with no partial
-charge while waiting. Independent eligible batches may bypass a QoS-blocked
-head. Queued buffers and registrations remain bounded by the engine-wide
-`max_inflight_batches/bytes`; `policy.usage()` counts acquired QoS capacity only.
-
-Preparation still rejects an intrinsically oversized group or a currently full
-reject-only slot without publishing tasks. If a reject-only slot fills after
-enqueue, that accepted submission fails at dispatch: its first task reports
-`ResourceExhausted` with no remote effect, and later tasks are skipped. A full
-reject-only slot wins over a delay slot in the same mixed-contract group.
-Waiting does not extend the submission deadline. Cancellation and expiry use
-the existing batch state machine and finish before data I/O. Synchronous calls
-wait in the same queue; no new worker or polling loop is added.
-
-Once acquired, quota remains owned through backing cleanup, even after logical
-completion. Actual prepared-owner Drop returns it and wakes the queue;
-Unquiesced retains it. Every exiting owner atomically retires its reservation,
-including one cancelled before acquiring quota; remaining queue metadata cannot
-reacquire capacity during Drop. Receiver credit sync runs only when QoS is eligible and
-keeps network I/O outside admission locks.
-
-Frozen TENT parses and overlays these action names but labels the resolver
-`resolution_only`. The executable rules above are OrbitTE's defined extension,
-not a claim that the frozen engine already implements them. See
-[source qualification](qualification.md#qos-admission-actions).
+When delay is enabled anywhere, every capped contract acquires capacity at its
+batch head, together with receiver credit and the dispatch window, with no
+partial charge while waiting; independent batches can pass a blocked head. If a
+reject-only slot fills after enqueue, that submission fails at dispatch with no
+remote effect and its later tasks are skipped. Waiting never extends the
+deadline. TENT parses these action names but does not execute them; this
+behavior is OrbitTE's extension. See
+[qualification](qualification.md#qos-admission-actions).
 
 ### JSON QoS configuration
 
-`QosConfig::from_json(&str)` and `QosConfig::from_json_file(path)` read the top-level
-`qos` section of a TENT-format engine document. They return `Result<Option<QosConfig>>`
-for direct assignment to `EngineConfig::qos`. Loading does not create an engine or
-alter a live one. Configure other engine settings through `EngineConfig`; this
-loader ignores JSON fields outside `qos` and does not import transport settings.
+`QosConfig::from_json(&str)` and `QosConfig::from_json_file(path)` read the `qos`
+section of a TENT-format engine document and return `Result<Option<QosConfig>>`
+for `EngineConfig::qos`. Other sections are ignored.
 
 ```json
 {
@@ -316,127 +225,58 @@ let engine = TransferEngine::new(EngineConfig {
 # Ok::<(), orbit_te::Error>(())
 ```
 
-Only version 1 is accepted; omission selects version 1. Missing/null `qos`, `{}`,
-and a version-only QoS object return `None`, matching frozen TENT's disabled
-resolver. Explicit `"defaults": {}` or `"tenants": []` enables an empty contract.
-Policy nodes and tenants must be objects; arrays and null policy values are
-rejected. Absent fields inherit, while zero bytes/requests remain hard zero caps.
-
-| Field | Accepted representation |
+| Field | Accepted values |
 | --- | --- |
-| `priority` | Integer 0/1/2, strings `high`/`medium`/`low`, or strings `0`/`1`/`2`; surrounding ASCII whitespace and case are normalized |
-| `max_inflight_bytes` | Nonnegative integer, or integer string with optional B, KiB, MiB, GiB or TiB; KB/MB/GB/TB also multiply by 1024, as in TENT |
-| `max_inflight_requests` | Nonnegative JSON integer; strings and floating-point values are rejected |
+| `priority` | 0/1/2, or `high`/`medium`/`low` (case-insensitive) |
+| `max_inflight_bytes` | Integer, or integer string with B, KiB, MiB, GiB or TiB (KB/MB/GB/TB also multiply by 1024, as in TENT) |
+| `max_inflight_requests` | Nonnegative integer |
+| `allowed_degraded_actions` | Array of `delay` and `reject` |
 
-All limits must fit the target's `usize`; conversion and multiplication are
-checked. Identifiers use the same 256-byte limit and ASCII normalization as typed
-configuration. At most 4096 compiled contracts, including global and tenant
-defaults, are accepted. Input is capped at 1 MiB; file reads consume at most one
-extra byte to detect overflow. No process environment, file watcher or reload
-thread is involved.
-
-Duplicate QoS fields, duplicate normalized tenant/intent names and unknown QoS
-keys are errors. The loader reports JSON schema diagnostics through
-`Error::InvalidQosConfig`, including the offending field where provided by the
-parser. Existing typed identifier/count checks may return `InvalidConfig`, and
-file access errors return `Io`. A failed load returns no partially usable config.
-
-`allowed_degraded_actions` accepts arrays containing `delay` and `reject`,
-including an empty array. Names use ASCII trimming and lowercase. Explicit null,
-non-string entries, `fallback_transport`, `local_recompute`, `compress` and
-unknown names are rejected. Bandwidth, weight and deadline fields not consumed
-by the engine remain rejected. Frozen TENT accepts all five action names as
-resolution-only metadata; OrbitTE accepts only the priority, inflight limits and
-[admission actions](#qos-admission-actions) that its runtime consumes.
-This is supported-field compatibility, not the full TENT engine configuration API.
-
-JSON/file processing runs once before engine creation, using the existing serde
-dependencies in every feature profile. The existing resolver compiles the resulting
-typed configuration once; submissions still reuse numeric slots and immutable
-policy handles. No parsing, extra lock or allocation is added to slice dispatch.
-See [source controls](qualification.md#json-qos-configuration).
+Only version 1 is accepted. Missing or null `qos`, `{}` and a version-only object
+return `None`, matching TENT's disabled resolver. Duplicate or unknown fields,
+duplicate normalized names and unsupported actions (`fallback_transport`,
+`local_recompute`, `compress`) are errors reported as `Error::InvalidQosConfig`.
+Input is limited to 1 MiB and parsed once before engine creation. See
+[qualification](qualification.md#json-qos-configuration).
 
 ## Receiver credit gating
 
-`EngineConfig::max_receiver_credit_sessions` defaults to zero (disabled). Set a
-positive bound, at most 4096, to require a cooperative credit binding for every
-nonempty outgoing data submission. A missing binding fails during preparation,
-before public task publication or transport I/O. Each binding identifies a peer
-endpoint and authoritative `RemoteSegment::source_epoch()`. READ and WRITE both
-consume request grants against that peer; on READ the payload receiver is local.
-These credits do not establish remote buffer/RQ capacity or a pacing rate.
+`EngineConfig::max_receiver_credit_sessions` defaults to zero (disabled). A
+positive value (at most 4096) requires every nonempty outgoing data submission
+to hold a credit binding for its peer endpoint and source epoch; a missing
+binding fails during preparation. READ and WRITE both consume grants. Credits
+authorize requests; they do not prove remote buffer capacity or limit rate.
 
-In manual mode, an application calls `activate_receiver_credit(peer, epoch, qos_class)`, then
-delivers `ReceiverCreditUpdateV1` through `apply_receiver_credit`. The update is
-a typed local API, not a TENT-compatible wire message. Use schema 1, flags 0, the
-peer's source epoch as `receiver_session_id`, matching QoS class, positive credit
-epoch and positive sequence. `DataBytes` and `RequestSlots` are **cumulative**
-grant totals, not increments. Both must cover the whole next submission:
+In manual mode, call `activate_receiver_credit(peer, epoch, qos_class)` and
+deliver `ReceiverCreditUpdateV1` through `apply_receiver_credit` (a local typed
+API, not a TENT wire message). Totals are **cumulative**, not increments:
 
 | Charge | Meaning |
 | --- | --- |
-| `DataBytes` | Sum of payload request lengths, excluding notification bytes |
-| `RequestSlots` | Number of public requests in the submission |
-| `StagingSlots`, `ConsumerSlots` | Automatic source-owned remote Pin slots/sessions, described below; manual updates remain rejected |
+| `DataBytes` | Sum of payload lengths, excluding notification bytes |
+| `RequestSlots` | Number of public requests |
+| `StagingSlots`, `ConsumerSlots` | Automatic remote Pin owners only (below) |
 
-Partial updates preserve omitted totals; a decreasing total or repeated resource
-rejects the whole update. Old/duplicate sequences have no effect. Sequence gaps
-are applied and reported as `SequenceGap`. Each engine is one sender ledger;
-applications must not copy one finite receiver grant independently to multiple
-senders. This API does not authenticate the issuer. One class is bound per peer;
-mapping from per-request QoS contracts to credit classes remains open.
+Decreasing totals or repeated resources reject the update; old or duplicate
+sequences are ignored. A credit-starved head waits without reserving the dispatch
+window, so other peers proceed. Credit is reserved with dispatch eligibility,
+refunded if the group is cancelled before its first transport handoff, and fully
+committed at that handoff, even if the transfer later fails. Completion does not
+return credit; the issuer grants new cumulative totals.
 
-With the runtime queue, a head lacking fresh credit waits without reserving the
-dispatch window, so another eligible peer can run. Without that queue, the
-caller/Batch worker waits on the credit ledger. Updates wake waiting owners and
-refill the queue. Original submission deadlines and cancellation still apply.
-All accepted owners, including those waiting for their first grant, retain the
-binding and existing inflight budgets. Empty groups, standalone notifications,
-registration/control work and internal staging CROSS work do not consume these
-credits. An outer staged group consumes exactly once.
-
-Credit is reserved atomically with dispatch eligibility. Cancellation, expiry or
-fencing before the first transport handoff refunds any reservation when the
-actual owner is released. At the first handoff, the **entire group's** debit is
-committed: success, a transport error, or a canceled later suffix does not
-refund it. Completion is not an automatic request-slot return; the issuer must
-grant additional cumulative totals. `receiver_credit_stats(peer)` exposes
-active/reserved owners and cumulative consumption, including still-refundable
-reservations. Unquiesced ownership retains its binding and reservation.
-
-`freshness_ttl_ms=0` has no expiry. Positive TTL gates new reservations only;
-already reserved work remains usable. A duplicate update cannot extend TTL;
-a new-sequence empty-grants heartbeat can refresh freshness without changing
-balances. If a credit-eligible large head blocks the byte window, existing
-waiters also wake at its credit expiry to reconsider smaller peers. No polling
-thread is added. The frozen TENT ledger carries this field but does not consume it.
-
-Activation in the same epoch preserves totals, sequence and freshness. A newer
-epoch requires every accepted owner to drain. `deactivate_receiver_credit`
-requires an exact epoch and fences new work plus reserved-but-uncommitted
-groups; already committed groups may finish. It returns `BatchBusy` while any
-actual owner remains, including uncertain DMA. Retry after drain to remove the
-binding. Same-epoch activation cannot undo a fence. After removal, the caller
-must use a fresh administrative epoch and reject delayed old updates: retired
-epoch history is not retained. Source restart also needs a fresh peer binding.
-Updates remain accepted during requester close so previously accepted work can
-drain.
-
-Frozen TENT's `SenderCreditLedger` provides the cumulative accounting model but
-is not wired into its transport/admission path. OrbitTE now consumes it at
-whole-submission granularity. The optional receiver issuer and cumulative wire
-synchronization and automatic staging/consumer owner charges are described below.
-Manual staging credit mapping and full QoS/pacing remain open.
-[Source controls](qualification.md#receiver-credit-gating) do not qualify native
-fairness, receiver protection or performance.
+`freshness_ttl_ms` gates new reservations only. `deactivate_receiver_credit`
+fences new and uncommitted work and returns `BatchBusy` until every owner drains.
+`receiver_credit_stats(peer)` reports owners and consumption. TENT's
+`SenderCreditLedger` provides this accounting model but is not wired into its
+admission path; OrbitTE consumes it per submission. See
+[qualification](qualification.md#receiver-credit-gating).
 
 ## Automatic receiver windows
 
-Configure `EngineConfig::receiver_credit=Some(ReceiverCreditConfig)` on the
-authoritative peer and enable `max_receiver_credit_sessions` on the requester.
-Call `connect_receiver_credit(peer, qos_class, timeout)` once before data
-submission. Ordinary TCP, RDMA, NVLink and staged requests then share the same
-credit owner; no manual update loop is required.
+Configure `EngineConfig::receiver_credit = Some(ReceiverCreditConfig)` on the
+receiving peer and `max_receiver_credit_sessions` on the requester, then call
+`connect_receiver_credit(peer, qos_class, timeout)` once. All transports then
+share that credit owner with no manual update loop:
 
 ```rust
 use orbit_te::{EngineConfig, ReceiverCreditConfig, TransferEngine};
@@ -464,235 +304,92 @@ requester.disconnect_receiver_credit(&peer, Duration::from_secs(3))?;
 # Ok::<(), orbit_te::Error>(())
 ```
 
-Each sender engine has one source-instance identity. The receiver reserves a
-fixed byte/request window for that identity and returns its credit epoch.
-`max_bytes` and `max_requests` bound the sum of these windows. The issuer's
-`max_sessions` bounds active and retired sender records; the requester's separate
-`max_receiver_credit_sessions` bounds its active, pending and retired receiver
-bindings. Window capacity can fill before the session-count limit. Defaults are 128 sessions, 64 MiB/1024
-aggregate, and 1 MiB/16 public requests per sender. Each whole submission must
-fit its window, otherwise preparation returns `ResourceExhausted` before task
-publication. Windows count payload bytes and public requests, as in manual mode.
+The receiver reserves a fixed byte/request window per sender engine;
+`max_bytes` and `max_requests` bound the sum, and each submission must fit its
+window. Defaults are 128 sessions, 64 MiB / 1024 aggregate and 1 MiB / 16
+requests per sender. A receiver epoch can have only one endpoint binding per
+requester, and a lost connect reply is recovered by retrying the same peer.
 
-Automatic bindings cannot be manually activated, updated or retired. Within a
-requester engine, one receiver source epoch may have only one endpoint binding;
-using another address/relay for that same receiver cannot create another balance.
-An initial exchange records its identity before I/O. If its reply is lost, retry
-the same peer and class to recover the existing epoch and window. Pending state
-is retained, even when the caller has stopped requester admission. Existing
-automatic connections can still be recovered after `close_requester`; opening a
-new binding requires outgoing admission. A pending epoch-zero binding must be
-recovered before disconnect; an unknown close never claims success.
+Grants are `window + completed_total`. The sender reports only successfully
+completed groups, published when the actual prepared owner drops; failed,
+cancelled or uncertain groups earn nothing. When the next group lacks credit, its
+existing worker performs one cumulative sync, shared by concurrent waiters, with
+no background thread or per-slice RPC. `disconnect_receiver_credit` returns
+`BatchBusy` until every committed group has completed, then returns the window
+and leaves a tombstone. Sender crashes are not reclaimed automatically.
+`receiver_credit_issuer_stats()` reports sender and window counts.
 
-The receiver issues cumulative grants as `window + completed_total`. The sender
-reports only monotonic committed and successfully completed data-group totals.
-`BatchReport::is_complete()` marks a successful data group; notification failure
-does not turn successful data into failure. Completed totals are published only
-when the actual `PreparedSubmission` drops its backing and queue owners before
-its `CreditPermit`. A partial/cancelled suffix, a transport error, or uncertain
-remote cleanup earns no new grant, even if the requester is locally drained.
-Unquiesced owners retain their original charge. Unstarted reservations still
-roll back locally. No failure path invents a fresh window.
-
-When the next group lacks credit and there are newly completed owners, its
-existing caller/Batch worker performs one cumulative sync. Concurrent requests
-share one in-flight sync per peer. The queue and ledger mutexes are released
-before network I/O; completion and sync exit wake both wait domains. If another
-group completes during the exchange, waiters reconsider that newer total before
-parking. There is no background credit thread, per-slice RPC or completion-time
-network call. An unchanged snapshot with no new completion causes no repeated
-polling. Sync/close retries resend cumulative metadata, never payload.
-
-Automatic windows have no freshness expiry. Std TCP connection establishment
-is capped at 250 ms or the original remaining deadline, whichever is shorter;
-after connection, control I/O retains that original deadline and checks
-cancellation at the existing 25 ms socket polling boundary. A failed exchange
-fails its current waiting submission and leaves the cumulative snapshot available
-for a subsequent attempt; it does not poison other waiters or reset consumption.
-
-`disconnect_receiver_credit` permanently fences new work on the binding. It
-returns `BatchBusy` while owners remain or any committed group lacks successful
-completion. Retry after clean drain. Existing sync and close receipts remain
-serviceable after source admission closes; new receiver sessions do not.
-Successful disconnect returns the fixed window and records a terminal tombstone
-before acknowledging. Lost close replies can be retried. Neither side reopens
-that sender/receiver identity, and tombstones count toward the session limit
-until engine exit. EOF, TTL, sender crash and local handle drop never reclaim a
-window automatically. Recovery of failed/uncertain groups and crashed senders
-requires a separate physical proof; it is not implemented by this API.
-
-`receiver_credit_stats(peer)` adds automatic-mode and completed-total counters.
-`receiver_credit_issuer_stats()` reports active/retired senders and reserved
-window bytes/requests. These are cooperative scheduling grants, not measured
-receiver buffer/RQ occupancy, authorization or a native rate guarantee. Fixed
-windows do not redistribute idle capacity or map QoS intent into credit classes.
-
-OrbitTE uses fixed-size `CreditSync` and `CreditClose` metadata frames.
-Pin reserves space for the session binding even when automatic credits are disabled. Frozen TENT supplies the sender ledger
-and resource/epoch/sequence model, but has no receiver issuer or network consumer.
-This bounded issuer is an OrbitTE extension. Automatic staging/consumer owner
-charges are described below; manual resource mapping, adaptive windows,
-failed-sender reclamation and native fairness/performance remain open. See [source qualification](qualification.md#automatic-receiver-credit-windows).
+TENT has no receiver issuer or network consumer; the `CreditSync` and
+`CreditClose` frames and this issuer are OrbitTE extensions. See
+[qualification](qualification.md#automatic-receiver-credit-windows).
 
 ## Staging and consumer owner credits
 
-With `--features cuda`, a source can enable four additional
-`ReceiverCreditConfig` fields: `max_staging_slots`, `max_consumer_slots`,
-`staging_slots_per_sender`, and `consumer_slots_per_sender`. All four default to
-zero (disabled); enabling requires positive values and per-sender windows that
-fit their respective totals. Connecting an automatic sender reserves these
-windows along with the existing byte/request windows. Example: totals of 16
-staging slots and 4 consumers, with 4 and 1 per sender, authorize at most four
-concurrent sender windows. Configure the physical pool separately.
+With `--features cuda`, a source can also set `max_staging_slots`,
+`max_consumer_slots`, `staging_slots_per_sender` and `consumer_slots_per_sender`
+(all default to zero, disabled). Connecting a sender then reserves these windows
+too.
 
-| Resource | Actual source owner | Return condition |
+| Resource | Source owner | Returned when |
 | --- | --- | --- |
-| `StagingSlots` | One negotiated remote Pin ring slot, including native construction | Its `StageBufferLease` safely returns Idle/Vacant after CUDA and private transport cleanup |
-| `ConsumerSlots` | One active remote Pin session | Every child slot has returned and the GPU range, CUDA copies and private MR/transport owners have finished |
+| `StagingSlots` | One negotiated remote Pin ring slot | Its lease returns after CUDA and private transport cleanup |
+| `ConsumerSlots` | One active remote Pin session | Every child slot has returned and the session's owners have finished |
 
-The source atomically acquires the negotiated slot depth and one consumer before
-native construction. This uses the source's actual chunk size and depth, not
-the requester's proposed ring width. Unassigned slots roll back; each assigned
-token follows the real lease, including a failed constructor with retained
-backing. A per-Pin child count prevents an implicit Drop failure from returning
-the consumer early. Uncertain cleanup retains both the affected stage charge
-and the session charge. Returning a reusable Idle slot does not destroy its
-pooled allocation or stream.
-
-An automatic request carries its sender session and issuer epoch in the existing
-Pin exchange. A source with owner credits enabled rejects missing, stale or
-closing bindings before allocation. The identifiers are cooperative session
-binding, not authentication. Successful Unpin returns resources before its ACK;
-a lost ACK cannot undo proven local cleanup. EOF with clean drain also returns
-physical charges, while the existing byte/request ledger still withholds fresh
-payload grants for unsuccessful groups. Closing a source credit binding fences
-new Pins and remains busy until its actual resource charges drain. A requester
-fence permits an already committed group to finish later Pin requests.
-
-`receiver_credit_issuer_stats()` exposes reserved windows, active resource charges
-(including retained owners), and explicitly retained subsets. A leaked native
-owner can remain active without incrementing the explicit-retention subset;
-active counts, not the subset alone, govern retirement. Sender success reports
-never release these physical charges. `ConsumerSlots` means the whole Pin session,
-not an external application consumption ACK.
-
-The gate adds no RPC, per-chunk credit work or progress thread. It acquires once
-per Pin and returns on existing cleanup paths. It authorizes remote Pin owners;
-the shared physical pool still serves ordinary/local staging and can independently
-return `ResourceExhausted`. It neither reserves physical buffers nor delays Pin
-until space becomes available. Manual resource updates, adaptive redistribution,
-crashed-sender recovery and generic consumer credits remain open.
-
-Frozen TENT defines the four credit resource tags and a private sender ledger,
-but does not connect that ledger to network admission. Its `ProxyManager` owns
-bitmap chunks and per-chunk locks. OrbitTE keeps that resource boundary and adds
-this automatic owner mapping. Its framing and consumer semantics are OrbitTE
-extensions. See [source controls](qualification.md#staging-and-consumer-owner-credits).
+The source acquires the negotiated depth plus one consumer atomically before
+construction, and rejects a Pin with a missing, stale or closing binding before
+allocation. Uncertain cleanup keeps both charges. These credits authorize remote
+Pin owners; the shared staging pool can still return `ResourceExhausted`
+independently. TENT defines these resource tags but does not connect them to
+admission. See [qualification](qualification.md#staging-and-consumer-owner-credits).
 
 ## Results, cancellation and quiescence
 
-Tasks expose waiting/running/completed/failed/cancelled/skipped states, exact
-bytes of fully completed requests, cancellation requests and a retained structured failure. A failed remote staging
-request can have visible completed READ chunks while contributing zero completed
-bytes; drain status is not rollback. Failure indices are public batch task indices. `request_index` identifies the first
-failed task; `affected_requests` gives the consecutive failure span. A shared
-NVLink close/ACK failure can cover several already attempted tasks. Every task
-in that span shares the failure and drain status; only subsequent tasks are
-skipped/cancelled without I/O. A clean copy/cancel failure followed by a source
-ACK preserves the copied prefix. Other accepted
-groups still run. Submission reports preserve each group's completed prefix and
-independent `NotificationStatus`; successful data can coexist with notification
-failure. Empty or failed groups do not send attached messages.
+Tasks report waiting, running, completed, failed, cancelled or skipped states,
+the bytes of fully completed requests and a structured failure. `request_index`
+names the first failed task and `affected_requests` the consecutive span that
+shares the failure (for example a shared NVLink close); later tasks are skipped
+without I/O. A failed remote staging request can show completed READ chunks while
+reporting zero completed bytes. Each group's `NotificationStatus` is separate, so
+successful data can coexist with a failed notification.
 
-`cancel(task)` and `cancel_all()` request cancellation. Waiting work checks that
-request before dispatch. A running CPU operation finishes or reaches its existing
-deadline; cancellation does not interrupt an unproven physical operation or
-relabel committed bytes as cancelled. A late cancellation can therefore coexist
-with a completed task. This profile has no provider abort or cancel receipt.
+`cancel(task)` and `cancel_all()` stop work that has not started. A running
+operation finishes or hits its deadline; cancellation never interrupts an
+unproven physical operation or relabels committed bytes.
 
-`locally_drained` means the requester's physical access to its registered backing
-has ended. Group/batch drain is published after dropping the actual prepared
-owners and their admission charge. It does **not** establish remote source
-quiescence. In particular, a lost WRITE acknowledgement retains
-`RemoteEffect::Unknown`, forbids automatic replay and still requires source-side
-ownership/drain before reusing remote backing. Source handlers retain their own
-owners independently.
+`locally_drained` means the requester's access to its backing has ended. It does
+**not** prove remote quiescence: a lost WRITE acknowledgement leaves
+`RemoteEffect::Unknown`, forbids replay and still requires source-side drain
+before remote memory is reused.
 
-`close_requester(timeout)` permanently rejects new outgoing work, including
-open, notification and async submissions. It waits for accepted queued/running
-work to release local owners. Timeout leaves admission closed; call again to
-wait. `close_source` separately gates source registration and handlers. Existing
-source-only close behavior is preserved. Whole-engine `close(timeout)` fences
-both directions before waiting against one deadline; accepted queued work can
-still create backend slices while draining. It then explicitly closes shared
-RDMA device resources. A native cleanup error is retained without retry; see
-the [device owner contract](rdma-cuda.md#failure-drain-and-resource-ownership). Closing requester admission does not
-invalidate existing status/free operations or claim that a remote ACK was read.
+`close_requester(timeout)` permanently rejects new outgoing work and waits for
+accepted work; call it again after a timeout. `close_source` gates source
+registration and handlers separately. Whole-engine `close(timeout)` fences both
+directions, waits against one deadline and then closes shared RDMA resources; see
+the [device owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
 
 ## Mixed GPU direct and staged submissions
 
-One submission can alternate explicit `Transport::Rdma` GPU Direct requests and
-`Transport::Tcp` GPU staging requests. Configure RDMA `cuda_memory=Direct` and
-use the constructor's default staging setting for these ordinary transfers. Each
-request keeps its own transport and checked
-local/remote ranges; requests execute in input order. A completed RDMA operation
-releases its range loan before the next CUDA copy. The TCP copy drains its event
-before the following RDMA request begins. Callers finish producer work before
-handoff and wait for the engine's completion before consumer reuse.
+One submission can alternate GPU Direct RDMA requests and GPU-over-TCP staging
+requests, executed in input order. Each RDMA operation releases its range loan
+before the next CUDA copy, and each TCP copy drains its event before the next RDMA
+request. RDMA readiness is checked once per submission as a preflight; actual
+dispatch rechecks context, connection and quota. A failed copy keeps the earlier
+completed prefix and skips later tasks; uncertain completion keeps the GPU
+backing, pinned chunk and admission with `locally_drained = false`.
 
-RDMA readiness is checked once at the first RDMA request in each submission,
-without sampling the full statistics snapshot. Every request still validates
-its addresses, permissions and byte budget. This is a preflight observation,
-not a device-state snapshot or a DMA grant: actual dispatch checks the current
-context, connection, quota and native owner again. A concurrent failure can
-therefore be reported at dispatch after preparation succeeded.
+Per-request [remote staging](staging.md#serial-remote-staging) can join the same
+batch. TENT's `commitPreparedSubmit` gives each physical owner a transport and
+staging plan; OrbitTE keeps that split with ordered batch execution. See
+[qualification](qualification.md#mixed-gpu-batches).
 
-A pending middle copy keeps the earlier completed prefix visible and later
-tasks waiting; neither batch completion nor its notification can overtake it.
-A drained copy error leaves the completed prefix intact and skips later tasks.
-Uncertain native completion retains the actual GPU backing, pinned chunk and
-submission admission, with `locally_drained=false`. Completed-request bytes do
-not count a failed request's partial local changes. Local staging continues to
-reuse its bounded pinned chunks and allocation-owned stream/event.
+## TENT correspondence and limits
 
-The [source controls](qualification.md#mixed-gpu-batches) cover READ and WRITE
-with healthy completion, a drained copy error and uncertain event completion.
-Per-request `remote_staging=true` also permits remote Pin/Delegate/Unpin over
-TCP/RDMA in the same engine and batch; only the source needs its incoming Pin
-capability enabled. The source validates the actual CUDA allocation. Private
-host staging grants follow host RDMA policy independently of GPU Direct. See
-[remote selection](staging.md#serial-remote-staging). Installed DMA,
-concurrent transport dispatch and end-to-end throughput remain separate work.
-
-Frozen TENT's `commitPreparedSubmit` assigns each physical owner a transport and
-staging plan, and `ProxyManager` owns its staging resources. OrbitTE preserves
-that division. Its current ordered batch execution and explicit per-request
-transport selection do not reproduce TENT's complete selector/subbatch scheduler.
-
-## Frozen correspondence and limits
-
-The frozen [`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
-allocates batch capacity, appends public tasks, retains runtime references and
-defers freeing batches that remain pending. Rust's explicit busy-on-free plus
-detached-handle ownership is a distinct safe API; matching the native deferred
-C free convention remains an adapter requirement. Rust adds seal to make an
-overall terminal result stable against further append; native TENT can append
-after prior tasks complete.
-
-The [shared CPU trace](cpu-oracle.md) now uses real async Rust APIs and native C
-allocate/append/status/free with the same 25 byte/notification/cleanup
-observations. Native queue/merge/progress-worker modes remain disabled for that
-profile. Rust blocked-socket tests exercise queue deadline, cancel, wait timeout,
-concurrent unregister, requester close and detached engine/allocator release.
-They do not qualify native fault behavior or device DMA.
-
-[RDMA/CUDA](rdma-cuda.md) now consume these owners with explicit per-request
-transport selection. Their `Unquiesced` failures retain native owners and
-admission/capacity: the logical result is terminal while `locally_drained` is
-false, `free` remains busy and close cannot report drain. No reclaim proof is
-implemented for this quarantine yet.
-
-Request merging/alias mappings, full transport selection policy, explicit
-progress, complete deadline/QoS policy, provider abort/reclaim and language/wire
-compatibility remain open. Runtime FIFO/EDF and RDMA payload priority are
-implemented within their documented source scope. No hardware backend inherits this CPU profile's drain proof.
+TENT's
+[`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
+allocates batch capacity, appends tasks and defers freeing pending batches.
+OrbitTE's busy-on-free with detached handles is a safe Rust alternative, and seal
+makes the terminal state stable (TENT can append after earlier tasks finish); a
+C adapter must still match TENT's deferred free. The [shared CPU trace](cpu-oracle.md)
+compares async allocate/append/status/free against native TENT. Request merging,
+alias mapping, explicit progress, provider abort and reclaim proofs for
+`Unquiesced` owners remain open.
