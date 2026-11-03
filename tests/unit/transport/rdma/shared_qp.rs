@@ -221,6 +221,7 @@ pub(super) fn run() {
     config.max_cached_mr_bytes = length;
     let mut runtime = RdmaTransport::new(
         config,
+        None,
         #[cfg(feature = "cuda")]
         crate::transport::rdma::tests::proxy(),
     )
@@ -459,7 +460,7 @@ pub(super) fn run() {
                     .endpoints
                     .get_or_insert(pair.into(), 1)
                     .unwrap();
-                if let Some(construction) = owner.reserve(Some(pair.connection)).unwrap() {
+                if let Some(construction) = owner.reserve(Some(pair.connection), None).unwrap() {
                     construction.attach(&mut grants[slot]).unwrap();
                     grants[slot].construction = Some(construction);
                 } else {

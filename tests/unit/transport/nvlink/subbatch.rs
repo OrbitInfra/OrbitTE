@@ -28,6 +28,9 @@ pub(crate) fn run_case(
     let engine = Arc::new(
         TransferEngine::new(EngineConfig {
             nvlink: true,
+            selector: (case == "policy").then(|| crate::TransportSelectorConfig::from_json(r#"{"policy":[
+                {"name":"gpu","segment_type":"memory","intent_type":"migration","transports":["nvlink"]},
+                {"name":"ordinary","segment_type":"memory","transports":["tcp"]}]}"#).unwrap()),
             max_transfer_bytes: if matches!(case, "cap" | "prefix-ack-loss") {
                 40
             } else {
@@ -64,7 +67,13 @@ pub(crate) fn run_case(
     listener.set_nonblocking(true).unwrap();
     let epoch = SourceEpoch([0x55; 16]);
     let mut peer = RemoteSegment {
-        metadata: Default::default(),
+        metadata: crate::segment::SegmentMetadata {
+            nvlink: Some(crate::segment::ProcessIdentity {
+                process: crate::SourceEpoch([0x77; 16]),
+                ..crate::segment::ProcessIdentity::local().unwrap()
+            }),
+            ..Default::default()
+        },
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![RemoteRegion {
@@ -77,12 +86,6 @@ pub(crate) fn run_case(
             permission: Permission::RemoteReadWrite,
         }],
     };
-    if case == "success" {
-        peer.metadata.nvlink = Some(ProcessIdentity {
-            process: SourceEpoch([0x77; 16]),
-            ..ProcessIdentity::local().unwrap()
-        });
-    }
     if case == "region" {
         peer.regions[0].length = 64;
         peer.regions.push(RemoteRegion {
@@ -113,17 +116,35 @@ pub(crate) fn run_case(
         .into_iter()
         .enumerate()
         .map(|(i, (transport, priority))| {
-            TransferRequest::new(
-                transport,
+            let request = TransferRequest::new(
+                if case == "policy" {
+                    Transport::Unspec
+                } else {
+                    transport
+                },
                 registrations[i].base_address() + 7,
                 remote.base_address() + 5 + offsets[i],
                 17,
             )
-            .with_priority(priority)
+            .with_priority(priority);
+            if case != "policy" {
+                return request;
+            }
+            match i {
+                0 => request.with_intent(crate::IntentType::Migration),
+                1 => request
+                    .with_intent(crate::IntentType::Migration)
+                    .with_policy_name("gpu")
+                    .unwrap(),
+                _ => request
+                    .with_intent(crate::IntentType::Checkpoint)
+                    .with_policy_name("gpu")
+                    .unwrap(),
+            }
         })
         .collect();
     let expected = match case {
-        "cap" => vec![(7, 43, 17, false), (7, 11, 17, false), (7, 67, 17, false)],
+        "policy" | "cap" => vec![(7, 43, 17, false), (7, 11, 17, false), (7, 67, 17, false)],
         "prefix-ack-loss" => vec![(7, 43, 17, false), (7, 11, 17, false)],
         "source-cap" => vec![
             (7, 11, 73, true),

@@ -113,7 +113,7 @@ pub(crate) struct FileLease {
 #[cfg(any(feature = "io-uring", feature = "gds"))]
 pub(crate) struct FileRequest {
     pub(crate) local: crate::RegisteredMemory,
-    pub(crate) transport: crate::Transport,
+    pub(crate) selection: crate::runtime::transport_selector::SelectionResult,
     #[cfg(feature = "gds")]
     pub(crate) buffer: Option<crate::transport::gds::BufferLease>,
     pub(crate) local_offset: usize,

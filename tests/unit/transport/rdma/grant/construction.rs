@@ -64,7 +64,7 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
             );
             if shared {
                 let claim = runtime
-                    .claim(Arc::clone(&device), |peer| !peer.source, deadline)
+                    .claim(Arc::clone(&device), |peer| !peer.source, None, deadline)
                     .unwrap()
                     .unwrap();
                 sibling = Some(
@@ -75,7 +75,7 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
             }
             Connection::Reuse(Box::new(
                 runtime
-                    .claim(Arc::clone(&device), |peer| !peer.source, deadline)
+                    .claim(Arc::clone(&device), |peer| !peer.source, None, deadline)
                     .unwrap()
                     .unwrap(),
             ))
@@ -92,6 +92,7 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
                         source_nic_id: 0,
                     },
                     1,
+                    None,
                     None,
                     deadline,
                 )
@@ -184,7 +185,7 @@ fn pending_grant_abort_returns_unused_owners_and_preserves_reused_qp_close_failu
         }
         memory.write(4, &[9; 4]).unwrap();
         if let Some(slot) = slot {
-            assert!(slot.reserve(None).unwrap().is_some());
+            assert!(slot.reserve(None, None).unwrap().is_some());
         }
         drop(construction);
         registry.unregister(&memory).unwrap();

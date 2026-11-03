@@ -100,6 +100,7 @@ pub(super) unsafe extern "C" fn connect(
     remote: *const Descriptor,
     port: u8,
     gid_index: u8,
+    service_level: u8,
     traffic_class: u8,
     hop_limit: u8,
 ) -> c_int {
@@ -116,6 +117,7 @@ pub(super) unsafe extern "C" fn connect(
         attr.rq_psn = remote.psn;
         attr.max_dest_rd_atomic = 1;
         attr.min_rnr_timer = 12;
+        attr.ah_attr.sl = service_level;
         attr.ah_attr.dlid = remote.lid;
         attr.ah_attr.port_num = port;
         if local.link_layer == 2 || remote.gid != [0; 16] {

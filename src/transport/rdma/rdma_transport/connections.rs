@@ -19,6 +19,7 @@ pub(super) struct Connecting {
     endpoint: Arc<RdmaEndpoint>,
     lanes: Vec<Arc<CqLane>>,
     remote: Option<ConnectionId>,
+    slot: Option<usize>,
 }
 
 impl Connecting {
@@ -37,9 +38,9 @@ impl Connecting {
             return Err(Error::Unavailable("RDMA runtime is closed"));
         }
         transport.workers.order(&mut self.lanes)?;
-        let candidates = self
-            .endpoint
-            .candidates(&|peer| self.remote.is_none_or(|id| peer.connection == id))?;
+        let candidates = self.endpoint.candidates(self.slot, &|peer| {
+            self.remote.is_none_or(|id| peer.connection == id)
+        })?;
         for lane in &self.lanes {
             for (candidate, _, peer) in &candidates {
                 if !Arc::ptr_eq(lane, candidate) {
@@ -59,7 +60,7 @@ impl Connecting {
             .active_endpoints
             >= transport.config.max_endpoints;
         if candidates.is_empty() || (!full && self.remote.is_none()) {
-            if let Some(slot) = self.endpoint.reserve(self.remote)? {
+            if let Some(slot) = self.endpoint.reserve(self.remote, self.slot)? {
                 return Ok(Some(Connection::Fresh(Some(slot))));
             }
         }
@@ -74,7 +75,7 @@ impl Connecting {
         }
         if let Some(remote) = self.remote {
             if !self.endpoint.contains(remote)? {
-                for (lane, _, peer) in self.endpoint.candidates(&|_| true)? {
+                for (lane, _, peer) in self.endpoint.candidates(self.slot, &|_| true)? {
                     if lane.evict_idle(|entry| entry.same_pair(&peer), deadline)? {
                         break;
                     }
@@ -97,6 +98,7 @@ impl RdmaTransport {
         key: EndpointKey,
         width: usize,
         remote: Option<ConnectionId>,
+        slot: Option<usize>,
     ) -> Result<Connecting> {
         let endpoint = {
             let mut contexts = self
@@ -121,6 +123,7 @@ impl RdmaTransport {
             endpoint,
             lanes: self.cq_list(device)?,
             remote,
+            slot,
         })
     }
 
@@ -130,9 +133,10 @@ impl RdmaTransport {
         key: EndpointKey,
         width: usize,
         remote: Option<ConnectionId>,
+        slot: Option<usize>,
         deadline: Instant,
     ) -> Result<Connection> {
-        let mut connecting = self.connecting(device, key, width, remote)?;
+        let mut connecting = self.connecting(device, key, width, remote, slot)?;
         loop {
             if let Some(connection) = connecting.poll(self, deadline)? {
                 return Ok(connection);
@@ -145,6 +149,7 @@ impl RdmaTransport {
         &self,
         device: Arc<RdmaContext>,
         matches: impl Fn(&Peer) -> bool,
+        slot: Option<usize>,
         deadline: Instant,
     ) -> Result<Option<RdmaGrant>> {
         let mut lanes = self.cq_list(Arc::clone(&device))?;
@@ -167,7 +172,7 @@ impl RdmaTransport {
         };
         let mut candidates = Vec::new();
         for endpoint in endpoints {
-            for (lane, record, peer) in endpoint.candidates(&matches)? {
+            for (lane, record, peer) in endpoint.candidates(slot, &matches)? {
                 candidates.push((Arc::clone(&endpoint), lane, record, peer));
             }
         }

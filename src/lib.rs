@@ -94,7 +94,9 @@ pub use {
             CreditAmount, CreditResource, CreditUpdateDisposition, ReceiverCreditConfig,
             ReceiverCreditIssuerStats, ReceiverCreditStats, ReceiverCreditUpdateV1,
         },
-        transport_selector::{SegmentType, SelectionPolicy, TransportSelectorConfig},
+        transport_selector::{
+            IntentType, PolicyName, QpPool, SegmentType, SelectionPolicy, TransportSelectorConfig,
+        },
     },
     segment::{
         FileSegment, FileSegmentInfo, RemoteRegion, RemoteSegment, SourceEpoch, TransferTarget,

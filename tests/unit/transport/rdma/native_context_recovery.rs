@@ -90,6 +90,7 @@ fn native_context_recovery_preserves_pd_mrs_and_strict_gid_selection() {
         let mut transport = Arc::try_unwrap(
             RdmaTransport::new(
                 config,
+                None,
                 #[cfg(feature = "cuda")]
                 crate::transport::rdma::tests::proxy(),
             )

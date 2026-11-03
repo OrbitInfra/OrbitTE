@@ -231,6 +231,7 @@ pub(super) struct Verbs {
         u8,
         u8,
         u8,
+        u8,
     ) -> c_int,
     pub post: unsafe extern "C" fn(
         *mut ConnectionHandles,

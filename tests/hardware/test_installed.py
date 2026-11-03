@@ -50,6 +50,24 @@ class InstalledHostEvidence(unittest.TestCase):
             with self.subTest(control=name), self.assertRaises(ValueError):
                 installed.verify(self.profile, self.case, evidence)
 
+    def test_selector_gate_requires_exact_pool_indices_and_per_rail_bytes(self):
+        self.case.update(mode='installed-selector', parents=1, num_lanes=1)
+        evidence = self.evidence()
+        for role, result in evidence.items():
+            result['stdout.log'] = result['stdout.log'].replace('"opened_qps": 6', '"opened_qps": 1')
+            for r in range(3):
+                for i, name in enumerate(self.profile['rails']):
+                    count = (r + 1) * self.case['payload'] if role == 'requester' and i == 0 else 0
+                    row = dict(round=r, nic=name, indices=1, bytes=count)
+                    result['stdout.log'] += '\nORBITTE_SELECTOR ' + json.dumps(row)
+        installed.verify(self.profile, self.case, evidence)
+        for key, value in [('indices', 2), ('bytes', 1)]:
+            bad = copy.deepcopy(evidence)
+            log = bad['source']['stdout.log']
+            bad['source']['stdout.log'] = log.replace(f'"{key}": ' + str(1 if key == 'indices' else 0), f'"{key}": {value}')
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                installed.verify(self.profile, self.case, bad)
+
     def test_profile_cannot_expand_hardware_or_memory_scope(self):
         for invalid in [dict(parents=True), dict(parents=33), dict(payload=64 << 20),
                         dict(parents=32, payload=8 << 20), dict(mask=4), dict(num_lanes=4),

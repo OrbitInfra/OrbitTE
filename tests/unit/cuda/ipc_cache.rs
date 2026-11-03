@@ -63,7 +63,13 @@ impl Relay {
     fn peer(&self, engine: &TransferEngine, memory: &crate::RegisteredMemory) -> RemoteSegment {
         let epoch = engine.source_epoch();
         RemoteSegment {
-            metadata: Default::default(),
+            metadata: crate::segment::SegmentMetadata {
+                nvlink: Some(crate::segment::ProcessIdentity {
+                    process: crate::SourceEpoch([0x77; 16]),
+                    ..crate::segment::ProcessIdentity::local().unwrap()
+                }),
+                ..Default::default()
+            },
             endpoint: self.endpoint,
             epoch,
             regions: vec![RemoteRegion {

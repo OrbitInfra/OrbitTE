@@ -355,6 +355,7 @@ pub(super) fn run(mode: &str, source: bool, rails: &[String]) {
     let Ok(mut runtime) = Arc::try_unwrap(
         RdmaTransport::new(
             config,
+            None,
             #[cfg(feature = "cuda")]
             crate::transport::rdma::tests::proxy(),
         )

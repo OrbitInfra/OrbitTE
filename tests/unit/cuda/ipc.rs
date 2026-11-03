@@ -265,6 +265,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             "ack-loss",
             "prefix-ack-loss",
             "cap",
+            "policy",
             "source-cap",
             "context",
             "region",
@@ -316,7 +317,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
             );
             let events = owners[0].events.lock().unwrap();
             let expected = match case {
-                "cap" | "source-cap" => 3,
+                "cap" | "policy" | "source-cap" => 3,
                 "region" | "prefix-ack-loss" => 2,
                 _ => 1,
             };

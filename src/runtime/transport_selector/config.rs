@@ -15,6 +15,48 @@ pub enum SegmentType {
     File,
 }
 
+/// Business intent attached to a transfer, independent of its QoS contract.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IntentType {
+    #[default]
+    Unspec,
+    ForegroundGet,
+    BackgroundPrefetch,
+    Migration,
+    Checkpoint,
+    WeightLoading,
+    StagingInternal,
+}
+
+fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentType>, D::Error> {
+    use IntentType::*;
+    let names = [
+        ("unspec", Unspec),
+        ("foreground_get", ForegroundGet),
+        ("background_prefetch", BackgroundPrefetch),
+        ("migration", Migration),
+        ("checkpoint", Checkpoint),
+        ("weight_loading", WeightLoading),
+        ("staging_internal", StagingInternal),
+    ];
+    let value = Value::deserialize(d)?;
+    let intent = match &value {
+        Value::String(s) if s.eq_ignore_ascii_case("intent_unspec") => Some(Unspec),
+        Value::String(s) => names
+            .iter()
+            .find(|(name, _)| s.eq_ignore_ascii_case(name))
+            .map(|(_, i)| *i),
+        Value::Number(n) => n
+            .as_u64()
+            .and_then(|n| names.get(usize::try_from(n).ok()?))
+            .map(|(_, i)| *i),
+        _ => None,
+    };
+    intent
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("invalid intent_type"))
+}
+
 /// Ordered TENT memory-selection rule. None matches any value; sizes are inclusive.
 /// Unknown or unconsumed JSON fields fail configuration instead of broadening it.
 #[derive(Clone, Debug, Deserialize)]
@@ -33,6 +75,18 @@ pub struct SelectionPolicy {
     pub max_size: Option<usize>,
     #[serde(default, deserialize_with = "priority")]
     pub priority: Option<Priority>,
+    #[serde(default, deserialize_with = "intent")]
+    pub intent_type: Option<IntentType>,
+    #[serde(default, deserialize_with = "present")]
+    pub same_machine: Option<bool>,
+    #[serde(default)]
+    pub devices: Vec<String>,
+    #[serde(default, deserialize_with = "pool_name")]
+    pub qp_pool: Option<String>,
+    #[serde(default, deserialize_with = "sl")]
+    pub service_level: Option<u8>,
+    #[serde(default, deserialize_with = "tc")]
+    pub traffic_class: Option<u8>,
     /// Candidate order. Empty uses eligible NVLink -> RDMA -> TCP.
     #[serde(default, deserialize_with = "transports")]
     pub transports: Vec<Transport>,
@@ -48,6 +102,12 @@ impl Default for SelectionPolicy {
             min_size: None,
             max_size: None,
             priority: None,
+            intent_type: None,
+            same_machine: None,
+            devices: Vec::new(),
+            qp_pool: None,
+            service_level: None,
+            traffic_class: None,
             transports: Vec::new(),
         }
     }
@@ -56,20 +116,81 @@ impl Default for SelectionPolicy {
 /// Opt-in selector for all requests, including explicit transport hints.
 /// With no rules, use the default eligible candidate order.
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(from = "Root")]
 pub struct TransportSelectorConfig {
-    #[serde(default, deserialize_with = "policies")]
+    pub force_tcp: bool,
+    pub use_legacy_transport_selection: bool,
+    pub qp_mul_factor: Option<usize>,
+    pub qp_pools: Vec<super::QpPool>,
     pub policy: Vec<SelectionPolicy>,
 }
 
+#[derive(Deserialize, Default)]
+struct Endpoint {
+    qp_mul_factor: Option<usize>,
+    #[serde(default)]
+    qp_pools: Vec<super::QpPool>,
+}
+#[derive(Deserialize, Default)]
+struct Rdma {
+    #[serde(default)]
+    endpoint: Endpoint,
+}
+#[derive(Deserialize, Default)]
+struct Transports {
+    #[serde(default)]
+    force_tcp: bool,
+    #[serde(default)]
+    rdma: Rdma,
+}
+#[derive(Deserialize)]
+struct Root {
+    #[serde(default)]
+    policy: Vec<Object<SelectionPolicy>>,
+    #[serde(default)]
+    transports: Transports,
+    #[serde(default)]
+    use_legacy_transport_selection: bool,
+}
+
+impl From<Root> for TransportSelectorConfig {
+    fn from(root: Root) -> Self {
+        let endpoint = root.transports.rdma.endpoint;
+        Self {
+            force_tcp: root.transports.force_tcp,
+            use_legacy_transport_selection: root.use_legacy_transport_selection,
+            qp_mul_factor: endpoint.qp_mul_factor,
+            qp_pools: endpoint.qp_pools,
+            policy: root.policy.into_iter().map(|Object(p)| p).collect(),
+        }
+    }
+}
+
 impl TransportSelectorConfig {
-    /// Read TENT's `policy` array from a JSON object of at most 1 MiB. Other
-    /// engine sections are left to their own loaders; policy fields are strict.
+    /// Read the selector and RDMA endpoint sections of a JSON object of at most 1 MiB.
     pub fn from_json(json: &str) -> Result<Self> {
         if json.len() > 1 << 20 {
             return Err(Error::InvalidSelectorConfig("JSON exceeds 1 MiB".into()));
         }
-        let Object(config): Object<Self> = serde_json::from_str(json)
-            .map_err(|error| Error::InvalidSelectorConfig(error.to_string()))?;
+        let Object(config): Object<Self> = serde_json::from_str(json).map_err(|error| {
+            // Only re-read invalid input to identify the policy that failed to parse.
+            if let Ok(root) = serde_json::from_str::<Value>(json) {
+                if let Some(policies) = root.get("policy").and_then(Value::as_array) {
+                    for policy in policies {
+                        if serde_json::from_value::<Object<SelectionPolicy>>(policy.clone())
+                            .is_err()
+                        {
+                            let name = policy
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("memory_default");
+                            return Error::InvalidSelectorConfig(format!("policy {name}: {error}"));
+                        }
+                    }
+                }
+            }
+            Error::InvalidSelectorConfig(error.to_string())
+        })?;
         config.validate()?;
         Ok(config)
     }
@@ -81,25 +202,19 @@ impl TransportSelectorConfig {
         let mut names = HashSet::new();
         for policy in &self.policy {
             if policy.name.is_empty() || policy.name.len() > 256 || !names.insert(&policy.name) {
-                return Err(Error::InvalidConfig(
-                    "transport policy names must be unique and fit 256 bytes",
-                ));
+                return Err(invalid(policy, "name must be unique and fit 256 bytes"));
             }
             if policy.segment_type == SegmentType::File
                 && !cfg!(any(feature = "io-uring", feature = "gds"))
             {
-                return Err(Error::InvalidConfig(
-                    "file segment selection requires io-uring or gds",
-                ));
+                return Err(invalid(policy, "file selection requires io-uring or gds"));
             }
             if policy
                 .min_size
                 .zip(policy.max_size)
                 .is_some_and(|(min, max)| min > max)
             {
-                return Err(Error::InvalidConfig(
-                    "transport policy min_size exceeds max_size",
-                ));
+                return Err(invalid(policy, "min_size exceeds max_size"));
             }
             if policy.transports.len() > 3
                 || policy.transports.iter().enumerate().any(|(i, transport)| {
@@ -109,8 +224,9 @@ impl TransportSelectorConfig {
                         || policy.transports[..i].contains(transport)
                 })
             {
-                return Err(Error::InvalidConfig(
-                    "transport candidates must be unique concrete transports",
+                return Err(invalid(
+                    policy,
+                    "expected unique concrete transports for this segment type",
                 ));
             }
         }
@@ -176,16 +292,28 @@ fn transports<'de, D: Deserializer<'de>>(
             "nvlink" => Ok(Transport::Nvlink),
             "io_uring" => Ok(Transport::IoUring),
             "gds" => Ok(Transport::Gds),
-            _ => Err(serde::de::Error::custom(
-                "transport must be tcp, rdma, nvlink, io_uring or gds",
-            )),
+            _ => Err(serde::de::Error::custom(format!(
+                "unsupported transport {name:?}"
+            ))),
         })
         .collect()
 }
 
-fn policies<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Vec<SelectionPolicy>, D::Error> {
-    Vec::<Object<SelectionPolicy>>::deserialize(deserializer)
-        .map(|policies| policies.into_iter().map(|Object(policy)| policy).collect())
+fn invalid(policy: &SelectionPolicy, reason: &str) -> Error {
+    Error::InvalidSelectorConfig(format!("policy {}: {reason}", policy.name))
+}
+
+fn pool_name<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    Ok(Value::deserialize(d)?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned))
+}
+
+fn sl<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u8>, D::Error> {
+    Ok(tc(d)?.filter(|n| *n <= 15))
+}
+
+fn tc<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u8>, D::Error> {
+    Ok(u8::try_from(i64::deserialize(d)?).ok())
 }

@@ -1,0 +1,34 @@
+"""Run the packaged host consumer on both selector routes using a locked host inventory."""
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--profile', type=Path, required=True, help='two-RNIC installed-host profile')
+    parser.add_argument('--artifact', type=Path, required=True, help='build_installed.py host output')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    profile = json.loads(args.profile.read_text())
+    if profile.get('runner') != 'orbitte-installed-host' or len(profile['rails']) != 2:
+        raise ValueError('expected a two-RNIC installed-host inventory')
+    source, requester = (profile['cases'][0][role] for role in ('source', 'requester'))
+    profile['cases'] = [dict(mode='installed-selector', source=source, requester=requester,
+                             source_kind='cpu', requester_kind='cpu', transport='rdma', operation=op,
+                             parents=1, block=65536, payload=262145, mask=3, num_lanes=1,
+                             rdma_events=False) for op in ('read', 'write')]
+    with tempfile.TemporaryDirectory() as work:
+        selected = Path(work) / 'profile.json'
+        selected.write_text(json.dumps(profile))
+        subprocess.run([sys.executable, str(Path(__file__).with_name('run.py')),
+                        '--profile', str(selected), '--installation', str(args.artifact / 'manifest.json'),
+                        '--binary', str(args.artifact / 'installed/bin/orbitte-rdma-host'),
+                        '--output', str(args.output)], check=True)
+
+
+if __name__ == '__main__':
+    main()

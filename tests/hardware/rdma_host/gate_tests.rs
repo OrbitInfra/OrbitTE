@@ -31,7 +31,7 @@ fn grant_is_forwarded_or_aborted_only_after_source_ready() -> Result<()> {
             assert_eq!(frame::<52>(&mut stream)?, wire::<52>(4, 1));
             stream.write_all(&wire::<36>(0, 188))?;
             stream.write_all(&[0x31; 188])?;
-            assert_eq!(frame::<106>(&mut stream)?, [0x41; 106]);
+            assert_eq!(frame::<107>(&mut stream)?, [0x41; 107]);
             stream.write_all(&wire::<36>(0, 89))?;
             stream.write_all(&[0x51; 89])?;
             assert_eq!(frame::<142>(&mut stream)?, phase(1));
@@ -54,7 +54,7 @@ fn grant_is_forwarded_or_aborted_only_after_source_ready() -> Result<()> {
         client.write_all(&wire::<52>(4, 1))?;
         assert_eq!(frame::<36>(&mut client)?, wire::<36>(0, 188));
         assert_eq!(frame::<188>(&mut client)?, [0x31; 188]);
-        client.write_all(&[0x41; 106])?;
+        client.write_all(&[0x41; 107])?;
         assert_eq!(frame::<36>(&mut client)?, wire::<36>(0, 89));
         assert_eq!(frame::<89>(&mut client)?, [0x51; 89]);
         client.write_all(&phase(1))?;

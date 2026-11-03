@@ -198,9 +198,19 @@ impl GrantConstruction {
                     Arc::clone(&transport.usage),
                     Some(grant._lease._selection.device_info()),
                 )?;
+                let qp_index = grant._lease.qp_index;
+                let pool = qp_index.and_then(|i| transport.qp_layout.as_ref()?.pool_at(i));
+                let link_qos = (
+                    pool.and_then(|p| p.service_level)
+                        .unwrap_or(transport.config.service_level),
+                    pool.and_then(|p| p.traffic_class)
+                        .unwrap_or(transport.config.traffic_class),
+                );
                 let record =
                     self.progress.register(Box::new(Resources {
                         connection: crate::transport::rdma::qp::RdmaQp::new(ConnectionResources {
+                            qp_index,
+                            link_qos,
                             receive_queue,
                             device: Arc::clone(&device),
                             handles,
@@ -256,6 +266,9 @@ impl GrantConstruction {
                     .grant
                     .as_mut()
                     .ok_or(Error::Internal("missing prepared grant"))?;
+                if grant._lease.qp_index != connection.qp_index {
+                    return Err(Error::Protocol("RDMA reused pair changed QP pool index"));
+                }
                 grant.connection = connection.incarnation;
                 drop(connection);
                 resources.grant = self.grant.take();

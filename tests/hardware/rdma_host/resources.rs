@@ -109,6 +109,10 @@ fn clean(engine: &TransferEngine) -> Result<()> {
 pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
     let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
     let config = EngineConfig {
+        selector: case
+            .selector
+            .then(|| super::selector::config(case))
+            .transpose()?,
         bind_addr: bind,
         max_registered_bytes: case.length(),
         max_transfer_bytes: case.payload,

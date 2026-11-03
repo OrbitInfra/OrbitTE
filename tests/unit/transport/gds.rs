@@ -799,6 +799,13 @@ fn native_only_excludes_compat_and_unsafe_extents_before_submit() -> Result<()> 
 #[test]
 fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -> Result<()> {
     for (mode, policy, expected_gds) in [
+        (
+            GdsMode::NativeOnly,
+            Some(
+                r#"{"transports":{"force_tcp":true},"policy":[{"name":"staged","segment_type":"file","transports":["io_uring"]},{"name":"native","segment_type":"file","intent_type":"checkpoint","transports":["gds"]}]}"#,
+            ),
+            true,
+        ),
         (GdsMode::CompatForced, None, false),
         (
             GdsMode::NativeOnly,
@@ -810,7 +817,7 @@ fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -
         let f = Fixture::new(
             &mock,
             EngineConfig {
-                gds_require_native: true,
+                gds_require_native: !expected_gds,
                 selector: policy
                     .map(crate::TransportSelectorConfig::from_json)
                     .transpose()?,
@@ -827,12 +834,12 @@ fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -
             return Ok(());
         }
         let m = f.host(16)?;
-        let req = [TransferRequest::new(
-            Transport::Unspec,
-            m.base_address(),
-            0,
-            4,
-        )];
+        let request = TransferRequest::new(Transport::Unspec, m.base_address(), 0, 4);
+        let req = [if expected_gds {
+            request.with_policy_name("native")?
+        } else {
+            request
+        }];
         assert!(
             f.engine
                 .submit_and_wait(TransferOp::Write, &f.segment, &req, WAIT)?

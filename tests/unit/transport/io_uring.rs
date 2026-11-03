@@ -821,7 +821,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
         return Ok(());
     }
     let selector = TransportSelectorConfig::from_json(
-        r#"{"policy":[{"name":"disk","segment_type":"file","local_memory":"cpu","remote_memory":"cpu","priority":"low","transports":["io_uring"]}]}"#,
+        r#"{"transports":{"force_tcp":true},"policy":[{"name":"disk","segment_type":"file","local_memory":"cpu","remote_memory":"cpu","priority":"low","intent_type":"checkpoint","same_machine":true,"transports":["io_uring"]},{"name":"network","segment_type":"memory","transports":["tcp"]}]}"#,
     )?;
     let f = Fixture::new(
         &std::env::temp_dir(),
@@ -836,7 +836,15 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
         f.run(TransferOp::Read, std::slice::from_ref(&high)),
         Err(Error::Unavailable(_))
     ));
-    let low = high.with_priority(crate::Priority::Low);
+    let wrong_segment = high.clone().with_policy_name("network")?;
+    assert!(
+        matches!(f.run(TransferOp::Write,&[wrong_segment]), Err(Error::TransportPolicy{policy,reason:"policy targets another segment type"}) if policy.as_str()=="network")
+    );
+    let named = high.clone().with_policy_name("disk")?;
+    assert!(f.run(TransferOp::Read, &[named])?.is_complete());
+    let low = high
+        .with_priority(crate::Priority::Low)
+        .with_intent(crate::IntentType::Checkpoint);
     assert!(
         f.run(TransferOp::Read, std::slice::from_ref(&low))?
             .is_complete()
@@ -845,7 +853,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
     invalid.transport = Transport::Tcp;
     assert!(matches!(
         f.run(TransferOp::Write, &[low.clone(), invalid]),
-        Err(Error::Unavailable(_))
+        Err(Error::TransportPolicy { policy, .. }) if policy.as_str()=="disk"
     ));
     let mut invalid = low.clone();
     invalid.remote_address = u64::MAX;

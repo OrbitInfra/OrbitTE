@@ -228,7 +228,13 @@ pub(crate) fn requester_case(
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let epoch = SourceEpoch([0x55; 16]);
     let peer = RemoteSegment {
-        metadata: Default::default(),
+        metadata: crate::segment::SegmentMetadata {
+            nvlink: Some(crate::segment::ProcessIdentity {
+                process: crate::SourceEpoch([0x77; 16]),
+                ..crate::segment::ProcessIdentity::local().unwrap()
+            }),
+            ..Default::default()
+        },
         endpoint: listener.local_addr().unwrap(),
         epoch,
         regions: vec![RemoteRegion {

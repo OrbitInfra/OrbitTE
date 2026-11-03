@@ -51,7 +51,7 @@ impl<'a> StagingTask<'a> {
         stopping: &'a AtomicBool,
     ) -> Result<Self> {
         let chunk_size = source.proxy.chunk_size;
-        let cross_limit = match request.transport {
+        let cross_limit = match request.selection.transport {
             #[cfg(feature = "rdma")]
             Transport::Rdma => source
                 .rdma
@@ -89,7 +89,7 @@ impl<'a> StagingTask<'a> {
             .encode(),
         )?;
         let mut hello = [0; crate::runtime::control_plane::PIN_HELLO_SIZE];
-        hello[0] = match request.transport {
+        hello[0] = match request.selection.transport {
             Transport::Tcp => 0,
             Transport::Rdma => 1,
             _ => return Err(Error::Unavailable("remote staging requires TCP or RDMA")),
@@ -411,7 +411,7 @@ impl<'a> StagingTask<'a> {
                                 inflight[slot] = Some(self.cross(local, offset, length)?);
                                 expected += length;
                                 progress = true;
-                                if self.request.transport == Transport::Tcp {
+                                if self.request.selection.transport == Transport::Tcp {
                                     tcp_active = true;
                                 } else {
                                     #[cfg(feature = "rdma")]
@@ -480,7 +480,7 @@ impl<'a> StagingTask<'a> {
             priority: self.request.priority,
             #[cfg(feature = "cuda")]
             remote_staging: false,
-            transport: self.request.transport,
+            selection: self.request.selection.clone(),
             local,
             local_offset: 0,
             remote: RemoteRegion {
@@ -497,7 +497,7 @@ impl<'a> StagingTask<'a> {
             remote_offset: 0,
             length,
         };
-        if cross.transport == Transport::Tcp {
+        if cross.selection.transport == Transport::Tcp {
             let task = TcpTask::new(
                 self.operation,
                 self.peer,
@@ -535,7 +535,7 @@ impl<'a> StagingTask<'a> {
         }
         #[cfg(feature = "rdma")]
         {
-            if cross.transport != Transport::Rdma {
+            if cross.selection.transport != Transport::Rdma {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }
             let setup = crate::transport::rdma::RdmaSetup::new(

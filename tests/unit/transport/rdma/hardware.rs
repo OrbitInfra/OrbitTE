@@ -251,6 +251,8 @@ fn shared_cq_peer() {
         registrations: buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &VERBS),
         config,
         usage,
+        qp_layout: None,
+        next_qp: Default::default(),
         counters: Arc::default(),
         workers: Arc::default(),
         cq_quota: Arc::default(),
@@ -626,6 +628,7 @@ fn source_window_peer() {
     config.block_size = 4096;
     let mut runtime = RdmaTransport::new(
         config,
+        None,
         #[cfg(feature = "cuda")]
         crate::transport::rdma::tests::proxy(),
     )
@@ -1027,6 +1030,7 @@ fn duplex_completion_peer() {
     config.max_send_wr = 1;
     let runtime = RdmaTransport::new(
         config,
+        None,
         #[cfg(feature = "cuda")]
         crate::transport::rdma::tests::proxy(),
     )

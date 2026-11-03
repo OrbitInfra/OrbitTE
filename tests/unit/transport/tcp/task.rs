@@ -28,7 +28,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             priority: Default::default(),
             #[cfg(feature = "cuda")]
             remote_staging: false,
-            transport: Transport::Tcp,
+            selection: crate::runtime::transport_selector::SelectionResult::plain(Transport::Tcp),
             local: local.clone(),
             local_offset: 3,
             remote: RemoteRegion {
@@ -137,7 +137,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         priority: Default::default(),
         #[cfg(feature = "cuda")]
         remote_staging: false,
-        transport: Transport::Tcp,
+        selection: crate::runtime::transport_selector::SelectionResult::plain(Transport::Tcp),
         local: local.clone(),
         local_offset: 0,
         remote: RemoteRegion {

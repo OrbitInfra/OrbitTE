@@ -28,7 +28,6 @@ impl<'a> From<&'a FileSegment> for TransferTarget<'a> {
     }
 }
 mod metadata;
-#[cfg(any(feature = "cuda", test))]
 pub(crate) use metadata::ProcessIdentity;
 pub(crate) use metadata::SegmentMetadata;
 

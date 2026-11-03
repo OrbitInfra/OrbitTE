@@ -18,6 +18,7 @@ use super::*;
 pub(crate) struct FakeDevice {
     pub(super) mode: String,
     pub(super) route: Mutex<Option<discovery::RdmaAddress>>,
+    pub(super) link_qos: Mutex<Vec<(u8, u8)>>,
     pub(super) route_queries: Mutex<Vec<Option<u8>>>,
     pub(super) route_error: std::sync::atomic::AtomicI32,
     pub(super) effective_speed: Mutex<(Option<u64>, i32, usize)>,
@@ -144,6 +145,7 @@ pub(super) unsafe extern "C" fn open_device(
         mode,
         route: Mutex::default(),
         route_queries: Mutex::default(),
+        link_qos: Mutex::default(),
         route_error: std::sync::atomic::AtomicI32::new(0),
         effective_speed: Mutex::new((Some(200_000), 0, 0)),
         asynchronous,
@@ -797,7 +799,8 @@ unsafe extern "C" fn connect(
     remote: *const Descriptor,
     _: u8,
     _: u8,
-    _: u8,
+    sl: u8,
+    tc: u8,
     _: u8,
 ) -> c_int {
     // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-flight work is
@@ -811,6 +814,7 @@ unsafe extern "C" fn connect(
     // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
     // constructing the resource.
     let device = unsafe { &*state.device };
+    device.link_qos.lock().unwrap().push((sl, tc));
     device.events.lock().unwrap().push("connect");
     i32::from(device.mode == "connect")
 }
@@ -1705,6 +1709,8 @@ pub(crate) fn runtime_with_config(config: RdmaConfig) -> RdmaTransport {
         proxy: crate::transport::rdma::tests::proxy(),
         config,
         usage,
+        qp_layout: None,
+        next_qp: Default::default(),
         counters: Arc::default(),
         workers: Arc::default(),
         cq_quota: Arc::default(),

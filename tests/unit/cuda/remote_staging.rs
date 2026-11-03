@@ -14,14 +14,18 @@ fn config() -> EngineConfig {
 }
 
 fn engine(transport: Transport) -> TransferEngine {
+    configured(transport, config())
+}
+
+fn configured(transport: Transport, config: EngineConfig) -> TransferEngine {
     #[cfg(feature = "rdma")]
     if transport == Transport::Rdma {
         let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
         runtime.proxy = ProxyManager::new(3, 1, crate::StagingLocation::Any).unwrap();
-        return crate::engine::tests::rdma_fixture_with_config(runtime, config());
+        return crate::engine::tests::rdma_fixture_with_config(runtime, config);
     }
     let _ = transport;
-    TransferEngine::new(config()).unwrap()
+    TransferEngine::new(config).unwrap()
 }
 
 #[test]
@@ -32,8 +36,18 @@ fn remote_chunks_cross_real_transports_with_one_handler_and_one_parent_slot() {
         Transport::Rdma,
     ] {
         for local_gpu in [false, true] {
-            let source = engine(transport);
-            let requester = engine(transport);
+            let mut options = config();
+            let name = if transport == Transport::Tcp {
+                "tcp"
+            } else {
+                "rdma"
+            };
+            options.selector = Some(crate::TransportSelectorConfig::from_json(&format!(r#"{{
+                "transports":{{"rdma":{{"endpoint":{{"qp_pools":[{{"name":"regular","num_qp":1}},{{"name":"cross","num_qp":1}}]}}}}}},
+                "policy":[{{"name":"cross","segment_type":"memory","intent_type":"staging_internal","remote_memory":"cuda",
+                "devices":["copy"],"qp_pool":"cross","transports":["nvlink","{name}"]}}]}}"#)).unwrap());
+            let source = configured(transport, options.clone());
+            let requester = configured(transport, options);
             let a = allocation(&[0x57; 16]);
             let b = allocation(&[0xcc; 16]);
             let source_gpu = memory(&a);
@@ -66,12 +80,13 @@ fn remote_chunks_cross_real_transports_with_one_handler_and_one_parent_slot() {
                 )
                 .unwrap();
             let request = TransferRequest::new(
-                transport,
+                Transport::Unspec,
                 local.base_address() + 2,
                 remote.base_address() + 1,
                 8,
             )
-            .with_remote_staging(true);
+            .with_remote_staging(true)
+            .with_intent(crate::IntentType::StagingInternal);
             let pattern = [3, 19, 21, 29, 37, 43, 51, 61];
             for op in [TransferOp::Read, TransferOp::Write] {
                 if op == TransferOp::Write {
@@ -114,6 +129,16 @@ fn remote_chunks_cross_real_transports_with_one_handler_and_one_parent_slot() {
                 .unwrap();
             assert_eq!(peer.regions().len(), 1);
             assert_eq!(peer.regions()[0].id(), remote.id());
+            #[cfg(feature = "rdma")]
+            if transport == Transport::Rdma {
+                for engine in [&source, &requester] {
+                    assert_eq!(
+                        engine.stats().unwrap().rdma.unwrap().connected_pool_indices,
+                        0b10
+                    );
+                    assert_eq!(engine.stats().unwrap().unresolved_policy_devices, 0);
+                }
+            }
             let stats = source.stats().unwrap().staging;
             assert_eq!(
                 (

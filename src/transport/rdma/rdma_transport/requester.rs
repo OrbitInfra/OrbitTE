@@ -52,6 +52,7 @@ pub(super) struct RequesterSetup {
     connecting: Option<Connecting>,
     construction: Option<GrantConstruction>,
     width: usize,
+    qp_index: Option<usize>,
     wire: Request,
     request: PreparedTransfer,
     epoch: SourceEpoch,
@@ -74,6 +75,7 @@ impl RequesterSetup {
     ) -> Self {
         Self {
             endpoint: None,
+            qp_index: lease.qp_index,
             lease: Some(lease),
             connecting: None,
             construction: None,
@@ -122,6 +124,7 @@ impl RequesterSetup {
                         },
                         self.width,
                         None,
+                        self.qp_index,
                     )?);
                     *advanced = true;
                 }
@@ -215,6 +218,7 @@ impl RequesterSetup {
                     }),
                     expected_domain: self.remote_path.domain,
                     direct: transport.direct(&self.request.local),
+                    qp_index: self.qp_index,
                     qp_width: endpoint
                         .endpoint
                         .as_ref()

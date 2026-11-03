@@ -103,6 +103,7 @@ fn source_offer(
         source: None,
         expected_domain: paths[0].domain,
         direct: false,
+        qp_index: None,
         qp_width: 0,
         previous_grant: 0,
     }
@@ -263,7 +264,10 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
         let peer = RemoteSegment {
-            metadata: Default::default(),
+            metadata: crate::segment::SegmentMetadata {
+                rdma: true,
+                ..Default::default()
+            },
             endpoint: listener.local_addr().unwrap(),
             epoch,
             regions: vec![RemoteRegion {
@@ -463,6 +467,7 @@ fn valid_tcp_done_without_a_source_receive_receipt_cannot_ack_or_commit_staging(
             source: None,
             expected_domain: paths[0].domain,
             direct: false,
+            qp_index: None,
             qp_width: 0,
             previous_grant: 0,
         }

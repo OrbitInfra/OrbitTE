@@ -291,7 +291,8 @@ impl RdmaContext {
         handles: &mut sys::ConnectionHandles,
         local: &Descriptor,
         remote: &Descriptor,
-        config: &RdmaConfig,
+        link_qos: (u8, u8),
+        hop_limit: u8,
     ) -> Result<()> {
         let state = self
             .state
@@ -310,8 +311,9 @@ impl RdmaContext {
                 remote,
                 resources.address.port,
                 resources.address.gid_index,
-                config.traffic_class,
-                config.hop_limit,
+                link_qos.0,
+                link_qos.1,
+                hop_limit,
             )
         })
     }

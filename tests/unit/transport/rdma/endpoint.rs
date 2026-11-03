@@ -32,7 +32,7 @@ fn peer_qp_arrays_keep_lane_owners_and_retire_only_after_native_drain() {
         .collect();
     for (grant, peer) in grants.iter_mut().zip(&peers) {
         let endpoint = store.get_or_insert((*peer).into(), 6).unwrap();
-        let slot = endpoint.reserve(None).unwrap().unwrap();
+        let slot = endpoint.reserve(None, None).unwrap().unwrap();
         slot.attach(grant).unwrap();
         endpoint.adopt(grant, *peer).unwrap();
     }
@@ -60,7 +60,7 @@ fn peer_qp_arrays_keep_lane_owners_and_retire_only_after_native_drain() {
     endpoint.adopt(&grants[0], newer).unwrap();
     assert_eq!(
         endpoint
-            .candidates(&|peer| peer.local == peers[0].local)
+            .candidates(None, &|peer| peer.local == peers[0].local)
             .unwrap()[0]
             .2
             .generation,
@@ -129,7 +129,7 @@ fn cold_reservations_are_atomic_and_unbound_cancellation_returns_only_its_slot()
                 let barrier = &barrier;
                 let admitted = &admitted;
                 scope.spawn(move || {
-                    let reservation = endpoint.reserve(None).unwrap();
+                    let reservation = endpoint.reserve(None, None).unwrap();
                     if reservation.is_some() {
                         admitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -144,13 +144,13 @@ fn cold_reservations_are_atomic_and_unbound_cancellation_returns_only_its_slot()
             domain: key().domain,
             generation: 1,
         };
-        let slot = endpoint.reserve(Some(remote)).unwrap().unwrap();
+        let slot = endpoint.reserve(Some(remote), None).unwrap().unwrap();
         assert!(
-            endpoint.reserve(Some(remote)).unwrap().is_none(),
+            endpoint.reserve(Some(remote), None).unwrap().is_none(),
             "duplicate bootstrap allocated a second QP"
         );
         drop(slot);
-        assert!(endpoint.reserve(Some(remote)).unwrap().is_some());
+        assert!(endpoint.reserve(Some(remote), None).unwrap().is_some());
     }
 }
 
@@ -159,16 +159,16 @@ fn cancelled_construction_counts_until_native_drain_and_cannot_release_a_replace
     for mode in ["copy", "close0"] {
         let runtime = runtime(mode);
         let endpoint = Arc::new(RdmaEndpoint::new(key(), 1).unwrap());
-        let slot = endpoint.reserve(None).unwrap().unwrap();
+        let slot = endpoint.reserve(None, None).unwrap().unwrap();
         let mut grant = runtime.staging_endpoint(8, 0).unwrap();
         slot.attach(&mut grant).unwrap();
-        assert!(endpoint.reserve(None).unwrap().is_none());
+        assert!(endpoint.reserve(None, None).unwrap().is_none());
         let result = grant.close();
         if mode == "close0" {
             assert!(matches!(result, Err(Error::Unquiesced { .. })));
             drop(slot);
             assert!(
-                endpoint.reserve(None).unwrap().is_none(),
+                endpoint.reserve(None, None).unwrap().is_none(),
                 "retained native QP lost its width charge"
             );
             assert!(
@@ -178,10 +178,10 @@ fn cancelled_construction_counts_until_native_drain_and_cannot_release_a_replace
             );
         } else {
             result.unwrap();
-            let replacement = endpoint.reserve(None).unwrap().unwrap();
+            let replacement = endpoint.reserve(None, None).unwrap().unwrap();
             drop(slot);
             assert!(
-                endpoint.reserve(None).unwrap().is_none(),
+                endpoint.reserve(None, None).unwrap().is_none(),
                 "old construction released the next slot generation"
             );
             drop(replacement);
@@ -205,6 +205,7 @@ fn cold_waiter_deadline_cannot_cancel_the_builder_and_retry_reuses_the_slot() {
             key(),
             1,
             None,
+            None,
             Instant::now() + Duration::from_secs(1),
         )
         .unwrap();
@@ -214,6 +215,7 @@ fn cold_waiter_deadline_cannot_cancel_the_builder_and_retry_reuses_the_slot() {
             Arc::clone(&device),
             key(),
             1,
+            None,
             None,
             Instant::now() + Duration::from_millis(20)
         ),
@@ -226,6 +228,7 @@ fn cold_waiter_deadline_cannot_cancel_the_builder_and_retry_reuses_the_slot() {
             device,
             key(),
             1,
+            None,
             None,
             Instant::now() + Duration::from_secs(1),
         )
