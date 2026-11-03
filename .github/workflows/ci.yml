@@ -82,6 +82,21 @@ jobs:
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --locked --features "$ORBITTE_FEATURES"
+      - name: Run the two-process HP-TCP loopback consumer
+        if: matrix.features == ''
+        run: |
+          installed="$RUNNER_TEMP/orbitte-installed-hp-tcp"
+          python3 tests/hardware/build_installed.py --consumer hp-tcp --toolchain "$RUSTUP_TOOLCHAIN" --output "$installed"
+          python3 "$installed/hp_tcp_run.py" --loopback --binary "$installed/installed/bin/orbitte-hp-tcp"
+      - name: Repeat HP-TCP socket and ownership controls 50 times
+        if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          for i in $(seq 1 50); do
+            RUST_TEST_THREADS=$(nproc) "$binary" transport::hp_tcp::tests:: | tee "$RUNNER_TEMP/hp-tcp.log"
+            grep -Eq '^test result: ok. [1-9][0-9]+ passed; 0 failed;' "$RUNNER_TEMP/hp-tcp.log"
+          done
       - name: Repeat retirement and Pin controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring'
         run: |

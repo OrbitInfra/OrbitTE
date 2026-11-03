@@ -156,8 +156,14 @@ pub(crate) fn rdma_fixture_with_config(
         runtime.qp_layout = Some(Arc::new(TransferEngine::qp_layout(&config).unwrap()));
     }
     let epoch = SourceEpoch::generate().unwrap();
+    let hp_listener = config
+        .hp_tcp
+        .enable
+        .then(|| config.hp_tcp.bind(config.bind_addr).unwrap());
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
+            tcp_disabled: !config.tcp,
+            hp: hp_listener.as_ref().map(|(_, endpoint)| *endpoint),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             rdma: true,
             #[cfg(feature = "cuda")]
@@ -188,6 +194,10 @@ pub(crate) fn rdma_fixture_with_config(
         }),
         drained: Condvar::new(),
     });
+    let hp_tcp = hp_listener.map(|(listener, _)| {
+        crate::transport::hp_tcp::HpTcpTransport::start(&config.hp_tcp, listener, source.clone())
+            .unwrap()
+    });
     let control = ControlService::start(Arc::clone(&source), &config).unwrap();
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
@@ -197,6 +207,7 @@ pub(crate) fn rdma_fixture_with_config(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        hp_tcp,
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),
@@ -1156,6 +1167,7 @@ pub(crate) fn staging_fixture(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        hp_tcp: None,
         #[cfg(feature = "metrics")]
         metrics: None,
         notification_routes: NotificationRoutes::new(&config),

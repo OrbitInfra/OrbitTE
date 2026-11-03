@@ -11,7 +11,12 @@ use crate::{Error, MemoryType, Priority, RemoteRegion, Result, Transport};
 pub use config::{IntentType, SegmentType, SelectionPolicy, TransportSelectorConfig};
 pub use qp_pools::QpPool;
 
-const DEFAULT_TRANSPORTS: [Transport; 3] = [Transport::Nvlink, Transport::Rdma, Transport::Tcp];
+const DEFAULT_TRANSPORTS: [Transport; 4] = [
+    Transport::Nvlink,
+    Transport::Rdma,
+    Transport::HpTcp,
+    Transport::Tcp,
+];
 
 pub(crate) struct SelectionContext<'a> {
     pub(crate) local_memory: MemoryType,
@@ -36,7 +41,20 @@ impl SelectionContext<'_> {
         }
         match transport {
             Transport::Unspec | Transport::IoUring | Transport::Gds => false,
-            Transport::Tcp => true,
+            Transport::Tcp => !self.local_segment.tcp_disabled && !self.remote_segment.tcp_disabled,
+            Transport::HpTcp => {
+                self.local_memory == MemoryType::Cpu
+                    && self.remote.hp_registered
+                    && self.remote.memory_type == MemoryType::Cpu
+                    && self
+                        .local_segment
+                        .hp
+                        .zip(self.remote_segment.hp)
+                        .is_some_and(|(a, b)| {
+                            a.rails().len() == b.rails().len()
+                                && self.transfer_size as u64 <= a.max_bytes.min(b.max_bytes)
+                        })
+            }
             Transport::Rdma => self.local_segment.rdma && self.remote_segment.rdma,
             Transport::Nvlink => {
                 self.local_ipc
@@ -119,7 +137,6 @@ impl SelectionResult {
         self.ranked[1] != Transport::Unspec
     }
 
-    #[cfg(any(feature = "rdma", feature = "gds"))]
     pub(crate) fn includes(&self, t: Transport) -> bool {
         self.transport == t || self.ranked.contains(&t)
     }

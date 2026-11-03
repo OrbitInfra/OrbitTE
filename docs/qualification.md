@@ -39,7 +39,8 @@ external output directory; failed runs are kept.
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
 | Native GDS / NVMe ext4 with nvidia-fs | Implemented, installed profile unqualified | `python3 "$ART/gds_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | cuFile and CUDA shim controls |
 | Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITTE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbitte-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
-| MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| HP-TCP | Implemented for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
+| MNNVL (S14), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -52,9 +53,30 @@ parser, compare JSON histogram counts, exercise a busy port and check shutdown
 with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
-and a 64-byte loopback READ with metrics compiled out, configured
+and guarded 64-byte TCP and HP-TCP loopback READs and WRITEs with metrics compiled out, configured
 off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the host and measurements. Physical
 NIC and GPU performance remains unmeasured.
+
+## HP-TCP rail verification
+
+The Linux CI `Run the two-process HP-TCP loopback consumer` step transfers
+2,097,155 bytes in each direction and checks the payload and guards on both
+processes. The stable job also repeats the socket ownership and rail controls
+50 times. This evidence covers loopback only.
+
+For physical rails, build on both hosts at the same revision and install
+the resulting binary at the same absolute path. Run the driver on the
+requester with two IPv4 addresses per host, ordered by their static pairing.
+
+```bash
+python3 tests/hardware/build_installed.py --consumer hp-tcp --output /tmp/orbitte-hp-installed
+python3 tests/hardware/hp_tcp_run.py --binary /tmp/orbitte-hp-installed/installed/bin/orbitte-hp-tcp \
+  --source-ssh "$SOURCE_SSH" --source-rails "$SOURCE_RAIL_A,$SOURCE_RAIL_B" \
+  --requester-rails "$REQUESTER_RAIL_A,$REQUESTER_RAIL_B"
+```
+
+The physical profile is unrun. The driver records route and byte-counter
+evidence for each interface alongside full byte checks on the installed crate.
 
 ## Batch progress and notification fallback
 
@@ -502,8 +524,7 @@ boundary Connect/Pin and native handshake waits had no task stop token; see
 Pin, native RDMA setup/finish, source handlers and ordinary local GPU
 snapshot/commit remain synchronous within their workers. Ordinary active batch cancellation, readiness notification,
 location selection and full ProxyManager/API/wire parity remain outside this
-substage. Frozen TENT's ordinary TcpTask uses synchronous workers; its separate
-hp_tcp async provider is not implemented by this change.
+substage. Frozen TENT's ordinary TcpTask uses synchronous workers. Persistent socket lanes are documented in [HP-TCP](hp-tcp.md).
 
 ## Remote Delegate progress
 

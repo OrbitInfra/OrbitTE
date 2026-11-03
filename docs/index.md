@@ -67,6 +67,7 @@ capabilities
 :maxdepth: 1
 
 cpu-tcp
+hp-tcp
 storage
 transport-selection
 async-batches

@@ -469,6 +469,7 @@ impl<'a> StagingTask<'a> {
 
     fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
         let cross = PreparedTransfer {
+            hp_cancel: None,
             #[cfg(feature = "rdma")]
             priority: self.request.priority,
             #[cfg(feature = "rdma")]
@@ -487,6 +488,7 @@ impl<'a> StagingTask<'a> {
                 length: self.chunk,
                 permission: Permission::RemoteReadWrite,
                 memory_type: crate::MemoryType::Cpu,
+                hp_registered: false,
                 ipc_exportable: false,
             },
             remote_offset: 0,

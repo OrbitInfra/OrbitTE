@@ -47,6 +47,7 @@ boundaries. Prometheus uses cumulative buckets through `+Inf`. A sub-microsecond
 sample can have a zero sum and still increments the count. `/metrics/summary`
 returns the summary available via the `log` facade.
 
+HP-TCP records attempts, bytes, failures and latency under the `hp_tcp` transport label.
 A successful 64-byte TCP READ contributes the following samples.
 
 ```text

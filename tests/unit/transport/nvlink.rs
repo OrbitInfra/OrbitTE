@@ -239,6 +239,7 @@ pub(crate) fn requester_case(
         epoch,
         regions: vec![RemoteRegion {
             memory_type: crate::MemoryType::Cuda,
+            hp_registered: false,
             ipc_exportable: true,
             epoch,
             id: 7,

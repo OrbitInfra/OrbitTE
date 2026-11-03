@@ -12,7 +12,14 @@ impl TransferEngine {
         use crate::metrics::transport_bit;
         for m in memory {
             #[allow(unused_mut)]
-            let mut mask = transport_bit(Transport::Tcp);
+            let mut mask = if self.config.tcp {
+                transport_bit(Transport::Tcp)
+            } else {
+                0
+            };
+            if self.hp_tcp.is_some() && crate::transport::hp_tcp::host(m) {
+                mask |= transport_bit(Transport::HpTcp);
+            }
             #[cfg(feature = "rdma")]
             if self.source.rdma.as_ref().is_some_and(|r| r.direct(m)) {
                 mask |= transport_bit(Transport::Rdma);

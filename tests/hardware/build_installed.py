@@ -21,6 +21,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "hp-tcp": ([], "orbitte-hp-tcp", "orbitte-installed-hp-tcp", "tests/hardware/hp_tcp.rs"),
         "host": (["rdma"], "orbitte-rdma-host", "orbitte-installed-host-v4", "tests/hardware/rdma_host.rs"),
         "gpu": (["rdma", "cuda"], "orbitte-hardware-peer", "orbitte-hardware-peer-v1", "examples/hardware_peer.rs"),
         "nvlink": (["cuda"], "orbitte-nvlink", "orbitte-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
@@ -85,8 +86,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        if storage:
-            drivers = ['storage_cuda_run.py']
+        if storage or consumer_kind == 'hp-tcp':
+            drivers = ['hp_tcp_run.py'] if consumer_kind == 'hp-tcp' else ['storage_cuda_run.py']
             if consumer_kind == 'gds':
                 drivers.append('gds_run.py')
             for name in drivers:
@@ -208,6 +209,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

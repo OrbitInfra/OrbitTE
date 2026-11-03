@@ -91,6 +91,7 @@ pub struct SubmissionStatus {
 }
 
 pub(crate) enum RunningCancel {
+    HpTcp(tokio::sync::watch::Sender<bool>),
     Unsupported,
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     File,
@@ -455,6 +456,9 @@ impl Batch {
             let between_attempts = state.retry_gate.as_ref().is_some_and(|g| g.owner == owner);
             if task.state == TaskState::Running && !between_attempts {
                 match &control.running {
+                    RunningCancel::HpTcp(signal) => {
+                        signal.send_replace(true);
+                    }
                     RunningCancel::Unsupported => {
                         unsupported = true;
                         continue;

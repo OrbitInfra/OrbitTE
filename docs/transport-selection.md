@@ -159,11 +159,10 @@ The reference is frozen TENT commit
 
 TENT's automatic memory order follows the buffer's registered transport list.
 OrbitTE registrations advertise capabilities without an insertion order, so
-automatic memory selection keeps NVLink → RDMA → TCP. A policy can reverse
+automatic memory selection tries NVLink, RDMA, then the configured CPU payload (HP-TCP or TCP). A policy can reverse
 that order. TENT documents GDS → io_uring → RDMA for files. Its frozen
 `getDefaultPolicies` lists GDS and io_uring. OrbitTE supports these two local
-owners. RDMA-to-file needs a remote file segment. SHM and HP-TCP have no
-executor yet. The selected rule retains its bounded candidate order. Only the engine’s
+owners. RDMA-to-file needs a remote file segment. SHM has no executor yet. The `hp_tcp` candidate requires an HP-TCP host registration on both peers and matching IPv4 rail counts. The smaller endpoint frame limit caps merging. The selected rule retains its bounded candidate order. Only the engine’s
 physical retry owner advances that index. A rejected initial hint still fails
 selection. An eligible hint moves to the front of the rule and its later
 candidates can run only after a safe failure. Caller-supplied fallback indices,

@@ -41,7 +41,7 @@ artifacts and hardware profiles.
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping and oracle open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
-| P3 | HP-TCP and shared-memory paths | P2 | Planned |
+| P3 | HP-TCP and shared-memory paths | P2 | HP-TCP implemented, SHM open |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
@@ -195,7 +195,7 @@ controls; a lost reply never authorizes ambiguous replay.
 
 Requirements: B02/B03 with associated F04/F07–F11/F18.
 
-- [ ] HP-TCP: worker-owned persistent lanes, bounded tasks/bytes/sessions,
+- [x] [HP-TCP](hp-tcp.md) has worker-owned persistent lanes, bounded tasks/bytes/sessions,
   generation-scoped registration IDs, remote permissions, WRITE ACK and READ
   accounting, IPv4 rail validation, per-peer lane rotation, large-READ
   partitioning and static rail pairing, as in TENT.

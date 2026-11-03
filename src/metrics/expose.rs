@@ -32,8 +32,8 @@ fn labels(kind: Labels, i: usize) -> String {
         ),
         Labels::Pair => format!(
             "from=\"{}\",to=\"{}\"",
-            TRANSPORTS[i / 6],
-            TRANSPORTS[i % 6]
+            TRANSPORTS[i / TRANSPORTS.len()],
+            TRANSPORTS[i % TRANSPORTS.len()]
         ),
     }
 }

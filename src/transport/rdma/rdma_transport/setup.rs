@@ -171,6 +171,7 @@ impl RdmaSetup {
                         return Err(Error::Protocol("RDMA repeated slice cache miss"));
                     }
                     let child = PreparedTransfer {
+                        hp_cancel: None,
                         #[cfg(feature = "rdma")]
                         priority: self.request.priority,
                         #[cfg(feature = "rdma")]

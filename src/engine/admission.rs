@@ -13,7 +13,7 @@ impl TransferEngine {
     #[cfg_attr(feature = "metrics", allow(clippy::too_many_arguments))]
     pub(super) fn admit_physical(
         &self,
-        payload: &PreparedTarget,
+        payload: &mut PreparedTarget,
         mapping: &TaskMap,
         requests: &[TransferRequest],
         contracts: &[Option<&CompiledContract>],
@@ -34,7 +34,7 @@ impl TransferEngine {
             None => Vec::new(),
         }
         .into_iter();
-        let mut credits = match (payload, &self.receiver_credits) {
+        let mut credits = match (&*payload, &self.receiver_credits) {
             (PreparedTarget::Memory { peer, .. }, Some(ledger)) if !mapping.owners.is_empty() => {
                 let charges: Vec<_> = mapping
                     .owners
@@ -53,6 +53,13 @@ impl TransferEngine {
             let owner_deadline = requests[first]
                 .deadline
                 .map_or(deadline, |d| d.min(deadline));
+            let hp = match &mut *payload {
+                PreparedTarget::Memory { requests, .. } => {
+                    self.prepare_hp_charge(&mut requests[i], owner_deadline)?
+                }
+                #[cfg(any(feature = "io-uring", feature = "gds"))]
+                PreparedTarget::File { .. } => None,
+            };
             if self.runtime_queue.is_some() {
                 let (kind, rate) = match payload {
                     PreparedTarget::Memory { requests: ts, .. }
@@ -120,6 +127,7 @@ impl TransferEngine {
                 }),
                 deadline: owner_deadline,
                 permits: Mutex::new(Some(OwnerPermits {
+                    hp,
                     _qos: qos,
                     queue: None,
                     credit,
@@ -140,6 +148,7 @@ impl TransferEngine {
 // Drop QoS before advancing the queue, and retire queue metadata before
 // receiver-credit rollback can wake another waiter.
 struct OwnerPermits {
+    hp: Option<crate::transport::hp_tcp::Permit>,
     _qos: Option<QosPermit>,
     queue: Option<QueuePermit>,
     credit: Option<CreditPermit>,
@@ -151,6 +160,18 @@ pub(super) struct OwnerAdmission {
     permits: Mutex<Option<OwnerPermits>>,
 }
 impl OwnerAdmission {
+    pub(super) fn admit_hp(
+        &self,
+        hp: &crate::transport::hp_tcp::HpTcpTransport,
+        len: usize,
+    ) -> Result<()> {
+        let mut permits = self.permits.lock().unwrap_or_else(|e| e.into_inner());
+        let permits = permits.as_mut().ok_or(Error::Cancelled)?;
+        if permits.hp.is_none() {
+            permits.hp = Some(hp.reserve(len)?);
+        }
+        Ok(())
+    }
     pub(super) fn reroute(&self, selection: &SelectionResult, staging: bool) {
         let permits = self.permits.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(q) = permits.as_ref().and_then(|p| p.queue.as_ref()) {
@@ -254,6 +275,11 @@ impl PreparedSubmission {
                 requests: _requests,
                 ..
             } => {
+                if _requests[_i].selection.transport == Transport::HpTcp {
+                    if let Some(signal) = &_requests[_i].hp_cancel {
+                        return RunningCancel::HpTcp(signal.clone());
+                    }
+                }
                 #[cfg(feature = "rdma")]
                 if _requests[_i].selection.transport == Transport::Rdma {
                     #[cfg(feature = "cuda")]
@@ -280,7 +306,6 @@ impl PreparedSubmission {
             .as_ref()
             .map(|q| q.ticket.clone())
     }
-    #[cfg(feature = "cuda")]
     pub(super) fn native_group(&self, first: usize) -> usize {
         if self.ticket(first).is_some() || self.owners[first].credit().is_some() {
             return 1;

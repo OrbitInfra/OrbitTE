@@ -26,6 +26,14 @@ TCP, RDMA and NVLink transports. RDMA negotiates paths, connections and exact
 memory grants over the control connection and moves bytes through verbs; see
 [wire boundaries](tent-parity.md#wire-and-consumer-boundaries).
 
+HP-TCP is built into the CPU transport set and is disabled by default. When
+enabled, it replaces the ordinary TCP payload and retains the control service.
+Each configured worker owns a single-thread Tokio reactor, the Rust counterpart to TENT’s per-worker Asio context. Persistent lanes
+keep their worker affinity and use readiness-driven sockets with TCP_NODELAY.
+Physical owners retain registration and task/byte admission through the last
+slice receipt. The typed configuration, frame layout, static rail limits and
+generation fence are described in [HP-TCP](hp-tcp.md).
+
 ## Local file segment ownership
 
 TENT's `SegmentManager` maps a name to one handle, `makeFileRemote` describes one

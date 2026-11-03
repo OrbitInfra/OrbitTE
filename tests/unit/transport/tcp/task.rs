@@ -24,6 +24,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             regions: vec![],
         };
         let request = PreparedTransfer {
+            hp_cancel: None,
             #[cfg(feature = "rdma")]
             priority: Default::default(),
             #[cfg(feature = "rdma")]
@@ -35,6 +36,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             local_offset: 3,
             remote: RemoteRegion {
                 memory_type: crate::MemoryType::Cpu,
+                hp_registered: false,
                 ipc_exportable: false,
                 epoch,
                 id: 1,
@@ -135,6 +137,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         regions: vec![],
     };
     let request = PreparedTransfer {
+        hp_cancel: None,
         #[cfg(feature = "rdma")]
         priority: Default::default(),
         #[cfg(feature = "rdma")]
@@ -146,6 +149,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         local_offset: 0,
         remote: RemoteRegion {
             memory_type: crate::MemoryType::Cpu,
+            hp_registered: false,
             ipc_exportable: false,
             epoch,
             id: 1,

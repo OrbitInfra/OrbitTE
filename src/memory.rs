@@ -545,7 +545,7 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
-    #[cfg(all(feature = "io-uring", feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     pub(crate) fn is_cuda_pinned_host(&self) -> bool {
         matches!(&self.0.allocation, Allocation::Host(host) if host.cuda_pinned)
     }
@@ -1032,6 +1032,7 @@ impl MemoryRegistry {
                         permission,
                         memory_type: allocation.memory_type(),
                         ipc_exportable: allocation.ipc_exportable(),
+                        hp_registered: false,
                     },
                     allocation: allocation.clone(),
                     allocation_offset: *offset,
@@ -1129,7 +1130,15 @@ impl MemoryRegistry {
             .regions
             .values()
             .filter(|entry| entry.memory.permission() != Permission::LocalOnly)
-            .map(|entry| entry.memory.0.descriptor)
+            .map(|entry| {
+                let mut descriptor = entry.memory.0.descriptor;
+                descriptor.hp_registered = crate::transport::hp_tcp::host(&entry.memory)
+                    && matches!(
+                        descriptor.permission,
+                        Permission::RemoteRead | Permission::RemoteReadWrite
+                    );
+                descriptor
+            })
             .collect())
     }
 

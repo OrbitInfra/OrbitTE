@@ -132,6 +132,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
             epoch,
             regions: vec![RemoteRegion {
                 memory_type: crate::MemoryType::Cuda,
+                hp_registered: false,
                 ipc_exportable: true,
                 epoch,
                 id: 1,
