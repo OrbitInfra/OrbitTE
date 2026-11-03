@@ -49,7 +49,8 @@ impl SelectionContext<'_> {
                     && self
                         .local_segment
                         .hp
-                        .zip(self.remote_segment.hp)
+                        .as_ref()
+                        .zip(self.remote_segment.hp.as_ref())
                         .is_some_and(|(a, b)| {
                             a.rails().len() == b.rails().len()
                                 && self.transfer_size as u64 <= a.max_bytes.min(b.max_bytes)
@@ -199,7 +200,7 @@ impl SelectionContext<'_> {
             remote: self.remote.memory_type,
             size: self.transfer_size,
             priority: self.priority,
-            same_machine: self.local_segment.same_machine(self.remote_segment),
+            same_machine: self.local_segment.same_machine(&self.remote_segment),
         }
     }
 

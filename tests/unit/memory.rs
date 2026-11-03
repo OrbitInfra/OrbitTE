@@ -108,7 +108,7 @@ fn permissions_and_export_visibility_are_distinct_from_local_access() {
         memory.read(0, &mut bytes).unwrap();
         assert_eq!(bytes, [0, 1, 2, 0]);
     }
-    assert_eq!(registry.descriptors().unwrap().len(), 3);
+    assert_eq!(registry.descriptors(false).unwrap().len(), 3);
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn batch_registration_preserves_order_references_and_shared_allocator_ownership(
     for index in [0, 2, 3] {
         registry.unregister(&batch[index]).unwrap();
     }
-    assert!(registry.descriptors().unwrap().is_empty());
+    assert!(registry.descriptors(false).unwrap().is_empty());
     drop(existing);
     drop(ranges);
     drop(fixture.memory);
@@ -363,7 +363,7 @@ fn batch_registration_failures_leave_no_new_ranges_or_duplicate_references() {
             "{case}: {error}"
         );
         assert_eq!(registry.usage().unwrap(), (1, 4), "{case}");
-        assert_eq!(registry.descriptors().unwrap().len(), 1, "{case}");
+        assert_eq!(registry.descriptors(false).unwrap().len(), 1, "{case}");
         let mut entries = registry.entries.lock().unwrap();
         assert_eq!(entries.next_id, next_id, "{case}");
         assert_eq!(
@@ -374,7 +374,7 @@ fn batch_registration_failures_leave_no_new_ranges_or_duplicate_references() {
         entries.regions.get_mut(&existing.id()).unwrap().references = 1;
         drop(entries);
         registry.unregister(&existing).unwrap();
-        assert!(registry.descriptors().unwrap().is_empty(), "{case}");
+        assert!(registry.descriptors(false).unwrap().is_empty(), "{case}");
     }
 }
 
@@ -408,7 +408,7 @@ fn batch_rejects_foreign_alias_locks_before_publication_or_reference_changes() {
             registry.register_host_batch(&ranges, Permission::RemoteRead, |_| Ok(())),
             Err(Error::RegistrationConflict)
         ));
-        assert!(registry.descriptors().unwrap().is_empty());
+        assert!(registry.descriptors(false).unwrap().is_empty());
         assert_eq!(registry.usage().unwrap(), before);
         drop(existing);
     }
@@ -527,7 +527,7 @@ fn native_preparation_precedes_lookup_and_duplicate_commit_and_keeps_failed_owne
         ),
         Err(Error::Unavailable(_))
     ));
-    assert_eq!(registry.descriptors().unwrap().len(), 1);
+    assert_eq!(registry.descriptors(false).unwrap().len(), 1);
     let retained = retained.unwrap();
     assert!(matches!(
         registry.get(retained.id()),
@@ -544,7 +544,7 @@ fn native_preparation_precedes_lookup_and_duplicate_commit_and_keeps_failed_owne
     assert_eq!(registry.usage().unwrap(), (1, 8));
     registry.unregister(&existing).unwrap();
     assert!(
-        registry.descriptors().unwrap().is_empty(),
+        registry.descriptors(false).unwrap().is_empty(),
         "failed batch did not add a duplicate reference"
     );
 }

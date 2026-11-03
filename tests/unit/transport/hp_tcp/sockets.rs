@@ -124,9 +124,9 @@ pub(super) fn redirect(peer: &mut crate::RemoteSegment, listeners: &[&TcpListene
             _ => panic!("IPv4 fixture"),
         })
         .collect();
-    peer.metadata.hp = Some(
+    peer.metadata.hp = Some(Arc::new(
         config::Endpoint::new(listeners[0].local_addr().unwrap().port(), 1 << 28, &addrs).unwrap(),
-    );
+    ));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn fragmented_read_with_tail_truncation_and_stall_preserves_guards() {
         redirect(&mut peer, &[&l]);
         let (release, held) = mpsc::channel();
         let h = thread::spawn(move || {
-            let (mut s, _) = l.accept().unwrap();
+            let (mut s, _) = accept(&l);
             let req = request(&mut s);
             for b in (Response {
                 status: Status::Ok,
@@ -199,7 +199,7 @@ fn lost_write_ack_and_running_cancel_never_replay_or_release_early() {
         let (posted, on_post) = mpsc::channel();
         let (release, on_release) = mpsc::channel();
         let h = thread::spawn(move || {
-            let (mut s, _) = l.accept().unwrap();
+            let (mut s, _) = accept(&l);
             let req = request(&mut s);
             assert_eq!(req.op, TransferOp::Write);
             let mut target = [0xa5; 18];
@@ -256,7 +256,7 @@ fn idle_lane_expires_only_after_active_and_queued_requests_complete() {
     let (release, held) = mpsc::channel();
     let (idle, idle_seen) = mpsc::channel();
     let h = thread::spawn(move || {
-        let (mut s, _) = l.accept().unwrap();
+        let (mut s, _) = accept(&l);
         s.set_read_timeout(Some(WAIT)).unwrap();
         for i in 0..2 {
             let req = request(&mut s);
@@ -280,7 +280,7 @@ fn idle_lane_expires_only_after_active_and_queued_requests_complete() {
             std::io::ErrorKind::UnexpectedEof
         );
         idle.send(()).unwrap();
-        let (mut next, _) = l.accept().unwrap();
+        let (mut next, _) = accept(&l);
         let req = request(&mut next);
         next.write_all(
             &(Response {
@@ -351,7 +351,7 @@ fn backpressured_write_keeps_its_only_task_and_byte_charge_until_ack() {
     let (ready, header) = mpsc::channel();
     let (release, wait) = mpsc::channel();
     let h = thread::spawn(move || {
-        let (mut s, _) = listener.accept().unwrap();
+        let (mut s, _) = accept(&listener);
         s.set_read_timeout(Some(WAIT)).unwrap();
         let req = request(&mut s);
         ready.send(()).unwrap();

@@ -327,7 +327,7 @@ impl TransferEngine {
             .transpose()?;
         let mut metadata = SegmentMetadata {
             tcp_disabled: !config.tcp,
-            hp: hp_listener.as_ref().map(|(_, end)| *end),
+            hp: hp_listener.as_ref().map(|(_, end)| Arc::new(*end)),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             ..Default::default()
         };
@@ -848,8 +848,11 @@ impl TransferEngine {
             return Ok(RemoteSegment {
                 endpoint,
                 epoch: expected_epoch,
-                regions: self.source.registry.descriptors()?,
-                metadata: self.source.metadata,
+                regions: self
+                    .source
+                    .registry
+                    .descriptors(self.source.metadata.hp.is_some())?,
+                metadata: self.source.metadata.clone(),
             });
         }
         control_plane::open_segment(endpoint, expected_epoch, deadline)
@@ -1132,8 +1135,8 @@ impl TransferEngine {
                 #[cfg(not(feature = "cuda"))]
                 local_ipc: false,
                 remote: &remote,
-                local_segment: self.source.metadata,
-                remote_segment: peer.metadata,
+                local_segment: self.source.metadata.clone(),
+                remote_segment: peer.metadata.clone(),
                 transfer_size: request.length,
                 priority,
                 remote_staging: request.remote_staging,
@@ -1207,7 +1210,8 @@ impl TransferEngine {
                     self.source
                         .metadata
                         .hp
-                        .zip(peer.metadata.hp)
+                        .as_ref()
+                        .zip(peer.metadata.hp.as_ref())
                         .map_or(usize::MAX, |(a, b)| {
                             usize::try_from(a.max_bytes.min(b.max_bytes)).unwrap_or(usize::MAX)
                         }),

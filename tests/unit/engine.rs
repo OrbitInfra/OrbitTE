@@ -163,7 +163,9 @@ pub(crate) fn rdma_fixture_with_config(
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
             tcp_disabled: !config.tcp,
-            hp: hp_listener.as_ref().map(|(_, endpoint)| *endpoint),
+            hp: hp_listener
+                .as_ref()
+                .map(|(_, endpoint)| Arc::new(*endpoint)),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             rdma: true,
             #[cfg(feature = "cuda")]

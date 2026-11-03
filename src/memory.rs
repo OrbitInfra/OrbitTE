@@ -1121,7 +1121,7 @@ impl MemoryRegistry {
             .ok_or(Error::RegionNotFound)
     }
 
-    pub(crate) fn descriptors(&self) -> Result<Vec<RemoteRegion>> {
+    pub(crate) fn descriptors(&self, hp_enabled: bool) -> Result<Vec<RemoteRegion>> {
         let entries = self
             .entries
             .lock()
@@ -1132,7 +1132,8 @@ impl MemoryRegistry {
             .filter(|entry| entry.memory.permission() != Permission::LocalOnly)
             .map(|entry| {
                 let mut descriptor = entry.memory.0.descriptor;
-                descriptor.hp_registered = crate::transport::hp_tcp::host(&entry.memory)
+                descriptor.hp_registered = hp_enabled
+                    && crate::transport::hp_tcp::host(&entry.memory)
                     && matches!(
                         descriptor.permission,
                         Permission::RemoteRead | Permission::RemoteReadWrite

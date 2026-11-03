@@ -242,7 +242,7 @@ assert_eq!(policy.effective_priority(), Priority::High);
 without a handle uses the precompiled `default`/`unspec` contract, so it cannot
 bypass a configured default budget. A handle from another engine returns
 `ForeignQosPolicy`. The effective priority feeds
-[transport selection](transport-selection.md) and RDMA dispatch; TCP and NVLink
+[transport selection](transport-selection.md) and RDMA dispatch; TCP, HP-TCP and NVLink
 treat it as advisory. Caps apply to every data transport.
 
 Each **resolved contract** has one budget: an unknown tenant shares the global
@@ -471,7 +471,7 @@ complete, even when the group reports zero completed requests and zero bytes.
 A failed remote staging request can show completed READ chunks while reporting
 zero completed bytes. Each group's `NotificationStatus` is separate.
 
-`cancel(task)` and `cancel_all()` stop work that has not started. Running TCP, NVLink and remote staging return `Error::Unavailable` for a cancel.
+`cancel(task)` and `cancel_all()` stop work that has not started. Running ordinary TCP, NVLink and remote staging return `Error::Unavailable` for a cancel. HP-TCP cancellation closes the active frame and joins every lane slice. A WRITE with a missing ACK retains an unknown remote effect. Independently dispatched HP-TCP tasks keep their own results.
 RDMA wakes its posting workers. Slices already posted can still move bytes and
 complete normally. File operations keep their backend cancellation and drain
 rules. `cancel_all()` still attempts each queued owner if a running one cannot

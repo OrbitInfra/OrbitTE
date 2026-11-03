@@ -229,15 +229,16 @@ impl Client {
     }
 }
 
+#[must_use]
 pub(crate) struct Receipt {
     count: usize,
     results: mpsc::Receiver<(Result<()>, bool)>,
     op: TransferOp,
 }
 impl Receipt {
-    pub(crate) fn wait(self, posted: &mut bool) -> Outcome {
+    pub(crate) fn wait(mut self, posted: &mut bool) -> Outcome {
         let mut error = None;
-        for _ in 0..self.count {
+        while self.count != 0 {
             let (res, started) = self.results.recv().map_err(|_| {
                 (
                     Error::Unquiesced {
@@ -251,6 +252,7 @@ impl Receipt {
                     },
                 )
             })?;
+            self.count -= 1;
             *posted |= started;
             if let Err(e) = res {
                 if error.is_none() || matches!(error, Some(Error::Cancelled)) {
@@ -268,6 +270,16 @@ impl Receipt {
                 },
             ))
         })
+    }
+}
+
+impl Drop for Receipt {
+    fn drop(&mut self) {
+        // An owner can abandon its result, but the admission scope must outlive
+        // every outstanding socket operation that can still write this range.
+        while self.count != 0 && self.results.recv().is_ok() {
+            self.count -= 1;
+        }
     }
 }
 

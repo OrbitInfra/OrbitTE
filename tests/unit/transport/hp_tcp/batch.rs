@@ -12,7 +12,7 @@ fn a_public_batch_posts_independent_lanes_and_reports_each_ack() {
         let h = thread::spawn(move || {
             let mut accepted = Vec::new();
             for _ in 0..2 {
-                let (mut s, _) = l.accept().unwrap();
+                let (mut s, _) = accept(&l);
                 s.set_read_timeout(Some(WAIT)).unwrap();
                 let req = request(&mut s);
                 let mut b = [0; 4];
@@ -117,14 +117,14 @@ fn hp_tcp_quota_and_unposted_connect_failures_select_the_next_rdma_candidate() {
         // Keep a non-listening socket at this address so no unrelated service can take it.
         let guard = tokio::net::TcpSocket::new_v4().unwrap();
         guard.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
-        peer.metadata.hp = Some(
+        peer.metadata.hp = Some(Arc::new(
             Endpoint::new(
                 guard.local_addr().unwrap().port(),
                 8,
                 &[Ipv4Addr::LOCALHOST],
             )
             .unwrap(),
-        );
+        ));
         local.write(0, &[0xcc; 10]).unwrap();
         let req = TransferRequest::new(
             Transport::Unspec,

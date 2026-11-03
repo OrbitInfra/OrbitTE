@@ -49,8 +49,28 @@ fn setup(
     (src, dst, remote, local, peer)
 }
 fn address(peer: &crate::RemoteSegment) -> SocketAddrV4 {
-    let hp = peer.metadata.hp.unwrap();
+    let hp = peer.metadata.hp.as_ref().unwrap();
     SocketAddrV4::new(hp.rails()[0], hp.port)
+}
+fn accept(listener: &TcpListener) -> (TcpStream, std::net::SocketAddr) {
+    listener.set_nonblocking(true).unwrap();
+    let until = Instant::now() + WAIT;
+    loop {
+        match listener.accept() {
+            Ok((socket, address)) => {
+                socket.set_nonblocking(false).unwrap();
+                socket.set_read_timeout(Some(WAIT)).unwrap();
+                socket.set_write_timeout(Some(WAIT)).unwrap();
+                return (socket, address);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < until, "mock peer never accepted its lane");
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(e) => panic!("accept mock HP-TCP lane: {e}"),
+        }
+    }
 }
 fn connect(addr: SocketAddrV4) -> TcpStream {
     let s = TcpStream::connect_timeout(&addr.into(), WAIT).unwrap();
@@ -312,7 +332,7 @@ fn endpoint_bootstrap_rejects_invalid_lengths_duplicates_and_incompatible_rail_c
     assert!(Endpoint::decode(&bad).is_err());
     assert!(Endpoint::decode(&wire[..19]).is_err());
     let (_src, dst, remote, local, mut peer) = setup(cfg(), 10);
-    peer.metadata.hp = Some(end);
+    peer.metadata.hp = Some(Arc::new(end));
     let req = TransferRequest::new(
         Transport::HpTcp,
         local.base_address() + 1,
@@ -344,4 +364,26 @@ fn a_failed_worker_fences_new_admission_and_teardown_still_joins() {
     assert!(matches!(workers.ready(), Err(Error::Unavailable(_))));
     workers.stop().unwrap();
     workers.stop().unwrap();
+}
+
+#[test]
+fn peer_frame_limit_keeps_adjacent_aliases_separate_before_payload() {
+    let mut c = cfg();
+    c.hp_tcp.max_outstanding_tasks = 1;
+    c.hp_tcp.max_transfer_bytes = 6;
+    let (_src, dst, remote, local, peer) = setup(c, 16);
+    let requests = [1, 5].map(|off| {
+        TransferRequest::new(
+            Transport::Unspec,
+            local.base_address() + off,
+            remote.base_address() + off,
+            4,
+        )
+    });
+    assert!(matches!(
+        dst.submit_and_wait(TransferOp::Write, &peer, &requests, WAIT),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(bytes(&remote), [0xa5; 16]);
+    assert_eq!(bytes(&local), [0xee; 16]);
 }

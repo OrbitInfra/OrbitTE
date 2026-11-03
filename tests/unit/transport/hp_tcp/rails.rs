@@ -65,7 +65,7 @@ fn static_ipv4_pairing_balances_uneven_reads_rotates_small_requests_and_never_st
         .map(|(rail, l)| {
             let data = data.clone();
             thread::spawn(move || {
-                let (mut s, a) = l.accept().unwrap();
+                let (mut s, a) = accept(&l);
                 s.set_read_timeout(Some(WAIT)).unwrap();
                 assert_eq!(a.ip(), ips[rail]);
                 let mut frames = Vec::new();
@@ -148,7 +148,7 @@ fn periodic_fanout_rotates_lanes_independently_per_peer() {
         handlers.push(thread::spawn(move || {
             thread::scope(|scope| {
                 for _ in 0..2 {
-                    let (mut s, _) = listener.accept().unwrap();
+                    let (mut s, _) = accept(&listener);
                     s.set_read_timeout(Some(WAIT)).unwrap();
                     scope.spawn(move || {
                         for _ in 0..2 {
@@ -208,7 +208,7 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
     sockets::redirect(&mut peer, &[&a, &b]);
     let (on_sibling, sibling) = mpsc::channel();
     let h = thread::spawn(move || {
-        let (mut s, _) = b.accept().unwrap();
+        let (mut s, _) = accept(&b);
         s.set_read_timeout(Some(WAIT)).unwrap();
         let req = request(&mut s);
         s.write_all(
@@ -224,7 +224,7 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
         assert!(s.read_exact(&mut [0; 1]).is_err());
     });
     let stale = thread::spawn(move || {
-        let (mut s, _) = a.accept().unwrap();
+        let (mut s, _) = accept(&a);
         let req = request(&mut s);
         sibling.recv_timeout(WAIT).unwrap();
         s.write_all(

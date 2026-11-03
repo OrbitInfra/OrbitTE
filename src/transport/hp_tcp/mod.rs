@@ -55,6 +55,8 @@ impl HpTcpTransport {
         let end = peer
             .metadata
             .hp
+            .as_deref()
+            .copied()
             .ok_or(Error::Unavailable("peer did not publish HP-TCP"))?;
         let frame = protocol::Request {
             op,

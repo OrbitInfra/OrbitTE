@@ -68,10 +68,10 @@ impl ProcessIdentity {
 
 /// Describe capabilities are fixed at engine creation, independent of current
 /// provider health. Execution still checks authoritative owners and readiness.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SegmentMetadata {
     pub(crate) tcp_disabled: bool,
-    pub(crate) hp: Option<crate::transport::hp_tcp::Endpoint>,
+    pub(crate) hp: Option<std::sync::Arc<crate::transport::hp_tcp::Endpoint>>,
     pub(crate) max_transfer_bytes: u64,
     pub(crate) boot: Option<SourceEpoch>,
     pub(crate) rdma: bool,
@@ -82,8 +82,8 @@ pub(crate) struct SegmentMetadata {
 impl SegmentMetadata {
     pub(crate) const WIRE_SIZE: usize = 44;
 
-    pub(crate) fn same_machine(self, peer: Self) -> bool {
-        let machine = |segment: Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
+    pub(crate) fn same_machine(&self, peer: &Self) -> bool {
+        let machine = |segment: &Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
         machine(self)
             .zip(machine(peer))
             .is_some_and(|(a, b)| a == b)

@@ -278,7 +278,9 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         if !metadata.tcp_disabled {
             return Err(Error::Protocol("unexpected HP-TCP descriptor"));
         }
-        metadata.hp = Some(crate::transport::hp_tcp::Endpoint::decode(&bytes[end..])?);
+        metadata.hp = Some(Arc::new(crate::transport::hp_tcp::Endpoint::decode(
+            &bytes[end..],
+        )?));
     }
     let mut regions = Vec::new();
     regions
@@ -665,10 +667,11 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
     let mut proxy_reply = false;
     let prepared = (|| {
         if request.operation == Operation::Describe {
-            let regions = source.registry.descriptors()?;
+            let regions = source.registry.descriptors(source.metadata.hp.is_some())?;
             let end = DESCRIPTOR_HEADER + regions.len() * REGION_SIZE;
-            let mut payload = buffer(end + source.metadata.hp.map_or(0, |hp| hp.wire_len()))?;
-            if let Some(hp) = source.metadata.hp {
+            let mut payload =
+                buffer(end + source.metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
+            if let Some(hp) = &source.metadata.hp {
                 hp.encode(&mut payload[end..]);
             }
             payload[..4].copy_from_slice(&(regions.len() as u32).to_be_bytes());
@@ -683,7 +686,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 entry[24] = region.permission as u8;
                 entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
                 entry[26] = u8::from(region.ipc_exportable);
-                entry[27] = u8::from(region.hp_registered && source.metadata.hp.is_some());
+                entry[27] = u8::from(region.hp_registered);
             }
             channel.reply(source.epoch, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;

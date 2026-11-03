@@ -93,9 +93,11 @@ jobs:
         run: |
           binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          count=$("$binary" --list | awk '/^transport::hp_tcp::tests::.*: test$/ {n++} END {print n+0}')
+          test "$count" -ge 18
           for i in $(seq 1 50); do
             RUST_TEST_THREADS=$(nproc) "$binary" transport::hp_tcp::tests:: | tee "$RUNNER_TEMP/hp-tcp.log"
-            grep -Eq '^test result: ok. [1-9][0-9]+ passed; 0 failed;' "$RUNNER_TEMP/hp-tcp.log"
+            grep -Fq "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/hp-tcp.log"
           done
       - name: Repeat retirement and Pin controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring'
