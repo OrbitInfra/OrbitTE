@@ -137,12 +137,25 @@ impl Scrape {
                 .map(|c| c.value.load(Relaxed))
                 .sum::<u64>()
         };
+        let bytes = |n: u64| {
+            for (scale, unit) in [
+                (1_000_000_000_000, "TB"),
+                (1_000_000_000, "GB"),
+                (1_000_000, "MB"),
+                (1_000, "KB"),
+            ] {
+                if n >= scale {
+                    return format!("{:.2} {unit}", n as f64 / scale as f64);
+                }
+            }
+            format!("{n}.00 B")
+        };
         format!(
-            "Read: {} B ({} reqs, {} fails) | Write: {} B ({} reqs, {} fails) | Failovers: {} | Quarantined batches: {}",
-            total(Metric::ReadBytes),
+            "Read: {} ({} reqs, {} fails) | Write: {} ({} reqs, {} fails) | Failovers: {} | Quarantined batches: {}",
+            bytes(total(Metric::ReadBytes)),
             total(Metric::ReadRequests),
             total(Metric::ReadFailures),
-            total(Metric::WriteBytes),
+            bytes(total(Metric::WriteBytes)),
             total(Metric::WriteRequests),
             total(Metric::WriteFailures),
             total(Metric::Failover),

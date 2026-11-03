@@ -46,6 +46,13 @@ boundaries. Prometheus uses cumulative buckets through `+Inf`. A sub-microsecond
 sample can have a zero sum and still increments the count. `/metrics/summary`
 returns the summary available via the `log` facade.
 
+A successful 64-byte TCP READ contributes the following samples.
+
+```text
+tent_read_bytes_total{transport="tcp"} 64
+tent_transport_attempts_total{transport="tcp",operation="read"} 1
+```
+
 ## Transfer metrics
 
 Each entry with `{read,write}` denotes two separate families. Supported

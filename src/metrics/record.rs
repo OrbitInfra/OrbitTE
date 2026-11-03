@@ -188,8 +188,12 @@ impl Observation {
             self.cells.add(M::Infeasible, t, 1);
         }
         if let Some(mut r) = reason {
-            if r.failed() && self.phase.load(Relaxed) == Failure::Poll.code() {
-                r = Failure::Poll;
+            if r.failed() {
+                r = if self.phase.load(Relaxed) == Failure::Poll.code() {
+                    Failure::Poll
+                } else {
+                    Failure::Submit
+                };
             }
             self.cells.add(
                 M::TaskFailures,

@@ -113,6 +113,9 @@ jobs:
           "$RUNNER_TEMP/metrics-parser/bin/pip" install prometheus-client==0.22.1
           cargo build --locked --features metrics --example metrics_overhead
           "$RUNNER_TEMP/metrics-parser/bin/python" tests/metrics/scrape.py target/debug/examples/metrics_overhead
+      - name: Measure CPU and TCP submission with metrics off, disabled and enabled
+        if: matrix.toolchain == 'stable' && matrix.features == 'metrics'
+        run: python3 tests/metrics/benchmark.py
       - name: Repeat metrics owner and scrape controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
         run: |
