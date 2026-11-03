@@ -332,6 +332,7 @@ fn single_handler(runtime: RdmaTransport) -> TransferEngine {
         runtime,
         crate::EngineConfig {
             handler_threads: 1,
+            handler_timeout: crate::test_support::EVENTUAL_PROGRESS,
             ..Default::default()
         },
     )

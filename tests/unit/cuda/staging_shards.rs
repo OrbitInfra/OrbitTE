@@ -10,6 +10,7 @@ fn engine(transport: Transport) -> TransferEngine {
         staging_chunk_count: 16,
         staging_pipeline_depth: 1,
         handler_threads: 16,
+        handler_timeout: crate::test_support::EVENTUAL_PROGRESS,
         max_inflight_batches: 16,
         ..EngineConfig::default()
     };

@@ -11,6 +11,7 @@ pub(super) fn engine(transport: Transport, chunk: usize, depth: usize) -> Transf
         staging_chunk_count: depth,
         staging_pipeline_depth: depth,
         handler_threads: 1,
+        handler_timeout: crate::test_support::EVENTUAL_PROGRESS,
         max_inflight_batches: 1,
         ..EngineConfig::default()
     };

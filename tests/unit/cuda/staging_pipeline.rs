@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::runtime::proxy_manager::ProxyManager;
+use crate::test_support::EVENTUAL_PROGRESS;
 use crate::{RegisteredMemory, SourceEpoch};
 use std::time::Instant;
 
@@ -12,6 +13,7 @@ fn config(depth: usize) -> EngineConfig {
         staging_chunk_count: depth,
         staging_pipeline_depth: depth,
         handler_threads: 1,
+        handler_timeout: crate::test_support::EVENTUAL_PROGRESS,
         max_inflight_batches: 1,
         ..EngineConfig::default()
     }
@@ -82,11 +84,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                         .unwrap()
                 };
                 let peer = requester
-                    .open_segment(
-                        source.endpoint(),
-                        source.source_epoch(),
-                        Duration::from_secs(10),
-                    )
+                    .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
                     .unwrap();
                 let depth = source_depth.min(requested).min(length.div_ceil(3));
                 let chunks = length.div_ceil(3);
@@ -110,7 +108,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                             )
                             .with_remote_staging(true)],
                             None,
-                            Duration::from_secs(10),
+                            EVENTUAL_PROGRESS,
                         )
                         .unwrap();
                     // Every source copy remains pending until the test releases
@@ -128,7 +126,7 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                             as u64
                     );
                     a.query_hold.store(false, Ordering::Release);
-                    let report = batch.wait(Duration::from_secs(10)).unwrap();
+                    let report = batch.wait(EVENTUAL_PROGRESS).unwrap();
                     assert_eq!(
                         report.state,
                         BatchState::Completed,
@@ -167,8 +165,8 @@ fn remote_pipeline_negotiates_depth_overlaps_copies_and_reuses_slot_streams() {
                 let mut expected = source_bytes;
                 expected[2..2 + length].copy_from_slice(&write_bytes);
                 assert_eq!(observed, expected);
-                requester.close(Duration::from_secs(10)).unwrap();
-                source.close(Duration::from_secs(10)).unwrap();
+                requester.close(EVENTUAL_PROGRESS).unwrap();
+                source.close(EVENTUAL_PROGRESS).unwrap();
                 assert!(a.pins.lock().unwrap().is_empty());
                 drop(remote);
                 drop(gpu);
