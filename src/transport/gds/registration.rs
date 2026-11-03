@@ -71,6 +71,20 @@ pub(crate) struct BufferSlot {
 }
 
 impl BufferSlot {
+    fn registered(&self) -> bool {
+        !self.retired
+            && !self.failed
+            && self
+                .native
+                .as_ref()
+                .is_some_and(|n| n.pid == n.driver.api.pid())
+    }
+
+    pub(crate) fn supports(memory: &RegisteredMemory) -> bool {
+        memory.memory_type() != crate::MemoryType::Cuda
+            || memory.0.gds.lock().is_ok_and(|slot| slot.registered())
+    }
+
     pub(crate) fn close(&mut self) -> Result<()> {
         if self.failed {
             return Err(Error::Unquiesced {
@@ -113,12 +127,19 @@ impl GdsTransport {
             attempted = true;
             self.driver.api.register_buffer(base, memory.len())
         });
-        if attempted && matches!(result, Err(Error::Unquiesced { .. })) {
-            slot.failed = true;
-            gpu.fence_gds();
-            std::mem::forget((memory.clone(), self.driver.clone()));
+        if let Err(error) = result {
+            if attempted {
+                if !matches!(error, Error::Unquiesced { .. }) {
+                    self.buffer_registration_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok(());
+                }
+                slot.failed = true;
+                gpu.fence_gds();
+                std::mem::forget((memory.clone(), self.driver.clone()));
+            }
+            return Err(error);
         }
-        result?;
         slot.native = Some(NativeBuffer {
             driver: self.driver.clone(),
             memory: gpu,
@@ -147,13 +168,7 @@ impl BufferLease {
             .gds
             .lock()
             .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
-        if slot.failed
-            || slot.retired
-            || slot
-                .native
-                .as_ref()
-                .is_none_or(|n| n.pid != n.driver.api.pid())
-        {
+        if !slot.registered() {
             return Err(Error::Unavailable(
                 "CUDA buffer is not registered with this GDS process",
             ));

@@ -51,24 +51,122 @@ fn gds_registers_the_cuda_view_once_consumes_readiness_and_uses_registered_offse
 }
 
 #[test]
-fn gds_buffer_registration_failure_rolls_back_without_publishing_memory() -> Result<()> {
+fn clean_gds_registration_failure_publishes_the_region_and_rejects_an_explicit_hint() -> Result<()>
+{
     let mock = Mock::new(GdsMode::NativeOnly);
     mock.register_error.store(true, Ordering::Release);
     let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
     let dev = allocation(&[0; 16]);
     let gpu = memory(&dev);
+    let ranges = [(gpu.clone(), 0, 16)];
+    let v = f
+        .engine
+        .register_cuda_memory_batch(&ranges, Permission::LocalOnly)?
+        .remove(0);
+    let alias = f
+        .engine
+        .register_cuda_memory_batch(&ranges, Permission::LocalOnly)?
+        .remove(0);
+    assert_eq!(
+        f.engine
+            .resolve_local_address(gpu.base_address(), 1)?
+            .0
+            .id(),
+        v.id()
+    );
+    assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 1);
+    v.write(0, b"available")?;
+    assert!(matches!(
+        f.engine
+            .submit_and_wait(TransferOp::Read, &f.segment, &[request(&v, 0, 0, 8)], WAIT),
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 1);
+    assert_eq!(mock.file_registers.load(Ordering::Acquire), 0);
+    assert_eq!(mock.submits.load(Ordering::Acquire), 0);
+    f.engine.unregister_memory(&v)?;
+    f.engine.unregister_memory(&alias)?;
+    assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
+    Ok(())
+}
+
+#[test]
+fn uncertain_gds_registration_fences_and_keeps_the_unpublished_region() -> Result<()> {
+    let mock = Mock::new(GdsMode::NativeOnly);
+    mock.register_uncertain.store(true, Ordering::Release);
+    let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
+    let dev = allocation(&[0; 16]);
+    let owner = Arc::downgrade(&dev);
+    let gpu = memory(&dev);
     assert!(matches!(
         f.engine
             .register_cuda_memory_batch(&[(gpu.clone(), 0, 16)], Permission::LocalOnly),
-        Err(Error::Backend { .. })
+        Err(Error::Unquiesced { .. })
     ));
     assert!(
         f.engine
             .resolve_local_address(gpu.base_address(), 1)
             .is_err()
     );
-    assert_eq!(f.engine.stats()?.retained_regions, 0);
+    assert!(gpu.write(0, &[1]).is_err());
+    assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 0);
     assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
+    drop((gpu, dev));
+    assert!(owner.upgrade().is_some());
+    Ok(())
+}
+
+#[cfg(all(feature = "rdma", feature = "io-uring"))]
+#[test]
+fn denied_gds_buffer_keeps_its_rdma_mr_and_selects_staged_file_reads() -> Result<()> {
+    use crate::engine::tests::{rdma_fixture_with_config, source_runtime};
+    use crate::transport::{io_uring, rdma};
+
+    if !io_uring::tests::kernel() {
+        return Ok(());
+    }
+    for selector in [
+        None,
+        Some(crate::TransportSelectorConfig::from_json(
+            r#"{"policy":[{"segment_type":"file","transports":["gds","io_uring"]}]}"#,
+        )?),
+    ] {
+        let config = EngineConfig {
+            selector,
+            ..Default::default()
+        };
+        let mut engine = rdma_fixture_with_config(rdma::tests::gpu_runtime("copy"), config.clone());
+        engine.io_uring = io_uring::IoUringTransport::probe();
+        let mock = Mock::new(GdsMode::NativeOnly);
+        mock.register_error.store(true, Ordering::Release);
+        mock.install(&mut engine, &config);
+        let f = Fixture::with_engine(engine, 16)?;
+        std::fs::write(&f.path, b"0123456789abcdef")?;
+        let dev = allocation(&[0x4e; 16]);
+        let v = f
+            .engine
+            .register_cuda_memory_batch(&[(memory(&dev), 0, 16)], Permission::LocalOnly)?
+            .remove(0);
+        assert_eq!(source_runtime(&f.engine).stats()?.persistent_mrs, 1);
+        let req = TransferRequest::new(Transport::Unspec, v.base_address() + 2, 4, 8);
+        let report = f
+            .engine
+            .submit_and_wait(TransferOp::Read, &f.segment, &[req], WAIT)?;
+        assert!(report.is_complete());
+        assert_eq!(
+            (report.completed_requests, report.transferred_bytes),
+            (1, 8)
+        );
+        let mut actual = [0; 16];
+        v.read(0, &mut actual)?;
+        assert_eq!(&actual, b"NN456789abNNNNNN");
+        assert_eq!(mock.file_registers.load(Ordering::Acquire), 0);
+        assert_eq!(mock.submits.load(Ordering::Acquire), 0);
+        assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 1);
+        f.engine.unregister_memory(&v)?;
+        assert_eq!(source_runtime(&f.engine).stats()?.persistent_mrs, 0);
+        f.engine.close_file_segment(&f.segment, WAIT)?;
+    }
     Ok(())
 }
 

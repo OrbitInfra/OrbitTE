@@ -17,12 +17,13 @@ pub(crate) struct Mock {
     mode: GdsMode,
     native_slice_limit: AtomicUsize,
     pub(crate) register_error: AtomicBool,
+    pub(crate) register_uncertain: AtomicBool,
     pub(crate) deregister_error: AtomicBool,
     pub(crate) buffer_registers: AtomicUsize,
     pub(crate) buffer_deregisters: AtomicUsize,
     file_error: AtomicBool,
     file_close_error: AtomicBool,
-    file_registers: AtomicUsize,
+    pub(crate) file_registers: AtomicUsize,
     file_closes: AtomicUsize,
     setup_error: AtomicBool,
     destroy_error: AtomicBool,
@@ -50,6 +51,7 @@ impl Mock {
             opens: 0.into(),
             open_error: false.into(),
             register_error: false.into(),
+            register_uncertain: false.into(),
             deregister_error: false.into(),
             buffer_registers: 0.into(),
             buffer_deregisters: 0.into(),
@@ -133,7 +135,12 @@ impl Api for Mock {
     }
     fn register_buffer(&self, _: usize, _: usize) -> Result<()> {
         self.buffer_registers.fetch_add(1, Ordering::Relaxed);
-        if self.register_error.load(Ordering::Acquire) {
+        if self.register_uncertain.load(Ordering::Acquire) {
+            Err(Error::Unquiesced {
+                operation: "cuFileBufRegister",
+                code: -1,
+            })
+        } else if self.register_error.load(Ordering::Acquire) {
             Err(failed("buf register"))
         } else {
             Ok(())
@@ -249,6 +256,9 @@ impl Fixture {
     pub(crate) fn new(mock: &Arc<Mock>, config: EngineConfig, length: usize) -> Result<Self> {
         let mut engine = TransferEngine::new(config.clone())?;
         mock.install(&mut engine, &config);
+        Self::with_engine(engine, length)
+    }
+    pub(crate) fn with_engine(engine: TransferEngine, length: usize) -> Result<Self> {
         let dir =
             std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         let path = dir.join(format!("orbitte-gds-{}", crate::SourceEpoch::generate()?));

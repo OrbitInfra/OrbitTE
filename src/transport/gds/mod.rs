@@ -27,6 +27,8 @@ pub enum GdsMode {
 pub struct GdsStats {
     pub mode: Option<GdsMode>,
     pub available: bool,
+    /// Clean cuFile buffer registration failures that left the CUDA region usable.
+    pub buffer_registration_failures: u64,
     pub submitted_batches: u64,
     pub quarantined_batches: usize,
 }
@@ -98,6 +100,7 @@ pub(crate) struct GdsTransport {
     driver: Arc<Driver>,
     depth: u32,
     require_native: bool,
+    buffer_registration_failures: AtomicU64,
     submitted: AtomicU64,
     quarantine: Mutex<Vec<Retained>>,
 }
@@ -126,6 +129,7 @@ impl GdsTransport {
             driver,
             depth: config.gds_batch_depth,
             require_native: config.gds_require_native,
+            buffer_registration_failures: AtomicU64::new(0),
             submitted: AtomicU64::new(0),
             quarantine: Mutex::default(),
         }
@@ -141,6 +145,7 @@ impl GdsTransport {
         GdsStats {
             mode: self.driver.mode().ok(),
             available: self.mode().is_ok(),
+            buffer_registration_failures: self.buffer_registration_failures.load(Ordering::Relaxed),
             submitted_batches: self.submitted.load(Ordering::Relaxed),
             quarantined_batches: self
                 .quarantine

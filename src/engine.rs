@@ -733,12 +733,15 @@ impl TransferEngine {
     }
 
     #[cfg(any(feature = "io-uring", feature = "gds"))]
-    fn file_available(&self, transport: Transport) -> bool {
+    fn file_available(&self, transport: Transport, _local: Option<&RegisteredMemory>) -> bool {
         match transport {
             #[cfg(feature = "io-uring")]
             Transport::IoUring => self.io_uring.is_some(),
             #[cfg(feature = "gds")]
-            Transport::Gds => self.gds.as_ref().is_some_and(|g| g.mode().is_ok()),
+            Transport::Gds => {
+                _local.is_none_or(crate::transport::gds::BufferSlot::supports)
+                    && self.gds.as_ref().is_some_and(|g| g.mode().is_ok())
+            }
             _ => false,
         }
     }
@@ -769,11 +772,9 @@ impl TransferEngine {
             }
             #[cfg(any(feature = "io-uring", feature = "gds"))]
             TransferTarget::File(segment) => {
-                #[cfg(feature = "gds")]
-                if let Some(gds) = &self.gds {
-                    gds.cleanup();
-                }
-                if !self.file_available(Transport::Gds) && !self.file_available(Transport::IoUring)
+                if requests.is_empty()
+                    && !self.file_available(Transport::Gds, None)
+                    && !self.file_available(Transport::IoUring, None)
                 {
                     return Err(Error::Unavailable("no local file transport is available"));
                 }
@@ -853,7 +854,7 @@ impl TransferEngine {
                         request.length,
                         priority,
                         request.transport,
-                        |t| self.file_available(t),
+                        |t| self.file_available(t, Some(&local)),
                     )?;
                     let (lease, offset) = self.files.admit(
                         segment,
@@ -954,6 +955,10 @@ impl TransferEngine {
                 remote_offset,
                 length: request.length,
             });
+        }
+        #[cfg(feature = "gds")]
+        if let (TransferTarget::File(_), Some(gds)) = (target, &self.gds) {
+            gds.cleanup();
         }
         let admission = self.admit_batch(total_bytes)?;
         let qos = match &self.qos {

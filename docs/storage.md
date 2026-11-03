@@ -109,7 +109,12 @@ otherwise. The installed GPU and local NVMe profile is [queued for verification]
 Enable the Linux `gds` feature and pass a file segment to the existing batch
 APIs. `Transport::Gds` supports both host and CUDA READ/WRITE. CUDA ranges
 register with cuFile in their owning context and consume producer readiness
-before I/O. Host ranges use their existing exclusive loan. A file entry owns
+before I/O. A clean cuFile buffer registration failure increments
+`EngineStats::gds.buffer_registration_failures` and leaves the region available
+to other transports. An explicit GDS hint for that region returns `Unavailable`.
+Automatic selection and file policies can choose io_uring staging when allowed.
+An uncertain registration still fences and retains the CUDA allocation.
+Host ranges use their existing exclusive loan. A file entry owns
 one cuFile handle and its `O_DIRECT` descriptor until close drains its users.
 A failure after GDS selection is returned to the caller.
 
