@@ -644,3 +644,106 @@ fn nested_rdma_exhaustion_preserves_error_scope_and_prior_write_effect() {
         assert!(a.pins.lock().unwrap().is_empty());
     }
 }
+
+#[test]
+fn abandoned_remote_delegate_releases_only_after_a_confirmed_event() {
+    use crate::test_support::EVENTUAL_PROGRESS;
+    for uncertain in [false, true] {
+        let source = engine(Transport::Tcp, 1);
+        let device = allocation(&[0x57; 64]);
+        let gpu = memory(&device);
+        let remote = register(&source, gpu.clone());
+        let (mut channel, nonce) = pin(&source, &remote, 1);
+        frame(&mut channel, nonce, &remote, Operation::Delegate, 0);
+        receipt(&mut channel, nonce);
+        let (entered, wait) = std::sync::mpsc::sync_channel(0);
+        let (resume, blocked) = std::sync::mpsc::sync_channel(0);
+        *device.event_gate.lock().unwrap() = Some((entered, blocked));
+        if uncertain {
+            device.event_wait_fail_at.store(1, Ordering::Release);
+            device.sync_error.store(700, Ordering::Release);
+        }
+        drop(channel);
+        wait.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        source.unregister_memory(&remote).unwrap();
+        drop(remote);
+        let held = source.stats().unwrap();
+        assert_eq!(
+            (
+                held.staging.active_chunks,
+                held.active_source_operations,
+                held.retained_regions
+            ),
+            (1, 1, 1)
+        );
+        assert_eq!(device.pins.lock().unwrap().len(), 1);
+        assert!(matches!(
+            source.close_source(Duration::ZERO),
+            Err(Error::Timeout)
+        ));
+        resume.send(()).unwrap();
+        if uncertain {
+            let end = Instant::now() + EVENTUAL_PROGRESS;
+            while source.stats().unwrap().staging.retained_chunks == 0 {
+                assert!(Instant::now() < end);
+                std::thread::yield_now();
+            }
+            assert_eq!(source.stats().unwrap().active_source_operations, 1);
+            assert_eq!(device.pins.lock().unwrap().len(), 1);
+            assert!(matches!(
+                source.close_source(Duration::ZERO),
+                Err(Error::Timeout)
+            ));
+        } else {
+            source.close_source(EVENTUAL_PROGRESS).unwrap();
+            assert_eq!(source.stats().unwrap().staging.idle_chunks, 1);
+            assert_eq!(source.stats().unwrap().retained_regions, 0);
+            source.close(EVENTUAL_PROGRESS).unwrap();
+            assert!(device.pins.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin() {
+    use crate::test_support::EVENTUAL_PROGRESS;
+    let source = engine(Transport::Tcp, 1);
+    let endpoint = source.endpoint();
+    let device = allocation(&[0x57; 64]);
+    let remote = register(&source, memory(&device));
+    let (mut channel, nonce) = pin(&source, &remote, 1);
+    frame(&mut channel, nonce, &remote, Operation::Delegate, 0);
+    receipt(&mut channel, nonce);
+    let (entered, wait) = std::sync::mpsc::sync_channel(0);
+    let (resume, blocked) = std::sync::mpsc::sync_channel(0);
+    *device.event_gate.lock().unwrap() = Some((entered, blocked));
+    drop(channel);
+    wait.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    drop(remote);
+    let (done, observed) = std::sync::mpsc::channel();
+    let closing = std::thread::spawn(move || {
+        drop(source);
+        done.send(()).unwrap();
+    });
+    // The acceptor has exited. The control worker still owns its private
+    // registration and stage until the native completion receipt arrives.
+    let until = Instant::now() + EVENTUAL_PROGRESS;
+    loop {
+        match std::net::TcpStream::connect_timeout(&endpoint, Duration::from_millis(50)) {
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => break,
+            _ => {
+                assert!(Instant::now() < until);
+                std::thread::yield_now();
+            }
+        }
+    }
+    assert!(matches!(
+        observed.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert_eq!(device.pins.lock().unwrap().len(), 1);
+    resume.send(()).unwrap();
+    observed.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    closing.join().unwrap();
+    assert!(device.pins.lock().unwrap().is_empty());
+}

@@ -173,33 +173,65 @@ impl GdsTransport {
         publish();
     }
 
-    // A later submitting or closing caller can collect late receipts. A failed
-    // teardown is never tried twice. Each item retains its original admission.
+    // Explicit progress probes only one recoverable owner for this batch.
+    // A busy quarantine yields; an irreversible deregister/destroy is never retried.
+    pub(crate) fn try_collect_for(&self, id: crate::BatchId) -> bool {
+        let Ok(mut retained) = self.quarantine.try_lock() else {
+            return true;
+        };
+        let Some(i) = retained.iter().position(|r| {
+            r.recoverable() && r.progress.as_ref().is_some_and(|(p, _)| p.id() == id)
+        }) else {
+            return false;
+        };
+        let mut item = retained.remove(i);
+        if item.collect() {
+            item.publish_drained();
+        } else {
+            retained.push(item);
+        }
+        retained
+            .iter()
+            .any(|r| r.recoverable() && r.progress.as_ref().is_some_and(|(p, _)| p.id() == id))
+    }
+
     pub(crate) fn cleanup(&self) {
         let mut retained = self.quarantine.lock().unwrap_or_else(|p| p.into_inner());
         let mut i = 0;
         while i < retained.len() {
-            let item = &mut retained[i];
-            let Quarantine::Batch(batch) = &mut item.batch else {
+            if retained[i].collect() {
+                retained.swap_remove(i).publish_drained();
+            } else {
                 i += 1;
-                continue;
-            };
-            if !batch.collect() {
-                i += 1;
-                continue;
-            }
-            if !item.submission.release_gds_buffers() {
-                batch.permanent = true;
-                i += 1;
-                continue;
-            }
-            let mut item = retained.swap_remove(i);
-            let progress = item.progress.take();
-            drop(item);
-            if let Some((progress, index)) = progress {
-                progress.gds_drained(index);
             }
         }
+    }
+}
+
+impl Retained {
+    fn publish_drained(mut self) {
+        let progress = self.progress.take();
+        drop(self);
+        if let Some((progress, index)) = progress {
+            progress.gds_drained(index);
+        }
+    }
+    fn recoverable(&self) -> bool {
+        matches!(&self.batch, Quarantine::Batch(batch) if !batch.permanent)
+    }
+
+    fn collect(&mut self) -> bool {
+        let Quarantine::Batch(batch) = &mut self.batch else {
+            return false;
+        };
+        if !batch.collect() {
+            return false;
+        }
+        if !self.submission.release_gds_buffers() {
+            batch.permanent = true;
+            return false;
+        }
+        true
     }
 }
 

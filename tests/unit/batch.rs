@@ -329,3 +329,93 @@ fn allocation_budget_and_requester_close_reject_without_leaking_reservations() {
         .unwrap();
     engine.unregister_memory(&local).unwrap();
 }
+
+#[test]
+fn one_progress_turn_dispatches_or_reaps_one_group_and_status_only_observes() {
+    let timeout = crate::test_support::EVENTUAL_PROGRESS;
+    let mut engine = TransferEngine::new(EngineConfig {
+        enable_progress_worker: true,
+        ..Default::default()
+    })
+    .unwrap();
+    // Suppress spontaneous wakes so each transition has exactly one public caller.
+    engine.progress_worker.as_mut().unwrap().stop();
+    let engine = Arc::new(engine);
+    let local = engine
+        .register_memory(vec![0; 2].into(), Permission::LocalOnly)
+        .unwrap();
+    let remote = engine
+        .register_memory(vec![41, 42].into(), Permission::RemoteRead)
+        .unwrap();
+    let peer = engine
+        .open_segment(engine.endpoint(), engine.source_epoch(), timeout)
+        .unwrap();
+    let mut batch = engine.allocate_batch(2).unwrap();
+    let id = batch.id().unwrap();
+    for i in [0, 1] {
+        batch
+            .submit(
+                TransferOp::Read,
+                &peer,
+                &[TransferRequest::new(
+                    crate::Transport::Tcp,
+                    local.base_address() + i,
+                    remote.base_address() + i,
+                    1,
+                )],
+                None,
+                timeout,
+            )
+            .unwrap();
+    }
+    batch.seal().unwrap();
+    let other = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+    let other_batch = other.allocate_batch(1).unwrap();
+    assert_eq!(id.as_u64(), other_batch.id().unwrap().as_u64());
+    assert!(matches!(other.progress_batch(id), Err(Error::BatchClosed)));
+    for _ in 0..10 {
+        assert_eq!(batch.status().unwrap().completed_tasks, 0);
+        assert_eq!(batch.progress().unwrap().lock().queue.len(), 2);
+    }
+    for i in 0..2 {
+        engine.progress_batch(id).unwrap();
+        let end = Instant::now() + timeout;
+        while batch.progress().unwrap().lock().receipt.is_none() {
+            assert!(Instant::now() < end);
+            thread::yield_now();
+        }
+        assert!(!batch.submissions().unwrap()[i].locally_drained);
+        engine.progress_batch(id).unwrap();
+        assert!(batch.submissions().unwrap()[i].locally_drained);
+        if i == 0 {
+            assert_eq!(batch.task_status(1).unwrap().state, TaskState::Waiting);
+        }
+    }
+    let mut bytes = [0; 2];
+    local.read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [41, 42]);
+    assert_eq!(batch.wait(timeout).unwrap().state, BatchState::Completed);
+    batch.free().unwrap();
+}
+
+#[test]
+fn independent_batches_progress_while_a_sibling_progress_lock_is_held() {
+    let engine = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+    let first = engine.allocate_batch(1).unwrap();
+    let second = engine.allocate_batch(1).unwrap();
+    let held = first.progress().unwrap().lock();
+    thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            let status = engine.progress_batch(second.id().unwrap()).unwrap();
+            tx.send(status).unwrap();
+        });
+        assert_eq!(
+            rx.recv_timeout(crate::test_support::EVENTUAL_PROGRESS)
+                .unwrap()
+                .state,
+            BatchState::Open
+        );
+    });
+    drop(held);
+}

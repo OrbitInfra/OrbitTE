@@ -459,3 +459,42 @@ fn staged_rdma_cuda_failure_survives_a_drained_cq_cleanup_error() {
         assert!(weak.upgrade().is_some());
     }
 }
+
+#[test]
+fn concurrent_first_stage_leases_charge_exactly_the_pool_capacity() {
+    let pool = ProxyManager::new(4096, 4, crate::StagingLocation::Any).unwrap();
+    let device = allocation(&[7; 8]);
+    let gpu = memory(&device);
+    let context = gpu.allocation.lock().unwrap().context.clone();
+    let start = std::sync::Barrier::new(8);
+    let leases = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    start.wait();
+                    pool.pin_stage_buffer(context.raw.as_ptr() as usize, None, None, |size| {
+                        PinnedAllocation::new(&context, size)
+                    })
+                })
+            })
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        leases
+            .iter()
+            .filter(|lease| matches!(lease, Err(Error::ResourceExhausted)))
+            .count(),
+        4
+    );
+    assert_eq!(pool.stats().unwrap().active_chunks, 4);
+    for lease in leases.into_iter().flatten() {
+        lease.release().unwrap();
+    }
+    assert_eq!(pool.stats().unwrap().idle_chunks, 4);
+    pool.close(Instant::now() + EVENTUAL_PROGRESS).unwrap();
+    assert!(device.pins.lock().unwrap().is_empty());
+}

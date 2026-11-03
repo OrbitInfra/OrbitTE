@@ -98,6 +98,14 @@ pub struct EngineConfig {
     pub max_batch_requests: usize,
     pub max_allocated_batches: usize,
     pub max_allocated_requests: usize,
+    /// Enable event-driven batch progress. Configuring a runtime queue also enables it.
+    pub enable_progress_worker: bool,
+    /// Active runtime queue fallback tick. Zero disables timed wakes.
+    pub progress_fallback_interval: Duration,
+    /// Allow another notification provider or the control RPC after an unavailable channel.
+    pub notification_rpc_fallback: bool,
+    /// Install the TCP notification channel. The control RPC is independent.
+    pub tcp_notifications: bool,
     /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
     pub runtime_queue: Option<RuntimeQueueConfig>,
     /// Immutable typed QoS contracts. None preserves caller priorities and adds
@@ -159,6 +167,10 @@ impl Default for EngineConfig {
             max_batch_requests: 1024,
             max_allocated_batches: 32,
             max_allocated_requests: 32 * 1024,
+            enable_progress_worker: false,
+            progress_fallback_interval: Duration::from_micros(50_000),
+            notification_rpc_fallback: true,
+            tcp_notifications: true,
             runtime_queue: None,
             qos: None,
             selector: None,

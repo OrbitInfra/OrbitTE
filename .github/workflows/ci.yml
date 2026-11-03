@@ -78,7 +78,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Set the same test parallelism for the suite and stability controls
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring'
+        if: matrix.toolchain == 'stable' && (matrix.features == 'rdma,cuda,io-uring' || matrix.features == 'rdma,cuda,io-uring,gds')
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --locked --features "$ORBITTE_FEATURES"
@@ -100,6 +100,12 @@ jobs:
             grep -Fq "test result: ok. ${#tests[@]} passed; 0 failed;" "$RUNNER_TEMP/timing-controls.log"
           done
           echo "All four controls passed 50/50 on Linux with RUST_TEST_THREADS=$RUST_TEST_THREADS." >> "$GITHUB_STEP_SUMMARY"
+      - name: Repeat progress and notification controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-progress-controls.sh "$binary"
       - name: RDMA interruption relay protocol boundary
         if: contains(matrix.features, 'rdma')
         run: cargo test --locked --features "$ORBITTE_FEATURES" --example rdma_host relay_tracks_the_public_engines_current_wire

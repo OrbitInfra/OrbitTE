@@ -1106,3 +1106,208 @@ pub(crate) fn read_request(channel: &mut ControlChannel<'_>) -> Request {
     channel.read_exact(&mut bytes).unwrap();
     Request::decode(&bytes).unwrap()
 }
+
+#[test]
+fn notify_ack_requires_a_registered_accepting_callback_and_well_formed_body() {
+    let engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    // Both real wire handlers dispatch through the same callback registration.
+    let source = engine.notification_inbox_for_test();
+    for operation in [Operation::Notify, Operation::NotifyRpc] {
+        source.set_receiver(None);
+        for behavior in [
+            "before",
+            "accept",
+            "cleared",
+            "throw",
+            "reject",
+            "malformed",
+        ] {
+            match behavior {
+                "accept" | "malformed" => source.set_receiver(Some(|p, n| p.commit(n))),
+                "cleared" => source.set_receiver(None),
+                "throw" => source.set_receiver(Some(|_, _| panic!("callback failed"))),
+                "reject" => source.set_receiver(Some(|_, _| Err(Error::PermissionDenied))),
+                _ => {}
+            }
+            let mut channel = wire_request(&engine, operation, 0, 1, 0);
+            assert_eq!(
+                Reply::read(&mut channel, engine.source_epoch())
+                    .unwrap()
+                    .status,
+                9
+            );
+            channel
+                .write_all(&[b'x', u8::from(behavior == "malformed")])
+                .unwrap();
+            let reply = Reply::read(&mut channel, engine.source_epoch());
+            match behavior {
+                "accept" => assert_eq!(reply.unwrap().status, 0),
+                "before" | "cleared" => assert!(matches!(reply, Err(Error::Unavailable(_)))),
+                "throw" => assert!(matches!(reply, Err(Error::Internal(_)))),
+                "reject" => assert!(matches!(reply, Err(Error::PermissionDenied))),
+                _ => assert!(matches!(reply, Err(Error::Protocol(_)))),
+            }
+            assert_eq!(
+                engine.receive_notifications().unwrap().len(),
+                usize::from(behavior == "accept")
+            );
+            assert_eq!(engine.stats().unwrap().retained_notifications, 0);
+        }
+    }
+}
+
+#[test]
+fn deferred_free_races_progress_and_allocation_until_real_tcp_drain() {
+    use std::sync::atomic::Ordering;
+    let t = common::EVENTUAL_PROGRESS;
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            enable_progress_worker: true,
+            runtime_queue: Some(Default::default()),
+            max_allocated_batches: 3,
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let (listener, peer) = fault_peer();
+    let epoch = peer.epoch;
+    let fi = common::external_memory(&[0; 8]);
+    let local = engine
+        .register_host_memory(fi.memory.clone(), 0, 8, Permission::LocalOnly)
+        .unwrap();
+    let req = [TransferRequest::new(
+        crate::Transport::Tcp,
+        local.base_address(),
+        peer.regions[0].base_address(),
+        8,
+    )];
+    let mut batch = engine
+        .submit_async(TransferOp::Read, &peer, &req, None, t)
+        .unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    stream.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+    let id = batch.id().unwrap();
+    engine.unregister_memory(&local).unwrap();
+    drop((local, fi.memory));
+    // Two explicit pollers observe the same worker-owned request. Free on a
+    // third thread fences the ID without waiting for this peer to reply.
+    let barrier = std::sync::Barrier::new(4);
+    thread::scope(|scope| {
+        let poll = || {
+            assert_eq!(engine.progress_batch(id).unwrap().completed_tasks, 0);
+            barrier.wait();
+            let until = Instant::now() + t;
+            loop {
+                match engine.progress_batch(id) {
+                    Err(Error::BatchClosed) => break,
+                    Ok(status) => assert!(!status.locally_drained),
+                    Err(other) => panic!("{other}"),
+                }
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            }
+        };
+        scope.spawn(poll);
+        scope.spawn(poll);
+        scope.spawn(|| {
+            barrier.wait();
+            for _ in 0..20 {
+                engine.allocate_batch(1).unwrap().free().unwrap();
+            }
+        });
+        scope.spawn(|| {
+            barrier.wait();
+            batch.free().unwrap();
+        });
+    });
+    let held = engine.stats().unwrap();
+    assert_eq!(
+        (
+            held.allocated_batches,
+            held.deferred_batches,
+            held.inflight_batches,
+            held.inflight_bytes
+        ),
+        (1, 1, 1, 8)
+    );
+    assert_eq!(held.runtime_queue.unwrap().dispatching_owners, 1);
+    assert!(fi.owner.upgrade().is_some());
+    stream
+        .write_all(
+            &Reply {
+                status: 0,
+                epoch,
+                length: 8,
+            }
+            .encode(),
+        )
+        .unwrap();
+    stream.write_all(&[37; 8]).unwrap();
+    let until = Instant::now() + t;
+    while engine.stats().unwrap().allocated_batches != 0 {
+        assert!(Instant::now() < until);
+        thread::yield_now();
+    }
+    assert_eq!(fi.drops.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.stats().unwrap().deferred_batches, 0);
+    assert_eq!(engine.stats().unwrap().quarantined_batches, 0);
+    assert_eq!(engine.stats().unwrap().inflight_bytes, 0);
+}
+
+#[test]
+fn background_progress_publishes_a_lost_write_receipt_without_replay() {
+    let timeout = common::EVENTUAL_PROGRESS;
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            enable_progress_worker: true,
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let (listener, peer) = fault_peer();
+    let mut b = engine
+        .submit_async(
+            TransferOp::Write,
+            &peer,
+            &[fault_request(&engine, &peer)],
+            None,
+            timeout,
+        )
+        .unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    stream.set_read_timeout(Some(timeout)).unwrap();
+    let mut header = [0; REQUEST_SIZE];
+    stream.read_exact(&mut header).unwrap();
+    assert!(Request::decode(&header).unwrap().operation == Operation::TcpWrite);
+    stream
+        .write_all(
+            &Reply {
+                status: 9,
+                epoch: peer.epoch,
+                length: 0,
+            }
+            .encode(),
+        )
+        .unwrap();
+    let mut bytes = [0; 8];
+    stream.read_exact(&mut bytes).unwrap();
+    assert_eq!(bytes, [7; 8]);
+    drop(stream);
+    // No status or progress call is needed to publish the physical failure.
+    let status = b.wait(timeout).unwrap();
+    assert_eq!(status.state, crate::BatchState::Failed);
+    assert_eq!(
+        b.submissions().unwrap()[0]
+            .failure
+            .as_ref()
+            .unwrap()
+            .remote_effect,
+        RemoteEffect::Unknown
+    );
+    for _ in 0..4 {
+        assert_eq!(engine.progress_batch(b.id().unwrap()).unwrap(), status);
+    }
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+    b.free().unwrap();
+}

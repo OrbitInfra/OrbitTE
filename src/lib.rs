@@ -86,6 +86,7 @@ pub use {
     notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus},
     runtime::{
         admission_queue::RuntimeQueueStats,
+        progress_worker::{next_poll_delay, wait_before_next_poll},
         qos_contract::{
             EffectiveQosPolicy, QosConfig, QosDegradedActions, QosPolicyFields, QosRequestContext,
             QosTenantContract, QosUsage,

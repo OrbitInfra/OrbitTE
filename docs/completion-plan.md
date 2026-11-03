@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, priority, admission, QoS and credits implemented; failover, progress and metrics open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS and credits implemented; merge, failover and metrics open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -85,8 +85,8 @@ pass. [AGENTS.md](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md)
 fixes the order (S0–S26) for this period; this plan remains the status record.
 
 S0 and S0b delivered the request API and pre-release wire rules. S1–S5
-complete P7 at source level. S6 implements P6 selector routing. Next is S7
-for explicit progress and notification fallback. OrbitKV
+complete P7 at source level. S6 implements P6 selector routing and S7 implements explicit progress and
+notification fallback. S8 covers the remaining admission and merge work. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -294,6 +294,9 @@ Done (source scope, CPU controls):
 - **Receiver credits.** Sender credit gating, bounded automatic receiver
   windows with cumulative sync, and staging/consumer owner credits for remote
   Pin.
+- **Progress and notifications (F09/F11).** One bounded progress turn,
+  observational status, optional event worker, deferred retirement and
+  target-specific notification receipts with transport and control RPC fallback.
 - **Bandwidth-aware spraying.** Topology penalties, strict locality, rate-seeded
   EWMA, weighted whole-parent distribution, periodic rail exploration and
   effective link-rate discovery.
@@ -306,8 +309,6 @@ Open:
   reclamation and manual resource mapping (F15).
 - [ ] Submit- and completion-stage failover, per-owner retry budgets and rail
   cooldown/probe/half-open state, never replaying uncertain writes (F17/F18).
-- [ ] Explicit progress, observational polling, bounded wake/fallback timing and
-  notification fallback (F09/F11).
 - [ ] Required metrics, failure attribution and disabled-mode overhead (F20).
 
 Exit: deterministic-clock and fault-provider state-machine tests, race detection

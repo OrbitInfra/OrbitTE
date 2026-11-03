@@ -48,11 +48,10 @@ impl TcpTransport {
                 }
                 if advanced {
                     idle = 0;
-                } else if idle < 128 {
-                    std::thread::yield_now();
                 } else {
-                    std::thread::park_timeout(
-                        std::time::Duration::from_micros(200).min(remaining(deadline)?),
+                    crate::runtime::progress_worker::wait_for_poll(
+                        u64::from(idle),
+                        remaining(deadline)?,
                     );
                 }
                 idle = idle.saturating_add(1);

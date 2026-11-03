@@ -87,10 +87,17 @@ accepting a body, and malformed or partial bodies never enter the inbox. After
 body submission without a final receipt the effect is `Unknown`; manual retries
 can duplicate a message.
 
-TENT's `TransferEngineImpl` also owns the local queue and notification hooks; its
-hooks retry unnotified targets on later polls, whereas OrbitTE makes one attempt
-and reports uncertainty. Multi-target asynchronous hooks, transport fallback and
-native C free conventions remain open.
+The sender tries each installed notification-capable channel in order. Only
+an unavailable channel with no delivery effect permits fallback. OrbitTE's
+installed channel is TCP. The independent control RPC can receive without
+that channel, and uses the same bounded inbox as self delivery. Set
+`tcp_notifications` to disable the TCP channel or `notification_rpc_fallback`
+to stop after its first attempt and disable RPC fallback. Both default to true.
+When the RPC also fails, the sender preserves the last channel error and any
+uncertain RPC effect. Receive drains all installed queues even if one fails.
+Successful deliveries take precedence over an empty-channel error.
+[Async completion hooks](async-batches.md#completion-notifications) retain
+only destinations still eligible for retry.
 
 ## Budgets and profile
 
@@ -133,9 +140,8 @@ the capability fields; each transfer still needs a grant.
 
 Operations: `0` describe, `1` TCP READ, `2` TCP WRITE, `3` notify, `4` RDMA READ,
 `5` RDMA WRITE, `6` sliced RDMA READ and `7` sliced RDMA WRITE (see
-[RDMA/CUDA](rdma-cuda.md)). Describe requires a zero ID and range. Notify uses ID
-zero, with offset as the name length and length as the message length; its body
-is name, message and a zero commit marker. Permissions: `0` local-only (never
+[RDMA/CUDA](rdma-cuda.md)). Control RPC notify uses operation `22`. Describe requires a zero ID and range. Both notification operations use ID
+zero, with offset as the name length and length as the message length; the body contains the UTF-8 name, message and a zero commit marker. The receiver sends final success only after its registered callback accepts the complete message. Permissions: `0` local-only (never
 exported), `1` remote read, `2` remote write, `3` read/write. Statuses: `0`
 success, `1` epoch mismatch, `2` unknown region, `3` permission denied, `4`
 invalid range, `5` source closed, `6` exhausted, `7` protocol error, `8` internal

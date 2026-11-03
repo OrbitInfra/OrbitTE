@@ -1,7 +1,9 @@
+use crate::notification::NotificationHook;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::engine::{PreparedSubmission, deadline, remaining};
 use crate::{
@@ -10,7 +12,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct BatchId(u64);
+pub struct BatchId(u64, crate::SourceEpoch);
 impl BatchId {
     pub fn as_u64(self) -> u64 {
         self.0
@@ -87,8 +89,6 @@ pub struct SubmissionStatus {
 pub struct Batch {
     engine: Option<Arc<TransferEngine>>,
     progress: Option<Arc<BatchProgress>>,
-    sender: Option<mpsc::SyncSender<QueuedSubmission>>,
-    receiver: Option<mpsc::Receiver<QueuedSubmission>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -104,7 +104,9 @@ impl Batch {
         if capacity == 0 || capacity > max_requests {
             return Err(Error::ResourceExhausted);
         }
-        let reservation = budget.reserve(capacity, max_batches, max_capacity)?;
+        budget.sweep_deferred();
+        let reservation =
+            budget.reserve(engine.source_epoch(), capacity, max_batches, max_capacity)?;
         let mut tasks = Vec::new();
         tasks
             .try_reserve_exact(capacity)
@@ -113,22 +115,36 @@ impl Batch {
         submissions
             .try_reserve_exact(capacity)
             .map_err(|_| Error::ResourceExhausted)?;
-        let (sender, receiver) = mpsc::sync_channel(capacity);
+        let mut queue = VecDeque::new();
+        queue
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::ResourceExhausted)?;
+        let progress = Arc::new(BatchProgress {
+            defer_free: engine.defers_busy_free(),
+            wakes: engine.progress_worker.as_ref().map(|w| w.wakes.clone()),
+            #[cfg(feature = "gds")]
+            gds: engine.gds.as_ref().map(Arc::downgrade),
+            reservation,
+            state: Mutex::new(ProgressState {
+                tasks,
+                submissions,
+                queue,
+                ready: None,
+                receipt: None,
+                hooks: VecDeque::new(),
+                retry: None,
+                active: false,
+                abandoned: false,
+                sealed: false,
+                pending: 0,
+                worker_exited: false,
+            }),
+            changed: Condvar::new(),
+        });
+        budget.register(&progress)?;
         Ok(Self {
             engine: Some(engine),
-            progress: Some(Arc::new(BatchProgress {
-                reservation,
-                state: Mutex::new(ProgressState {
-                    tasks,
-                    submissions,
-                    sealed: false,
-                    pending: 0,
-                    worker_exited: false,
-                }),
-                changed: Condvar::new(),
-            })),
-            sender: Some(sender),
-            receiver: Some(receiver),
+            progress: Some(progress),
             worker: None,
         })
     }
@@ -154,6 +170,45 @@ impl Batch {
         notification: Option<&Notification>,
         timeout: Duration,
     ) -> Result<Range<usize>> {
+        let peer = peer.into();
+        let targets = match peer {
+            TransferTarget::Memory(peer) => Some(std::slice::from_ref(peer)),
+            TransferTarget::File(_) => None,
+        };
+        self.submit_group(operation, peer, requests, notification, targets, timeout)
+    }
+
+    /// Attach one logical notification for each distinct destination after
+    /// this memory submission succeeds. Progress can retry a definitely
+    /// unposted target within the submission deadline.
+    pub fn submit_with_notification_targets(
+        &mut self,
+        operation: TransferOp,
+        peer: &crate::RemoteSegment,
+        requests: &[TransferRequest],
+        notification: &Notification,
+        targets: &[crate::RemoteSegment],
+        timeout: Duration,
+    ) -> Result<Range<usize>> {
+        self.submit_group(
+            operation,
+            peer.into(),
+            requests,
+            Some(notification),
+            Some(targets),
+            timeout,
+        )
+    }
+
+    fn submit_group(
+        &mut self,
+        operation: TransferOp,
+        peer: TransferTarget<'_>,
+        requests: &[TransferRequest],
+        notification: Option<&Notification>,
+        targets: Option<&[crate::RemoteSegment]>,
+        timeout: Duration,
+    ) -> Result<Range<usize>> {
         let progress = Arc::clone(self.progress()?);
         {
             let state = progress.lock();
@@ -167,7 +222,17 @@ impl Batch {
             }
         }
         let engine = Arc::clone(self.engine.as_ref().ok_or(Error::BatchClosed)?);
-        let prepared = engine.prepare(
+        let hook = match (notification, targets) {
+            (Some(message), Some(peers)) if !requests.is_empty() => {
+                Some(engine.notification_routes.hook(
+                    engine.local_target(),
+                    peers,
+                    message.byte_len()?,
+                )?)
+            }
+            _ => None,
+        };
+        let mut prepared = engine.prepare(
             operation,
             peer,
             requests,
@@ -176,10 +241,6 @@ impl Batch {
             Some(self.id()?),
         )?;
         if self.worker.is_none() {
-            let receiver = self
-                .receiver
-                .take()
-                .ok_or_else(|| prepared.abort_error(Error::BatchClosed))?;
             let engine = Arc::clone(&engine);
             let state = Arc::clone(&progress);
             let token = progress
@@ -195,33 +256,12 @@ impl Batch {
                             progress: Arc::clone(&state),
                             _token: token,
                         };
-                        // Drop queued owners before WorkerExit publishes quiescence,
-                        // including during unwinding from an unexpected worker panic.
-                        let receiver = receiver;
-                        for queued in receiver {
-                            let QueuedSubmission {
-                                first_task,
-                                submission,
-                                prepared,
-                            } = queued;
-                            let report = engine.execute(&prepared, Some((&state, first_task)));
-                            if report.locally_drained {
-                                drop(prepared);
-                                state.finish_submission(submission, first_task, report);
-                            } else {
-                                engine.retain_undrained(
-                                    prepared,
-                                    Some((state.clone(), submission)),
-                                    Some(engine.clone()),
-                                    || state.finish_submission(submission, first_task, report),
-                                );
-                            }
-                        }
+                        state.run(&engine);
                     })
                     .map_err(|e| prepared.abort_error(e.into()))?,
             );
         }
-        let (range, submission) = {
+        let range = {
             let mut state = progress.lock();
             if state.worker_exited {
                 return Err(prepared.abort_error(Error::BatchClosed));
@@ -252,40 +292,25 @@ impl Batch {
                 locally_drained: false,
             });
             state.pending += 1;
-            (range, submission)
+            let hook = hook.and_then(|targets| {
+                prepared.notification.take().map(|message| Retry {
+                    admission: None,
+                    submission,
+                    message,
+                    targets,
+                    deadline: prepared.deadline,
+                })
+            });
+            state.queue.push_back(QueuedSubmission {
+                hook,
+                first_task: range.start,
+                submission,
+                prepared,
+            });
+            range
         };
-        let queued = QueuedSubmission {
-            first_task: range.start,
-            submission,
-            prepared,
-        };
-        match self
-            .sender
-            .as_ref()
-            .ok_or_else(|| queued.prepared.abort_error(Error::BatchClosed))?
-            .try_send(queued)
-        {
-            Ok(()) => Ok(range),
-            Err(error) => {
-                // This group never became visible to the worker. Drop its real
-                // owners before restoring its public task/capacity reservation.
-                let failed = match error {
-                    mpsc::TrySendError::Full(queued) => (queued, Error::ResourceExhausted),
-                    mpsc::TrySendError::Disconnected(queued) => (queued, Error::BatchClosed),
-                };
-                let outcome = failed.0.prepared.abort_error(failed.1);
-                drop(failed.0);
-                let mut state = progress.lock();
-                state.tasks.truncate(range.start);
-                state.submissions.truncate(submission);
-                // WorkerExit may already have accounted for a disconnected job.
-                if !state.worker_exited {
-                    state.pending -= 1;
-                }
-                progress.changed.notify_all();
-                Err(outcome)
-            }
-        }
+        progress.kick();
+        Ok(range)
     }
 
     /// Stops appending. A terminal failure can retain unquiesced native work;
@@ -294,7 +319,6 @@ impl Batch {
         let progress = self.progress()?;
         progress.lock().sealed = true;
         progress.changed.notify_all();
-        self.sender.take();
         Ok(())
     }
 
@@ -372,34 +396,78 @@ impl Batch {
         }
     }
 
-    /// Explicit free rejects pending work and preserves the handle for retry.
-    /// Dropping a pending handle instead leaves its worker/reservations alive.
+    /// In event-driven mode a pending free hands ownership to deferred retirement.
+    /// With the worker disabled a busy handle stays valid for retry.
     pub fn free(&mut self) -> Result<()> {
-        if !self.status()?.locally_drained {
-            return Err(Error::BatchBusy);
+        let progress = self.progress()?;
+        if !progress.lock().can_free() {
+            if !progress.defer_free {
+                return Err(Error::BatchBusy);
+            }
+            self.detach();
+            return Ok(());
         }
         self.seal()?;
+        self.detach();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        self.progress.take();
-        self.engine.take();
         Ok(())
+    }
+
+    fn detach(&mut self) {
+        if let Some(progress) = self.progress.take() {
+            progress.abandon();
+        }
+        self.engine.take();
     }
 }
 
+impl Drop for Batch {
+    fn drop(&mut self) {
+        self.detach();
+    }
+}
+
+struct Retry {
+    // Close waits for a pending admitted hook, even after payload loans drop.
+    admission: Option<crate::engine::BatchPermit>,
+    submission: usize,
+    message: Notification,
+    targets: NotificationHook,
+    deadline: Instant,
+}
+struct Receipt {
+    notification: Option<Arc<NotificationStatus>>,
+    submission: usize,
+    first_task: usize,
+    report: BatchReport,
+}
+
 struct QueuedSubmission {
+    hook: Option<Retry>,
     first_task: usize,
     submission: usize,
     prepared: PreparedSubmission,
 }
 
 pub(crate) struct BatchProgress {
+    defer_free: bool,
+    wakes: Option<Arc<crate::runtime::progress_worker::Wakes>>,
+    #[cfg(feature = "gds")]
+    gds: Option<Weak<crate::transport::gds::GdsTransport>>,
     reservation: Reservation,
     state: Mutex<ProgressState>,
     changed: Condvar,
 }
 struct ProgressState {
+    queue: VecDeque<QueuedSubmission>,
+    ready: Option<QueuedSubmission>,
+    hooks: VecDeque<Retry>,
+    retry: Option<Retry>,
+    receipt: Option<Receipt>,
+    active: bool,
+    abandoned: bool,
     tasks: Vec<TaskStatus>,
     submissions: Vec<SubmissionStatus>,
     sealed: bool,
@@ -407,6 +475,9 @@ struct ProgressState {
     worker_exited: bool,
 }
 impl ProgressState {
+    fn can_free(&self) -> bool {
+        !self.active && self.status().locally_drained
+    }
     fn status(&self) -> BatchStatus {
         let state = if !self.sealed {
             BatchState::Open
@@ -445,11 +516,213 @@ impl ProgressState {
     }
 }
 impl BatchProgress {
+    #[cfg(feature = "gds")]
+    pub(crate) fn id(&self) -> BatchId {
+        self.reservation.id
+    }
+
     fn lock(&self) -> MutexGuard<'_, ProgressState> {
         self.state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
     }
+    // Exactly one receipt or one dispatch. The batch mutex covers transitions
+    // only; the blocking payload call never holds it or the registry lock.
+    pub(crate) fn step(&self) -> bool {
+        self.advance(true)
+    }
+
+    fn advance(&self, allow_hook: bool) -> bool {
+        let mut state = self.lock();
+        if let Some(receipt) = state.receipt.take() {
+            self.finish_submission(
+                &mut state,
+                receipt.submission,
+                receipt.first_task,
+                receipt.report,
+            );
+            if let Some(notification) = receipt.notification {
+                state.submissions[receipt.submission].notification = notification;
+            }
+            let more = !state.queue.is_empty();
+            drop(state);
+            if let Some(wakes) = &self.wakes {
+                if more {
+                    wakes.batch(self.reservation.id);
+                }
+            }
+            return true;
+        } else if !state.active {
+            if let Some(next) = state.queue.pop_front() {
+                state.active = true;
+                state.ready = Some(next);
+                self.changed.notify_all();
+                return true;
+            } else if allow_hook && !state.abandoned {
+                if let Some(hook) = state.hooks.pop_front() {
+                    state.active = true;
+                    state.retry = Some(hook);
+                    self.changed.notify_all();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn kick(&self) {
+        if let Some(wakes) = &self.wakes {
+            wakes.batch(self.reservation.id);
+        } else {
+            self.advance(false);
+            if !self.lock().queue.is_empty() {
+                self.advance(false);
+            }
+        }
+    }
+
+    fn run(self: &Arc<Self>, engine: &TransferEngine) {
+        let mut state = self.lock();
+        loop {
+            if let Some(job) = state.ready.take() {
+                drop(state);
+                self.execute_group(engine, job);
+                self.kick();
+            } else if let Some(mut retry) = state.retry.take() {
+                drop(state);
+                let status = retry
+                    .targets
+                    .attempt(engine, &retry.message, retry.deadline);
+                let mut locked = self.lock();
+                locked.submissions[retry.submission].notification = status;
+                if !locked.abandoned && retry.targets.pending() {
+                    locked.hooks.push_back(retry);
+                }
+                locked.active = false;
+                let more = !locked.queue.is_empty();
+                self.changed.notify_all();
+                drop(locked);
+                if more {
+                    self.kick();
+                }
+            } else {
+                let now = Instant::now();
+                state.hooks.retain(|h| h.deadline > now);
+                if let Some(at) = state.hooks.iter().map(|h| h.deadline).min() {
+                    state = self
+                        .changed
+                        .wait_timeout(state, at.saturating_duration_since(now))
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0;
+                } else if state.sealed && state.pending == 0 {
+                    return;
+                } else {
+                    state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+                }
+                continue;
+            }
+            state = self.lock();
+        }
+    }
+
+    fn execute_group(self: &Arc<Self>, engine: &TransferEngine, job: QueuedSubmission) {
+        let QueuedSubmission {
+            first_task,
+            submission,
+            mut prepared,
+            hook,
+        } = job;
+        let mut report = engine.execute(&prepared, Some((self, first_task)));
+        let mut retry = None;
+        let mut notification = None;
+        if let Some(mut hook) = hook {
+            report.notification = NotificationStatus::Skipped;
+            if report.is_complete() {
+                notification = Some(hook.targets.attempt(engine, &hook.message, hook.deadline));
+                if hook.targets.pending() {
+                    hook.admission = prepared.admission.take();
+                    retry = Some(hook);
+                }
+            }
+        }
+        if report.locally_drained {
+            drop(prepared);
+            let mut state = self.lock();
+            if let Some(hook) = retry {
+                if !state.abandoned {
+                    state.hooks.push_back(hook);
+                }
+            }
+            state.receipt = Some(Receipt {
+                submission,
+                first_task,
+                notification,
+                report,
+            });
+        } else {
+            engine.retain_undrained(prepared, Some((self.clone(), submission)), || {
+                // Publish under the native quarantine lock before a late receipt.
+                self.finish_submission(&mut self.lock(), submission, first_task, report);
+            });
+        }
+    }
+
+    pub(crate) fn progress_public(&self) -> Result<BatchStatus> {
+        if self.lock().abandoned {
+            return Err(Error::BatchClosed);
+        }
+        if !self.step() {
+            self.probe_retirement();
+        }
+        let state = self.lock();
+        if state.abandoned {
+            Err(Error::BatchClosed)
+        } else {
+            Ok(state.status())
+        }
+    }
+
+    fn abandon(&self) {
+        let mut state = self.lock();
+        state.abandoned = true;
+        state.hooks.clear();
+        if state.retry.take().is_some() {
+            state.active = false;
+        }
+        state.sealed = true;
+        if !state.can_free() {
+            self.reservation
+                .budget
+                .lifecycle(self.reservation.id, Life::Deferred);
+        }
+        self.changed.notify_all();
+        drop(state);
+        self.probe_retirement();
+        self.kick();
+    }
+
+    fn probe_retirement(&self) {
+        let Ok(state) = self.state.try_lock() else {
+            return;
+        };
+        if state.pending != 0 || state.submissions.iter().all(|s| s.locally_drained) {
+            return;
+        }
+        drop(state);
+        #[cfg(feature = "gds")]
+        if let Some(gds) = self.gds.as_ref().and_then(Weak::upgrade) {
+            if gds.try_collect_for(self.reservation.id) {
+                return;
+            }
+        }
+        let state = self.lock();
+        if state.abandoned && !state.status().locally_drained {
+            self.reservation
+                .budget
+                .lifecycle(self.reservation.id, Life::Quarantined);
+        }
+    }
+
     pub(crate) fn cancel_requested(&self, index: usize) -> bool {
         self.lock().tasks[index].cancel_requested
     }
@@ -534,8 +807,14 @@ impl BatchProgress {
         }
         self.changed.notify_all();
     }
-    fn finish_submission(&self, index: usize, first: usize, report: BatchReport) {
-        let mut state = self.lock();
+    fn finish_submission(
+        &self,
+        state: &mut ProgressState,
+        index: usize,
+        first: usize,
+        report: BatchReport,
+    ) {
+        state.active = false;
         let failure = report.failure.map(|mut failure| {
             failure.request_index += first;
             Arc::new(failure)
@@ -581,14 +860,28 @@ impl BatchProgress {
     }
 }
 
+impl Drop for BatchProgress {
+    fn drop(&mut self) {
+        if let Some(wakes) = &self.wakes {
+            wakes.discard(self.reservation.id);
+        }
+    }
+}
+
 struct WorkerExit {
     progress: Arc<BatchProgress>,
     _token: WorkerToken,
 }
 impl Drop for WorkerExit {
     fn drop(&mut self) {
+        // Drop unstarted physical owners outside the progress lock on unwind.
+        let (queue, ready) = {
+            let mut state = self.progress.lock();
+            state.worker_exited = true;
+            (std::mem::take(&mut state.queue), state.ready.take())
+        };
+        drop((queue, ready));
         let mut state = self.progress.lock();
-        state.worker_exited = true;
         if state.pending != 0 {
             for index in 0..state.submissions.len() {
                 if state.submissions[index].locally_drained
@@ -632,13 +925,23 @@ impl Drop for WorkerExit {
             state.pending = 0;
         }
         self.progress.changed.notify_all();
+        drop(state);
+        self.progress.probe_retirement();
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Life {
+    Live,
+    Deferred,
+    Quarantined,
 }
 
 pub(crate) struct AllocationBudget {
     state: Mutex<Allocated>,
 }
 struct Allocated {
+    registry: HashMap<BatchId, (Weak<BatchProgress>, Life)>,
     next_id: u64,
     count: usize,
     capacity: usize,
@@ -648,6 +951,7 @@ impl AllocationBudget {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(Allocated {
+                registry: HashMap::new(),
                 next_id: 1,
                 count: 0,
                 capacity: 0,
@@ -655,15 +959,77 @@ impl AllocationBudget {
             }),
         }
     }
-    pub(crate) fn usage(&self) -> Result<(usize, usize, usize)> {
+    pub(crate) fn lookup(&self, id: BatchId) -> Option<Arc<BatchProgress>> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .registry
+            .get(&id)?
+            .0
+            .upgrade()
+    }
+    fn register(&self, progress: &Arc<BatchProgress>) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .registry
+            .try_reserve(1)
+            .map_err(|_| Error::ResourceExhausted)?;
+        state.registry.insert(
+            progress.reservation.id,
+            (Arc::downgrade(progress), Life::Live),
+        );
+        Ok(())
+    }
+    fn lifecycle(&self, id: BatchId, life: Life) {
+        if let Some((_, current)) = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .registry
+            .get_mut(&id)
+        {
+            *current = life;
+        }
+    }
+    pub(crate) fn sweep_deferred(&self) {
+        let parked: Vec<_> = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .registry
+            .values()
+            .filter(|(_, life)| *life == Life::Deferred)
+            .filter_map(|(weak, _)| weak.upgrade())
+            .collect();
+        for batch in parked {
+            batch.probe_retirement();
+        }
+    }
+
+    pub(crate) fn usage(&self) -> Result<(usize, usize, usize, usize, usize)> {
         let state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("batch allocation lock poisoned"))?;
-        Ok((state.count, state.capacity, state.workers))
+        Ok((
+            state.count,
+            state.capacity,
+            state.workers,
+            state
+                .registry
+                .values()
+                .filter(|(_, l)| *l == Life::Deferred)
+                .count(),
+            state
+                .registry
+                .values()
+                .filter(|(_, l)| *l == Life::Quarantined)
+                .count(),
+        ))
     }
     fn reserve(
         self: &Arc<Self>,
+        epoch: crate::SourceEpoch,
         capacity: usize,
         max_batches: usize,
         max_capacity: usize,
@@ -683,7 +1049,7 @@ impl AllocationBudget {
         if state.count >= max_batches || total > max_capacity {
             return Err(Error::ResourceExhausted);
         }
-        let id = BatchId(state.next_id);
+        let id = BatchId(state.next_id, epoch);
         state.next_id = next;
         state.count += 1;
         state.capacity = total;
@@ -715,6 +1081,7 @@ impl Drop for Reservation {
             .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        state.registry.remove(&self.id);
         state.count -= 1;
         state.capacity -= self.capacity;
     }

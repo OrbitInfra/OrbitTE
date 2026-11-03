@@ -42,6 +42,16 @@ external output directory; failed runs are kept.
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
 
+## Batch progress and notification fallback
+
+Implemented at source level. The Linux CPU controls exercise independent batch
+locks, pending free during real TCP reads, active-queue-only fallback ticks,
+and multi-peer delivery with a full inbox or missing callback. CUDA and cuFile
+shims hold an abandoned stage at its event and keep a permanently failed
+destroy charged while another batch retires. The CI stability job repeats
+the progress, retirement and notification races 50 times. Hardware qualification
+of the underlying native transports remains with their installed profiles.
+
 ## Local file segments
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.

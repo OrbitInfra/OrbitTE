@@ -29,12 +29,52 @@ its timeout neither cancels nor releases work. Each submission's deadline starts
 at submit and covers validation, queueing, transfer and the attached
 notification.
 
-`free()` returns `BatchBusy` while work still owns local memory, keeping the
-handle for retry; once idle it seals, joins the worker and releases capacity.
-Dropping an active handle detaches the worker, which keeps the engine,
-registrations and budgets until it exits. `submit_async(...)` allocates, submits
-one group and seals it; see the
-[`async_batch` example](../examples/async_batch.rs).
+By default, an explicit `free()` on a busy batch returns `BatchBusy` and keeps the
+handle valid. Setting `EngineConfig::enable_progress_worker` also opts in to
+deferred free. A busy free then fences the ID and returns immediately. Dropping
+a handle in either mode detaches accepted work. Actual registrations, staging
+chunks, file loans and admission stay with their owners until physical drain.
+`EngineStats::deferred_batches` counts retired IDs waiting for that proof.
+`quarantined_batches` counts retired IDs without a safe reclaim path. Both
+consume allocation capacity. `submit_async` allocates, submits one group and
+seals it. See the [async example](../examples/async_batch.rs).
+
+## Explicit progress
+
+`engine.progress_batch(id)?` dispatches at most one FIFO group or notification
+retry, or publishes one completion. It returns the batch status. The caller
+can also probe a retired native submission for a late release receipt. The
+existing per-batch executor owns the blocking socket, native calls and copies.
+Independent batch IDs use separate locks. A freed or foreign ID returns
+`BatchClosed`. Status reads and waits are observational in both modes.
+
+The optional progress worker coalesces wakes by batch ID and shares a single
+runtime-queue wake. The wake set fits `max_allocated_batches`. Enabling the
+runtime queue starts this worker too, while keeping busy-on-free unless
+`enable_progress_worker` was requested. The default fallback interval is
+50 ms. It applies only while the runtime queue owns work. Set
+`progress_fallback_interval` to zero for event-only progress. Without either
+option, the batch executor continues to make progress autonomously.
+
+For caller-driven polling, `wait_before_next_poll(count)` yields for polls 0
+through 127. Later delays start at 1 µs and double up to 200 µs.
+`next_poll_delay(count)` returns the duration without sleeping. Increment the
+count with saturating arithmetic.
+
+### Completion notifications
+
+`submit_with_notification_targets` attaches one message to a memory submission
+and accepts a list of destination segments. The batch worker tries self first
+and sends to each distinct destination after payload success. A later explicit
+progress turn can retry a definitely unposted destination until the original
+deadline. Delivered destinations are removed. An invalid request or uncertain
+receipt ends attempts for that destination. Inspect `submissions().notification`
+for the outcome independently of the data status. Pending hooks share the
+engine's outbound target and message-byte limits, sized by
+`max_pending_notifications` and `max_pending_notification_bytes`. A retry holds
+requester admission through its final attempt, deadline or free. Free closes
+retry admission. [TCP and RPC notifications](cpu-tcp.md#notification-contracts) describes
+fallback and acknowledgements.
 
 ## Runtime admission and dispatch window
 
@@ -393,9 +433,13 @@ staging plan; OrbitTE keeps that split with ordered batch execution. See
 TENT's
 [`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
 allocates batch capacity, appends tasks and defers freeing pending batches.
-OrbitTE's busy-on-free with detached handles is a safe Rust alternative, and seal
-makes the terminal state stable (TENT can append after earlier tasks finish); a
-C adapter must still match TENT's deferred free. The [shared CPU trace](cpu-oracle.md)
-compares async allocate/append/status/free against native TENT. Request merging,
-alias mapping, explicit progress, provider abort and reclaim proofs for
-`Unquiesced` owners remain open.
+OrbitTE uses one lock per batch and keeps the caller's status reads observational.
+TENT can drive hooks and queue progress while reading status. Here the existing
+batch executor publishes transport receipts and explicit progress can dispatch a
+pending hook. Seal fixes the terminal task set. When free or an abandoned stage
+cannot confirm completion, its physical owners stay charged. The free-list sweep
+continues past a stuck ID. Per-batch reclaim failures on a recoverable cuFile
+operation are capped at 4,096 consecutive errors. A pending reply resets the
+count. Uncertain destruction is parked immediately. The [shared CPU trace](cpu-oracle.md)
+compares async allocate, append, status and free. Request merging and failover
+remain open.

@@ -51,6 +51,7 @@ pub(crate) struct LocalTransferAdmissionQueue {
     config: RuntimeQueueConfig,
     state: Mutex<QueueState>,
     changed: Condvar,
+    progress: std::sync::OnceLock<std::sync::Weak<crate::runtime::progress_worker::Wakes>>,
 }
 
 impl LocalTransferAdmissionQueue {
@@ -59,7 +60,36 @@ impl LocalTransferAdmissionQueue {
             config,
             state: Mutex::default(),
             changed: Condvar::new(),
+            progress: Default::default(),
         })
+    }
+
+    pub(crate) fn attach(
+        &self,
+        wakes: std::sync::Weak<crate::runtime::progress_worker::Wakes>,
+    ) -> Result<()> {
+        self.progress
+            .set(wakes)
+            .map_err(|_| Error::Internal("progress worker already attached"))
+    }
+    pub(crate) fn active(&self) -> bool {
+        !self.lock().owners.is_empty()
+    }
+    fn signal(&self) {
+        if let Some(wakes) = self.progress.get().and_then(std::sync::Weak::upgrade) {
+            wakes.queue();
+        }
+    }
+    pub(crate) fn refill(&self) {
+        let mut state = self.lock();
+        // Capacity, credit and QoS changes refill synchronously at their owner.
+        // Only expiry can make another head eligible without a release. In
+        // particular, do not reject a delayed head against a transient quota.
+        if state.credit_wakeup.is_some_and(|at| Instant::now() >= at)
+            && state.refill_dispatch_window(self.config)
+        {
+            self.changed.notify_all();
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, QueueState> {
@@ -125,6 +155,8 @@ impl LocalTransferAdmissionQueue {
             }
             return Err(Error::ResourceExhausted);
         }
+        drop(state);
+        self.signal();
         Ok(QueuePermit {
             queue: Arc::clone(self),
             id,
@@ -147,6 +179,8 @@ impl LocalTransferAdmissionQueue {
         let mut state = self.lock();
         state.refill_dispatch_window(self.config);
         self.changed.notify_all();
+        drop(state);
+        self.signal();
     }
 }
 
@@ -321,6 +355,8 @@ impl Drop for QueuePermit {
         if state.refill_dispatch_window(self.queue.config) {
             self.queue.changed.notify_all();
         }
+        drop(state);
+        self.queue.signal();
     }
 }
 

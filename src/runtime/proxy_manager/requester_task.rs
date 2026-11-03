@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::ProxyManager;
 use super::stage_buffer_cache::StageBufferCache;
@@ -259,13 +259,10 @@ impl Session {
             if progress {
                 idle_sweeps = 0;
             } else {
-                if idle_sweeps < 128 {
-                    std::thread::yield_now();
-                } else {
-                    let delay =
-                        Duration::from_micros((1u64 << (idle_sweeps - 128).min(8)).min(200));
-                    std::thread::park_timeout(delay.min(remaining(deadline)?));
-                }
+                crate::runtime::progress_worker::wait_for_poll(
+                    u64::from(idle_sweeps),
+                    remaining(deadline)?,
+                );
                 idle_sweeps = idle_sweeps.saturating_add(1);
             }
         }
