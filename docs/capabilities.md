@@ -52,7 +52,7 @@ behind every hardware result.
 | Discovery, port recovery and multirail slicing | Accepted (RoCE) | Automatic discovery matches a separate host inventory; two-rail accounting verifies exact bytes. Physical loss is unqualified |
 | CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
 | Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |
-| Runtime FIFO/EDF admission | Implemented | Whole-submission dispatch windows. Staging reserves and deadline-infeasible cancellation are open. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
+| Runtime FIFO/EDF admission | Implemented | Merged memory requests, public alias status, physical dispatch windows, staging reserves and transport-aware deadline drops. See [dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
 | QoS contracts | Implemented | TENT-format global, tenant and intent policies with byte/request caps and delay/reject. Hierarchical quotas are open. See [QoS](async-batches.md#qos-contracts) |
 | Receiver credits | Implemented | Cumulative peer grants and automatic receiver windows. They authorize requests; they are not a rate limiter. See [credits](async-batches.md#receiver-credit-gating) |
 | Failover, metrics endpoints | Planned (P6) | |

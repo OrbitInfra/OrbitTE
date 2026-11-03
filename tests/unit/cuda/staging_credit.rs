@@ -42,7 +42,7 @@ fn engine(transport: Transport, receiver: bool) -> TransferEngine {
 }
 
 #[test]
-fn automatic_staging_credit_uses_negotiated_depth_and_committed_groups_finish_after_fence() {
+fn automatic_staging_credit_uses_negotiated_depth_and_only_committed_owners_finish_after_fence() {
     for transport in [
         Transport::Tcp,
         #[cfg(feature = "rdma")]
@@ -121,8 +121,16 @@ fn automatic_staging_credit_uses_negotiated_depth_and_committed_groups_finish_af
             a.query_hold.store(false, Ordering::Release);
             assert_eq!(
                 batch.wait(TIMEOUT).unwrap().state,
-                BatchState::Completed,
+                BatchState::Cancelled,
                 "{transport:?}/{operation:?}"
+            );
+            assert_eq!(
+                batch.task_status(0).unwrap().state,
+                crate::TaskState::Completed
+            );
+            assert_eq!(
+                batch.task_status(1).unwrap().state,
+                crate::TaskState::Cancelled
             );
             batch.free().unwrap();
             let stats = source.receiver_credit_issuer_stats().unwrap();
@@ -130,23 +138,23 @@ fn automatic_staging_credit_uses_negotiated_depth_and_committed_groups_finish_af
                 (stats.active_staging_slots, stats.active_consumer_slots),
                 (0, 0)
             );
-            assert_eq!(source.stats().unwrap().staging.remote_unpins, 2);
+            assert_eq!(source.stats().unwrap().staging.remote_unpins, 1);
             let mut bytes = [0; 6];
             local.read(0, &mut bytes).unwrap();
             assert_eq!(
-                bytes,
+                bytes[..5],
                 [if operation == TransferOp::Read {
                     0x57
                 } else {
                     0xcc
-                }; 6]
+                }; 5]
             );
+            assert_eq!(bytes[5], 0xcc);
             let mut actual = [0; 16];
             gpu.read(0, &mut actual).unwrap();
             let mut expected = [0x57; 16];
             if operation == TransferOp::Write {
                 expected[..5].fill(0xcc);
-                expected[8] = 0xcc;
             }
             assert_eq!(actual, expected);
             requester

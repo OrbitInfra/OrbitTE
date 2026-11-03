@@ -87,6 +87,13 @@ impl Drop for WorkerExit {
 }
 
 impl Workers {
+    pub(crate) fn wake_cancel(&self) {
+        let pool = self.pool.lock().unwrap_or_else(|p| p.into_inner());
+        for (_, handle) in &pool.workers {
+            handle.thread().unpark();
+        }
+    }
+
     pub(super) fn attach(&self, worker_id: usize, progress: &CqLane) -> Result<()> {
         if !std::ptr::eq(self, progress.workers.as_ref()) {
             return Err(Error::Internal(

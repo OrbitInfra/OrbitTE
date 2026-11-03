@@ -1,5 +1,8 @@
 //! Installed two-RNIC selector case. Both NICs are globally enabled in each run.
-use orbit_te::{IntentType, TransferEngine, TransferRequest, Transport, TransportSelectorConfig};
+use orbit_te::{
+    BatchReport, Error, IntentType, RemoteEffect, RemoteSegment, TransferEngine, TransferOp,
+    TransferRequest, Transport, TransportSelectorConfig,
+};
 
 use super::{Case, Result};
 
@@ -19,13 +22,60 @@ pub(super) fn config(case: &Case) -> Result<TransportSelectorConfig> {
     ))?)
 }
 
-pub(super) fn request(case: &Case, mut request: TransferRequest) -> Result<TransferRequest> {
+pub(super) fn transfer(
+    case: &Case,
+    engine: &TransferEngine,
+    peer: &RemoteSegment,
+    op: TransferOp,
+    mut request: TransferRequest,
+) -> Result<BatchReport> {
     request.transport = Transport::Unspec;
     request.intent = IntentType::ForegroundGet;
     if !case.read {
         request = request.with_policy_name("write")?;
     }
-    Ok(request)
+    let half = request.length / 2;
+    let mut tail = request.clone();
+    tail.local_address += half as u64;
+    tail.remote_address += half as u64;
+    tail.length -= half;
+    request.length = half;
+    let aliases = [tail, request];
+    let deadline = std::time::Instant::now();
+    let expired = aliases.clone().map(|r| r.with_deadline(deadline));
+    let before = engine
+        .stats()?
+        .rdma
+        .ok_or("missing native counters")?
+        .post_calls;
+    let dropped = engine.submit_and_wait(op, peer, &expired, super::TIMEOUT)?;
+    if !dropped.failure.as_ref().is_some_and(|f| {
+        matches!(f.error, Error::DeadlineInfeasible)
+            && f.request_index == 0
+            && f.affected_requests == 2
+            && f.remote_effect == RemoteEffect::None
+    }) || dropped.transferred_bytes != 0
+        || !dropped.locally_drained
+        || engine
+            .stats()?
+            .rdma
+            .ok_or("missing native counters")?
+            .post_calls
+            != before
+    {
+        return Err(
+            format!("expired aliases crossed the native dispatch boundary: {dropped:?}").into(),
+        );
+    }
+    // The one-owner cap rejects two independent requests. Both public pieces
+    // must fit one physical transfer and satisfy the ordinary per-rail proof.
+    let report = engine.submit_and_wait(op, peer, &aliases, super::TIMEOUT)?;
+    if report.completed_requests != 2 {
+        return Err(
+            format!("merged selector transfer did not complete both aliases: {report:?}").into(),
+        );
+    }
+    Ok(report)
 }
 
 pub(super) fn evidence(case: &Case, engine: &TransferEngine, round: usize) -> Result<()> {

@@ -16,6 +16,7 @@ fn config(credits: usize) -> EngineConfig {
             max_dispatch_owners: 4,
             max_dispatch_bytes: 8,
             deadline_aware: true,
+            ..Default::default()
         }),
         max_receiver_credit_sessions: credits,
         ..Default::default()
@@ -79,13 +80,13 @@ fn public_qos_delay_preserves_batch_heads_and_actual_owner_release() {
         .submit(
             TransferOp::Write,
             &peer,
-            &[make(0, 0, &a), make(0, 1, &b)],
+            &[make(0, 1, &b), make(0, 0, &a)],
             None,
             TIMEOUT,
         )
         .unwrap();
     // The later group has the earlier EDF deadline and available A quota, but
-    // may not take A away from its waiting [A, B] predecessor.
+    // may not take A away from its waiting [B, A] predecessors.
     batch
         .submit(
             TransferOp::Write,
@@ -99,7 +100,7 @@ fn public_qos_delay_preserves_batch_heads_and_actual_owner_release() {
     assert_eq!(a.usage().unwrap(), QosUsage::default());
     assert_eq!(b.usage().unwrap().owners, 1);
     let stats = requester.stats().unwrap();
-    assert_eq!(stats.runtime_queue.unwrap().queued_owners, 2);
+    assert_eq!(stats.runtime_queue.unwrap().queued_owners, 3);
     assert!(
         batch
             .task_statuses()
@@ -233,19 +234,32 @@ fn public_qos_delay_combines_credit_reject_cancel_and_deadline_admission() {
         )
         .unwrap();
     let mut batch = requester.allocate_batch(2).unwrap();
-    for requests in [
-        vec![make(1, &a), make(1, &a)],
-        vec![make(1, &a), make(0, &r)],
-    ] {
-        // Intrinsically oversized groups and a saturated reject slot cannot be
-        // hidden by another slot allowing delay. No partial charge or task IDs.
-        assert!(matches!(
-            batch.submit(TransferOp::Write, &peer, &requests, None, TIMEOUT),
-            Err(Error::ResourceExhausted)
-        ));
-        assert_eq!(batch.status().unwrap().submitted_tasks, 0);
-    }
+    // A saturated reject-only contract still rejects the entire submit before
+    // any public IDs appear, even though another physical owner can delay.
+    assert!(matches!(
+        batch.submit(
+            TransferOp::Write,
+            &peer,
+            &[make(1, &a), make(0, &r)],
+            None,
+            TIMEOUT
+        ),
+        Err(Error::ResourceExhausted)
+    ));
+    assert_eq!(batch.status().unwrap().submitted_tasks, 0);
+    // Two distinct delay-eligible owners can take the same slot successively.
+    batch
+        .submit(
+            TransferOp::Write,
+            &peer,
+            &[make(1, &a), make(1, &a)],
+            None,
+            TIMEOUT,
+        )
+        .unwrap();
+    batch.cancel_all().unwrap();
     batch.seal().unwrap();
+    assert_eq!(batch.wait(TIMEOUT).unwrap().state, BatchState::Cancelled);
     batch.free().unwrap();
     let mut waiting = requester
         .submit_async(TransferOp::Write, &peer, &[make(1, &a)], None, TIMEOUT)
@@ -321,14 +335,18 @@ fn retired_qos_owner_cannot_be_recharged_before_queue_metadata_drops() {
         &QosRequestContext::default(),
     )
     .unwrap();
-    let mut charges = Vec::new();
-    QosCharge::add(&mut charges, resolver.default_contract(), 1).unwrap();
+    let charges = vec![QosCharge::new(resolver.default_contract(), 1)];
     let deadline = std::time::Instant::now() + TIMEOUT;
-    let running = resolver.admit(charges.clone()).unwrap().unwrap();
+    let running = resolver
+        .admit(charges.clone())
+        .unwrap()
+        .pop()
+        .flatten()
+        .unwrap();
     let running_queue = queue
         .try_admit(1, deadline, None, None, running.reservation())
         .unwrap();
-    let pending = resolver.admit(charges).unwrap().unwrap();
+    let pending = resolver.admit(charges).unwrap().pop().flatten().unwrap();
     let pending_queue = queue
         .try_admit(1, deadline, None, None, pending.reservation())
         .unwrap();

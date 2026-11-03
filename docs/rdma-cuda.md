@@ -132,6 +132,16 @@ workers share one CQ budget, whereas TENT also groups by remote segment. Sorting
 buffers are reused, with no per-dispatch allocation. See
 [qualification](qualification.md#rdma-request-priority).
 
+Admission uses the same `DeadlineMlu` formula before posting. It counts
+dispatched, unfinished RDMA payload bytes and uses the sum of current transmit
+estimates for healthy NICs allowed by the physical owner’s mask. An effective
+link rate supplies the initial estimate. Measured transmit bandwidth can
+subsequently replace it. If an eligible NIC has no rate or transmit sample,
+or recovery owns the route snapshot, admission leaves the owner eligible.
+The RDMA worker continues to arbitrate its own posted backlog. A pre-dispatch
+drop creates no grant, connection or WR. See
+[queue configuration](async-batches.md#runtime-admission-and-dispatch-window).
+
 ## Priority promotion and shared slots
 
 `priority_promotion_timeout` defaults to 10 ms, as in TENT. Workers check

@@ -148,6 +148,7 @@ pub(crate) fn rdma_fixture_with_config(
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
+            max_transfer_bytes: config.max_transfer_bytes as u64,
             rdma: true,
             #[cfg(feature = "cuda")]
             remote_staging: config.remote_staging,
@@ -184,7 +185,7 @@ pub(crate) fn rdma_fixture_with_config(
     });
     let allocations = Arc::new(AllocationBudget::new());
     let progress_worker =
-        TransferEngine::start_progress(&config, &allocations, &runtime_queue).unwrap();
+        TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     TransferEngine {
         notification_routes: NotificationRoutes::new(&config),
         progress_worker,
@@ -416,6 +417,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
             max_dispatch_owners: 1,
             max_dispatch_bytes: 8,
             deadline_aware: true,
+            ..Default::default()
         },
     ));
     requester.receiver_credits = Some(SenderCreditLedger::new(1, requester.runtime_queue.as_ref()));
@@ -512,6 +514,7 @@ fn requester_shared_cq_failure_cannot_report_drain_after_retaining_native_owners
     assert_eq!(
         stats.runtime_queue.unwrap(),
         RuntimeQueueStats {
+            deadline_infeasible_drops: 0,
             queued_owners: 0,
             queued_bytes: 0,
             dispatching_owners: 1,
@@ -1006,7 +1009,7 @@ fn direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exi
             stats.completed_read_bytes,
             stats.work_requests
         ),
-        (3, 4, 8, 0)
+        (1, 2, 4, 0)
     );
     assert_eq!(fixture.drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
@@ -1101,6 +1104,7 @@ pub(crate) fn staging_fixture(
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
+            max_transfer_bytes: config.max_transfer_bytes as u64,
             #[cfg(feature = "rdma")]
             rdma: rdma.is_some(),
             remote_staging: config.remote_staging,
@@ -1131,7 +1135,7 @@ pub(crate) fn staging_fixture(
     let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
     let allocations = Arc::new(AllocationBudget::new());
     let progress_worker =
-        TransferEngine::start_progress(&config, &allocations, &runtime_queue).unwrap();
+        TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     TransferEngine {
         notification_routes: NotificationRoutes::new(&config),
         progress_worker,
@@ -1167,4 +1171,78 @@ impl TransferEngine {
     pub(crate) fn notification_inbox_for_test(&self) -> &NotificationInbox {
         &self.source.notifications
     }
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn cancelling_a_running_rdma_alias_drains_posts_and_suppresses_the_remaining_slices() -> Result<()>
+{
+    let timeout = crate::test_support::EVENTUAL_PROGRESS;
+    let source = rdma_fixture("direct:ok");
+    let requester = Arc::new(rdma_fixture("direct:pause_copy"));
+    let pause = crate::transport::rdma::tests::pause(requester.source.rdma.as_ref().unwrap());
+    let remote =
+        source.register_memory(vec![0x44; 8].into_boxed_slice(), Permission::RemoteRead)?;
+    let local =
+        requester.register_memory(vec![0xcc; 10].into_boxed_slice(), Permission::LocalOnly)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
+    let requests = [0, 4].map(|i| {
+        TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 1 + i,
+            remote.base_address() + i,
+            4,
+        )
+    });
+    let mut batch = requester.submit_async(TransferOp::Read, &peer, &requests, None, timeout)?;
+    let (lock, ready) = &*pause;
+    let (gate, timed) = ready
+        .wait_timeout_while(lock.lock().unwrap(), timeout, |s| !s.0)
+        .unwrap();
+    assert!(!timed.timed_out());
+    drop(gate);
+    assert!(batch.cancel(1)? && batch.cancel(0)?);
+    assert!(
+        batch
+            .task_statuses()?
+            .iter()
+            .all(|task| task.physical_owner == 0
+                && task.cancel_requested
+                && task.state == crate::TaskState::Running
+                && !task.locally_drained)
+    );
+    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+    assert!(matches!(
+        local.read(1, &mut [0; 8]),
+        Err(Error::Unavailable(_))
+    ));
+    lock.lock().unwrap().1 = true;
+    ready.notify_all();
+    let status = batch.wait(timeout)?;
+    assert_eq!(status.state, crate::BatchState::Cancelled);
+    assert!(status.locally_drained);
+    for task in batch.task_statuses()? {
+        assert_eq!(task.state, crate::TaskState::Cancelled);
+        let failure = task.failure.unwrap();
+        assert!(matches!(failure.error, Error::Cancelled));
+        assert_eq!((failure.request_index, failure.affected_requests), (0, 2));
+    }
+    assert!(!batch.cancel(1)?);
+    let mut bytes = [0; 10];
+    local.read(0, &mut bytes)?;
+    assert_eq!(
+        bytes,
+        [0xcc, 0x44, 0x44, 0x44, 0x44, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc]
+    );
+    let rdma = requester.stats()?.rdma.unwrap();
+    assert_eq!(
+        (
+            rdma.post_calls,
+            rdma.completed_reads,
+            rdma.completed_read_bytes,
+            rdma.work_requests
+        ),
+        (1, 2, 4, 0)
+    );
+    Ok(())
 }

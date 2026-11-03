@@ -9,63 +9,14 @@ use crate::{Error, Result};
 pub(crate) struct QosCharge {
     slot: usize,
     bytes: usize,
-    requests: usize,
 }
 
 impl QosCharge {
-    pub(crate) fn add(
-        charges: &mut Vec<Self>,
-        contract: &CompiledContract,
-        bytes: usize,
-    ) -> Result<()> {
-        if !contract.fields.bounded() {
-            return Ok(());
-        }
-        if let Some(last) = charges.last_mut().filter(|last| last.slot == contract.slot) {
-            last.bytes = last
-                .bytes
-                .checked_add(bytes)
-                .ok_or(Error::ResourceExhausted)?;
-            last.requests = last
-                .requests
-                .checked_add(1)
-                .ok_or(Error::ResourceExhausted)?;
-        } else {
-            charges
-                .try_reserve(1)
-                .map_err(|_| Error::ResourceExhausted)?;
-            charges.push(Self {
-                slot: contract.slot,
-                bytes,
-                requests: 1,
-            });
-        }
-        Ok(())
-    }
-
-    fn coalesce(charges: &mut Vec<Self>) -> Result<()> {
-        // Adjacent requests coalesce during preparation; sort remaining runs once.
-        charges.sort_unstable_by_key(|charge| charge.slot);
-        let mut count = 0;
-        for index in 0..charges.len() {
-            let charge = charges[index];
-            if count > 0 && charges[count - 1].slot == charge.slot {
-                let previous = &mut charges[count - 1];
-                previous.bytes = previous
-                    .bytes
-                    .checked_add(charge.bytes)
-                    .ok_or(Error::ResourceExhausted)?;
-                previous.requests = previous
-                    .requests
-                    .checked_add(charge.requests)
-                    .ok_or(Error::ResourceExhausted)?;
-            } else {
-                charges[count] = charge;
-                count += 1;
-            }
-        }
-        charges.truncate(count);
-        Ok(())
+    pub(crate) fn new(contract: &CompiledContract, bytes: usize) -> Option<Self> {
+        contract.fields.bounded().then_some(Self {
+            slot: contract.slot,
+            bytes,
+        })
     }
 }
 
@@ -96,97 +47,99 @@ impl QosQuota {
         self.lock()[slot]
     }
 
-    pub(super) fn admit(self: &Arc<Self>, mut charges: Vec<QosCharge>) -> Result<QosPermit> {
-        QosCharge::coalesce(&mut charges)?;
-        // An intrinsically oversized group cannot become eligible after drain.
-        for charge in &charges {
-            let limits = self.limits[charge.slot];
-            if limits
-                .max_inflight_bytes
-                .is_some_and(|cap| charge.bytes > cap)
-                || limits
-                    .max_inflight_requests
-                    .is_some_and(|cap| charge.requests > cap)
-            {
-                return Err(Error::ResourceExhausted);
-            }
-        }
+    pub(super) fn admit(
+        self: &Arc<Self>,
+        charges: Vec<Option<QosCharge>>,
+    ) -> Result<Vec<Option<QosPermit>>> {
+        let queued = self.queue.is_some();
+        let mut permits = Vec::new();
+        permits
+            .try_reserve_exact(charges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
         let mut usage = self.lock();
-        self.available(&usage, &charges)?;
-        if self.queue.is_some() {
-            // All bounded contracts in a delay-enabled engine acquire in Batch
-            // head order, including reject-only contracts. A later group cannot
-            // reserve capacity needed by its own waiting predecessor.
-            Ok(QosPermit::Queued(Arc::new(QosReservation {
-                quota: Arc::clone(self),
-                charges,
-                state: AtomicU8::new(PENDING),
-            })))
-        } else {
-            Self::charge(&mut usage, &charges);
-            Ok(QosPermit::Admitted {
-                quota: Arc::clone(self),
-                charges,
-            })
-        }
-    }
-
-    fn available(&self, usage: &[QosUsage], charges: &[QosCharge]) -> Result<bool> {
-        let mut available = true;
-        for charge in charges {
-            let current = usage[charge.slot];
-            let limits = self.limits[charge.slot];
-            let bytes = current
-                .inflight_bytes
-                .checked_add(charge.bytes)
-                .ok_or(Error::ResourceExhausted)?;
-            let requests = current
-                .inflight_requests
-                .checked_add(charge.requests)
-                .ok_or(Error::ResourceExhausted)?;
-            if current.owners == usize::MAX {
-                return Err(Error::ResourceExhausted);
-            }
-            if limits.max_inflight_bytes.is_some_and(|cap| bytes > cap)
-                || limits
-                    .max_inflight_requests
-                    .is_some_and(|cap| requests > cap)
-            {
-                if !limits
-                    .allowed_degraded_actions
-                    .is_some_and(|actions| actions.delay)
-                {
-                    return Err(Error::ResourceExhausted);
+        for (index, item) in charges.iter().enumerate() {
+            let Some(c) = item else { continue };
+            // Direct admission publishes the complete set or none under the
+            // ledger lock. Queued owners take their individual slot at dispatch.
+            let result = self.available(&usage, c);
+            if let Err(error) = result {
+                if !queued {
+                    for old in charges[..index].iter().flatten() {
+                        Self::uncharge(&mut usage, old);
+                    }
                 }
-                available = false;
+                return Err(error);
+            }
+            if !queued {
+                Self::charge(&mut usage, c);
             }
         }
-        Ok(available)
+        drop(usage);
+        permits.extend(charges.into_iter().map(|item| {
+            item.map(|charge| {
+                if queued {
+                    QosPermit::Queued(Arc::new(QosReservation {
+                        quota: self.clone(),
+                        charge,
+                        state: AtomicU8::new(PENDING),
+                    }))
+                } else {
+                    QosPermit::Admitted {
+                        quota: self.clone(),
+                        charge,
+                    }
+                }
+            })
+        }));
+        Ok(permits)
     }
 
-    fn charge(usage: &mut [QosUsage], charges: &[QosCharge]) {
-        for charge in charges {
-            let current = &mut usage[charge.slot];
-            current.inflight_bytes += charge.bytes;
-            current.inflight_requests += charge.requests;
-            current.owners += 1;
+    fn available(&self, usage: &[QosUsage], charge: &QosCharge) -> Result<bool> {
+        let current = usage[charge.slot];
+        let limits = self.limits[charge.slot];
+        if limits
+            .max_inflight_bytes
+            .is_some_and(|cap| charge.bytes > cap)
+            || limits.max_inflight_requests == Some(0)
+        {
+            return Err(Error::ResourceExhausted);
         }
-    }
-
-    fn uncharge(usage: &mut [QosUsage], charges: &[QosCharge]) {
-        for charge in charges {
-            let current = &mut usage[charge.slot];
-            current.inflight_bytes -= charge.bytes;
-            current.inflight_requests -= charge.requests;
-            current.owners -= 1;
+        let bytes = current
+            .inflight_bytes
+            .checked_add(charge.bytes)
+            .ok_or(Error::ResourceExhausted)?;
+        let requests = current
+            .inflight_requests
+            .checked_add(1)
+            .ok_or(Error::ResourceExhausted)?;
+        if limits.max_inflight_bytes.is_some_and(|cap| bytes > cap)
+            || limits
+                .max_inflight_requests
+                .is_some_and(|cap| requests > cap)
+        {
+            if self.queue.is_some() && limits.allowed_degraded_actions.is_some_and(|a| a.delay) {
+                return Ok(false);
+            }
+            return Err(Error::ResourceExhausted);
         }
+        Ok(true)
     }
-
-    fn release(&self, charges: &[QosCharge]) {
-        Self::uncharge(&mut self.lock(), charges);
+    fn charge(usage: &mut [QosUsage], charge: &QosCharge) {
+        let current = &mut usage[charge.slot];
+        current.inflight_bytes += charge.bytes;
+        current.inflight_requests += 1;
+        current.owners += 1;
+    }
+    fn uncharge(usage: &mut [QosUsage], charge: &QosCharge) {
+        let current = &mut usage[charge.slot];
+        current.inflight_bytes -= charge.bytes;
+        current.inflight_requests -= 1;
+        current.owners -= 1;
+    }
+    fn release(&self, charge: &QosCharge) {
+        Self::uncharge(&mut self.lock(), charge);
         self.wake_queue();
     }
-
     // Scheduling takes queue -> QoS -> credit; call only after unlocking quota.
     fn wake_queue(&self) {
         if let Some(queue) = self.queue.as_ref().and_then(Weak::upgrade) {
@@ -202,7 +155,7 @@ const RETIRED: u8 = 2;
 /// Shared scheduling metadata. Only QosPermit retires the actual owner's quota.
 pub(crate) struct QosReservation {
     quota: Arc<QosQuota>,
-    charges: Vec<QosCharge>,
+    charge: QosCharge,
     // Every transition/read is serialized by quota.usage. Atomic storage lets
     // the queue share metadata without introducing a second admission lock.
     state: AtomicU8,
@@ -216,7 +169,7 @@ impl QosReservation {
             CHARGED => return Ok(true),
             _ => {}
         }
-        self.quota.available(&usage, &self.charges)
+        self.quota.available(&usage, &self.charge)
     }
 
     /// Reserve all QoS slots only if the queue can also acquire receiver credit.
@@ -228,10 +181,10 @@ impl QosReservation {
             CHARGED => return Ok(credit_ready()),
             _ => {}
         }
-        if !self.quota.available(&usage, &self.charges)? || !credit_ready() {
+        if !self.quota.available(&usage, &self.charge)? || !credit_ready() {
             return Ok(false);
         }
-        QosQuota::charge(&mut usage, &self.charges);
+        QosQuota::charge(&mut usage, &self.charge);
         self.state.store(CHARGED, Ordering::Relaxed);
         Ok(true)
     }
@@ -240,7 +193,7 @@ impl QosReservation {
         let mut usage = self.quota.lock();
         let charged = self.state.swap(RETIRED, Ordering::Relaxed) == CHARGED;
         if charged {
-            QosQuota::uncharge(&mut usage, &self.charges);
+            QosQuota::uncharge(&mut usage, &self.charge);
         }
         // Queue metadata may outlive the real permit during Drop. Even an
         // uncharged owner must retire before another wake can reserve it.
@@ -254,7 +207,7 @@ impl QosReservation {
 pub(crate) enum QosPermit {
     Admitted {
         quota: Arc<QosQuota>,
-        charges: Vec<QosCharge>,
+        charge: QosCharge,
     },
     Queued(Arc<QosReservation>),
 }
@@ -271,7 +224,7 @@ impl QosPermit {
 impl Drop for QosPermit {
     fn drop(&mut self) {
         match self {
-            Self::Admitted { quota, charges } => quota.release(charges),
+            Self::Admitted { quota, charge } => quota.release(charge),
             Self::Queued(reservation) => reservation.retire(),
         }
     }

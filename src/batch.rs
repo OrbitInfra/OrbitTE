@@ -1,4 +1,6 @@
 use crate::notification::NotificationHook;
+use crate::runtime::admission_queue::QueueTicket;
+use crate::runtime::request_merge::{Alias, TaskMap};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
@@ -36,12 +38,14 @@ impl TaskState {
 
 #[derive(Clone, Debug)]
 pub struct TaskStatus {
+    /// Absolute public task ID of this transfer’s physical owner.
+    pub physical_owner: usize,
     pub state: TaskState,
     pub operation: TransferOp,
     pub transferred_bytes: usize,
     pub cancel_requested: bool,
     pub locally_drained: bool,
-    /// The failure index is the public task index in this batch.
+    /// The failure identifies the affected public interval in this batch.
     pub failure: Option<Arc<TransferFailure>>,
 }
 
@@ -82,6 +86,24 @@ pub struct SubmissionStatus {
     pub locally_drained: bool,
 }
 
+pub(crate) enum RunningCancel {
+    Unsupported,
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
+    File,
+    #[cfg(feature = "rdma")]
+    Rdma(Arc<std::sync::atomic::AtomicBool>),
+}
+
+struct TaskControl {
+    ticket: Option<QueueTicket>,
+    running: RunningCancel,
+}
+struct Group {
+    first_physical: usize,
+    mapping: Arc<TaskMap>,
+    status: SubmissionStatus,
+}
+
 /// A capacity reservation, public task mapping and one bounded FIFO worker.
 /// Multiple submit groups append atomically. Seal freezes the batch's terminal
 /// status. Dropping this handle detaches accepted work while retaining its
@@ -119,6 +141,14 @@ impl Batch {
         queue
             .try_reserve_exact(capacity)
             .map_err(|_| Error::ResourceExhausted)?;
+        let mut public = Vec::new();
+        public
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::ResourceExhausted)?;
+        let mut controls = Vec::new();
+        controls
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::ResourceExhausted)?;
         let progress = Arc::new(BatchProgress {
             defer_free: engine.defers_busy_free(),
             wakes: engine.progress_worker.as_ref().map(|w| w.wakes.clone()),
@@ -127,6 +157,8 @@ impl Batch {
             reservation,
             state: Mutex::new(ProgressState {
                 tasks,
+                public,
+                controls,
                 submissions,
                 queue,
                 ready: None,
@@ -215,7 +247,7 @@ impl Batch {
             if state.sealed || state.worker_exited {
                 return Err(Error::BatchClosed);
             }
-            if requests.len() > progress.reservation.capacity - state.tasks.len()
+            if requests.len() > progress.reservation.capacity - state.public.len()
                 || state.submissions.len() >= progress.reservation.capacity
             {
                 return Err(Error::ResourceExhausted);
@@ -266,10 +298,22 @@ impl Batch {
             if state.worker_exited {
                 return Err(prepared.abort_error(Error::BatchClosed));
             }
-            let first = state.tasks.len();
+            let first = state.public.len();
+            let first_physical = state.tasks.len();
             let range = first..first + requests.len();
-            for _ in requests {
+            for a in &prepared.mapping.public {
+                state.public.push(Alias {
+                    owner: first_physical + a.owner,
+                    ..*a
+                });
+            }
+            for (i, owner) in prepared.mapping.owners.iter().enumerate() {
+                state.controls.push(TaskControl {
+                    ticket: prepared.ticket(i),
+                    running: prepared.running_cancel(i),
+                });
                 state.tasks.push(TaskStatus {
+                    physical_owner: first + owner.representative,
                     state: TaskState::Waiting,
                     operation,
                     transferred_bytes: 0,
@@ -279,17 +323,21 @@ impl Batch {
                 });
             }
             let submission = state.submissions.len();
-            state.submissions.push(SubmissionStatus {
-                tasks: range.clone(),
-                completed_requests: 0,
-                transferred_bytes: 0,
-                failure: None,
-                notification: Arc::new(if notification.is_some() {
-                    NotificationStatus::Skipped
-                } else {
-                    NotificationStatus::NotRequested
-                }),
-                locally_drained: false,
+            state.submissions.push(Group {
+                first_physical,
+                mapping: prepared.mapping.clone(),
+                status: SubmissionStatus {
+                    tasks: range.clone(),
+                    completed_requests: 0,
+                    transferred_bytes: 0,
+                    failure: None,
+                    notification: Arc::new(if notification.is_some() {
+                        NotificationStatus::Skipped
+                    } else {
+                        NotificationStatus::NotRequested
+                    }),
+                    locally_drained: false,
+                },
             });
             state.pending += 1;
             let hook = hook.and_then(|targets| {
@@ -303,7 +351,7 @@ impl Batch {
             });
             state.queue.push_back(QueuedSubmission {
                 hook,
-                first_task: range.start,
+                first_task: first_physical,
                 submission,
                 prepared,
             });
@@ -326,49 +374,93 @@ impl Batch {
         Ok(self.progress()?.lock().status())
     }
     pub fn task_status(&self, task: usize) -> Result<TaskStatus> {
-        self.progress()?
-            .lock()
-            .tasks
-            .get(task)
-            .cloned()
-            .ok_or(Error::InvalidTask)
+        self.progress()?.lock().public_status(task)
     }
     pub fn task_statuses(&self) -> Result<Vec<TaskStatus>> {
-        Ok(self.progress()?.lock().tasks.clone())
+        let s = self.progress()?.lock();
+        (0..s.public.len()).map(|id| s.public_status(id)).collect()
     }
     pub fn submissions(&self) -> Result<Vec<SubmissionStatus>> {
-        Ok(self.progress()?.lock().submissions.clone())
+        Ok(self
+            .progress()?
+            .lock()
+            .submissions
+            .iter()
+            .map(|g| g.status.clone())
+            .collect())
     }
 
-    /// Requests cancellation. Queued work is skipped; a running CPU operation
-    /// finishes or reaches its deadline before exposing its actual outcome.
-    /// Accepted cancellation is not physical quiescence.
+    /// Cancel a queued physical owner through any public alias. Running RDMA
+    /// drops only unposted slices. A running transport without cancellation
+    /// support returns Unavailable. A cancel never proves physical quiescence.
     pub fn cancel(&self, task: usize) -> Result<bool> {
         let mut state = self.progress()?.lock();
-        let task = state.tasks.get_mut(task).ok_or(Error::InvalidTask)?;
-        if task.state.is_terminal() {
+        let owner = state.public.get(task).ok_or(Error::InvalidTask)?.owner;
+        let control = &state.controls[owner];
+        let task = &state.tasks[owner];
+        if task.state.is_terminal()
+            || control
+                .ticket
+                .as_ref()
+                .is_some_and(|t| t.terminal().is_err())
+        {
             return Ok(false);
         }
-        task.cancel_requested = true;
-        drop(state);
-        if let Some(engine) = &self.engine {
-            engine.wake_runtime_queue();
+        if task.cancel_requested {
+            return Ok(true);
         }
+        let engine = self.engine.as_ref().ok_or(Error::BatchClosed)?;
+        if task.state == TaskState::Running {
+            match &control.running {
+                RunningCancel::Unsupported => {
+                    return Err(Error::Unavailable(
+                        "running transport does not support cancellation",
+                    ));
+                }
+                #[cfg(any(feature = "io-uring", feature = "gds"))]
+                RunningCancel::File => {}
+                #[cfg(feature = "rdma")]
+                RunningCancel::Rdma(flag) => {
+                    flag.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        let ticket = control.ticket.clone();
+        #[cfg(feature = "rdma")]
+        let native =
+            task.state == TaskState::Running && matches!(control.running, RunningCancel::Rdma(_));
+        state.tasks[owner].cancel_requested = true;
+        drop(state);
+        if let Some(ticket) = ticket {
+            engine.cancel_queued(&ticket);
+        }
+        #[cfg(feature = "rdma")]
+        if native {
+            engine.wake_rdma_cancel();
+        }
+        engine.wake_runtime_queue();
         Ok(true)
     }
 
+    /// Attempt every physical owner, including queued successors of a running
+    /// transport that cannot cancel. Return the first unsupported operation.
     pub fn cancel_all(&self) -> Result<()> {
-        let mut state = self.progress()?.lock();
-        for task in &mut state.tasks {
-            if !task.state.is_terminal() {
-                task.cancel_requested = true;
+        let owners: Vec<_> = self
+            .progress()?
+            .lock()
+            .tasks
+            .iter()
+            .map(|t| t.physical_owner)
+            .collect();
+        let mut result = Ok(());
+        for owner in owners {
+            if let Err(e) = self.cancel(owner) {
+                if result.is_ok() {
+                    result = Err(e);
+                }
             }
         }
-        drop(state);
-        if let Some(engine) = &self.engine {
-            engine.wake_runtime_queue();
-        }
-        Ok(())
+        result
     }
 
     /// Observational wait: timeout neither cancels nor frees work. Seal before
@@ -460,12 +552,48 @@ struct ProgressState {
     active: bool,
     abandoned: bool,
     tasks: Vec<TaskStatus>,
-    submissions: Vec<SubmissionStatus>,
+    public: Vec<Alias>,
+    controls: Vec<TaskControl>,
+    submissions: Vec<Group>,
     sealed: bool,
     pending: usize,
     worker_exited: bool,
 }
 impl ProgressState {
+    fn public_status(&self, id: usize) -> Result<TaskStatus> {
+        let a = *self.public.get(id).ok_or(Error::InvalidTask)?;
+        let mut task = self.tasks[a.owner].clone();
+        task.transferred_bytes = task
+            .transferred_bytes
+            .saturating_sub(a.offset)
+            .min(a.length);
+        if task.state == TaskState::Waiting {
+            if let Some(failure) = self.ticket_failure(a.owner) {
+                task.state = TaskState::Cancelled;
+                task.failure = Some(failure);
+            }
+        }
+        Ok(task)
+    }
+    fn ticket_failure(&self, slot: usize) -> Option<Arc<TransferFailure>> {
+        let error = self.controls[slot].ticket.as_ref()?.terminal().err()?;
+        let span = self.public_span(slot..slot + 1);
+        Some(Arc::new(TransferFailure {
+            request_index: span.start,
+            affected_requests: span.len(),
+            error,
+            remote_effect: RemoteEffect::None,
+        }))
+    }
+    fn public_span(&self, physical: Range<usize>) -> Range<usize> {
+        let start = self.tasks[physical.start].physical_owner;
+        let end = self
+            .public
+            .iter()
+            .rposition(|a| physical.contains(&a.owner))
+            .map_or(start, |i| i + 1);
+        start..end
+    }
     fn can_free(&self) -> bool {
         !self.active && self.status().locally_drained
     }
@@ -491,18 +619,18 @@ impl ProgressState {
         };
         BatchStatus {
             state,
-            submitted_tasks: self.tasks.len(),
+            submitted_tasks: self.public.len(),
             completed_tasks: self
-                .tasks
+                .public
                 .iter()
-                .filter(|task| task.state == TaskState::Completed)
+                .filter(|a| self.tasks[a.owner].state == TaskState::Completed)
                 .count(),
             transferred_bytes: self.tasks.iter().map(|task| task.transferred_bytes).sum(),
             locally_drained: self.pending == 0
                 && self
                     .submissions
                     .iter()
-                    .all(|submission| submission.locally_drained),
+                    .all(|group| group.status.locally_drained),
         }
     }
 }
@@ -533,7 +661,7 @@ impl BatchProgress {
                 receipt.report,
             );
             if let Some(notification) = receipt.notification {
-                state.submissions[receipt.submission].notification = notification;
+                state.submissions[receipt.submission].status.notification = notification;
             }
             let more = !state.queue.is_empty();
             drop(state);
@@ -585,7 +713,7 @@ impl BatchProgress {
                     .targets
                     .attempt(engine, &retry.message, retry.deadline);
                 let mut locked = self.lock();
-                locked.submissions[retry.submission].notification = status;
+                locked.submissions[retry.submission].status.notification = status;
                 if !locked.abandoned && retry.targets.pending() {
                     locked.hooks.push_back(retry);
                 }
@@ -623,7 +751,7 @@ impl BatchProgress {
             mut prepared,
             hook,
         } = job;
-        let mut report = engine.execute(&prepared, Some((self, first_task)));
+        let mut report = engine.execute_physical(&prepared, Some((self, first_task)));
         let mut retry = None;
         let mut notification = None;
         if let Some(mut hook) = hook {
@@ -703,7 +831,7 @@ impl BatchProgress {
         let Ok(state) = self.state.try_lock() else {
             return;
         };
-        if state.pending != 0 || state.submissions.iter().all(|s| s.locally_drained) {
+        if state.pending != 0 || state.submissions.iter().all(|s| s.status.locally_drained) {
             return;
         }
         drop(state);
@@ -724,6 +852,29 @@ impl BatchProgress {
     pub(crate) fn cancel_requested(&self, index: usize) -> bool {
         self.lock().tasks[index].cancel_requested
     }
+    pub(crate) fn fail_owners(&self, base: usize, mut failure: TransferFailure, drained: bool) {
+        let mut s = self.lock();
+        let first = base + failure.request_index;
+        let range = first..first + failure.affected_requests;
+        let public = s.public_span(range.clone());
+        failure.request_index = public.start;
+        failure.affected_requests = public.len();
+        let state = if matches!(failure.error, Error::Cancelled | Error::DeadlineInfeasible) {
+            TaskState::Cancelled
+        } else {
+            TaskState::Failed
+        };
+        let shared = Arc::new(failure);
+        for t in &mut s.tasks[range] {
+            if !t.state.is_terminal() {
+                t.state = state;
+                t.locally_drained = drained;
+                t.failure = Some(shared.clone());
+            }
+        }
+        self.changed.notify_all();
+    }
+
     pub(crate) fn begin_task(&self, index: usize) -> bool {
         let mut state = self.lock();
         let task = &mut state.tasks[index];
@@ -768,7 +919,7 @@ impl BatchProgress {
         task.transferred_bytes = bytes;
         task.locally_drained = drained;
         task.failure = Some(Arc::new(TransferFailure {
-            request_index: index,
+            request_index: task.physical_owner,
             affected_requests: 1,
             error,
             remote_effect: effect,
@@ -798,8 +949,9 @@ impl BatchProgress {
     #[cfg(feature = "gds")]
     pub(crate) fn gds_drained(&self, index: usize) {
         let mut state = self.lock();
-        state.submissions[index].locally_drained = true;
-        let range = state.submissions[index].tasks.clone();
+        state.submissions[index].status.locally_drained = true;
+        let group = &state.submissions[index];
+        let range = group.first_physical..group.first_physical + group.mapping.owners.len();
         for task in &mut state.tasks[range] {
             task.locally_drained = true;
         }
@@ -813,21 +965,41 @@ impl BatchProgress {
         report: BatchReport,
     ) {
         state.active = false;
-        let failure = report.failure.map(|mut failure| {
-            failure.request_index += first;
-            Arc::new(failure)
+        // A queued cancel/drop can become visible before this worker reaches
+        // its group. Preserve that terminal outcome if a predecessor fails.
+        let count = state.submissions[index].mapping.owners.len();
+        for slot in first..first + count {
+            if state.tasks[slot].state == TaskState::Waiting {
+                if let Some(failure) = state.ticket_failure(slot) {
+                    let task = &mut state.tasks[slot];
+                    task.state = TaskState::Cancelled;
+                    task.failure = Some(failure);
+                    task.locally_drained = true;
+                }
+            }
+        }
+        let group = &state.submissions[index];
+        let physical = report
+            .failure
+            .as_ref()
+            .map(|f| f.request_index..f.request_index + f.affected_requests);
+        let operation = state
+            .tasks
+            .get(first)
+            .map_or(TransferOp::Read, |t| t.operation);
+        let report = group.mapping.public_report(report, operation);
+        let failure = report.failure.map(|mut f| {
+            f.request_index += group.status.tasks.start;
+            Arc::new(f)
         });
-        let range = state.submissions[index].tasks.clone();
-        if let Some(failure) = &failure {
-            for task_index in failure.request_index..range.end {
-                let task = &mut state.tasks[task_index];
-                // File CQEs are independent. A later request may have its own
-                // successful or short completion after the first failed request.
+        if let (Some(failed), Some(failure)) = (physical, &failure) {
+            for i in failed.start..group.mapping.owners.len() {
+                let task = &mut state.tasks[first + i];
                 if task.state.is_terminal() {
                     continue;
                 }
-                task.state = if task_index < failure.request_index + failure.affected_requests {
-                    if matches!(failure.error, Error::Cancelled) {
+                task.state = if failed.contains(&i) {
+                    if matches!(failure.error, Error::Cancelled | Error::DeadlineInfeasible) {
                         TaskState::Cancelled
                     } else {
                         TaskState::Failed
@@ -837,22 +1009,18 @@ impl BatchProgress {
                 } else {
                     TaskState::Skipped
                 };
-                task.locally_drained = task_index
-                    >= failure.request_index + failure.affected_requests
-                    || report.locally_drained;
-                if task_index < failure.request_index + failure.affected_requests {
-                    task.failure = Some(Arc::clone(failure));
+                task.locally_drained = !failed.contains(&i) || report.locally_drained;
+                if failed.contains(&i) {
+                    task.failure = Some(failure.clone());
                 }
             }
         }
-        state.submissions[index] = SubmissionStatus {
-            tasks: range,
-            completed_requests: report.completed_requests,
-            transferred_bytes: report.transferred_bytes,
-            failure,
-            notification: Arc::new(report.notification),
-            locally_drained: report.locally_drained,
-        };
+        let group = &mut state.submissions[index].status;
+        group.completed_requests = report.completed_requests;
+        group.transferred_bytes = report.transferred_bytes;
+        group.failure = failure;
+        group.notification = Arc::new(report.notification);
+        group.locally_drained = report.locally_drained;
         state.pending -= 1;
         self.changed.notify_all();
     }
@@ -882,24 +1050,24 @@ impl Drop for WorkerExit {
         let mut state = self.progress.lock();
         if state.pending != 0 {
             for index in 0..state.submissions.len() {
-                if state.submissions[index].locally_drained
-                    || state.submissions[index].failure.is_some()
+                if state.submissions[index].status.locally_drained
+                    || state.submissions[index].status.failure.is_some()
                 {
                     continue;
                 }
-                let range = state.submissions[index].tasks.clone();
-                let mut completed = 0;
-                let mut bytes = 0;
+                let group = &state.submissions[index];
+                let first = group.first_physical;
+                let mapping = group.mapping.clone();
+                let range = first..first + mapping.owners.len();
                 for task_index in range {
+                    let span = state.public_span(task_index..task_index + 1);
                     let task = &mut state.tasks[task_index];
-                    if task.state == TaskState::Completed {
-                        completed += 1;
-                        bytes += task.transferred_bytes;
+                    if task.state.is_terminal() {
                         continue;
                     }
                     let failure = Arc::new(TransferFailure {
-                        request_index: task_index,
-                        affected_requests: 1,
+                        request_index: span.start,
+                        affected_requests: span.len(),
                         error: Error::Internal("batch worker stopped before normal completion"),
                         remote_effect: if task.operation == TransferOp::Write
                             && task.state == TaskState::Running
@@ -912,13 +1080,21 @@ impl Drop for WorkerExit {
                     task.state = TaskState::Failed;
                     task.locally_drained = true;
                     task.failure = Some(Arc::clone(&failure));
-                    if state.submissions[index].failure.is_none() {
-                        state.submissions[index].failure = Some(failure);
-                    }
                 }
-                state.submissions[index].completed_requests = completed;
-                state.submissions[index].transferred_bytes = bytes;
-                state.submissions[index].locally_drained = true;
+                let prefix = mapping
+                    .public
+                    .iter()
+                    .take_while(|a| state.tasks[first + a.owner].state == TaskState::Completed)
+                    .count();
+                let failure = mapping
+                    .public
+                    .get(prefix)
+                    .and_then(|a| state.tasks[first + a.owner].failure.clone());
+                let group = &mut state.submissions[index].status;
+                group.failure = failure;
+                group.completed_requests = prefix;
+                group.transferred_bytes = mapping.public[..prefix].iter().map(|a| a.length).sum();
+                state.submissions[index].status.locally_drained = true;
             }
             state.pending = 0;
         }

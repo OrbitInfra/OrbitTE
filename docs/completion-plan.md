@@ -44,7 +44,7 @@ artifacts and hardware profiles.
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
-| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS and credits implemented; merge, failover and metrics open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, progress, notification fallback, priority, admission, QoS and credits implemented; failover and metrics open |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
 | P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
@@ -86,7 +86,7 @@ fixes the order (S0–S26) for this period; this plan remains the status record.
 
 S0 and S0b delivered the request API and pre-release wire rules. S1–S5
 complete P7 at source level. S6 implements P6 selector routing and S7 implements explicit progress and
-notification fallback. S8 covers the remaining admission and merge work. OrbitKV
+notification fallback. S8 implements physical admission and merge. S9 is next. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -152,7 +152,7 @@ Open:
   process environment.
 - [ ] Explicit separation of logical outcome and physical quiescence for every
   remaining owner, with unregister retry and documented unsafe raw-pointer APIs.
-- [ ] CPU allocation, copy and probing; merge/alias ownership contracts.
+- [ ] CPU allocation, copy and probing. P6 covers merge/alias ownership.
 - [ ] Config precedence, effective defaults and diagnostics (F01, see P9).
 
 Exit: CPU property and negative tests, concurrent registration and shutdown
@@ -283,9 +283,11 @@ Done (source scope, CPU controls):
   identity. Strict hints, per-request NIC masks and endpoint QP pools reach
   the executing owner. Installed two-RNIC qualification is queued.
   See [transport selection](transport-selection.md).
-- **Runtime admission.** Opt-in FIFO/EDF over whole submissions with independent
-  owner and byte dispatch windows, queue cancel and expiry, and retained
-  `Unquiesced` charges.
+- **Physical admission and merge (S8, F08/F14).** Registered contiguous ranges
+  share a physical owner across public task IDs. FIFO/EDF tracks physical
+  windows, internal staging reserves, credit and QoS permits. The optional
+  deadline threshold uses transport-specific rates. Drops are visible on every
+  alias, and unquiesced native work stays charged.
 - **Priority and arbitration.** RDMA High/Medium/Low dispatch across contexts,
   TENT's urgency ordering, head-only or per-entry aging and shared priority
   slots; TCP and NVLink accept every priority as advisory.
@@ -303,8 +305,6 @@ Done (source scope, CPU controls):
 
 Open:
 
-- [ ] Physical-request/alias granularity, merge mapping, staging reserves and
-  deadline-infeasible cancellation (F08/F14).
 - [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
   reclamation and manual resource mapping (F15).
 - [ ] Submit- and completion-stage failover, per-owner retry budgets and rail

@@ -76,6 +76,10 @@ impl DeviceInfo {
         }
     }
 
+    pub(super) fn transmit_estimate(&self) -> Option<f64> {
+        let s = self.state.try_lock().ok()?;
+        (s.link_speed_mbps.is_some() || s.transmit_samples > 0).then_some(s.transmit_bps)
+    }
     pub(in crate::transport::rdma) fn bandwidth(&self) -> f64 {
         f64::from_bits(self.selection_bps.load(Ordering::Relaxed))
     }

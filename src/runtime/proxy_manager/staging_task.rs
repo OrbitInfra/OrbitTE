@@ -471,6 +471,8 @@ impl<'a> StagingTask<'a> {
         let cross = PreparedTransfer {
             #[cfg(feature = "rdma")]
             priority: self.request.priority,
+            #[cfg(feature = "rdma")]
+            rdma_cancel: None,
             #[cfg(feature = "cuda")]
             remote_staging: false,
             selection: self.request.selection.clone(),

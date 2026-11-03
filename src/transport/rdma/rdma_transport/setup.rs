@@ -170,6 +170,8 @@ impl RdmaSetup {
                     let child = PreparedTransfer {
                         #[cfg(feature = "rdma")]
                         priority: self.request.priority,
+                        #[cfg(feature = "rdma")]
+                        rdma_cancel: self.request.rdma_cancel.clone(),
                         #[cfg(feature = "cuda")]
                         remote_staging: false,
                         selection: self.request.selection.clone(),
@@ -252,7 +254,7 @@ impl RdmaSetup {
                         slice.grant.claim,
                         slice.remote,
                         self.operation,
-                        self.request.priority,
+                        &self.request,
                         channel.deadline,
                     )?;
                     Phase::Submit(index + 1)

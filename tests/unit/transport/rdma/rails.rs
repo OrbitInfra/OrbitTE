@@ -1874,3 +1874,177 @@ fn named_policy_masks_every_slice_and_connects_only_its_qp_pool() -> Result<()> 
     assert_eq!(&bytes[..16], &[0xa3; 16]);
     Ok(())
 }
+
+#[test]
+fn admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_post() -> Result<()> {
+    use crate::{EngineConfig, RuntimeQueueConfig, TaskState, TransportSelectorConfig};
+    let selector = TransportSelectorConfig::from_json(
+        r#"{"policy":[
+        {"name":"slow","segment_type":"memory","devices":["rail0"],"transports":["rdma"]},
+        {"name":"fast","segment_type":"memory","devices":["rail2"],"transports":["rdma"]},{"name":"tcp","segment_type":"memory","transports":["tcp"]}]}"#,
+    )?;
+    let source = rdma_fixture_with_runtime(runtime(u64::MAX, 8));
+    let requester = Arc::new(crate::engine::tests::rdma_fixture_with_config(
+        runtime(u64::MAX, 8),
+        EngineConfig {
+            selector: Some(selector),
+            runtime_queue: Some(RuntimeQueueConfig {
+                deadline_aware: true,
+                mlu_local_threshold: 2e-11,
+                max_outstanding_owners: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    ));
+    let local =
+        requester.register_memory((0..32u8).collect::<Vec<_>>().into(), Permission::LocalOnly)?;
+    let remote = source.register_memory(vec![0x91; 32].into(), Permission::RemoteReadWrite)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let loads = requester.nic_load_stats()?;
+    assert_eq!(
+        loads
+            .iter()
+            .map(|n| (n.device_id, n.link_speed_gbps))
+            .collect::<Vec<_>>(),
+        [(0, Some(100.0)), (2, Some(400.0))]
+    );
+    // Eight bytes / 12.5 GB/s / 20 s exceeds the threshold on rail0.
+    // The same eight bytes on rail2 fit. Other transports cannot borrow either rate.
+    let deadline = Duration::from_secs(20);
+    let req =
+        |t, i| TransferRequest::new(t, local.base_address() + i, remote.base_address() + i, 4);
+    for (name, drop) in [("slow", true), ("fast", false)] {
+        let r = [
+            req(Transport::Rdma, 4).with_policy_name(name)?,
+            req(Transport::Rdma, 8).with_policy_name(name)?,
+        ];
+        let mut batch = requester.submit_async(TransferOp::Write, &peer, &r, None, deadline)?;
+        let status = batch.wait(deadline)?;
+        let tasks = batch.task_statuses()?;
+        assert!(
+            tasks
+                .iter()
+                .all(|t| t.physical_owner == 0 && t.locally_drained)
+        );
+        let mut got = [0; 32];
+        remote.read(0, &mut got)?;
+        let mut expected = [0x91; 32];
+        let stats = requester.stats()?;
+        assert_eq!(stats.runtime_queue.unwrap().deadline_infeasible_drops, 1);
+        if drop {
+            assert!(tasks.iter().all(|t| t.state == TaskState::Cancelled
+                && matches!(t.failure.as_ref().unwrap().error, Error::DeadlineInfeasible)));
+            let g = batch.submissions()?.remove(0);
+            assert_eq!(
+                (g.completed_requests, g.failure.unwrap().affected_requests),
+                (0, 2)
+            );
+            assert_eq!(stats.rdma.unwrap().opened_connections, 0);
+            assert_eq!(source.stats()?.rdma.unwrap().receive_post_calls, 0);
+        } else {
+            assert_eq!(status.completed_tasks, 2);
+            assert!(tasks.iter().all(|t| t.transferred_bytes == 4));
+            expected[4..12].copy_from_slice(&[4, 5, 6, 7, 8, 9, 10, 11]);
+            assert_eq!(stats.rdma.unwrap().completed_sends, 1);
+            assert_eq!(
+                requester
+                    .nic_load_stats()?
+                    .iter()
+                    .find(|n| n.device_id == 2)
+                    .unwrap()
+                    .completed_bytes,
+                8
+            );
+        }
+        assert_eq!(got, expected);
+        batch.free()?;
+    }
+    let r = [
+        req(Transport::Tcp, 16).with_policy_name("tcp")?,
+        req(Transport::Tcp, 20).with_policy_name("tcp")?,
+    ];
+    assert_eq!(
+        requester
+            .submit_and_wait(TransferOp::Write, &peer, &r, deadline)?
+            .completed_requests,
+        2
+    );
+    let mut got = [0; 32];
+    remote.read(0, &mut got)?;
+    let mut expected = [0x91; 32];
+    expected[4..12].copy_from_slice(&[4, 5, 6, 7, 8, 9, 10, 11]);
+    expected[16..24].copy_from_slice(&[16, 17, 18, 19, 20, 21, 22, 23]);
+    assert_eq!(got, expected);
+    Ok(())
+}
+
+#[test]
+fn an_infeasible_merged_write_does_not_hide_a_later_feasible_tcp_owner() -> Result<()> {
+    let source = rdma_fixture_with_runtime(runtime(u64::MAX, 6));
+    let requester = Arc::new(crate::engine::tests::rdma_fixture_with_config(
+        runtime(u64::MAX, 6),
+        crate::EngineConfig {
+            runtime_queue: Some(crate::RuntimeQueueConfig {
+                deadline_aware: true,
+                mlu_local_threshold: f64::MIN_POSITIVE,
+                max_dispatch_owners: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    ));
+    let local = requester.register_memory(vec![0x5a; 8].into(), Permission::LocalOnly)?;
+    let remote = source.register_memory(vec![0xaa; 8].into(), Permission::RemoteReadWrite)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let r = [
+        (Transport::Rdma, 1),
+        (Transport::Tcp, 6),
+        (Transport::Rdma, 2),
+    ]
+    .map(|(t, i)| TransferRequest::new(t, local.base_address() + i, remote.base_address() + i, 1));
+    for asynchronous in [true, false] {
+        remote.write(0, &[0xaa; 8])?;
+        let f = if asynchronous {
+            let mut b = requester.submit_async(TransferOp::Write, &peer, &r, None, TIMEOUT)?;
+            assert_eq!(b.wait(TIMEOUT)?.completed_tasks, 1);
+            assert_eq!(
+                (
+                    b.task_status(1)?.transferred_bytes,
+                    b.task_status(2)?.physical_owner
+                ),
+                (1, 0)
+            );
+            for i in [0, 2] {
+                assert!(matches!(
+                    b.task_status(i)?.failure.unwrap().error,
+                    Error::DeadlineInfeasible
+                ));
+            }
+            let report = b.submissions()?.remove(0);
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (0, 0)
+            );
+            b.free()?;
+            report.failure.unwrap()
+        } else {
+            let report = requester.submit_and_wait(TransferOp::Write, &peer, &r, TIMEOUT)?;
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (0, 0)
+            );
+            Arc::new(report.failure.unwrap())
+        };
+        assert!(matches!(f.error, Error::DeadlineInfeasible));
+        assert_eq!(
+            (f.request_index, f.affected_requests, f.remote_effect),
+            (0, 3, crate::RemoteEffect::Unknown)
+        );
+        let mut got = [0; 8];
+        remote.read(0, &mut got)?;
+        assert_eq!(got, [0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0x5a, 0xaa]);
+        assert_eq!(requester.stats()?.rdma.unwrap().opened_connections, 0);
+    }
+    Ok(())
+}
