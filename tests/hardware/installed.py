@@ -25,7 +25,7 @@ def validate_nodes(profile):
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -63,6 +63,8 @@ def validate(case):
             raise ValueError('cleanup requires a supported native owner and progress mode')
     if 'cleanup_kind' in case and case['mode'] not in ('installed-memory-cleanup', 'installed-cleanup-failure'):
         raise ValueError('native fault selector escaped its mode')
+    if case['mode'] == 'installed-selector' and (case['mask'] != 3 or case['parents'] != 1 or case['num_lanes'] != 1 or case['payload'] <= case['block']):
+        raise ValueError('selector requires two globally enabled NICs, one CQ lane and a sliced request')
     if case['mode'] == 'installed-rail-accounting' and (case['parents'], case['payload'], case['block'], case['num_lanes'], case['mask']) != (16, (4 << 20) + 1, 1 << 20, 1, 3):
         raise ValueError('rail accounting requires the frozen folded-tail profile')
     if 'discovery' in case and (case['discovery'] != 'auto' or case['mode'] != 'installed-rail-accounting'):
@@ -151,6 +153,13 @@ def verify(profile, case, evidence):
                 value = expected if role == 'requester' and case['operation'] == operation else 0
                 if row[operation + '_bytes'] != value:
                     raise ValueError('installed native byte ledger disagrees with requested bytes')
+        if case['mode'] == 'installed-selector':
+            index = int(case['operation'] == 'write')
+            expected = [dict(round=r, nic=name, indices=1 << index,
+                             bytes=(r + 1) * case['payload'] if role == 'requester' and i == index else 0)
+                        for r in range(3) for i, name in enumerate(profile['rails'])]
+            if records('ORBITTE_SELECTOR ') != expected:
+                raise ValueError('per-NIC completed bytes or connected QP pool indices disagree')
         results = records('ORBITTE_INSTALLED_RESULT ')
         if results != [dict(protocol=PROTOCOL, status='passed', role=role,
                             operation=case['operation'], parents=case['parents'],

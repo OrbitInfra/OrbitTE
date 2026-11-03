@@ -11,7 +11,11 @@ use crate::runtime::admission_queue::{
 use crate::runtime::control_plane::{self, ControlService};
 use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
 use crate::runtime::receiver_credit::{CreditPermit, ReceiverCreditIssuer, SenderCreditLedger};
-use crate::runtime::transport_selector::{SelectionContext, TransportSelector};
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+use crate::runtime::transport_selector::Filters;
+use crate::runtime::transport_selector::{
+    SelectionContext, SelectionResult, TransportSelector, qp_pools::QpLayout,
+};
 use crate::segment::{FileSegments, SegmentMetadata};
 use crate::transport::tcp::TcpTransport;
 use crate::{
@@ -57,6 +61,10 @@ pub enum Priority {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct TransferRequest {
+    /// Bind to exactly this policy and segment type. Resolved during preparation.
+    pub policy_name: Option<crate::PolicyName>,
+    /// Business intent for automatic policy selection, independent of QoS.
+    pub intent: crate::IntentType,
     /// Pre-resolved engine-bound contract. None uses the engine's default/unspec
     /// contract, with `priority` as its fallback. Some captures its own requested
     /// priority at resolution and replaces this request's legacy priority.
@@ -88,10 +96,24 @@ impl TransferRequest {
             local_address,
             remote_address,
             length,
+            policy_name: None,
+            intent: crate::IntentType::Unspec,
             qos: None,
             priority: Priority::default(),
             remote_staging: false,
         }
+    }
+
+    /// Bind to a named selector rule. Allocate the bounded name at request construction.
+    pub fn with_policy_name(mut self, name: impl AsRef<str>) -> Result<Self> {
+        self.policy_name = Some(crate::PolicyName::new(name.as_ref())?);
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn with_intent(mut self, intent: crate::IntentType) -> Self {
+        self.intent = intent;
+        self
     }
 
     /// Use an engine-resolved policy, or clear it to use the default contract.
@@ -122,7 +144,7 @@ pub(crate) struct PreparedTransfer {
     pub(crate) priority: Priority,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
-    pub(crate) transport: Transport,
+    pub(crate) selection: SelectionResult,
     pub(crate) local: RegisteredMemory,
     pub(crate) local_offset: usize,
     pub(crate) remote: RemoteRegion,
@@ -173,6 +195,8 @@ impl BatchReport {
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct EngineStats {
+    /// Device name entries missing or outside the policy mask at construction.
+    pub unresolved_policy_devices: usize,
     #[cfg(feature = "gds")]
     pub gds: crate::GdsStats,
     #[cfg(feature = "cuda")]
@@ -218,11 +242,7 @@ pub struct TransferEngine {
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
         config.validate()?;
-        let selector = config
-            .selector
-            .as_ref()
-            .map(TransportSelector::new)
-            .transpose()?;
+
         let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let qos = config
             .qos
@@ -230,6 +250,7 @@ impl TransferEngine {
             .map(|qos| QosContractResolver::new(qos, runtime_queue.as_ref()))
             .transpose()?;
         let epoch = SourceEpoch::generate()?;
+        let layout = std::sync::Arc::new(Self::qp_layout(&config)?);
         #[cfg(feature = "cuda")]
         let proxy = crate::runtime::proxy_manager::ProxyManager::new(
             config.staging_chunk_size,
@@ -240,9 +261,15 @@ impl TransferEngine {
         let rdma = config
             .rdma
             .clone()
-            .map(|config| {
+            .map(|rdma_config| {
+                let config_layout = config
+                    .selector
+                    .as_ref()
+                    .filter(|s| !s.qp_pools.is_empty() || s.qp_mul_factor.is_some())
+                    .map(|_| Arc::clone(&layout));
                 crate::transport::rdma::RdmaTransport::new(
-                    config,
+                    rdma_config,
+                    config_layout,
                     #[cfg(feature = "cuda")]
                     Arc::clone(&proxy),
                 )
@@ -270,6 +297,16 @@ impl TransferEngine {
             metadata.nvlink = nvlink.as_ref().map(|transport| transport.identity);
             metadata.remote_staging = config.remote_staging;
         }
+        metadata.boot = metadata
+            .nvlink
+            .map(|id| id.machine)
+            .or_else(|| crate::segment::ProcessIdentity::boot_id().ok());
+        let selector = Self::compile_selector(
+            &config,
+            &layout,
+            #[cfg(feature = "rdma")]
+            rdma.as_deref(),
+        )?;
         let source = Arc::new(Source {
             metadata,
             credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
@@ -320,6 +357,37 @@ impl TransferEngine {
             batches: Arc::default(),
             allocations: Arc::new(AllocationBudget::new()),
         })
+    }
+
+    fn qp_layout(config: &EngineConfig) -> Result<QpLayout> {
+        #[cfg(feature = "rdma")]
+        let flat = config.rdma.as_ref().map_or(1, |rdma| rdma.num_lanes);
+        #[cfg(not(feature = "rdma"))]
+        let flat = 1;
+        let selector = config.selector.as_ref();
+        QpLayout::new(
+            selector.map_or(&[][..], |s| s.qp_pools.as_slice()),
+            selector.and_then(|s| s.qp_mul_factor).unwrap_or(flat),
+        )
+    }
+
+    fn compile_selector(
+        config: &EngineConfig,
+        layout: &QpLayout,
+        #[cfg(feature = "rdma")] rdma: Option<&crate::transport::rdma::RdmaTransport>,
+    ) -> Result<Option<TransportSelector>> {
+        let Some(config) = &config.selector else {
+            return Ok(None);
+        };
+        #[cfg(feature = "rdma")]
+        let devices = if config.policy.iter().any(|p| !p.devices.is_empty()) {
+            rdma.map(|r| r.policy_devices()).transpose()?
+        } else {
+            None
+        };
+        #[cfg(not(feature = "rdma"))]
+        let devices: Option<Vec<String>> = None;
+        TransportSelector::compile(config, devices.as_deref(), layout).map(Some)
     }
 
     /// Resolves names once and returns an immutable policy handle for reuse in
@@ -470,6 +538,7 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            unresolved_policy_devices: self.selector.as_ref().map_or(0, |s| s.unresolved_devices),
             #[cfg(feature = "gds")]
             gds,
             #[cfg(feature = "cuda")]
@@ -760,6 +829,13 @@ impl TransferEngine {
         }
         let deadline = deadline(timeout)?;
         let target = peer.into();
+        let kind = match target {
+            TransferTarget::Memory(_) => crate::SegmentType::Memory,
+            TransferTarget::File(_) => crate::SegmentType::File,
+        };
+        let mut bindings = TransportSelector::bindings(self.selector.as_ref(), kind, requests)?
+            .into_iter()
+            .peekable();
         let mut payload = match target {
             TransferTarget::Memory(peer) => PreparedTarget::Memory {
                 peer: peer.clone(),
@@ -776,7 +852,9 @@ impl TransferEngine {
                     && !self.file_available(Transport::Gds, None)
                     && !self.file_available(Transport::IoUring, None)
                 {
-                    return Err(Error::Unavailable("no local file transport is available"));
+                    return Err(Error::Unavailable(
+                        "file_storage: no local file transport is available",
+                    ));
                 }
                 PreparedTarget::File {
                     segment: segment.clone(),
@@ -785,7 +863,9 @@ impl TransferEngine {
             }
             #[cfg(not(any(feature = "io-uring", feature = "gds")))]
             TransferTarget::File(_) => {
-                return Err(Error::Unavailable("no local file transport is available"));
+                return Err(Error::Unavailable(
+                    "file_storage: no local file transport is available",
+                ));
             }
         };
         let notification_bytes = match notification {
@@ -806,7 +886,8 @@ impl TransferEngine {
         .map_err(|_| Error::ResourceExhausted)?;
         #[cfg(feature = "rdma")]
         let mut rdma_ready = false;
-        for request in requests {
+        for (index, request) in requests.iter().enumerate() {
+            let bound = bindings.next_if(|(i, _)| *i == index).map(|(_, rule)| rule);
             let (priority, contract) = match &request.qos {
                 Some(policy) => (
                     policy.effective_priority(),
@@ -848,12 +929,18 @@ impl TransferEngine {
                             "file I/O does not support remote staging",
                         ));
                     }
-                    let transport = TransportSelector::select_file(
+                    let selection = TransportSelector::select(
                         self.selector.as_ref(),
-                        local.memory_type(),
-                        request.length,
-                        priority,
-                        request.transport,
+                        Filters {
+                            segment: crate::SegmentType::File,
+                            local: local.memory_type(),
+                            remote: crate::MemoryType::Cpu,
+                            size: request.length,
+                            priority,
+                            same_machine: true,
+                        },
+                        request,
+                        bound,
                         |t| self.file_available(t, Some(&local)),
                     )?;
                     let (lease, offset) = self.files.admit(
@@ -863,7 +950,7 @@ impl TransferEngine {
                         request.length,
                     )?;
                     files.push(crate::segment::file::FileRequest {
-                        transport,
+                        selection,
                         #[cfg(feature = "gds")]
                         buffer: None,
                         local,
@@ -876,34 +963,35 @@ impl TransferEngine {
                 }
             };
             if matches!(request.transport, Transport::Gds | Transport::IoUring) {
-                return Err(Error::Unavailable("file transport requires a file target"));
+                let reason = "memory_default: file transport requires a file target";
+                return Err(match &request.policy_name {
+                    Some(name) => Error::TransportPolicy {
+                        policy: name.clone(),
+                        reason: "file transport requires a file target",
+                    },
+                    None => Error::Unavailable(reason),
+                });
             }
             let (remote, remote_offset) =
                 peer.resolve_address(request.remote_address, request.length)?;
             if !remote.permission.allows(operation == TransferOp::Write) {
                 return Err(Error::PermissionDenied);
             }
-            let transport = if self.selector.is_none() && request.transport != Transport::Unspec {
-                request.transport
-            } else {
-                let context = SelectionContext {
-                    local_memory: local.memory_type(),
-                    #[cfg(feature = "cuda")]
-                    local_ipc: local.ipc_requester(),
-                    #[cfg(not(feature = "cuda"))]
-                    local_ipc: false,
-                    remote: &remote,
-                    local_segment: self.source.metadata,
-                    remote_segment: peer.metadata,
-                    transfer_size: request.length,
-                    priority,
-                    remote_staging: request.remote_staging,
-                };
-                match &self.selector {
-                    Some(selector) => selector.select(&context, request.transport)?,
-                    None => TransportSelector::select_default(&context)?,
-                }
+            let context = SelectionContext {
+                local_memory: local.memory_type(),
+                #[cfg(feature = "cuda")]
+                local_ipc: local.ipc_requester(),
+                #[cfg(not(feature = "cuda"))]
+                local_ipc: false,
+                remote: &remote,
+                local_segment: self.source.metadata,
+                remote_segment: peer.metadata,
+                transfer_size: request.length,
+                priority,
+                remote_staging: request.remote_staging,
             };
+            let selection = context.select_bound(self.selector.as_ref(), request, bound)?;
+            let transport = selection.transport;
             if request.remote_staging && transport == Transport::Nvlink {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }
@@ -916,12 +1004,29 @@ impl TransferEngine {
             if transport == Transport::Rdma {
                 #[cfg(feature = "rdma")]
                 {
+                    if selection.device_mask != u64::MAX {
+                        self.source
+                            .rdma
+                            .as_ref()
+                            .ok_or_else(|| selection.rejected("RDMA is unavailable"))?
+                            .check_policy_paths(
+                                (!request.remote_staging)
+                                    .then(|| local.location())
+                                    .transpose()?
+                                    .map(|r| r.location),
+                                &selection,
+                            )?;
+                    }
                     if !rdma_ready {
                         self.source
                             .rdma
                             .as_ref()
                             .ok_or(Error::Unavailable("RDMA is not configured"))?
-                            .check_ready()?;
+                            .check_ready()
+                            .map_err(|error| match error {
+                                Error::Unavailable(reason) => selection.rejected(reason),
+                                error => error,
+                            })?;
                         rdma_ready = true;
                     }
                 }
@@ -948,7 +1053,7 @@ impl TransferEngine {
                 priority,
                 #[cfg(feature = "cuda")]
                 remote_staging: request.remote_staging,
-                transport,
+                selection,
                 local,
                 local_offset,
                 remote,
@@ -1103,10 +1208,10 @@ impl TransferEngine {
             PreparedTarget::File { requests, .. } => {
                 let mut first = 0;
                 while first < requests.len() {
-                    let transport = requests[first].transport;
+                    let transport = requests[first].selection.transport;
                     let count = requests[first..]
                         .iter()
-                        .take_while(|r| r.transport == transport)
+                        .take_while(|r| r.selection == requests[first].selection)
                         .count();
                     let group = &requests[first..first + count];
                     let progress = progress.map(|(p, base)| (p, base + first));
@@ -1201,7 +1306,7 @@ impl TransferEngine {
                         remote_effect,
                     })
             };
-            let result = match request.transport {
+            let result = match request.selection.transport {
                 Transport::IoUring | Transport::Gds | Transport::Unspec => single(Err((
                     Error::Internal("unresolved transport"),
                     RemoteEffect::None,
@@ -1673,7 +1778,7 @@ impl PreparedSubmission {
     fn pin_gds_buffers(mut self) -> Result<Self> {
         if let PreparedTarget::File { requests, .. } = &mut self.payload {
             for r in requests {
-                if r.transport == Transport::Gds {
+                if r.selection.transport == Transport::Gds {
                     match crate::transport::gds::BufferLease::acquire(&r.local) {
                         Ok(lease) => r.buffer = lease,
                         Err(e) => return Err(self.abort_error(e)),

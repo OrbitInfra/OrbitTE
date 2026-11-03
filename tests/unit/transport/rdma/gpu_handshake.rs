@@ -55,6 +55,7 @@ pub(crate) fn check_source(runtime: &RdmaTransport, epoch: SourceEpoch, memory: 
                     paths[0].domain
                 },
                 direct: true,
+                qp_index: None,
                 qp_width: usize::from(case == "width"),
                 previous_grant: u64::from(case == "cached"),
             }
@@ -123,7 +124,10 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let epoch = SourceEpoch([7; 16]);
         let peer = RemoteSegment {
-            metadata: Default::default(),
+            metadata: crate::segment::SegmentMetadata {
+                rdma: true,
+                ..Default::default()
+            },
             endpoint: listener.local_addr().unwrap(),
             epoch,
             regions: vec![RemoteRegion {

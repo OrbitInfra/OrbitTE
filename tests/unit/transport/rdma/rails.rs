@@ -621,6 +621,7 @@ fn malformed_parent_plan_and_changed_slice_domain_fail_before_any_endpoint_autho
                     source: None,
                     expected_domain: paths[1].domain,
                     direct: true,
+                    qp_index: None,
                     qp_width: 1,
                     previous_grant: 0,
                 }
@@ -1694,4 +1695,182 @@ fn weighted_parent_read_write_uses_exact_tail_bytes_and_compatible_remote_rails(
         requester.close(TIMEOUT).unwrap();
         source.close(TIMEOUT).unwrap();
     }
+}
+
+#[test]
+fn named_policy_masks_every_slice_and_connects_only_its_qp_pool() -> Result<()> {
+    use crate::{EngineConfig, IntentType, TransportSelectorConfig};
+    let selector = TransportSelectorConfig::from_json(
+        r#"{
+        "policy":[
+          {"name":"fast","segment_type":"memory","intent_type":"foreground_get","devices":["rail2","typo"],"qp_pool":"fg","transports":["rdma","tcp"]},
+          {"name":"bulk","segment_type":"memory","devices":["rail0"],"qp_pool":"bg","service_level":9,"transports":["rdma"]},
+          {"name":"masked","segment_type":"memory","devices":["device_missing"],"transports":["rdma"]}],
+        "transports":{"rdma":{"endpoint":{"qp_pools":[
+           {"name":"bg","num_qp":1,"service_level":3,"traffic_class":40},
+           {"name":"fg","num_qp":2,"service_level":6,"traffic_class":96}]}}}}"#,
+    )?;
+    let make = || {
+        let mut transport = runtime(u64::MAX, 12);
+        transport.config.num_lanes = 2;
+        transport.config.block_size = 8;
+        crate::engine::tests::rdma_fixture_with_config(
+            transport,
+            EngineConfig {
+                selector: Some(selector.clone()),
+                ..Default::default()
+            },
+        )
+    };
+    let source = make();
+    let requester = Arc::new(make());
+    let local =
+        requester.register_memory(vec![0x3a; 48].into_boxed_slice(), Permission::LocalOnly)?;
+    let remote = source.register_memory(
+        vec![0x71; 48].into_boxed_slice(),
+        Permission::RemoteReadWrite,
+    )?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let req = TransferRequest::new(
+        Transport::Unspec,
+        local.base_address() + 4,
+        remote.base_address() + 4,
+        32,
+    )
+    .with_intent(IntentType::ForegroundGet);
+    assert_eq!(requester.stats()?.unresolved_policy_devices, 1);
+    let mut batch = requester.allocate_batch(1)?;
+    assert!(
+        matches!(batch.submit(TransferOp::Write,&peer,&[req.clone().with_policy_name("masked")?],None,TIMEOUT),
+        Err(Error::TransportPolicy {policy,reason}) if policy.as_str()=="masked" && reason.contains("device mask"))
+    );
+    assert_eq!(requester.stats()?.rdma.unwrap().connected_pool_indices, 0);
+    let report = requester.submit_and_wait(
+        TransferOp::Write,
+        &peer,
+        std::slice::from_ref(&req),
+        TIMEOUT,
+    )?;
+    assert!(report.is_complete(), "{report:?}");
+    let mut bytes = [0u8; 48];
+    remote.read(0, &mut bytes)?;
+    let mut expected = [0x71; 48];
+    expected[4..36].fill(0x3a);
+    assert_eq!(bytes, expected);
+    let nic_bytes = |engine: &TransferEngine, id| -> Result<u64> {
+        Ok(engine
+            .nic_load_stats()?
+            .iter()
+            .find(|n| n.device_id == id)
+            .unwrap()
+            .completed_bytes)
+    };
+    assert_eq!(
+        (nic_bytes(&requester, 0)?, nic_bytes(&requester, 2)?),
+        (0, 32)
+    );
+    for engine in [&*requester, &source] {
+        assert_eq!(engine.stats()?.rdma.unwrap().connected_pool_indices, 0b110);
+        assert_eq!(
+            super::super::super::context::tests::link_qos(source_runtime(engine), 2),
+            [(6, 96); 2]
+        );
+    }
+    remote.write(4, &[0x18; 32])?;
+    let task = batch.submit(
+        TransferOp::Read,
+        &peer,
+        &[req.with_policy_name("bulk")?],
+        None,
+        TIMEOUT,
+    )?;
+    assert_eq!(task, 0..1);
+    batch.seal()?;
+    assert_eq!(batch.wait(TIMEOUT)?.completed_tasks, 1);
+    batch.free()?;
+    local.read(0, &mut bytes)?;
+    expected = [0x3a; 48];
+    expected[4..36].fill(0x18);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        (nic_bytes(&requester, 0)?, nic_bytes(&requester, 2)?),
+        (32, 32)
+    );
+    for engine in [&*requester, &source] {
+        assert_eq!(engine.stats()?.rdma.unwrap().connected_pool_indices, 7);
+        assert_eq!(
+            super::super::super::context::tests::link_qos(source_runtime(engine), 0),
+            [(3, 40)]
+        );
+    }
+    // Keep public task IDs and per-task routes in A/B/A order, followed by a TCP hint.
+    let mut mixed = requester.allocate_batch(4)?;
+    let mut requests = Vec::new();
+    for (i, name) in ["fast", "bulk", "fast", "fast"].into_iter().enumerate() {
+        let hint = if i == 3 {
+            Transport::Tcp
+        } else {
+            Transport::Rdma
+        };
+        requests.push(
+            TransferRequest::new(
+                hint,
+                local.base_address() + i as u64 * 4,
+                remote.base_address() + i as u64 * 4,
+                4,
+            )
+            .with_policy_name(name)?,
+        );
+    }
+    local.write(0, &[0xa5; 16])?;
+    assert_eq!(
+        mixed.submit(TransferOp::Read, &peer, &requests, None, TIMEOUT)?,
+        0..4
+    );
+    mixed.seal()?;
+    assert_eq!(mixed.wait(TIMEOUT)?.completed_tasks, 4);
+    for i in 0..4 {
+        assert_eq!(mixed.task_status(i)?.transferred_bytes, 4);
+    }
+    let mut wanted = [0; 16];
+    remote.read(0, &mut wanted)?;
+    local.read(0, &mut bytes[..16])?;
+    assert_eq!(&bytes[..16], &wanted);
+    assert_eq!(
+        (nic_bytes(&requester, 0)?, nic_bytes(&requester, 2)?),
+        (36, 40)
+    );
+    mixed.free()?;
+    let mismatch = crate::engine::tests::rdma_fixture_with_config(
+        runtime(u64::MAX, 12),
+        EngineConfig {
+            selector: Some(TransportSelectorConfig::from_json(
+                r#"{"transports":{"rdma":{"endpoint":{"qp_pools":[{"name":"wrong","num_qp":2}]}}}}"#,
+            )?),
+            ..Default::default()
+        },
+    );
+    let untouched = mismatch.register_memory(
+        vec![0xa3; 16].into_boxed_slice(),
+        Permission::RemoteReadWrite,
+    )?;
+    let peer = requester.open_segment(mismatch.endpoint(), mismatch.source_epoch(), TIMEOUT)?;
+    let bad = TransferRequest::new(
+        Transport::Rdma,
+        local.base_address(),
+        untouched.base_address(),
+        8,
+    )
+    .with_policy_name("bulk")?;
+    let report = requester.submit_and_wait(TransferOp::Write, &peer, &[bad], TIMEOUT)?;
+    let fail = report.failure.unwrap();
+    assert!(matches!(
+        fail.error,
+        Error::Protocol("RDMA peer QP pool width mismatch")
+    ));
+    assert_eq!(fail.remote_effect, crate::RemoteEffect::None);
+    assert_eq!(mismatch.stats()?.rdma.unwrap().connected_pool_indices, 0);
+    untouched.read(0, &mut bytes[..16])?;
+    assert_eq!(&bytes[..16], &[0xa3; 16]);
+    Ok(())
 }

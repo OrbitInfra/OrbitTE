@@ -319,3 +319,25 @@ fn requester_close_drains_files_and_fences_new_opens() -> Result<()> {
     assert!(fd.upgrade().is_none());
     Ok(())
 }
+
+#[test]
+fn unknown_policy_rejects_the_whole_group_before_opening_any_file_fd() -> Result<()> {
+    use crate::{TransferOp, TransferRequest, Transport};
+    let temp = TempFile::new(b"file");
+    let engine = TransferEngine::new(EngineConfig::default())?;
+    let file = engine.open_file_segment(&temp.uri(), Permission::RemoteReadWrite)?;
+    let memory = engine.register_memory(b"host".to_vec().into(), Permission::LocalOnly)?;
+    let request = TransferRequest::new(Transport::Unspec, memory.base_address(), 0, 4);
+    let group = [
+        request.clone().with_policy_name("file_storage")?,
+        request.with_policy_name("typo")?,
+    ];
+    let result = engine.submit_and_wait(TransferOp::Write, &file, &group, Duration::from_secs(3));
+    assert!(
+        matches!(result, Err(Error::TransportPolicy {policy, reason:"unknown policy"}) if policy.as_str()=="typo")
+    );
+    assert!(file.0.upgrade().unwrap().lock()?.file.is_none());
+    assert_eq!(engine.stats()?.inflight_batches, 0);
+    assert_eq!(fs::read(&temp.path)?, b"file");
+    Ok(())
+}

@@ -25,6 +25,8 @@ impl Drop for ConnectionLease {
 }
 
 pub(super) struct ConnectionResources {
+    pub(super) qp_index: Option<usize>,
+    pub(super) link_qos: (u8, u8),
     pub(super) device: Arc<RdmaContext>,
     pub(super) handles: sys::ConnectionHandles,
     pub(super) send_queue: Arc<send_queue::SendQueue>,

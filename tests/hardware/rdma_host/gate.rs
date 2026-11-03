@@ -217,7 +217,7 @@ fn relay(mut client: TcpStream, upstream: SocketAddr, control: &Control) -> Resu
     if operation == 0 {
         return Ok(());
     }
-    forward(&mut client, &mut source, 106)?;
+    forward(&mut client, &mut source, 107)?;
     let offer = frame::<36>(&mut source)?;
     let (status, length) = header(&offer)?;
     client.write_all(&offer)?;

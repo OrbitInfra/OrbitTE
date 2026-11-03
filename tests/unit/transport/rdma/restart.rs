@@ -233,7 +233,10 @@ pub(super) fn stale(
                 Err(Error::EpochMismatch)
             ));
             let stale = crate::RemoteSegment {
-                metadata: Default::default(),
+                metadata: crate::segment::SegmentMetadata {
+                    rdma: true,
+                    ..Default::default()
+                },
                 endpoint,
                 epoch,
                 regions: vec![crate::RemoteRegion {

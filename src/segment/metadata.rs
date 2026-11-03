@@ -9,6 +9,14 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    pub(crate) fn boot_id() -> Result<SourceEpoch> {
+        // If unavailable, the engine cannot establish same-machine placement.
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+            .trim()
+            .replace('-', "")
+            .parse()
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn local() -> Result<Self> {
         use std::sync::OnceLock;
@@ -19,10 +27,7 @@ impl ProcessIdentity {
             }
             return Ok(*identity);
         }
-        let machine = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?
-            .trim()
-            .replace('-', "")
-            .parse()?;
+        let machine = Self::boot_id()?;
         let candidate = Self {
             machine,
             process: SourceEpoch::generate()?,
@@ -65,6 +70,7 @@ impl ProcessIdentity {
 /// provider health. Execution still checks authoritative owners and readiness.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SegmentMetadata {
+    pub(crate) boot: Option<SourceEpoch>,
     pub(crate) rdma: bool,
     pub(crate) remote_staging: bool,
     pub(crate) nvlink: Option<ProcessIdentity>,
@@ -73,6 +79,13 @@ pub(crate) struct SegmentMetadata {
 impl SegmentMetadata {
     pub(crate) const WIRE_SIZE: usize = 36;
 
+    pub(crate) fn same_machine(self, peer: Self) -> bool {
+        let machine = |segment: Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
+        machine(self)
+            .zip(machine(peer))
+            .is_some_and(|(a, b)| a == b)
+    }
+
     pub(crate) fn encode(&self, bytes: &mut [u8]) {
         bytes.fill(0);
         bytes[0] = u8::from(self.rdma)
@@ -80,21 +93,30 @@ impl SegmentMetadata {
             | (u8::from(self.nvlink.is_some()) << 2);
         if let Some(identity) = self.nvlink {
             identity.encode(&mut bytes[4..]);
+        } else if let Some(boot) = self.boot {
+            bytes[0] |= 8;
+            bytes[4..20].copy_from_slice(&boot.0);
         }
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::WIRE_SIZE
-            || bytes[0] & !7 != 0
+            || bytes[0] & !15 != 0
+            || bytes[0] & 12 == 12
             || bytes[1..4].iter().any(|b| *b != 0)
-            || (bytes[0] & 4 == 0 && bytes[4..].iter().any(|b| *b != 0))
+            || (bytes[0] & 12 == 0 && bytes[4..20].iter().any(|b| *b != 0))
+            || (bytes[0] & 4 == 0 && bytes[20..].iter().any(|b| *b != 0))
+            || (bytes[0] & 12 != 0 && bytes[4..20] == [0; 16])
+            || (bytes[0] & 4 != 0 && bytes[20..] == [0; 16])
         {
             return Err(Error::Protocol("invalid segment capabilities"));
         }
+        let identity = ProcessIdentity::decode(&bytes[4..]);
         Ok(Self {
+            boot: (bytes[0] & 12 != 0).then_some(identity.machine),
             rdma: bytes[0] & 1 != 0,
             remote_staging: bytes[0] & 2 != 0,
-            nvlink: (bytes[0] & 4 != 0).then(|| ProcessIdentity::decode(&bytes[4..])),
+            nvlink: (bytes[0] & 4 != 0).then_some(identity),
         })
     }
 }

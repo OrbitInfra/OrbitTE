@@ -135,9 +135,16 @@ pub(crate) fn rdma_fixture_with_runtime(
 
 #[cfg(feature = "rdma")]
 pub(crate) fn rdma_fixture_with_config(
-    runtime: crate::transport::rdma::RdmaTransport,
+    mut runtime: crate::transport::rdma::RdmaTransport,
     config: EngineConfig,
 ) -> TransferEngine {
+    if config
+        .selector
+        .as_ref()
+        .is_some_and(|s| !s.qp_pools.is_empty() || s.qp_mul_factor.is_some())
+    {
+        runtime.qp_layout = Some(Arc::new(TransferEngine::qp_layout(&config).unwrap()));
+    }
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
         metadata: SegmentMetadata {
@@ -188,12 +195,13 @@ pub(crate) fn rdma_fixture_with_config(
             .transpose()
             .unwrap(),
         runtime_queue,
-        selector: config
-            .selector
-            .as_ref()
-            .map(TransportSelector::new)
-            .transpose()
-            .unwrap(),
+        selector: TransferEngine::compile_selector(
+            &config,
+            &TransferEngine::qp_layout(&config).unwrap(),
+            #[cfg(feature = "rdma")]
+            source.rdma.as_deref(),
+        )
+        .unwrap(),
         config,
         source,
         control,
@@ -1128,12 +1136,13 @@ pub(crate) fn staging_fixture(
             .transpose()
             .unwrap(),
         runtime_queue,
-        selector: config
-            .selector
-            .as_ref()
-            .map(TransportSelector::new)
-            .transpose()
-            .unwrap(),
+        selector: TransferEngine::compile_selector(
+            &config,
+            &TransferEngine::qp_layout(&config).unwrap(),
+            #[cfg(feature = "rdma")]
+            source.rdma.as_deref(),
+        )
+        .unwrap(),
         config,
         source,
         control,

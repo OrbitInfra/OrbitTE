@@ -74,6 +74,7 @@ pub struct RdmaConfig {
     pub progress_mode: RdmaProgressMode,
     /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
     pub num_lanes: usize,
+    pub service_level: u8,
     pub traffic_class: u8,
     pub hop_limit: u8,
     /// Aggregate physical QP limit, independent of grant concurrency.
@@ -120,6 +121,7 @@ impl Default for RdmaConfig {
             slot_rotation_interval: Duration::from_millis(2),
             progress_mode: RdmaProgressMode::Polling,
             num_lanes: 1,
+            service_level: 0,
             traffic_class: 0,
             hop_limit: 1,
             max_endpoints: 64,
@@ -187,6 +189,7 @@ impl RdmaConfig {
             || self.device_mask == 0
             || !(1..=64).contains(&self.num_lanes)
             || self.port == Some(0)
+            || self.service_level > 15
             || self.hop_limit == 0
             || self.max_cached_mrs == 0
             || self.max_cached_mr_bytes == 0

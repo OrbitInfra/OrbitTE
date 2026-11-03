@@ -21,10 +21,10 @@ class InstalledHostEvidence(unittest.TestCase):
                     for index, name in enumerate(self.profile['rails'])]
             rows += [('ORBITTE_INSTALLED_ROUND ', dict(phase=0, round=index, opened_qps=6, closed_qps=0,
                      reused_qps=index * 96, completed_grants=(index + 1) * 96,
-                     opened_mrs=4, read_bytes=(index + 1) * 16 * self.case['payload']
+                     opened_mrs=4, read_bytes=(index + 1) * self.case['parents'] * self.case['payload']
                      if role == 'requester' else 0, write_bytes=0)) for index in range(3)]
             rows += [('ORBITTE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL,
-                     status='passed', role=role, operation='read', parents=16,
+                     status='passed', role=role, operation='read', parents=self.case['parents'],
                      payload=self.case['payload'], rounds=3,
                      full_bytes_and_guards=True, locally_drained=True))]
             result[role] = {'stdout.log': '\n'.join(prefix + json.dumps(row) for prefix, row in rows),
@@ -49,6 +49,24 @@ class InstalledHostEvidence(unittest.TestCase):
             change(evidence['source'])
             with self.subTest(control=name), self.assertRaises(ValueError):
                 installed.verify(self.profile, self.case, evidence)
+
+    def test_selector_gate_requires_exact_pool_indices_and_per_rail_bytes(self):
+        self.case.update(mode='installed-selector', parents=1, num_lanes=1)
+        evidence = self.evidence()
+        for role, result in evidence.items():
+            result['stdout.log'] = result['stdout.log'].replace('"opened_qps": 6', '"opened_qps": 1')
+            for r in range(3):
+                for i, name in enumerate(self.profile['rails']):
+                    count = (r + 1) * self.case['payload'] if role == 'requester' and i == 0 else 0
+                    row = dict(round=r, nic=name, indices=1, bytes=count)
+                    result['stdout.log'] += '\nORBITTE_SELECTOR ' + json.dumps(row)
+        installed.verify(self.profile, self.case, evidence)
+        for key, value in [('indices', 2), ('bytes', 1)]:
+            bad = copy.deepcopy(evidence)
+            log = bad['source']['stdout.log']
+            bad['source']['stdout.log'] = log.replace(f'"{key}": ' + str(1 if key == 'indices' else 0), f'"{key}": {value}')
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                installed.verify(self.profile, self.case, bad)
 
     def test_profile_cannot_expand_hardware_or_memory_scope(self):
         for invalid in [dict(parents=True), dict(parents=33), dict(payload=64 << 20),

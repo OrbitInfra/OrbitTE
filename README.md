@@ -31,7 +31,10 @@ and worker boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Updates
 
-- **Nov 3, 2026** — TENT-style transport selection picks NVLink, RDMA or TCP
+- **Nov 3, 2026**: Local file segments support DRAM transfers through io_uring,
+  CUDA staging through pinned DRAM, and GDS through cuFile. The DRAM path is
+  qualified on ext4 and tmpfs in CI. [Local storage](docs/storage.md)
+- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
   per request.
 - **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
   receiver credit windows.

@@ -101,7 +101,11 @@ impl ProxyManager {
                     gpu.with_staging(base, request.length, self, width, None, |copy, leases| {
                         let mut slots = Vec::with_capacity(width);
                         let built = leases.into_iter().try_for_each(|lease| {
-                            slots.push(PinnedStage::new(lease, source, request.transport)?);
+                            slots.push(PinnedStage::new(
+                                lease,
+                                source,
+                                request.selection.transport,
+                            )?);
                             Ok(())
                         });
                         let mut stages = StageBufferCache::Cuda { copy, slots };
@@ -115,7 +119,7 @@ impl ProxyManager {
                     let mut stages = StageBufferCache::Host(StageRegistration::new(
                         host,
                         source,
-                        request.transport,
+                        request.selection.transport,
                     )?);
                     let result = transfer(&mut stages);
                     stages.finish(result)

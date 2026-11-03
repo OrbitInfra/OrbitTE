@@ -124,6 +124,7 @@ impl RdmaEndpoint {
     pub(super) fn reserve(
         self: &Arc<Self>,
         remote: Option<ConnectionId>,
+        slot: Option<usize>,
     ) -> Result<Option<Construction>> {
         let mut qps = self.lock()?;
         Self::reclaim(&mut qps)?;
@@ -131,7 +132,11 @@ impl RdmaEndpoint {
         if remote.is_some() && qps.iter().flatten().any(|qp| qp.remote == remote) {
             return Ok(None);
         }
-        let Some(index) = qps.iter().position(Option::is_none) else {
+        let Some(index) = qps
+            .iter()
+            .enumerate()
+            .position(|(i, qp)| slot.is_none_or(|s| s == i) && qp.is_none())
+        else {
             return Ok(None);
         };
         let token = Arc::new(());
@@ -186,12 +191,18 @@ impl RdmaEndpoint {
         Ok(qps.iter().all(Option::is_none))
     }
 
-    pub(super) fn candidates(&self, matches: &impl Fn(&Peer) -> bool) -> Result<Vec<Candidate>> {
+    pub(super) fn candidates(
+        &self,
+        slot: Option<usize>,
+        matches: &impl Fn(&Peer) -> bool,
+    ) -> Result<Vec<Candidate>> {
         let qps = self.lock()?;
         Ok(qps
             .iter()
-            .flatten()
-            .filter_map(|qp| {
+            .enumerate()
+            .filter(|(i, _)| slot.is_none_or(|s| s == *i))
+            .filter_map(|(_, qp)| {
+                let qp = qp.as_ref()?;
                 let peer = qp.peer?;
                 let record = qp.record.as_ref()?;
                 if !matches(&peer) || record.connection.require_live().is_err() {

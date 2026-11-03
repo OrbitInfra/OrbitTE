@@ -12,6 +12,8 @@ pub(super) mod admission;
 pub(super) mod construction;
 
 pub(super) struct GrantLease {
+    pub(super) qp_index: Option<usize>,
+    pub(super) policy_worker: Option<super::workers::SliceLease>,
     pub(super) _credit: admission::GrantCredit,
     pub(super) _selection: super::quota::DeviceLease,
     pub(super) usage: Arc<Mutex<RdmaStats>>,
@@ -469,12 +471,26 @@ impl RdmaGrant {
         }
         let device = Arc::clone(&connection.device);
         let local = connection.local;
-        if let Err(error) = device.connect(&mut connection.handles, &local, remote, &self.config) {
+        let link_qos = connection.link_qos;
+        if let Err(error) = device.connect(
+            &mut connection.handles,
+            &local,
+            remote,
+            link_qos,
+            self.config.hop_limit,
+        ) {
             drop(state);
             device.asynchronous.notify();
             return Err(error);
         }
         connection.remote = Some(*remote);
+        if let (Some(index), Some(lease)) = (connection.qp_index, &connection.lease) {
+            lease
+                .usage
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .connected_pool_indices |= 1u64 << index;
+        }
         state.phase = Phase::Connected;
         Ok(())
     }

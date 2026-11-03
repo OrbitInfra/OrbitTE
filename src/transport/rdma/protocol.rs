@@ -9,7 +9,7 @@ use crate::runtime::control_plane::{ControlChannel, REQUEST_SIZE, Request, u64_a
 use crate::{Error, Result, SourceEpoch};
 
 pub(super) const IDENTITY_SIZE: usize = 40;
-pub(super) const HELLO_SIZE: usize = 2 + 2 * IDENTITY_SIZE + 16 + 8;
+pub(super) const HELLO_SIZE: usize = 3 + 2 * IDENTITY_SIZE + 16 + 8;
 pub(super) const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE + 1;
 pub(super) const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8 + 1;
 const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
@@ -65,6 +65,7 @@ pub(super) struct Hello {
     pub(super) expected_domain: [u8; 16],
     pub(super) direct: bool,
     pub(super) qp_width: usize,
+    pub(super) qp_index: Option<usize>,
     /// Last observed grant on this pair; it is a lower bound, not an exclusive claim.
     pub(super) previous_grant: u64,
 }
@@ -79,6 +80,11 @@ impl Hello {
         }
         bytes[1 + 2 * IDENTITY_SIZE] =
             u8::try_from(self.qp_width).map_err(|_| Error::Protocol("RDMA bootstrap QP width"))?;
+        bytes[2 + 2 * IDENTITY_SIZE] = match self.qp_index {
+            None => 0,
+            Some(i) if i < 64 => i as u8 + 1,
+            Some(_) => return Err(Error::Protocol("RDMA bootstrap QP index")),
+        };
         bytes[HELLO_SIZE - 24..HELLO_SIZE - 8].copy_from_slice(&self.expected_domain);
         bytes[HELLO_SIZE - 8..].copy_from_slice(&self.previous_grant.to_be_bytes());
         Ok(bytes)
@@ -94,6 +100,11 @@ impl Hello {
         if qp_width > 64 || (bytes[0] & 1 == 0 && qp_width != 0) {
             return Err(Error::Protocol("RDMA bootstrap QP width"));
         }
+        let index = bytes[2 + 2 * IDENTITY_SIZE];
+        if index > 64 || (qp_width != 0 && usize::from(index) > qp_width) {
+            return Err(Error::Protocol("RDMA bootstrap QP index"));
+        }
+        let qp_index = index.checked_sub(1).map(usize::from);
         let requester = Identity::decode(&bytes[1..1 + IDENTITY_SIZE])?;
         let source_bytes = &bytes[1 + IDENTITY_SIZE..1 + 2 * IDENTITY_SIZE];
         let source = if bytes[0] & 2 != 0 {
@@ -128,6 +139,7 @@ impl Hello {
             expected_domain,
             direct: bytes[0] & 1 != 0,
             qp_width,
+            qp_index,
             previous_grant,
         })
     }

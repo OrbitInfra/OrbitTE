@@ -10,6 +10,10 @@ pub enum Error {
     /// JSON syntax/schema diagnostics, including the offending QoS field.
     InvalidQosConfig(String),
     InvalidSelectorConfig(String),
+    TransportPolicy {
+        policy: crate::PolicyName,
+        reason: &'static str,
+    },
     BatchBusy,
     BatchClosed,
     BatchOpen,
@@ -68,6 +72,10 @@ impl Error {
             Self::Unavailable(msg) => Self::Unavailable(msg),
             Self::Protocol(msg) => Self::Protocol(msg),
             Self::Internal(msg) => Self::Internal(msg),
+            Self::TransportPolicy { policy, reason } => Self::TransportPolicy {
+                policy: policy.clone(),
+                reason,
+            },
             Self::InvalidSelectorConfig(msg) => Self::InvalidSelectorConfig(msg.clone()),
             Self::InvalidQosConfig(msg) => Self::InvalidQosConfig(msg.clone()),
             Self::Unquiesced { operation, code } => Self::Unquiesced {
@@ -91,6 +99,9 @@ impl fmt::Display for Error {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid configuration: {message}"),
             Self::InvalidQosConfig(message) => write!(f, "invalid QoS configuration: {message}"),
+            Self::TransportPolicy { policy, reason } => {
+                write!(f, "transport policy {}: {reason}", policy.as_str())
+            }
             Self::InvalidSelectorConfig(message) => {
                 write!(f, "invalid selector configuration: {message}")
             }

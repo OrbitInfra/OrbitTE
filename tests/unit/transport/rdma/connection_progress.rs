@@ -41,7 +41,7 @@ fn pending_acquisition_preserves_the_canonical_array_and_never_reserves_extra_qp
         let device = runtime.device().unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut builder = runtime
-            .connecting(Arc::clone(&device), key(), width, None)
+            .connecting(Arc::clone(&device), key(), width, None, None)
             .unwrap();
         let mut reservations = Vec::new();
         for _ in 0..width {
@@ -52,7 +52,7 @@ fn pending_acquisition_preserves_the_canonical_array_and_never_reserves_extra_qp
             reservations.push(slot);
         }
         let mut waiter = runtime
-            .connecting(Arc::clone(&device), key(), width, None)
+            .connecting(Arc::clone(&device), key(), width, None, None)
             .unwrap();
         assert!(Arc::ptr_eq(&waiter.endpoint, &builder.endpoint));
         for _ in 0..64 {
@@ -64,7 +64,7 @@ fn pending_acquisition_preserves_the_canonical_array_and_never_reserves_extra_qp
         ));
         drop(waiter);
         assert!(
-            builder.endpoint.reserve(None).unwrap().is_none(),
+            builder.endpoint.reserve(None, None).unwrap().is_none(),
             "waiter must not cancel builders"
         );
         let stats = runtime.stats().unwrap();
@@ -78,7 +78,9 @@ fn pending_acquisition_preserves_the_canonical_array_and_never_reserves_extra_qp
         );
         // Canonical lookup survives both a pending waiter and an unbound rollback.
         drop(reservations);
-        let mut retry = runtime.connecting(device, key(), width, None).unwrap();
+        let mut retry = runtime
+            .connecting(device, key(), width, None, None)
+            .unwrap();
         assert!(Arc::ptr_eq(&retry.endpoint, &builder.endpoint));
         let Some(Connection::Fresh(Some(slot))) = retry.poll(&runtime, deadline).unwrap() else {
             panic!("rolled-back slot was not reusable");
@@ -271,8 +273,13 @@ mod staging {
             self.polls.load(Ordering::Acquire)
         }
         pub(crate) fn assert_held(&self) {
-            assert!(self.endpoint.candidates(&|_| true).unwrap().is_empty());
-            assert!(self.endpoint.reserve(None).unwrap().is_none());
+            assert!(
+                self.endpoint
+                    .candidates(None, &|_| true)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(self.endpoint.reserve(None, None).unwrap().is_none());
         }
     }
 
@@ -311,10 +318,11 @@ mod staging {
                 },
                 1,
                 None,
+                None,
             )
             .unwrap();
         let endpoint = connecting.endpoint;
-        let reservation = endpoint.reserve(None).unwrap().unwrap();
+        let reservation = endpoint.reserve(None, None).unwrap().unwrap();
         let polls = Arc::new(AtomicUsize::new(0));
         assert!(
             OBSERVERS

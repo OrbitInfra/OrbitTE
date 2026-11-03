@@ -530,7 +530,7 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
                 8 => entry[26] = 1, // Host memory cannot authorize CUDA IPC export.
                 9 => entry[26] = 2,
                 10 => payload[4] = 8,
-                11 => payload[8] = 1, // Identity bytes require the NVLink capability.
+                11 => payload[8] = 1, // Boot bytes require an advertised placement identity.
                 // A pre-selector peer can send the same header with the old Describe layout.
                 12 => drop(payload.drain(4..DESCRIPTOR_HEADER)),
                 _ => {}

@@ -621,6 +621,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
             source: None,
             expected_domain: paths[0].domain,
             direct: true,
+            qp_index: None,
             qp_width: 1,
             previous_grant: 0,
         }
@@ -732,6 +733,7 @@ fn invalid_rendezvous_and_unknown_cached_pair_never_create_new_authority() {
             source: None,
             expected_domain: domain,
             direct: true,
+            qp_index: None,
             qp_width: 1,
             previous_grant: 0,
         };
@@ -994,6 +996,7 @@ fn a_real_idle_source_pair_requires_both_identities_last_grant_and_operation() {
             }),
             expected_domain: peer.connection.domain,
             direct: true,
+            qp_index: None,
             qp_width: 1,
             previous_grant: peer.generation,
         };
@@ -1146,7 +1149,7 @@ fn unattached_shared_claim_cannot_evict_or_fence_a_live_sibling() {
         let end = deadline(TIMEOUT).unwrap();
         let mut active = if attached {
             let cached = runtime
-                .claim(runtime.device().unwrap(), |peer| !peer.source, end)
+                .claim(runtime.device().unwrap(), |peer| !peer.source, None, end)
                 .unwrap()
                 .unwrap();
             Some(
@@ -1162,7 +1165,7 @@ fn unattached_shared_claim_cannot_evict_or_fence_a_live_sibling() {
             .snapshot()
             .unwrap()
             .remove(0);
-        let (lane, record, peer) = owner.candidates(&|_| true).unwrap().remove(0);
+        let (lane, record, peer) = owner.candidates(None, &|_| true).unwrap().remove(0);
         let placeholder = lane.share(&record, peer, end).unwrap();
         assert_eq!(runtime.stats().unwrap().idle_endpoints, 0);
         assert!(

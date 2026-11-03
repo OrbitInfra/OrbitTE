@@ -26,7 +26,9 @@ pub(super) fn subbatch_len(
     let mut end = start + first.length;
     let mut count = 1;
     for request in &requests[1..] {
-        if request.transport != Transport::Nvlink
+        // S8 coalescing must preserve policy binding and intent as well as source authority.
+        if request.selection != first.selection
+            || request.selection.transport != Transport::Nvlink
             || request.remote.id != first.remote.id
             || context(request).ok() != Some(first_context)
         {

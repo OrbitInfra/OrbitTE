@@ -22,6 +22,17 @@ pub(crate) fn events(runtime: &RdmaTransport) -> Arc<Mutex<Vec<&'static str>>> {
     Arc::clone(&unsafe { &*resources.handles.context.cast::<FakeDevice>() }.events)
 }
 
+pub(crate) fn link_qos(runtime: &RdmaTransport, id: usize) -> Vec<(u8, u8)> {
+    let owner = runtime.device_at(id).unwrap();
+    let state = owner.state.lock().unwrap();
+    let State::Open(resources) = &*state else {
+        panic!("device is not open");
+    };
+    // SAFETY: The locked fixture context owns its boxed fake device during the snapshot.
+    let device = unsafe { &*resources.handles.context.cast::<FakeDevice>() };
+    device.link_qos.lock().unwrap().clone()
+}
+
 #[cfg(feature = "cuda")]
 pub(crate) fn after_open(runtime: &RdmaTransport, hook: impl FnOnce() + Send + 'static) {
     let owner = runtime.device().unwrap();

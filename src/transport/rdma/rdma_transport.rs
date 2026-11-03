@@ -1,5 +1,6 @@
 //! RDMA transport entry points: registration, parent dispatch and source serving.
 
+use crate::runtime::transport_selector::{SelectionResult, qp_pools::QpLayout};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -25,6 +26,7 @@ use crate::{
 pub(crate) struct RdmaTransport {
     #[cfg(feature = "cuda")]
     pub(crate) proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
+    pub(crate) qp_layout: Option<Arc<QpLayout>>,
     pub(super) config: RdmaConfig,
     pub(super) usage: Arc<Mutex<RdmaStats>>,
     pub(super) counters: Arc<events::Counters>,
@@ -61,6 +63,7 @@ impl ParentAdmission {
 impl RdmaTransport {
     pub(crate) fn new(
         config: RdmaConfig,
+        qp_layout: Option<Arc<QpLayout>>,
         #[cfg(feature = "cuda")] proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
     ) -> Result<Arc<Self>> {
         config.validate()?;
@@ -71,6 +74,7 @@ impl RdmaTransport {
             #[cfg(feature = "cuda")]
             proxy,
             config,
+            qp_layout,
             usage,
             counters: Arc::default(),
             workers: Arc::default(),
@@ -80,6 +84,110 @@ impl RdmaTransport {
             drained: Arc::default(),
             registrations,
         }))
+    }
+
+    fn qp_width(&self) -> usize {
+        self.qp_layout
+            .as_ref()
+            .map_or(self.config.num_lanes, |layout| layout.width)
+    }
+
+    fn peer_width(&self, advertised: usize) -> Result<usize> {
+        if self.qp_layout.is_some() && advertised != 0 && advertised != self.qp_width() {
+            return Err(Error::Protocol("RDMA peer QP pool width mismatch"));
+        }
+        Ok(advertised.min(self.qp_width()))
+    }
+
+    fn route_grant(
+        &self,
+        grant: &mut super::grant::GrantLease,
+        selection: &SelectionResult,
+    ) -> Result<()> {
+        let Some(layout) = &self.qp_layout else {
+            return Ok(());
+        };
+        let device = self.device_at(grant._selection.device_id())?;
+        let (lane, worker) = self.workers.select(&self.cq_list(device)?)?;
+        let candidate = lane
+            .worker_id
+            .get()
+            .ok_or(Error::Internal("RDMA candidate has no worker"))?;
+        let range = selection.qp_pool.unwrap_or_else(|| layout.range(None));
+        grant.qp_index = Some(range.index(*candidate as i32));
+        grant.policy_worker = Some(worker);
+        Ok(())
+    }
+
+    pub(crate) fn policy_devices(&self) -> Result<Vec<String>> {
+        let mut contexts = self
+            .context_set
+            .lock()
+            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+        match self.initialize_contexts(&mut contexts) {
+            Ok(()) => (),
+            Err(Error::Unavailable(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        }
+        Ok(contexts
+            .topology
+            .as_ref()
+            .ok_or(Error::Internal("missing RDMA topology"))?
+            .nic_list
+            .iter()
+            .map(|nic| nic.name.clone())
+            .collect())
+    }
+
+    pub(crate) fn check_policy_paths(
+        &self,
+        location: Option<crate::MemoryLocation>,
+        selection: &SelectionResult,
+    ) -> Result<()> {
+        let contexts = self
+            .context_set
+            .lock()
+            .map_err(|_| Error::Internal("RDMA context set lock poisoned"))?;
+        let eligible = contexts.selector.as_ref().map_or(0, |devices| {
+            self.config.device_mask
+                & selection.device_mask
+                & location.map_or(u64::MAX, |loc| {
+                    devices
+                        .priority(
+                            self.config
+                                .preferred_numa_node
+                                .map_or(loc, |node| crate::MemoryLocation::Cpu(Some(node))),
+                        )
+                        .eligible
+                })
+        });
+        if contexts.slots.iter().enumerate().any(|(i, slot)| {
+            eligible & (1u64 << i) != 0
+                && slot
+                    .owner
+                    .as_ref()
+                    .is_some_and(|nic| nic.asynchronous.check().is_ok())
+        }) {
+            Ok(())
+        } else {
+            Err(selection.rejected("device mask excludes every eligible RDMA NIC"))
+        }
+    }
+
+    fn request_paths(
+        &self,
+        location: crate::MemoryLocation,
+        selection: &SelectionResult,
+    ) -> Result<Vec<path::NicPath>> {
+        let mut paths = self.paths(location).map_err(|error| match error {
+            Error::Unavailable(reason) => selection.rejected(reason),
+            other => other,
+        })?;
+        paths.retain(|p| selection.device_mask & (1u64 << p.nic_id) != 0);
+        if paths.is_empty() {
+            return Err(selection.rejected("device mask excludes every eligible RDMA NIC"));
+        }
+        Ok(paths)
     }
 
     pub(crate) fn register_memory(
@@ -222,8 +330,8 @@ impl RdmaTransport {
         let mut effect = RemoteEffect::None;
         let result = (|| {
             let location = request.local.location()?.location;
-            let local_paths = self.paths(location)?;
-            if (local_paths.len() > 1 || self.config.num_lanes > 1)
+            let local_paths = self.request_paths(location, &request.selection)?;
+            if (local_paths.len() > 1 || self.qp_width() > 1)
                 && plan_rdma_slices(request.length, self.config.block_size, 64)?.1 > 1
             {
                 let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
@@ -243,20 +351,23 @@ impl RdmaTransport {
             // A recovered peer can discard every cached QP in this array.
             // Each miss closes one stale pair before another bootstrap; no
             // payload has been submitted and the original deadline still applies.
-            for _ in 0..=self.config.num_lanes {
+            for _ in 0..=self.qp_width() {
                 let mut channel = ControlChannel::connect(peer.endpoint, deadline)?;
                 channel.write_all(&wire.encode())?;
                 let (mut remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
+                let width = self.peer_width(remote_width)?;
                 let mut paths = local_paths.clone();
                 if let Some((local, remote)) = pinned {
                     paths.retain(|path| path.domain == local);
                     remote_paths.retain(|path| path.domain == remote);
                 }
-                let selection = self.allocate(
-                    request.length,
-                    location,
-                    path::local_device_mask(&paths, &remote_paths),
-                )?;
+                let mask = path::local_device_mask(&paths, &remote_paths);
+                if mask == 0 {
+                    return Err(request
+                        .selection
+                        .rejected("no permitted NIC has a compatible peer path"));
+                }
+                let selection = self.allocate(request.length, location, mask)?;
                 let local = paths
                     .iter()
                     .find(|path| path.nic_id == selection.device_id())
@@ -268,8 +379,12 @@ impl RdmaTransport {
                     request.clone(),
                     epoch,
                     remote.clone(),
-                    self.reserve_grant(selection, &request.local, &credits)?,
-                    remote_width.min(self.config.num_lanes),
+                    {
+                        let mut lease = self.reserve_grant(selection, &request.local, &credits)?;
+                        self.route_grant(&mut lease, &request.selection)?;
+                        lease
+                    },
+                    width,
                 );
                 let Some(mut slice) = self.requester_slice(&mut channel, setup)? else {
                     continue;
@@ -377,7 +492,7 @@ impl RdmaTransport {
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
         let qp_width = if self.direct(memory) && !memory.is_cuda() {
-            self.config.num_lanes
+            self.qp_width()
         } else {
             0
         };

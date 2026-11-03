@@ -32,6 +32,8 @@ mod memory;
 mod resources;
 #[path = "rdma_host/restart.rs"]
 mod restart;
+#[path = "rdma_host/selector.rs"]
+mod selector;
 
 use resources::{close, create, idle, maps};
 
@@ -46,6 +48,7 @@ fn number(name: &str) -> Result<usize> {
 }
 
 struct Case {
+    selector: bool,
     source: bool,
     read: bool,
     parents: usize,
@@ -60,6 +63,7 @@ struct Case {
 impl Case {
     fn load() -> Result<Self> {
         let case = Self {
+            selector: env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-selector",
             source: match env::var("ORBITTE_SHARED_ROLE")?.as_str() {
                 "source" => true,
                 "requester" => false,
@@ -279,6 +283,23 @@ fn rounds(
                         (case, engine, memory, segment, &start);
                     joins.push(scope.spawn(move || -> Result<()> {
                         start.wait();
+                        let request = TransferRequest::new(
+                            Transport::Rdma,
+                            memory.base_address()
+                                + (parent * case.bank()
+                                    + if case.read { case.destination() } else { GUARD })
+                                    as u64,
+                            remote
+                                + (parent * case.bank()
+                                    + if case.read { GUARD } else { case.destination() })
+                                    as u64,
+                            case.payload,
+                        );
+                        let request = if case.selector {
+                            selector::request(case, request)?
+                        } else {
+                            request
+                        };
                         let report = engine.submit_and_wait(
                             if case.read {
                                 TransferOp::Read
@@ -286,18 +307,7 @@ fn rounds(
                                 TransferOp::Write
                             },
                             segment,
-                            &[TransferRequest::new(
-                                Transport::Rdma,
-                                memory.base_address()
-                                    + (parent * case.bank()
-                                        + if case.read { case.destination() } else { GUARD })
-                                        as u64,
-                                remote
-                                    + (parent * case.bank()
-                                        + if case.read { GUARD } else { case.destination() })
-                                        as u64,
-                                case.payload,
-                            )],
+                            &[request],
                             TIMEOUT,
                         )?;
                         if report.failure.is_some()
@@ -333,6 +343,14 @@ fn rounds(
         if let Some(index) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
             return Err(format!("byte/sentinel mismatch at round {round}, byte {index}").into());
         }
+        if case.selector {
+            selector::evidence(case, engine, round)?;
+        }
+        let active_rails = if case.selector {
+            1
+        } else {
+            case.mask.count_ones() as usize
+        };
         if stats.opened_devices != 2
             || stats.persistent_mrs != 4
             || stats.opened_persistent_mrs != 4
@@ -347,7 +365,7 @@ fn rounds(
             || stats.retained_grants != 0
             || stats.progress_failures != baseline.progress_failures
             || stats.progress_recoveries != baseline.progress_recoveries
-            || stats.progress_lanes != case.mask.count_ones() as usize * case.lanes
+            || stats.progress_lanes != active_rails * case.lanes
             || stats.active_cqs != 2 * stats.progress_lanes
             || stats.staging_bytes != 0
         {
@@ -406,7 +424,7 @@ fn main() -> Result<()> {
         | "installed-cleanup-failure" => restart::run(&case),
         "installed-inflight-dma" => inflight::run(&case),
         "installed-memory-cleanup" => memory::run(&case),
-        "installed-host" | "installed-rail-accounting" => {
+        "installed-host" | "installed-rail-accounting" | "installed-selector" => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;
             let (engine, memory) = create(&case, bind)?;
             let mut stream = control(case.source, bind, None)?;

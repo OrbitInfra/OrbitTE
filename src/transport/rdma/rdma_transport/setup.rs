@@ -81,7 +81,8 @@ impl RdmaSetup {
             wire,
             epoch,
             concurrency,
-            local_paths: transport.paths(request.local.location()?.location)?,
+            local_paths: transport
+                .request_paths(request.local.location()?.location, &request.selection)?,
             remote_paths: Vec::new(),
             remote_width: 0,
             phase: Phase::Request,
@@ -135,6 +136,7 @@ impl RdmaSetup {
             }
             Phase::Paths => {
                 (self.remote_paths, self.remote_width) = path::decode_paths(&self.bytes)?;
+                self.remote_width = transport.peer_width(self.remote_width)?;
                 self.bytes.resize(1, 0);
                 Phase::Window
             }
@@ -162,7 +164,7 @@ impl RdmaSetup {
             }
             Phase::Prepare => {
                 if let Some(entry) = self.plan.front_mut() {
-                    if self.retries > self.remote_width.min(transport.config.num_lanes) {
+                    if self.retries > self.remote_width {
                         return Err(Error::Protocol("RDMA repeated slice cache miss"));
                     }
                     let child = PreparedTransfer {
@@ -170,7 +172,7 @@ impl RdmaSetup {
                         priority: self.request.priority,
                         #[cfg(feature = "cuda")]
                         remote_staging: false,
-                        transport: self.request.transport,
+                        selection: self.request.selection.clone(),
                         local: self.request.local.clone(),
                         local_offset: self.request.local_offset + entry.range.offset,
                         remote: self.request.remote,
@@ -196,20 +198,21 @@ impl RdmaSetup {
                             1u64 << entry.local_id,
                         )?,
                     };
-                    let lease = transport.reserve_grant(
+                    let mut lease = transport.reserve_grant(
                         selection,
                         &child.local,
                         self.credits
                             .as_ref()
                             .ok_or(Error::Internal("missing parent grant credits"))?,
                     )?;
+                    transport.route_grant(&mut lease, &child.selection)?;
                     self.active = Some(RequesterSetup::new(
                         wire,
                         child,
                         self.epoch,
                         entry.remote.clone(),
                         lease,
-                        self.remote_width.min(transport.config.num_lanes),
+                        self.remote_width,
                     ));
                     Phase::Slice
                 } else {
@@ -310,6 +313,12 @@ impl RdmaSetup {
             .try_reserve_exact(count)
             .map_err(|_| Error::ResourceExhausted)?;
         let mask = path::local_device_mask(&self.local_paths, &self.remote_paths);
+        if mask == 0 {
+            return Err(self
+                .request
+                .selection
+                .rejected("no permitted NIC has a compatible peer path"));
+        }
         let location = self.request.local.location()?.location;
         let allocation =
             transport.allocate_slices(self.request.length, block, count, location, mask)?;

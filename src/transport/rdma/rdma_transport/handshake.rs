@@ -93,6 +93,8 @@ impl RdmaTransport {
                 usage.staging_bytes = bytes;
             }
             Ok(GrantLease {
+                qp_index: None,
+                policy_worker: None,
                 _credit: credit,
                 usage: Arc::clone(&self.usage),
                 length,
@@ -171,8 +173,15 @@ impl RdmaTransport {
         }
         let remote_mr = self.direct(memory) && memory.is_cuda();
         let cacheable = hello.direct && self.direct(memory) && !remote_mr;
-        if cacheable != (hello.qp_width != 0) || hello.qp_width > self.config.num_lanes {
+        if cacheable != (hello.qp_width != 0) || hello.qp_width > self.qp_width() {
             return Err(Error::Protocol("RDMA bootstrap QP width/profile mismatch"));
+        }
+        let indexed = self.qp_layout.is_some();
+        if indexed != hello.qp_index.is_some()
+            || hello.qp_index.is_some_and(|i| i >= self.qp_width())
+            || (indexed && cacheable && hello.qp_width != self.qp_width())
+        {
+            return Err(Error::Protocol("RDMA endpoint QP pool layout mismatch"));
         }
         let mask = paths
             .iter()
@@ -185,7 +194,8 @@ impl RdmaTransport {
         }
         let selection = self.allocate(length, memory.location()?.location, mask)?;
         let source_nic_id = selection.device_id();
-        let grant_lease = self.reserve_grant(selection, memory, &admission.grants)?;
+        let mut grant_lease = self.reserve_grant(selection, memory, &admission.grants)?;
+        grant_lease.qp_index = hello.qp_index;
         let device = self.device_at(source_nic_id)?;
         device.check_address()?;
         let connection = if let Some(source) = hello.source {
@@ -203,6 +213,7 @@ impl RdmaTransport {
                         && peer.operation == operation
                         && peer.generation >= hello.previous_grant
                 },
+                hello.qp_index,
                 channel.deadline,
             )?;
             let Some(reuse) = reuse else {
@@ -231,6 +242,7 @@ impl RdmaTransport {
                 },
                 hello.qp_width,
                 Some(hello.requester.connection),
+                hello.qp_index,
                 channel.deadline,
             )?
         } else {

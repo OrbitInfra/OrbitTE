@@ -75,6 +75,8 @@ pub struct RdmaStats {
     pub active_endpoints: usize,
     pub idle_endpoints: usize,
     pub opened_connections: u64,
+    /// Endpoint pool indices on which a native RC connection reached RTS.
+    pub connected_pool_indices: u64,
     pub closed_connections: u64,
     pub reused_connections: u64,
     pub evicted_connections: u64,

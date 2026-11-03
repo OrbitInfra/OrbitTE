@@ -48,7 +48,7 @@ behind every hardware result.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Transport selection | Implemented | First-match memory, file, size and priority rules with strict hints. Named request selection, intents, device and QP-pool filters remain open. See [transport selection](transport-selection.md) |
+| Transport selection | Implemented | First-match and named rules consume intent, boot identity, priority and size. RDMA dispatch honors per-request NIC masks and endpoint QP pools. Physical routing awaits the installed two-RNIC gate. See [transport selection](transport-selection.md) |
 | Discovery, port recovery and multirail slicing | Accepted (RoCE) | Automatic discovery matches a separate host inventory; two-rail accounting verifies exact bytes. Physical loss is unqualified |
 | CUDA topology, custom priority matrices, bandwidth-aware rails | Implemented | Installed routing and throughput are unqualified. See [bandwidth-aware selection](rdma-cuda.md#bandwidth-aware-rdma-selection) |
 | Request priority and NIC arbitration | Implemented | RDMA orders High/Medium/Low with aging and opt-in deadline urgency; TCP and NVLink treat priority as advisory. See [priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration) |

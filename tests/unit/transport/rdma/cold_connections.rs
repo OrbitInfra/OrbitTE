@@ -143,6 +143,7 @@ fn failed_cold_accept_rolls_back_its_slot_before_retry() {
             source: None,
             expected_domain: paths[0].domain,
             direct: true,
+            qp_index: None,
             qp_width: width,
             previous_grant: 0,
         }

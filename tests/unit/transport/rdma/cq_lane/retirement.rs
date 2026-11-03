@@ -20,8 +20,16 @@ fn poll_retirement_keeps_native_owners_until_close_or_retention_receipt() {
         );
         let mut grant = runtime.staging_endpoint(8, 0).unwrap();
         let hold = NativeHold(pause(&runtime));
-        assert!(!grant.poll_close().unwrap());
-        wait_blocked(&hold.0);
+        // A pending poll can yield on the record lock before publishing CLOSE.
+        let record = Arc::clone(&grant.record);
+        {
+            let _busy = record.lock().unwrap();
+            assert!(!grant.poll_close().unwrap());
+        }
+        wait_until(|| {
+            assert!(!grant.poll_close().unwrap());
+            hold.0.0.lock().unwrap().0
+        });
         let before = runtime.stats().unwrap();
         assert_eq!(
             (

@@ -84,9 +84,9 @@ commands wait in the qualification verification queue for one later hardware
 pass. [AGENTS.md](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md)
 fixes the order (S0–S26) for this period; this plan remains the status record.
 
-S0 and S0b delivered the request API and pre-release wire rules. The first S6
-selector delivery and advisory priorities on TCP/NVLink are in place. S1–S5
-complete P7 at source level. The remaining S6 selector work is next. OrbitKV
+S0 and S0b delivered the request API and pre-release wire rules. S1–S5
+complete P7 at source level. S6 implements P6 selector routing. Next is S7
+for explicit progress and notification fallback. OrbitKV
 integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
@@ -278,9 +278,10 @@ Requirements: F08–F20; every implemented transport consumes the same owners.
 
 Done (source scope, CPU controls):
 
-- **Transport selection (first delivery).** First-match policy order with
-  CPU/CUDA memory, inclusive size and effective-priority filters, `Unspec`
-  selection and strict hints, driven by owner-derived Describe capabilities.
+- **Transport selection (S6, F12/F13).** First-match and named policies use
+  segment, original memory types, size, effective priority, intent and boot
+  identity. Strict hints, per-request NIC masks and endpoint QP pools reach
+  the executing owner. Installed two-RNIC qualification is queued.
   See [transport selection](transport-selection.md).
 - **Runtime admission.** Opt-in FIFO/EDF over whole submissions with independent
   owner and byte dispatch windows, queue cancel and expiry, and retained
@@ -299,8 +300,6 @@ Done (source scope, CPU controls):
 
 Open:
 
-- [ ] Named policies, request intents, device masks and QP pools in selection,
-  with merge isolation (F12/F13).
 - [ ] Physical-request/alias granularity, merge mapping, staging reserves and
   deadline-infeasible cancellation (F08/F14).
 - [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender

@@ -25,7 +25,7 @@ pub(in crate::transport::rdma) struct GrantConstruction {
 impl GrantConstruction {
     pub(in crate::transport::rdma) fn new(
         transport: &RdmaTransport,
-        grant_lease: GrantLease,
+        mut grant_lease: GrantLease,
         memory: &RegisteredMemory,
         range: std::ops::Range<usize>,
         permission: u32,
@@ -70,11 +70,26 @@ impl GrantConstruction {
                 None => Buffer::Staged(Staging::new(length)?),
             };
             let device = transport.device_at(grant_lease._selection.device_id())?;
-            let (progress, worker_lease) = if let Some(endpoint) = &reuse {
-                (
-                    Arc::clone(&endpoint.progress),
-                    transport.workers.reserve(&endpoint.progress)?,
-                )
+            // The worker candidate chooses the pool index. Its QP uses the CQ
+            // at index modulo lane count, including for a passive or transient QP.
+            let assigned = match (&reuse, grant_lease.qp_index) {
+                (Some(endpoint), _) => Some(Arc::clone(&endpoint.progress)),
+                (None, Some(index)) => {
+                    let lanes = transport.cq_list(Arc::clone(&device))?;
+                    Some(Arc::clone(
+                        lanes
+                            .get(index % transport.config.num_lanes)
+                            .ok_or(Error::Internal("missing RDMA pool CQ lane"))?,
+                    ))
+                }
+                _ => None,
+            };
+            let (progress, worker_lease) = if let Some(lane) = assigned {
+                let lease = match grant_lease.policy_worker.take() {
+                    Some(lease) => lease,
+                    None => transport.workers.reserve(&lane)?,
+                };
+                (lane, lease)
             } else {
                 transport
                     .workers
@@ -198,9 +213,19 @@ impl GrantConstruction {
                     Arc::clone(&transport.usage),
                     Some(grant._lease._selection.device_info()),
                 )?;
+                let qp_index = grant._lease.qp_index;
+                let pool = qp_index.and_then(|i| transport.qp_layout.as_ref()?.pool_at(i));
+                let link_qos = (
+                    pool.and_then(|p| p.service_level)
+                        .unwrap_or(transport.config.service_level),
+                    pool.and_then(|p| p.traffic_class)
+                        .unwrap_or(transport.config.traffic_class),
+                );
                 let record =
                     self.progress.register(Box::new(Resources {
                         connection: crate::transport::rdma::qp::RdmaQp::new(ConnectionResources {
+                            qp_index,
+                            link_qos,
                             receive_queue,
                             device: Arc::clone(&device),
                             handles,
@@ -256,6 +281,9 @@ impl GrantConstruction {
                     .grant
                     .as_mut()
                     .ok_or(Error::Internal("missing prepared grant"))?;
+                if grant._lease.qp_index != connection.qp_index {
+                    return Err(Error::Protocol("RDMA reused pair changed QP pool index"));
+                }
                 grant.connection = connection.incarnation;
                 drop(connection);
                 resources.grant = self.grant.take();
