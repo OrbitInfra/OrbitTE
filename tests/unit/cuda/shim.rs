@@ -830,7 +830,7 @@ unsafe extern "C" fn ipc_open(
     );
     let mut bytes = [0u8; 8];
     for (out, byte) in bytes.iter_mut().zip(handle.reserved) {
-        *out = byte as u8;
+        *out = byte.to_ne_bytes()[0];
     }
     let address = u64::from_ne_bytes(bytes);
     let error = current().ipc_open_error.load(Ordering::Acquire);
