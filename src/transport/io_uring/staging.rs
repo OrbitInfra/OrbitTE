@@ -7,6 +7,9 @@ use super::*;
 use crate::cuda::StagingCopy;
 use crate::runtime::proxy_manager::{ProxyManager, StageBufferLease};
 
+// Linux io_uring_setup caps the submission queue at IORING_MAX_ENTRIES.
+const MAX_SQ_ENTRIES: usize = 32_768;
+
 pub(super) struct Submission<'a> {
     pub requests: &'a [FileRequest],
     pub proxy: &'a Arc<ProxyManager>,
@@ -50,7 +53,7 @@ impl Submission<'_> {
     pub(super) fn execute(
         &self,
         transport: &IoUringTransport,
-        size: usize,
+        max_batch_requests: usize,
         report: &mut BatchReport,
     ) -> Result<()> {
         let until = self
@@ -60,8 +63,11 @@ impl Submission<'_> {
                 "file drain deadline overflows monotonic clock",
             ))?;
         let mut tasks = Vec::with_capacity(self.requests.len());
+        let mut piece_count = 0usize;
         for request in self.requests {
             let backing = if request.local.memory_type() == crate::MemoryType::Cuda {
+                piece_count =
+                    piece_count.saturating_add(request.length.div_ceil(self.proxy.chunk_size()));
                 let (gpu, offset) = request
                     .local
                     .cuda_range(request.local_offset, request.length)?;
@@ -70,6 +76,7 @@ impl Submission<'_> {
                 request.lease.io_file(request.offset, request.length)?;
                 Backing::Device(gpu.staging_loan(offset, request.length, self.proxy)?)
             } else {
+                piece_count = piece_count.saturating_add(1);
                 let (task, iov) = Task::new(self.operation, request, transport.allocate)?;
                 Backing::Host(task, iov)
             };
@@ -81,18 +88,18 @@ impl Submission<'_> {
                 error: None,
             });
         }
-        let mut ring =
-            (transport.create)(u32::try_from(size).map_err(|_| Error::ResourceExhausted)?)?;
-        if ring.space() < self.requests.len() {
+        let width = piece_count.min(max_batch_requests).min(MAX_SQ_ENTRIES);
+        let mut ring = (transport.create)(width as u32)?;
+        if ring.space() < width {
             return Err(Error::ResourceExhausted);
         }
         let mut live = ManuallyDrop::new(Live {
             ring,
             tasks,
-            pieces: Vec::with_capacity(size),
-            iovecs: Vec::with_capacity(size),
+            pieces: Vec::with_capacity(width),
+            iovecs: Vec::with_capacity(width),
         });
-        let result = self.rounds(&mut live, size, until);
+        let result = self.rounds(&mut live, width, until);
         report.locally_drained = !matches!(result, Err(Error::Unquiesced { .. }));
         self.finish(&mut live.tasks, result.err(), report);
         if report.locally_drained {
@@ -113,10 +120,10 @@ impl Submission<'_> {
         Ok(())
     }
 
-    fn rounds(&self, live: &mut Live, size: usize, until: Instant) -> Result<()> {
+    fn rounds(&self, live: &mut Live, width: usize, until: Instant) -> Result<()> {
         while live.tasks.iter().any(|t| t.backing.is_some()) {
             remaining(self.deadline)?;
-            self.plan(live, size)?;
+            self.plan(live, width)?;
             let entries = self.prepare(live)?;
             remaining(self.deadline)?;
             if live.ring.space() < entries.len() {
@@ -189,7 +196,7 @@ impl Submission<'_> {
         Ok(())
     }
 
-    fn plan(&self, live: &mut Live, size: usize) -> Result<()> {
+    fn plan(&self, live: &mut Live, width: usize) -> Result<()> {
         let mut leased = false;
         for (index, task) in live.tasks.iter().enumerate() {
             let Some(backing) = &task.backing else {
@@ -197,7 +204,7 @@ impl Submission<'_> {
             };
             let request = &self.requests[index];
             let mut offset = task.bytes;
-            while offset < request.length && live.pieces.len() < size {
+            while offset < request.length && live.pieces.len() < width {
                 let file_offset = request.offset + offset as u64;
                 let (stage, iov) = match backing {
                     Backing::Host(_, iov) => (None, *iov),
@@ -240,7 +247,7 @@ impl Submission<'_> {
                 live.iovecs.push(iov);
                 offset += iov.iov_len;
             }
-            if live.pieces.len() == size {
+            if live.pieces.len() == width {
                 break;
             }
         }

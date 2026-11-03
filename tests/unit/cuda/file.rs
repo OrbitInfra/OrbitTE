@@ -8,11 +8,9 @@ use crate::{RegisteredMemory, RemoteEffect, RuntimeQueueConfig, TaskState};
 const WAIT: Duration = Duration::from_secs(5);
 
 fn fixture(contents: &[u8], chunk: usize, slots: usize, queued: bool) -> Result<Fixture> {
-    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
-    Fixture::new(
-        &dir,
+    fixture_with_config(
         contents,
-        TransferEngine::new(EngineConfig {
+        EngineConfig {
             staging_chunk_size: chunk,
             staging_chunk_count: slots,
             runtime_queue: queued.then(|| RuntimeQueueConfig {
@@ -20,8 +18,13 @@ fn fixture(contents: &[u8], chunk: usize, slots: usize, queued: bool) -> Result<
                 ..Default::default()
             }),
             ..Default::default()
-        })?,
+        },
     )
+}
+
+fn fixture_with_config(contents: &[u8], config: EngineConfig) -> Result<Fixture> {
+    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    Fixture::new(&dir, contents, TransferEngine::new(config)?)
 }
 
 fn register(f: &Fixture, device: &Arc<Device>) -> Result<(Arc<CudaMemory>, RegisteredMemory)> {
@@ -43,6 +46,93 @@ fn request(view: &RegisteredMemory, local: usize, offset: u64, length: usize) ->
 }
 
 #[test]
+fn single_device_read_and_write_fill_each_round_with_available_pieces() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    const CHUNK: usize = 4096;
+    const LENGTH: usize = 7 * CHUNK + 37;
+    let source: Vec<_> = (0..LENGTH + 6).map(|i| ((37 * i) % 251) as u8).collect();
+    let start = vec![0xa3; CHUNK + LENGTH + 5];
+    let mut expected_file = start.clone();
+    expected_file[CHUNK..CHUNK + LENGTH].copy_from_slice(&source[2..2 + LENGTH]);
+
+    // First the pool limits the rounds. Then the configured batch limit wins,
+    // even though Linux rounds a five-entry SQ up to eight slots.
+    for (slots, limit, ring_entries, widths) in [(3, 16, 8, &[3, 3, 2][..]), (7, 5, 5, &[5, 3][..])]
+    {
+        let mut f = fixture_with_config(
+            &start,
+            EngineConfig {
+                staging_chunk_size: CHUNK,
+                staging_chunk_count: slots,
+                max_batch_requests: limit,
+                ..Default::default()
+            },
+        )?;
+        let trace = f.observe_ring(false, move |size| {
+            assert_eq!(size, ring_entries);
+            Ok(())
+        });
+        let device = allocation(&source);
+        let (_, view) = register(&f, &device)?;
+        let requests = [request(&view, 2, CHUNK as u64, LENGTH)];
+        let mut expected_gpu = vec![0x56; source.len()];
+        for op in [TransferOp::Write, TransferOp::Read] {
+            if op == TransferOp::Read {
+                view.write(0, &expected_gpu)?;
+            }
+            let report = f.run(op, &requests)?;
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            assert_eq!(
+                (report.completed_requests, report.transferred_bytes),
+                (1, LENGTH)
+            );
+            assert_eq!(
+                std::mem::take(&mut trace.lock().unwrap().round_widths),
+                widths,
+                "{op:?}"
+            );
+            assert_eq!(fs::read(&f.path)?, expected_file);
+        }
+        expected_gpu[2..2 + LENGTH].copy_from_slice(&source[2..2 + LENGTH]);
+        let mut actual = vec![0; source.len()];
+        view.read(0, &mut actual)?;
+        assert_eq!(actual, expected_gpu);
+    }
+    Ok(())
+}
+
+#[test]
+fn staged_ring_caps_piece_count_at_the_linux_entry_limit() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let contents = vec![0x71; 32_769];
+    let mut f = fixture_with_config(
+        &contents,
+        EngineConfig {
+            staging_chunk_size: 1,
+            staging_chunk_count: 1,
+            max_batch_requests: contents.len(),
+            ..Default::default()
+        },
+    )?;
+    f.observe_ring(false, |size| {
+        assert_eq!(size, 32_768);
+        // Observe setup without allocating a max-size kernel ring in CI.
+        Err(std::io::Error::from_raw_os_error(libc::ENOMEM))
+    });
+    let device = allocation(&contents);
+    let (_, view) = register(&f, &device)?;
+    let report = f.run(TransferOp::Read, &[request(&view, 0, 0, contents.len())])?;
+    assert!(
+        matches!(report.failure.unwrap().error, Error::Io(e) if e.raw_os_error() == Some(libc::ENOMEM))
+    );
+    Ok(())
+}
+
+#[test]
 fn device_chunks_and_tail_use_one_ring_and_verify_both_files_and_guards() -> Result<()> {
     if !kernel() {
         return Ok(());
@@ -53,7 +143,7 @@ fn device_chunks_and_tail_use_one_ring_and_verify_both_files_and_guards() -> Res
     let rings = Arc::new(AtomicUsize::new(0));
     let calls = rings.clone();
     f.observe_ring(false, move |n| {
-        assert_eq!(n, 2);
+        assert_eq!(n, 4);
         calls.fetch_add(1, Ordering::Relaxed);
         Ok(())
     });
@@ -118,7 +208,7 @@ fn a_short_middle_chunk_copies_only_the_prefix_and_preserves_other_tasks() -> Re
         let mut f = fixture(b"abcdefghijklmnop", 4, 3, false)?;
         let path = f.path.clone();
         f.observe_ring(!real_eof, move |n| {
-            assert_eq!(n, 3);
+            assert_eq!(n, 5);
             if real_eof {
                 fs::OpenOptions::new().write(true).open(&path)?.set_len(5)?;
             }
@@ -236,13 +326,13 @@ fn staged_copy_failure_and_uncertain_event_or_restore_preserve_the_right_owners(
         if mode == "copy" {
             assert!(matches!(error, Error::Backend { .. }));
             assert!(status.locally_drained && t.locally_drained);
-            assert!(ring.lock().unwrap().upgrade().is_none());
+            assert!(ring.lock().unwrap().lifetime.upgrade().is_none());
             assert_eq!(f.engine.stats()?.staging.idle_chunks, 1);
             f.engine.close_file_segment(&f.segment, WAIT)?;
         } else {
             assert!(matches!(error, Error::Unquiesced { .. }));
             assert!(!status.locally_drained && !t.locally_drained);
-            assert!(ring.lock().unwrap().upgrade().is_some());
+            assert!(ring.lock().unwrap().lifetime.upgrade().is_some());
             assert_eq!(f.engine.stats()?.staging.retained_chunks, 1);
             assert_eq!(f.engine.stats()?.inflight_bytes, 8);
             f.engine.unregister_memory(&v)?;

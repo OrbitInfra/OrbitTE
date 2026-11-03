@@ -12,6 +12,13 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(feature = "cuda")]
+#[derive(Default)]
+pub(crate) struct RingTrace {
+    pub(crate) lifetime: std::sync::Weak<()>,
+    pub(crate) round_widths: Vec<usize>,
+}
+
 fn required() -> bool {
     std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref() == Ok("1")
 }
@@ -66,15 +73,15 @@ impl Fixture {
         &mut self,
         short_middle: bool,
         before: impl Fn(u32) -> io::Result<()> + Send + Sync + 'static,
-    ) -> Arc<Mutex<std::sync::Weak<()>>> {
-        let lifetime = Arc::new(Mutex::new(std::sync::Weak::new()));
-        let observed = Arc::clone(&lifetime);
+    ) -> Arc<Mutex<RingTrace>> {
+        let trace = Arc::new(Mutex::new(RingTrace::default()));
+        let observed = Arc::clone(&trace);
         Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
             allocate: task::Bounce::new,
             create: Arc::new(move |size| {
                 before(size)?;
                 let alive = Arc::new(());
-                *observed.lock().unwrap() = Arc::downgrade(&alive);
+                observed.lock().unwrap().lifetime = Arc::downgrade(&alive);
                 Ok(Box::new(FaultRing {
                     inner: ring::create(size)?,
                     calls: 0,
@@ -83,11 +90,11 @@ impl Fixture {
                     } else {
                         Fault::Pass
                     },
-                    _lifetime: alive,
+                    observer: Some((alive, Arc::clone(&observed))),
                 }))
             }),
         });
-        lifetime
+        trace
     }
 
     pub(crate) fn request(&self, local: usize, remote: u64, length: usize) -> TransferRequest {
@@ -386,7 +393,7 @@ struct FaultRing {
     fault: Fault,
     calls: usize,
     #[cfg(feature = "cuda")]
-    _lifetime: Arc<()>,
+    observer: Option<(Arc<()>, Arc<Mutex<RingTrace>>)>,
 }
 
 impl Ring for FaultRing {
@@ -401,7 +408,12 @@ impl Ring for FaultRing {
         self.inner.queued()
     }
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
-        self.inner.push(entries)
+        self.inner.push(entries)?;
+        #[cfg(feature = "cuda")]
+        if let Some((_, trace)) = &self.observer {
+            trace.lock().unwrap().round_widths.push(entries.len());
+        }
+        Ok(())
     }
     fn submit(&mut self, n: u32) -> io::Result<usize> {
         self.calls += 1;
@@ -440,7 +452,7 @@ fn fault_fixture(fault: Fault) -> Result<Fixture> {
                 fault,
                 calls: 0,
                 #[cfg(feature = "cuda")]
-                _lifetime: Arc::new(()),
+                observer: None,
             }))
         }),
     });

@@ -997,7 +997,7 @@ impl TransferEngine {
                     progress,
                     &mut report,
                     #[cfg(feature = "cuda")]
-                    &self.source.proxy,
+                    (&self.source.proxy, self.config.max_batch_requests),
                 );
                 return report;
             }

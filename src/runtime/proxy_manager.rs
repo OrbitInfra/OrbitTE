@@ -79,6 +79,11 @@ pub(crate) struct ProxyManager {
 }
 
 impl ProxyManager {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
     pub(crate) fn new(
         chunk_size: usize,
         chunk_count: usize,

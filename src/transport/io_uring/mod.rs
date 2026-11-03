@@ -55,7 +55,10 @@ impl IoUringTransport {
         deadline: Instant,
         progress: Option<(&BatchProgress, usize)>,
         report: &mut BatchReport,
-        #[cfg(feature = "cuda")] proxy: &Arc<crate::runtime::proxy_manager::ProxyManager>,
+        #[cfg(feature = "cuda")] (proxy, max_batch_requests): (
+            &Arc<crate::runtime::proxy_manager::ProxyManager>,
+            usize,
+        ),
     ) {
         if requests.is_empty() {
             return;
@@ -80,7 +83,7 @@ impl IoUringTransport {
                     deadline,
                     progress,
                 }
-                .execute(self, requests.len(), report)?;
+                .execute(self, max_batch_requests, report)?;
             }
             if count != 0 && !staged {
                 let mut tasks = Vec::new();

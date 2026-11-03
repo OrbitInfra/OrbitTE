@@ -86,8 +86,10 @@ registered CUDA address. The caller or batch worker holds the whole device
 range and consumes its producer event before access. TENT allocates a host
 buffer per request. OrbitTE leases page-aligned pinned chunks from the
 engine's `ProxyManager`, bounded by `staging_chunk_count` and
-`staging_chunk_size`. A round runs with the chunks it can lease. If none are
-available the request fails with `ResourceExhausted`.
+`staging_chunk_size`. The ring is sized for the device chunks and unsplit host
+requests, up to `max_batch_requests` and the Linux submission queue limit.
+Each round fills that width from the remaining pieces while chunks are
+available. If none can be leased the request fails with `ResourceExhausted`.
 
 WRITE confirms each device-to-host copy and restores the CUDA context before
 submitting the round. READ drains the SQEs first and copies back consecutive
