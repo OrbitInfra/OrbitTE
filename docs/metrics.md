@@ -26,7 +26,8 @@ periodic reporter and recording cells.
 Resolution is per field. A key in the JSON file wins over the environment,
 which wins over the typed `EngineConfig.metrics` value. Omitted typed fields
 take the defaults above. Set `EngineConfig.metrics_config_file` to the JSON
-file path. The loader accepts nested keys and slash paths such as
+file path. The host accepts an IP literal or a DNS hostname. The loader accepts
+nested keys and slash paths such as
 `metrics/http_port`. Invalid settings return a typed construction error. Ports
 range from 1 to 65535. The fixed HTTP pool accepts 1–64 threads per engine.
 

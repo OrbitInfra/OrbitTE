@@ -106,7 +106,18 @@ fn invalid_settings_are_typed_and_stale_bucket_keys_do_not_change_the_schema() {
             &["42x", "-10", "4294967296"][..],
         ),
         ("TENT_METRICS_ENABLED", &["maybe"][..]),
-        ("TENT_METRICS_HTTP_HOST", &["", "host/path"][..]),
+        (
+            "TENT_METRICS_HTTP_HOST",
+            &[
+                "",
+                "host/path",
+                ":",
+                "bad::host",
+                "-invalid",
+                "two..labels",
+                "999.999.0.1",
+            ][..],
+        ),
     ] {
         for v in vs {
             assert!(
@@ -115,6 +126,15 @@ fn invalid_settings_are_typed_and_stale_bucket_keys_do_not_change_the_schema() {
             );
         }
     }
+    for host in ["0.0.0.0", "::1", "localhost", "rank-1.example."] {
+        assert_eq!(
+            resolve(&d, None, &[("TENT_METRICS_HTTP_HOST", host)])
+                .unwrap()
+                .http_host,
+            host
+        );
+    }
+    assert!(resolve(&d, None, &[("TENT_METRICS_HTTP_HOST", &"a".repeat(64))]).is_err());
     for v in ["1", "8080", "65535"] {
         assert_eq!(
             resolve(&d, None, &[("TENT_METRICS_HTTP_PORT", v)])

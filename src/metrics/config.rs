@@ -129,15 +129,26 @@ impl MetricsConfig {
                 "metrics/http_server_threads outside 1..=64",
             ));
         }
-        if cfg.http_host.is_empty()
-            || cfg.http_host.len() > 253
-            || !cfg
-                .http_host
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b".:-".contains(&b))
-        {
+        if !valid_host(&cfg.http_host) {
             return Err(Error::InvalidConfig("invalid metrics/http_host"));
         }
         Ok(cfg)
     }
+}
+
+fn valid_host(host: &str) -> bool {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let name = host.strip_suffix('.').unwrap_or(host);
+    name.len() <= 253
+        && name.bytes().any(|b| b.is_ascii_alphabetic())
+        && name.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
