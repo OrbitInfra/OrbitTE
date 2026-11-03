@@ -1,169 +1,105 @@
 # Rust API Guide
 
-The library package is `orbit-te`; the Rust crate is `orbit_te`. This guide
-describes the current source API. Generate its full type documentation with:
+The package is `orbit-te` and the crate is `orbit_te`. Generate the full type
+documentation with:
 
 ```sh
 cargo doc --locked --no-deps --open
 ```
 
-Add `--features rdma,cuda` when documenting native providers in an environment
-with the [build prerequisites](build.md).
+Add `--features rdma,cuda` in an environment with the
+[build prerequisites](build.md).
 
 ## Transfer requests
 
-Create a request with `TransferRequest::new(transport, local_address,
-remote_address, length)`. It starts with high priority, the engine's default
-QoS contract and remote staging disabled. Use `.with_qos(policy)`,
-`.with_priority(priority)` and `.with_remote_staging(true)` to override these
-fields. An explicit QoS policy supplies its own priority.
+`TransferRequest::new(transport, local_address, remote_address, length)` starts
+with `Priority::High`, the engine's default QoS contract and remote staging off.
+Override them with `.with_qos(policy)`, `.with_priority(priority)` and
+`.with_remote_staging(true)`; an explicit QoS policy supplies its own priority.
+Use `Transport::Unspec` for [transport selection](transport-selection.md).
+`TransferRequest`, `Transport` and `Error` are non-exhaustive, so matches outside
+the crate need a wildcard arm.
 
-Construct requests through this API when migrating from struct literals.
-`TransferRequest`, `Transport` and `Error` are non-exhaustive. Include a
-wildcard when matching a transport or error outside the crate.
+Both ranges must lie inside one applicable registration, and `TransferOp`
+selects READ or WRITE. Submission resolves and retains every backing allocation
+before any transfer effect. Priority orders RDMA payloads on each worker; TCP and
+NVLink accept every priority as advisory, and requests within a batch keep their
+order.
 
 ## Engine and registration
 
-`TransferEngine::new(EngineConfig)` starts a source control service and owns
-requester/source admission. Its default bind address is loopback. Configuration
-and budgets are immutable for that engine instance.
+`TransferEngine::new(EngineConfig)` starts a source control service (loopback by
+default) and owns requester and source admission. Configuration is immutable per
+engine.
 
 | API | Contract |
 | --- | --- |
-| `register_memory` | Transfer ownership of host bytes into a registered range |
-| `register_host_memory` | Register a range of an existing `Arc<HostMemory>` while retaining its real allocation owner |
-| `register_host_memory_batch` | Preflight a set of host ranges before publishing new registration references |
-| `unregister_memory` | Retire a registration reference; admitted users retain their actual backing |
-| `resolve_local_address` | Resolve a contained registered address range without adopting an arbitrary pointer |
+| `register_memory` | Move host bytes into a registered range |
+| `register_host_memory` | Register a range of an existing `Arc<HostMemory>`, retaining its allocation owner |
+| `register_host_memory_batch` | Preflight a set of host ranges, then publish them together |
+| `register_cuda_memory_batch` | Register CUDA allocations (`cuda` feature) |
+| `unregister_memory` | Drop a registration reference; admitted users keep their backing |
+| `resolve_local_address` | Resolve a contained registered range without adopting a raw pointer |
 
-`Permission` distinguishes local-only, remote READ and remote READ/WRITE
-authority. Repeated registration of the same range keeps its original
-permission. CPU access coordination is shared across aliases.
-
-For a configured RDMA engine with host Direct policy, host registration prepares
-every usable context's MR copies before lookup/descriptor visibility and before
-duplicate reference increments commit. This includes paused ports: their PDs
-retain memory registration, while transfer admission waits for recovery. A failed batch retires only its newly
-created copies. Previously published ranges remain valid; failed native cleanup
-retains unpublished backing and its charges. This can fail at registration time
-when native resources or aggregate MR capacity are unavailable. See the
+`Permission` distinguishes local-only, remote READ, remote WRITE and remote
+READ/WRITE; repeated registration of a range keeps its first permission. With
+RDMA host Direct policy, registration also prepares MRs on every usable context
+before the range becomes visible, so it can fail when native resources are
+exhausted; see the
 [publication contract](rdma-cuda.md#eager-publication-and-cross-rail-slice-completion).
 
-`EngineConfig::runtime_queue: Option<RuntimeQueueConfig>` opts synchronous and
-asynchronous data submissions into a FIFO/EDF dispatch window. Whole-submission
-owner/byte reservations appear in `EngineStats::runtime_queue`; existing inflight
-budgets still bound retained work. See [queue configuration, cancellation and
-scope](async-batches.md#runtime-admission-and-dispatch-window).
+## Admission and QoS configuration
 
-`EngineConfig::receiver_credit` enables the receiver-side issuer.
-`connect_receiver_credit` negotiates a bounded automatic window and
-`disconnect_receiver_credit` fences and retires it after proven successful owner
-release. Existing pending bindings can recover after requester close. Automatic
-and manual bindings remain separate; endpoint aliases cannot duplicate automatic
-authority. `receiver_credit_issuer_stats` exposes reserved windows and retained
-tombstones. See [automatic windows](async-batches.md#automatic-receiver-windows).
+| Setting | Purpose | Guide |
+| --- | --- | --- |
+| `EngineConfig::runtime_queue` | FIFO/EDF dispatch window for all data submissions | [Dispatch window](async-batches.md#runtime-admission-and-dispatch-window) |
+| `EngineConfig::qos`, `QosConfig::from_json(_file)` | Global/tenant/intent contracts; `resolve_qos` returns a reusable `EffectiveQosPolicy` | [QoS](async-batches.md#qos-contracts), [actions](async-batches.md#qos-admission-actions) |
+| `EngineConfig::max_receiver_credit_sessions` | Sender credit gating; `activate`/`apply`/`deactivate_receiver_credit` for manual grants | [Credits](async-batches.md#receiver-credit-gating) |
+| `EngineConfig::receiver_credit` | Receiver-side issuer; `connect`/`disconnect_receiver_credit` for automatic windows | [Automatic windows](async-batches.md#automatic-receiver-windows) |
+| `EngineConfig::selector`, `TransportSelectorConfig::from_json` | Ordered transport selection rules (TENT's `policy` array) | [Selection](transport-selection.md) |
 
-`EngineConfig::max_receiver_credit_sessions` enables sender credit gating (zero
-disables it). `activate_receiver_credit`, `apply_receiver_credit`,
-`deactivate_receiver_credit` and `receiver_credit_stats` administer one class per
-peer/source epoch. Applications deliver cumulative payload byte/request grants;
-new dispatch requires both. The setting applies to sync and async submissions
-with or without a runtime queue. See [epochs, refunds, freshness and issuer
-obligations](async-batches.md#receiver-credit-gating).
-
-`EngineConfig::qos: Option<QosConfig>` compiles global/tenant/intent contracts.
-`QosConfig::from_json` and `from_json_file` load the supported TENT `qos` section
-into this same typed configuration, with `None` for disabled QoS. Other engine
-settings still come from `EngineConfig`. See [JSON format](async-batches.md#json-qos-configuration). `resolve_qos(&QosRequestContext)` returns a reusable immutable
-`EffectiveQosPolicy` for `TransferRequest::qos`. `None` selects default/unspec;
-explicit handles use their captured fallback priority. Per-contract payload
-byte/request caps are reserved atomically for each mixed submission and retained
-through actual drain. `fields()` and resolution accessors explain the policy;
-`usage()` samples its shared budget. `QosPolicyFields::allowed_degraded_actions`
-accepts `QosDegradedActions { delay, reject }`; the JSON equivalent is an action
-array. Effective delay requires `runtime_queue` and defers every bounded
-contract's charge to joint dispatch admission. Pending groups retain the global
-inflight budget; `usage()` counts only acquired QoS capacity. See
-[configuration and scope](async-batches.md#qos-contracts) and
-[action semantics](async-batches.md#qos-admission-actions).
-
-## Transport policy selection
-
-`EngineConfig::selector: Option<TransportSelectorConfig>` compiles ordered
-`SelectionPolicy` rules. `TransportSelectorConfig::from_json` loads the supported
-TENT root `policy` array. Pass `Transport::Unspec` to `TransferRequest::new`
-for automatic selection.
-Configured explicit hints must be both allowed and available. The engine resolves
-both registrations and effective QoS priority before choosing once, then retains
-the chosen transport through queueing and drain. `RemoteRegion::memory_type()`
-exposes the source-owned descriptor classification. See
-[configuration and TENT correspondence](transport-selection.md).
+`EffectiveQosPolicy::fields()`, `effective_priority()` and `usage()` explain a
+resolved policy and sample its budget.
 
 ## Memory type and location
 
 `RegisteredMemory::memory_type()` returns `MemoryType::Cpu` or `Cuda` from the
-retained backing without a lock or driver call. `RegisteredMemory::location()`
-returns `RangeLocation { address, length, location }` clipped to exactly that
-registration. `HostMemory::location(offset, length)` and
-`CudaMemory::location(offset, length)` check the requested owner subrange first.
-Queries read immutable metadata without taking the payload lock; they do not
-wait for producer readiness or grant
-permission to access payload bytes.
+retained backing, without locks or driver calls. `RegisteredMemory::location()`
+returns `RangeLocation { address, length, location }` clipped to that
+registration, and `HostMemory::location(offset, length)` /
+`CudaMemory::location(offset, length)` check the owner subrange first. These
+queries neither wait for producer readiness nor grant payload access.
 
-`MemoryLocation::Cuda { device, context }` contains the process-visible CUDA
-ordinal and native context identity. Its display form is `cuda:N`. The context
-number is diagnostic metadata, not a retained or usable native handle. Retain
-the actual owner/registration and follow its transfer completion contract.
-`MemoryLocation::Cpu(Some(N))` displays `cpu:N`; `Cpu(None)` displays `*`.
-Ordinary/external host memory and portable CUDA-pinned allocations have unknown
-NUMA placement. Pinned DRAM remains CPU memory. A NUMA-bound staging mapping
-reports its selected node, not a new physical-residency measurement.
+`MemoryLocation::Cuda { device, context }` displays as `cuda:N`; the context
+number is diagnostic, not a usable handle. `MemoryLocation::Cpu(Some(N))`
+displays `cpu:N` and `Cpu(None)` displays `*`. Ordinary, external and portable
+pinned host memory have unknown NUMA placement, and pinned DRAM stays CPU memory.
 
-External CUDA adoption performs one `cuPointerGetAttributes` call for type,
-managed status, actual context and visible device ordinal, resolves its native
-device handle with `cuDeviceGet`, then checks the whole range with
-`cuMemGetAddressRange` inside that retained context. Unknown/default attributes,
-managed/host pointers, invalid context/device and native errors fail adoption.
-They never choose a CPU dereference. The range check uses the mapped allocation,
-not a potentially larger virtual-address reservation. See the
-[CUDA attribute contract](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__UNIFIED.html).
-
-These APIs implement the owner-backed part of frozen TENT's `Platform`
-`getMemoryType` / `getPointerDeviceId` / `getLocation` and `RangeLocation`
-responsibilities. They do not provide a general arbitrary-pointer classifier,
-CPU page-residency scan or device-plugin ABI. Native RDMA discovery now publishes
-`MemType::Cuda` entries with validated `MemEntry::pci_bus_id`, optional NUMA
-placement and GPU-to-RNIC priority tiers. Transfer selection consumes the actual
-owner's location; see [topology selection](rdma-cuda.md#device-port-gid-and-memory-topology-discovery).
-`RdmaConfig::priority_matrix` and `custom_json_path` override rank lists using
-TENT JSON formats, resolved once against that inventory. They preserve physical
-metadata and apply to each peer's actual owner location; see
-[custom topology](rdma-cuda.md#custom-topology-and-priority-matrices).
-Current hardware/performance limits are in [qualification](qualification.md#cuda-pointer-and-location).
+External CUDA adoption makes one `cuPointerGetAttributes` call (type, managed
+status, context, device), resolves the device with `cuDeviceGet` and checks the
+whole range with `cuMemGetAddressRange` in that context. Unknown attributes,
+managed or host pointers and native errors fail adoption and never select CPU
+access. This covers the owner-backed part of TENT's `Platform` `getMemoryType`,
+`getPointerDeviceId` and `getLocation`; there is no general pointer classifier,
+CPU page-residency scan or device-plugin ABI. See
+[qualification](qualification.md#cuda-pointer-and-location).
 
 ## RDMA bandwidth and load
 
-With the `rdma` feature, `RdmaConfig::scheduling` configures bandwidth-aware
-`DeviceSelector` policy through `transport::rdma::SchedulingParams`. Smart
-selection defaults to enabled; setting `smart_selection` to `false` selects
-the first eligible topology tier with round-robin ties. Both modes preserve
-device masks, strict locality and actual grant charges. Multi-slice parents use
-one inverse-score weighted allocation, with `score_epsilon = 1e-12` by default;
-every 100th successful smart multi-slice allocation rotates eligible rails for
-sampling. Baseline mode rotates only the first eligible tier. No public request
-or wire format changes are needed; see [selection](rdma-cuda.md#bandwidth-aware-rdma-selection).
+With `rdma`, `RdmaConfig::scheduling` configures `SchedulingParams` for
+bandwidth-aware selection (on by default; `smart_selection = false` uses
+round-robin in the first tier); see
+[selection](rdma-cuda.md#bandwidth-aware-rdma-selection).
+`TransferEngine::nic_load_stats()` returns initialized NICs without discovery:
+rate estimates in **bytes per second**, `link_speed_gbps` in Gbit/s,
+`inflight_bytes` (grant admission), `posted_bytes` (native payload debt) and
+cumulative completed bytes, busy time and sample counts. Priority settings
+(`deadline_bw_arbitration`, `priority_promotion_timeout`,
+`priority_promotion_per_entry`, `shared_quota_shm_path`,
+`slot_rotation_interval`) are described in
+[request priority](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
 
-`TransferEngine::nic_load_stats() -> Result<Vec<transport::rdma::NicLoadStats>>`
-returns initialized available NICs, or an empty vector when RDMA is disabled,
-not yet initialized or closed. The call performs no device discovery. Rate
-estimates are **bytes per second**; `link_speed_gbps` is the optional queried
-port rate in Gbit/s. `inflight_bytes` is physical grant admission;
-`posted_bytes` is outstanding native payload debt. `completed_bytes` and
-`busy_time` and sample counts are cumulative local observations. Rate changes
-reseed the estimates without resetting these lifetime counters. The selection
-and transmit estimates are independent. See [parameters and sampling](rdma-cuda.md#bandwidth-aware-rdma-selection).
-
-## Peer authority
+## Peer authority and file segments
 
 ```rust
 let peer = requester.open_segment(
@@ -173,93 +109,47 @@ let peer = requester.open_segment(
 )?;
 ```
 
-The expected `SourceEpoch` must come from the authoritative source owner.
-Descriptors identify registered regions but do not replace that authority.
-Restarting a process at the same endpoint does not authorize an old peer handle
-to use the new process's allocations.
+The expected `SourceEpoch` must come from the authoritative source owner;
+descriptors identify regions but never replace that authority, so a restarted
+process at the same endpoint cannot be reached through an old handle.
 
-For a local file, use `open_file_segment` with a `file://` name and explicit
-permission. `file_segment_info` returns the cached descriptor, and
-`refresh_file_segment` reads the size from the same fd. `resolve_file_offset`
-checks a request range and access. `close_file_segment` closes admission for
-all aliases and waits for drain. See [file segments](storage.md).
+For a local file, `open_file_segment` takes a `file://` name and a permission;
+`file_segment_info` returns the cached descriptor, `refresh_file_segment` re-reads
+the size from the same fd, `resolve_file_offset` checks a range, and
+`close_file_segment` closes every alias and waits for drain. See
+[file segments](storage.md).
 
-## Requests and reports
+## Reports
 
-`TransferRequest` names the transport, priority, local address, remote address
-and length. The constructor defaults to `Priority::High`. TCP and NVLink accept
-Medium and Low as advisory. On RDMA, priority orders ready payloads competing
-on a worker. Requests within a batch retain their order. Optional
-`RdmaConfig::deadline_bw_arbitration` consumes the existing transmit meter.
-`priority_promotion_timeout` defaults to 10 ms and `priority_promotion_per_entry`
-selects individual aging instead of TENT's default head-only tier promotion.
-`shared_quota_shm_path` enables optional cross-process priority slots, with a
-matching `slot_rotation_interval` (default 2 ms).
-See [dispatch semantics](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
-Both ranges must be contained in one applicable registration. `TransferOp`
-selects READ or WRITE. Submission resolves and retains each backing allocation
-before transfer effects.
-
-`submit_and_wait` returns `BatchReport` with completed request/byte counts,
-failure information, notification status and local drain status. The completed
-prefix is not a transaction. `RemoteEffect::Unknown` means an attempted WRITE
-may have changed peer bytes; a failed report does not authorize automatic replay.
-`TransferFailure.affected_requests` is the number of consecutive tasks sharing
-the failure from `request_index`. Shared NVLink import close/ACK failure excludes
-the entire attempted group from the completed prefix; async tasks in this span
-are failed, not skipped. Only later requests were never attempted.
-For a cross-rail request, all slice receipts must complete before its one request
-and full byte count are added. Earlier slices may already have changed bytes if
-a later slice fails, including source-staged WRITE slices copied back after
-their own completion. Completion is not an atomic multi-rail commit.
-Remote staging READ starts each local POST after its scoped CROSS receipt.
-Independent slot copies may complete out of order. A later failure, including
-lost Unpin, leaves changed bytes visible but counts the failed request as zero
-completed requests/bytes; native uncertainty does not imply an exact prefix.
-The CUDA requester uses a bounded ring; WRITE does not snapshot the entire
-request. Keep input bytes stable while a request is in flight. GPU staging range loans reject
-conflicting access, including overlapping self-peer copies.
-
-For asynchronous ownership, see [`Batch`](async-batches.md): submit groups,
-seal, inspect or wait for completion, and retain the handle until resource
-ownership is understood. Dropping a handle cannot free live native work.
+`submit_and_wait` returns a `BatchReport` with completed request and byte counts,
+failure details, notification status and local drain status. The completed prefix
+is not a transaction. `RemoteEffect::Unknown` means an attempted WRITE may have
+changed peer bytes, and never authorizes replay. `TransferFailure.affected_requests`
+counts the consecutive tasks that share a failure from `request_index`; only later
+requests were never attempted. A multirail or remote-staged request counts only
+after all its slices or chunks complete, but earlier slices may already have
+changed bytes. For asynchronous ownership see [async batches](async-batches.md).
 
 ## Native providers
 
-`transport::rdma::RdmaConfig` selects discovery/pins, host direct or staged
-memory, progress mode and bounded native resource budgets.
-`RdmaProgressMode::Polling` is the default; `EventDriven` consumes native CQ
-events while preserving the same data worker and completion validation.
-
-The `cuda` module owns NVIDIA device/pinned-host allocations and synchronized
-copies. Device transfers select declared host staging or explicit GPUDirect RDMA.
-Unsafe `CudaMemory::record_producer_stream(stream, owner)` records already-queued
-GPU producer work on the caller's actual stream. Retain the live stream and all
-producer inputs in the supplied `Arc<dyn Send + Sync>`; aliases share one reusable
-event generation. Transfer access consumes readiness before reading or writing
-the allocation. `HostMemory::record_producer_stream` provides the same handoff
-for owned CUDA-pinned host memory, using the context selected at allocation.
-CPU/staging, host RDMA and local IPC access consume that marker. Ordinary or
-externally wrapped host memory is rejected; neither API establishes a
-consumer-stream dependency. See the
-[producer ownership contract](rdma-cuda.md#producer-stream-readiness) before using
-the unsafe API, and [RDMA and CUDA](rdma-cuda.md) for range, grant and drain rules.
+`transport::rdma::RdmaConfig` selects discovery and pins, host Direct or staged
+memory, progress mode (`Polling` by default, or `EventDriven`) and native budgets.
+The `cuda` module owns device and pinned-host allocations and synchronized copies;
+device transfers use staging or explicit GPUDirect RDMA. Unsafe
+`CudaMemory::record_producer_stream` and `HostMemory::record_producer_stream`
+hand already-queued producer work to transfers; read the
+[producer contract](rdma-cuda.md#producer-stream-readiness) before using them.
 
 ## Close and drain
 
-With CUDA enabled, `flush_nvlink_cache(timeout)` closes a snapshot of cached
-import keys while keeping requester admission open. It waits for each captured
-key's current borrower and then uses the native-close/source-receipt protocol.
-Concurrent submissions may refill the cache; stop submitting first if it must
-be completely empty. Flush also retries outstanding safe release receipts.
-See [the cache contract](cuda-ipc.md#cross-submission-relocation-cache).
+`close_source` and `close_requester` fence one direction; whole-engine `close`
+fences both, drains accepted work and closes shared native resources. A timeout
+never completes pending native work, and `Error::Unquiesced` keeps the real
+resources and charges when cleanup could not be proved. With `cuda`,
+`flush_nvlink_cache(timeout)` closes the cached imports present when it starts
+while admission stays open; see
+[the cache contract](cuda-ipc.md#cross-submission-relocation-cache).
 
-`close_source` fences source admission; `close_requester` fences requester
-admission. Whole-engine `close` fences both, drains accepted work and closes
-shared native resources. A timeout does not complete pending native work.
-`Error::Unquiesced` retains the real resources and their charges after physical
-cleanup could not be proved.
-
-The runnable [TCP example](../examples/tcp_roundtrip.rs),
-[external allocation example](../examples/external_host.rs) and
-[async example](../examples/async_batch.rs) use the public source API.
+Runnable examples: [TCP](../examples/tcp_roundtrip.rs),
+[external allocation](../examples/external_host.rs) and
+[async batches](../examples/async_batch.rs).

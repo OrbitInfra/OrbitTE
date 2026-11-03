@@ -1,21 +1,8 @@
 # Qualification
 
-Wire labels v3–v23 below identify historical artifacts and the revisions on
-which their evidence was collected.
-See the [development wire policy](tent-parity.md#wire-and-consumer-boundaries) for current builds.
-The receiver-window and resource-owner
-source gates are recorded at [automatic receiver credit windows](#automatic-receiver-credit-windows)
-and [staging/consumer owner credits](#staging-and-consumer-owner-credits).
-
-The source CI builds public request consumers with the default, `rdma`,
-`cuda` and combined features on Linux. On a non-Linux target it checks the
-CPU-only build and the explicit rejection of each native feature combination.
-These compile checks do not exercise devices.
-
-Qualification belongs to an exact source, artifact and execution profile.
-The [capability matrix](capabilities.md) describes current behavior; the
-[completion plan](completion-plan.md#p4-remaining-delivery) is the only queue
-for remaining P4 work.
+This ledger records the exact source, artifact and execution profile behind
+every result. [Capabilities](capabilities.md) summarizes current behavior and
+the [completion plan](completion-plan.md) holds the status of each stage.
 
 | State | Meaning |
 | --- | --- |
@@ -23,23 +10,34 @@ for remaining P4 work.
 | Qualified | The declared artifact passes its stated source or hardware profile |
 | Accepted | An independent reviewer inspects the change and verifies its applicable gates |
 
-A build or CPU fixture does not qualify DMA, a new fabric, GPU direct transfer
-or performance. Earlier hardware results retain their original revisions and
-do not automatically qualify subsequent changes.
+A build or CPU fixture never qualifies DMA, a fabric, GPU direct transfer or
+performance, and an earlier hardware result does not cover later changes. Wire
+labels v3–v23 below identify historical artifacts; current builds follow the
+[pre-release wire policy](tent-parity.md#wire-and-consumer-boundaries). Source CI
+builds the public consumers for the default, `rdma`, `cuda` and combined
+features on Linux, and checks that native features are rejected on other
+targets; these compile checks exercise no device.
 
-The latest installed delivery covers the [bounded remote pipeline](#bounded-remote-cuda-pipeline),
-[serial remote CUDA staging](#serial-remote-cuda-staging),
-[local staging chunks](#local-cuda-staging-chunks) and the
-[bounded cross-submission cache](#bounded-cross-submission-cuda-ipc-cache),
-building on [local pinned host IPC](#local-pinned-host-cuda-ipc), bounded [subbatches](#bounded-cuda-ipc-subbatches) and the cooperative
-[GPU IPC](#cooperative-cuda-ipc-and-nvlink) profile
-below. The bounded [GPUDirect RDMA](#gpudirect-rdma) profile retains its
-explicit host-wide context inventory limit. Earlier host
-[automatic discovery](#installed-automatic-discovery) and
-[physical rail accounting](#installed-physical-rail-accounting) retain their own
-artifacts and acceptance boundaries.
-The production host RDMA implementation is complete; physical/fabric
-qualification and complete acceptance remain in the existing P4 queue.
+## Verification queue
+
+No GPU or RDMA machine has been available since 2026-11-03. The profiles below
+wait for one hardware pass. Each run uses fresh nodes with recorded host,
+provider, RNIC and GPU inventories and locks, a frozen packaged artifact and an
+external output directory; failed runs are kept.
+
+| Profile | Current state | Gate | Earlier evidence |
+| --- | --- | --- | --- |
+| Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
+| CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
+| Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
+| CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
+| GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
+| P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
+| GPU↔file staging (S3), native GDS (S4), RDMA failover (S9), MNNVL (S14), HP-TCP physical rails (S12), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
+
+Paths that need no special hardware, such as io_uring on Linux runners, are
+qualified in CI and do not wait here.
 
 ## Local file segments
 

@@ -4,130 +4,52 @@ Build an independently maintained Rust transfer engine for CPU DRAM, NVIDIA
 GPUs and local SSDs against the [frozen latest TENT contract](tent-parity.md).
 OrbitTE replaces OrbitKV's earlier Mooncake TENT dependency and must carry every
 end-to-end KV cache path, including GPU↔DRAM and GPU↔SSD. CPU and CUDA are the
-selected platforms; other accelerator vendors are outside scope. Preserve the
-applicable runtime, language and operational behavior and all 10 selected
-transport types. A working TCP/RDMA subset is an intermediate delivery within
-this NVIDIA target.
+selected platforms; other accelerator vendors are outside scope. The target
+keeps TENT's applicable runtime, language and operational behavior and all 10
+selected transport types.
 
-Storage modules are opt-in builds, like `rdma` and `cuda`: a network/memory-only
-build must run without file/SSD modules or cuFile dependencies. Optional
-network-provider modules are also opt-in builds; both remain requirements of the
-selected complete target. This selection does not restrict CPU, SSD or
-network-device vendors. No non-NVIDIA accelerator SDK is a dependency.
+Storage and optional network providers are opt-in builds, like `rdma` and
+`cuda`: a network/memory-only build must run without file/SSD executors,
+cuFile or provider SDKs. This does not restrict CPU, SSD or network-device
+vendors, and no non-NVIDIA accelerator SDK is a dependency.
 
-This is OrbitTE's only execution queue. The parity document defines requirements;
-it is not another roadmap. OrbitKV keeps its own existing cache delivery queue.
-Do not replace or duplicate that project's state, storage-policy or adapter roadmap here.
+This is OrbitTE's only status record and execution queue; the parity document
+defines requirements. OrbitKV keeps its own cache delivery queue, and this plan
+does not duplicate that project's state, storage-policy or adapter roadmap.
 
-## Starting point and delivery states
+## Delivery states
 
-`orbit-te 0.1.0-alpha.1` is published as an identity-only package. The source
-implements the CPU TCP path and NVIDIA host staging, plus host Direct RDMA:
-persistent multi-context MRs, fixed-width reusable QP arrays, shared workers/CQs,
-multirail slicing, bounded admission and selected-port recovery. See
-[capabilities](capabilities.md) for implemented paths and
-[qualification](qualification.md) for the exact artifacts and hardware profiles.
-These implementations have not been published to crates.io.
-
-Use these states for each substage and each claimed hardware profile:
+Every substage and every claimed hardware profile has one state:
 
 | State | Meaning |
 | --- | --- |
 | Planned | Required code or executable acceptance contract is still missing |
-| Implemented | Code exists and its stated source checks pass; required runtime qualification remains open |
+| Implemented | Code exists and its source checks pass; required runtime qualification remains open |
 | Qualified | The exact installed artifact passed the declared correctness, lifetime, compatibility and resource gates in the recorded profile |
 | Accepted | An independent reviewer inspected the diff, reran relevant gates and accepted the evidence and remaining limits |
-| Unqualified / Failed | Required hardware/evidence is unavailable, or a gate ran and failed; neither counts as passed |
+| Unqualified / Failed | Required hardware or evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
-P1.1/P2.1 were merged in #2 after passing stable/MSRV CI and local CPU checks.
-P1.2's external host ranges and P2.2's bounded notifications were merged in
-#3/#4 after passing the same source gates. They have local Linux loopback/process evidence;
-independent acceptance is still open. No complete numbered stage is qualified.
-PRs #5-#9 are merged through `02d64e552f94ef965eff32b35a55789018223439`,
-covering the CPU comparison, host batches, async ownership and native RDMA/CUDA
-bindings. Stable/MSRV checks, 58 Rust tests, two supervision controls and eight
-healthy two-host H20 staging cases passed for that tree. These scoped results
-do not establish independent acceptance, complete native faults or full parity.
-P0.1 adds a [scoped native CPU comparison](cpu-oracle.md); the complete P0 oracle
-and compatibility inventory remain open. Missing hardware leaves
-a profile unqualified and visible in the full target.
-
-## Native-engine delivery focus
-
-Complete OrbitTE's native RDMA stage P4 against frozen TENT before resuming
-OrbitKV integration. Deliver reviewable substages inside P4: direct application
-DRAM registration, endpoint/MR reuse, fragmented work/completion ownership,
-discovery/topology and multirail, with the physical fault and shutdown gates
-below. Advance NVIDIA P5 owners where those prerequisites are ready. Do not
-upgrade OrbitKV's dependency or add consumer adapters between these substages.
-The return to consumer work requires independent acceptance of the complete P4
-exit, not a healthy staging pilot or one additional merged PR. Remaining P5-P10
-contracts stay in scope; accepting P4 does not establish full TENT parity.
-
-On 2026-10-27 the user authorized proceeding to P5 with the available RoCE/GPU
-resources. Physical link/device loss, provider teardown and InfiniBand remain
-unqualified until suitable hardware is available. The independent review accepts
-P4 source and bounded RoCE evidence at `121ab95`, including four fresh live
-repeats recorded in [qualification](qualification.md#p4-independent-review).
-This sequencing decision permits P5 implementation without claiming full P4
-acceptance or resuming OrbitKV integration.
-
-Use TENT's context/PD, registered-buffer, endpoint-store and worker/slice
-boundaries as the implementation reference. Preserve the Rust contract that
-failed native cleanup retains actual owners and budget charges. Every substage
-records its exact source correspondence and deliberate safety differences.
-
-## Historical OrbitKV contracts and evidence
-
-These records preserve earlier consumer requirements and accepted profiles;
-they do not set the current execution order. At OrbitKV
-`a9befeec596bb9064d25d34f93d07fe59077809d`, the audited transfer owner needs stable
-allocator registration, P2P segment lookup, batched READ, authoritative source epochs, source close/drain, generation-scoped
-notifications and NIC-load observations. Source authority comes from the
-source grant; a refreshed endpoint must not silently replace that epoch.
-
-P1.1/P2.1 establish the CPU path; P1.2 adds externally owned host allocations,
-duplicate registration references, shared alias locking and address lookup.
-P2.2 adds bounded local/remote notifications and separate attached-delivery
-outcomes. OrbitKV already owns generation scopes and matching counts in its
-notification mailbox (verified at `3f4d65709e86a060f323da7e0d1b59975f6939bc`);
-those remain consumer policy. P0.1 adds a frozen valid-input CPU comparison
-trace. P1.3 adds atomic host-region registration batches and absolute-address
-requests that retain their resolved owners. The OrbitKV consumer audit remains
-at `3f4d65709e86a060f323da7e0d1b59975f6939bc`; its native fork is
-`12cbf549b6351c800de0f94a480276d216b9a43b`, with an extended request ABI.
-P1.4 adds bounded asynchronous batch/task ownership and requester drain for
-CPU TCP. P1.5 implements the first real pinned-allocation bridge in
-[OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303), with a scoped H20
-TCP ownership pilot. P2.3 connects the opt-in OrbitKV TCP payload provider in
-[OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304), preserving source
-grants, their epochs and the existing generation-scoped gRPC completion owner.
-That Manager owner is separate from the transfer notification mailbox; this
-change does not add a mailbox adapter. Whole-pool native adaptation, installed
-consumer qualification and remaining notification integration stay open in
-P1/P2/P9/P11. RDMA and CUDA development
-proceeds with these owners; no hardware qualification is inferred from CPU progress.
-Any later OrbitKV runtime switch still needs its own P10/P11 qualification.
-Native P4/P5 now proceed ahead of consumer linkage, HP-TCP/SHM and optional
-providers when their prerequisites are ready. The complete parity inventory
-remains the target; the current order does not reduce the required scope.
+`orbit-te 0.1.0-alpha.1` on crates.io is an identity-only package; none of the
+implementation below has been published. [Capabilities](capabilities.md)
+summarizes current paths and [qualification](qualification.md) records the exact
+artifacts and hardware profiles.
 
 ## Delivery sequence
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
-| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping/oracle open |
-| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset; remaining P0 before parity acceptance | P1.1-P1.4 implemented; P1.5 consumer candidate implemented; broader P1 open |
-| P2 | P2P control plane and standard TCP vertical path | Corresponding P1 substage | P2.1-P2.3 implemented; broader P2 open |
+| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping and oracle open |
+| P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
+| P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Planned |
-| P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile independently accepted, including fresh live repeats; physical/fabric gates deferred and unqualified |
-| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct and cooperative IPC/subbatch profiles accepted with explicit limits; full P5 open |
-| P6 | Complete routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: weighted parent allocation, periodic exploration and NIC snapshots implemented; full policy/QoS open |
-| P7 | File, io_uring and GDS paths | P2; GDS also P5 | P7.1 local file segments implemented. Payload executors remain open |
-| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4/P5/P6 contracts | Planned, divided below |
-| P9 | Complete C/C++/Python and operational compatibility | P0/P2/P6; backend claims require their stages | Planned |
-| P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3-P9 deliveries | Planned |
-| P11 | Consumer integration, matched performance and installable release | Relevant accepted P2-P10 profiles | Planned |
+| P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
+| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
+| P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | In progress: selection, priority, admission, QoS and credits implemented; failover, progress and metrics open |
+| P7 | File, io_uring and GDS paths | P2; GDS also P5 | P7.1 file segments implemented; payload executors open |
+| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
+| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | Planned |
+| P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
+| P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
 
 ```mermaid
 flowchart LR
@@ -147,674 +69,251 @@ flowchart LR
     P9 --> P10 --> P11
 ```
 
-The graph shows dependencies, not a requirement to land an entire numbered
-stage in one PR. Complete one coherent substage at a time. Provider work that
-already has its prerequisite contracts can proceed independently; it must not
-inherit another provider's hardware qualification. P10 begins with the first
-real backend and accumulates evidence; fault testing is required within each
-stage, not postponed until all implementations exist. The graph describes full
-target closure; an interim P11 release needs P10 acceptance of its explicitly
-selected profiles while the other rows remain open.
+The graph shows dependencies, not one PR per stage. Provider work whose
+prerequisites exist can proceed independently, but never inherits another
+provider's hardware qualification. Fault testing belongs to each stage; P10
+closes the complete matrix. An interim release needs P10 acceptance of its
+selected profiles while other rows stay open.
+
+## Current focus
+
+Since 2026-11-03 no GPU or RDMA machine is available. All remaining in-scope
+capabilities are implemented at source level first, with CPU controls driving
+production owners and installed hardware gates written but not run; their
+commands wait in the qualification verification queue for one later hardware
+pass. [AGENTS.md](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md)
+fixes the order (S0–S26) for this period; this plan remains the status record.
+
+Done in this period: S0 request API and safety hygiene, S0b frozen pre-release
+wire, the first S6 selector delivery, advisory priorities on TCP/NVLink and
+S1 (P7.1) file segments. **Next: S2, io_uring DRAM↔file payloads.** OrbitKV
+integration stays deferred to P11.
 
 ## P0 — Freeze contracts and executable comparison
 
 Requirements: all F/B IDs in [the parity contract](tent-parity.md).
 
-- [x] **P0.1 — shared CPU comparison trace (Implemented, not Accepted).**
-  Unmodified frozen TENT and public Rust drivers execute one deterministic
-  registration/READ/WRITE/notification trace over actual host memory and TCP.
-  Both must match 25 independent expected observations (including P1.3 batch registration). Reference/dependency
-  revisions, library paths and hashes are checked; six comparator controls must
-  reject broken results. Native notification free/reuse is exercised. A separate
-  native CI gate preserves external evidence; the fast Rust fixture gate does
-  not claim native execution. This covers selected valid-input CPU behavior,
-  not the complete P0 mapping, native faults, wire compatibility or hardware.
-- [ ] Freeze the reference source, compiler/build options, optional providers
-  and external dependency revisions for an isolated C++ oracle. It is a test
-  dependency outside the normal OrbitTE build and published package.
-- [ ] Map all 33 C functions, richer native/Python/classic-TE surfaces, config
-  keys/defaults/environment precedence, transport capability bits, metrics,
-  metadata and wire messages to deterministic acceptance cases. Mark reference
-  stubs, inactive source and narrative/code disagreements explicitly.
-- [ ] Map the 84 reference C++ test sources to retained behavioral cases and
-  their CPU, service, GPU, RNIC, filesystem or vendor-hardware triggers. Map
-  Python guards, parent compatibility tests and tebench byte checks too. Mark
-  excluded-accelerator and UB cases as outside scope and require explicit
-  unavailable behavior for their ABI values. Merge overlapping cases; do not mechanically
-  port low-value implementation tests.
-- [ ] Define a common request trace and runner contract for C++ and Rust:
-  initial bytes, registrations, operations, faults, observations and cleanup.
-  Compare byte integrity and allowed status/state transitions, not incidental
-  timestamps, random IDs or thread schedules. Include deliberate old/broken
-  controls for lifetime and epoch checks.
-- [ ] Freeze control-RPC/YLT framing and serialization, metadata formats,
-  HP-TCP wire frames, provider bootstrap messages and C ABI fixtures. Keep
-  small deterministic fixtures in source; raw oracle captures stay external.
-- [ ] Reserve qualification resources and write a run manifest schema: source
-  and artifact hashes, ABI/profile, hardware/topology, SDK/driver/kernel,
-  namespace, budgets, seed, command, correctness and cleanup result.
-- [ ] Freeze workload-specific resource and performance guards before formal
-  measurements. Record initial estimates after the first representative pilot.
+Done:
 
-Exit: a reviewer can select any inventory row and find its implemented reference
-path, intended Rust owner, test trigger and acceptance result format. The oracle
-must build and execute its CPU controls independently of OrbitKV's restaged
-native libraries. No feature is considered implemented by completing P0.
+- **P0.1 — shared CPU comparison trace (Implemented).** Unmodified frozen TENT
+  and the public Rust API run one deterministic registration, READ/WRITE, batch
+  and notification trace over real host memory and TCP; both must match 25
+  observations, and six comparator controls must reject broken results. See
+  [CPU oracle](cpu-oracle.md). It covers selected valid-input CPU behavior only.
+
+Open:
+
+- [ ] Freeze the reference source, build options, optional providers and
+  dependency revisions for an isolated C++ oracle outside the normal build.
+- [ ] Map all 33 C functions, the richer native/Python/classic-TE surfaces,
+  config keys and precedence, capability bits, metrics, metadata and wire
+  messages to deterministic acceptance cases, marking reference stubs.
+- [ ] Map the 84 reference C++ test sources, Python guards and tebench byte
+  checks to retained cases with their hardware triggers; mark excluded
+  accelerator and UB cases out of scope with explicit unavailable behavior.
+- [ ] Define a common request trace and runner contract for C++ and Rust,
+  comparing bytes and allowed transitions, with broken lifetime/epoch controls.
+- [ ] Freeze control-RPC framing, metadata formats, HP-TCP frames, provider
+  bootstrap messages and C ABI fixtures.
+- [ ] Write the run-manifest schema and freeze workload-specific resource and
+  performance guards before formal measurements.
+
+Exit: any inventory row resolves to its reference path, Rust owner, test trigger
+and result format, and the oracle runs its CPU controls independently of OrbitKV.
 
 ## P1 — Core engine and physical ownership
 
-Requirements: F01-F04, F08-F10 foundations, F22.
+Requirements: F01–F04, F08–F10 foundations, F22.
 
-- [x] **P1.1 — owned CPU foundation (Implemented, not Accepted).** Immutable
-  Rust config, random source epochs, owned stable backing, checked ranges and
-  permissions, non-reused registration IDs, retained-memory budgets, bounded
-  batch admission, resource counters and source-handler close/drain. Local
-  Linux checks pass. External pinned allocations, topology/NUMA, TENT config
-  precedence, asynchronous task/cancel/merge and native providers remain open.
-- [x] **P1.2 — external host owner and address registration (Implemented, not
-  Accepted).** A retained host-allocation owner, checked registered subranges,
-  TENT-style duplicate references/first permission and containing-buffer lookup,
-  shared alias locks, retained-range conflicts and versioned base-address
-  descriptors. Real TCP tests use external source/destination backing and prove
-  unregister/timeout cannot release the owner while a handler remains active.
-  This substage does not pin pages itself. P1.5 adds an actual CUDA-pinned
-  consumer bridge; whole-pool integration and native free-failure qualification
-  remain open.
-- [x] **P1.3 — native host batch inputs (Implemented, not Accepted).**
-  The Rust API hygiene step (S0, Implemented) adds a request constructor with
-  ordinary transfer defaults and setters for QoS, priority and remote staging.
-  Requests, transports and errors are non-exhaustive for Rust callers.
-  Clippy checks unsafe blocks for safety notes and native features require a
-  Linux target. These source changes preserve transfer behavior. Absolute-address READ/WRITE inputs resolve all registered ranges before I/O
-  and retain actual backing through completion. Host range batches preflight
-  bounds, alias locks, references, IDs and retained budgets before one atomic
-  publication. Real external allocations, multi-region TCP bytes and concurrent
-  requester unregister/close are tested. The shared native trace now exercises
-  batch duplicate references and complete cleanup. New in-batch duplicates are
-  coalesced in Rust; this restriction is distinguished from the frozen native
-  publication behavior. This is allocator-facing input support, not an
-  installed OrbitKV adapter, C ABI or CUDA-pinned qualification.
-- [x] **P1.4 — asynchronous CPU batches (Implemented, not Accepted).**
-  Bounded allocate/append/seal/status/free, stable public task indices and
-  post-seal terminal state, worker-driven progress and observational polling.
-  Task/submission data outcomes and notifications are independent. Queue time
-  consumes the submission deadline. Cancellation never releases running owners;
-  dropped handles retain the engine, backing and allocation/admission charges
-  until accepted work exits. Requester close/drain is separate from source
-  close. Real blocked TCP controls exercise cancel, wait timeout, unregister,
-  detach and release. The native comparison now uses async allocation, multiple
-  submits, repeated terminal polling and free. See [the contract](async-batches.md).
-  Merge/alias mapping, explicit progress, backend aborts, priority and native
-  deferred-free compatibility remain open; this is not the complete F08 stage.
-- [x] **P1.5 — OrbitKV pinned allocation bridge (Implemented consumer candidate,
-  not Accepted).** [OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303)
-  at `f9eda6acd9defdae46d95514bd4e94d48b657fc6` pins OrbitTE `02d64e55` and
-  exposes one canonical host view per real `PinnedAllocation`. The view retains
-  that exact slot and its shard; a weak cache avoids cycles and independent
-  alias locks. Strict default-feature Clippy passes. Two explicit hardware
-  controls passed on H20 GPU 7 with private CUDA 12.2: production memfd/CUDA host
-  registration, actual TCP READ/WRITE bytes, duplicates, cancel/wait timeout,
-  unregister, failed early free, detach, slot exhaustion, allocator drop and
-  eventual release. The native child and supervisor were reaped and locks
-  released. Evidence is external at
-  `/root/orbitte-artifacts/merge-and-allocator-20261021/allocator-hardware/`.
-  This is an opt-in allocation-range bridge in a consumer PR, not a Manager
-  transport replacement, whole-pool MR cache, source-grant/mailbox integration,
-  installed serving, RDMA or device-DMA failure qualification. The caller must
-  still coordinate external CPU/GPU/process access. See the maintained
-  [consumer contract and hardware gate](https://github.com/OrbitInfra/OrbitKV/blob/f9eda6acd9defdae46d95514bd4e94d48b657fc6/docs/transport.md#experimental-orbitte-allocation-bridge).
-- [ ] Implement Rust request/status/error/options types and native engine
-  construction using frozen per-engine config, without changing process-global
-  environment to configure concurrent engines.
-- [ ] Make allocation, registration, batch/task and callback ownership concrete.
-  An admitted transfer retains actual source/destination backing and native
-  registrations until the backend proves it can no longer access them.
-- [ ] Represent logical outcome and physical quiescence separately. Define
-  engine admission close, requester/handler drain, unregister retry and retained
-  resources. A token drop, deadline, failed submit or accepted cancel is not a
-  release receipt. Borrowed/raw-pointer APIs have explicit unsafe contracts.
-- [ ] Implement CPU allocation/copy/probing, range/overflow/permission validation,
-  duplicate registration references, partial rollback, generation checks and
-  bounded task/descriptor/payload/retained-resource admission.
-- [ ] Implement batch capacity and status accounting, including terminal
-  stability and merge/alias ownership contracts, before adding real devices.
-- [ ] Freeze config precedence, effective defaults and diagnostics; preserve the
-  distinction between bootstrap fields, runtime candidates and implemented live
-  updates. Do not add a hot-reload controller to emulate a declaration.
+Done (each Implemented, not Accepted):
 
-Exit: CPU property/negative tests, concurrent registration and shutdown controls,
-allocator failure and partial construction/cleanup tests pass. Test-only fakes
-drive production owners. No fake test is described as a network or DMA pass.
+- **P1.1 — owned CPU foundation.** Immutable config, random source epochs,
+  owned backing, checked ranges and permissions, non-reused registration IDs,
+  retained-memory budgets, bounded admission and source close/drain.
+- **P1.2 — external host owners.** Retained external allocations, duplicate
+  references with TENT's first permission, containing-range lookup and shared
+  alias locks.
+- **P1.3 — native host batch inputs.** Absolute-address requests resolve and
+  retain every range before I/O; host range batches publish atomically.
+- **P1.4 — asynchronous batches.** Bounded allocate/append/seal/status/free,
+  stable task indices, independent data and notification outcomes, and
+  cancellation that never releases running owners; see
+  [async batches](async-batches.md).
+- **P1.5 — OrbitKV pinned allocation bridge (consumer candidate).**
+  [OrbitKV #303](https://github.com/OrbitInfra/OrbitKV/pull/303) exposes one host
+  view per real `PinnedAllocation`; two H20 hardware controls passed.
+- **S0 — request API and safety hygiene.** `TransferRequest::new` with builders,
+  non-exhaustive public types, enforced safety notes and Linux-only native
+  features.
+
+Open:
+
+- [ ] Native engine construction from frozen per-engine config, without mutating
+  process environment.
+- [ ] Explicit separation of logical outcome and physical quiescence for every
+  remaining owner, with unregister retry and documented unsafe raw-pointer APIs.
+- [ ] CPU allocation, copy and probing; merge/alias ownership contracts.
+- [ ] Config precedence, effective defaults and diagnostics (F01, see P9).
+
+Exit: CPU property and negative tests, concurrent registration and shutdown
+controls, and allocator failure and partial-construction tests pass on
+production owners.
 
 ## P2 — First complete TCP path
 
-Requirements: B01; F05-F08, F11, F20 foundations.
+Requirements: B01; F05–F08, F11, F20 foundations.
 
-- [x] **P2.1 — first CPU TCP vertical path (Implemented, not Accepted).** Explicit
-  epoch-fenced descriptor open/refresh, sequential READ/WRITE batches with exact
-  prefix accounting, source-side validation, staged complete-slice commits,
-  final WRITE ACK, absolute I/O deadlines and bounded handlers. Real loopback,
-  concurrent and independent-process restart/byte tests pass. The development
-  protocol is OrbitTE-only. S0b (Implemented) freezes its version and preserves
-  both frame layouts. CPU controls reject unsupported versions on requests
-  and replies. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries).
-  TENT mixed-peer tests, physical two-host tests,
-  transport notification fallback, automatic updates and the reference oracle
-  remain open.
-- [x] **P2.2 — bounded CPU notifications (Implemented, not Accepted).** TENT-style
-  named local/remote messages, atomic drain/empty polling and one attached
-  message after successful nonempty synchronous batches. Queue count/bytes
-  include incoming reservations. Source close drains admitted handlers and
-  leaves queued messages readable. Data results remain intact if notification
-  delivery fails; an ambiguous receipt is not replayed. Real TCP, concurrency,
-  malformed/partial-body, queue-pressure and independent-process restart tests
-  pass. Native C allocation/free, asynchronous
-  multi-target hooks, RDMA/RPC fallback and C++ differential gates remain open.
-- [x] **P2.3 — OrbitKV TCP peer integration (Implemented consumer candidate;
-  scoped source/H20 pilot reviewed; installed prerequisite accepted in P11).** [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304)
-  at `5a50d092c651d28ff3f79f6de661c9da8120b2b3` pins OrbitTE `02d64e55`.
-  An explicit `orbitte-tcp` provider shares Manager discovery, source admission,
-  planning and gRPC generation completion. The standalone build excludes
-  Mooncake; the runtime default remains TENT. Source tickets retain actual
-  allocation registrations; requester READ preserves the grant epoch through
-  metadata open and payload. Cancellation retains the blocking owner;
-  unquiesced work retains the source ticket, destination buffers and admission.
-  Source close fences before requester drain, even after cleanup failure.
-  The first profile allows 64 MiB/16,384 split descriptors per READ and 4,096
-  active/retained allocation regions. It rejects excess work; planner resizing
-  is not implemented. Strict default/dual/standalone checks, real TCP epoch and
-  protocol controls, ticket loss/retry/cancellation and isolated quarantine
-  controls pass. Two exact H20 source gates passed with private CUDA 12.2:
-  duplicate grant registration, generation reuse, eviction and TCP bytes;
-  then real Manager services, etcd/inventory, multi-grant READ, GPU Save/Restore
-  byte comparison, membership fencing and worker/service drain. The run verifies
-  private libraries, no mapped TENT, owned child/supervisor/etcd reaping and GPU
-  lease release. An independent reviewer accepted the limited source/H20
-  evidence after rerunning the source/CPU gates and both frozen hardware tests;
-  the report is `independent-review.json` under the evidence root below.
-  The failed first cleanup-assertion attempt is retained with
-  the passing corrected run in the external evidence root
-  `/root/orbitte-artifacts/peer-read-20261021/`.
-  This does not qualify an installed Manager/wheel, serving, CUDA 13 runtime,
-  physical cross-host Manager traffic, RDMA, GDR, multirail, SSD or TENT wire
-  compatibility. Transfer notification-mailbox adaptation remains separate.
-  See the maintained [consumer contract and explicit gates](https://github.com/OrbitInfra/OrbitKV/blob/5a50d092c651d28ff3f79f6de661c9da8120b2b3/docs/transport.md#experimental-orbitte-peer-tcp-profile).
-- [ ] Implement peer identity, memory descriptors and P2P open/refresh/update
-  behavior, owned RPC dispatch and handler isolation/reconnect semantics.
-- [ ] Implement actual host READ/WRITE with registration/range/permission checks,
-  exact status/byte accounting and copy-error propagation. Retain uncertain
-  submitted work and reject stale authority in the declared protocol profile.
-- [ ] Implement local and remote notifications, attached notifications and empty
-  polling/free behavior, with concurrency and duplicate-delivery controls.
-- [ ] Expose a narrow Rust vertical-path API and minimal native adapters needed
-  to run the same trace against Rust and frozen TENT. Complete API coverage is P9.
-- [ ] Add core resource/failure metrics early so admitted, retained and retired
-  work is observable during every later stage.
+Done (each Implemented):
 
-Exit: real two-process and physical two-host TCP byte tests, mixed-peer tests for
-the frozen protocol, permission/range denial, restart, reconnect, partial/lost
-reply and normal source/requester shutdown. A lost RPC reply must not authorize
-ambiguous replay or memory reuse. Publish a CPU-only recipe with exact limits.
+- **P2.1 — CPU TCP vertical path.** Epoch-fenced descriptor open/refresh,
+  READ/WRITE batches with exact prefix accounting, source validation, final
+  WRITE ACK, absolute deadlines and bounded handlers; real loopback and
+  independent-process tests.
+- **P2.2 — bounded notifications.** TENT-style local/remote messages, atomic
+  drain, one attached message per successful batch and data results that
+  survive notification failure.
+- **P2.3 — OrbitKV TCP peer integration (consumer candidate).**
+  [OrbitKV #304](https://github.com/OrbitInfra/OrbitKV/pull/304) adds an opt-in
+  `orbitte-tcp` provider; the limited source/H20 evidence was independently
+  accepted.
+- **S0b — frozen pre-release wire.** The OrbitTE-only control protocol stays at
+  version 1 until the first release; see the
+  [wire policy](tent-parity.md#wire-and-consumer-boundaries).
+
+Open:
+
+- [ ] Peer identity, descriptor update subscriptions and reconnect semantics.
+- [ ] Notification RPC fallback and native C allocation/free conventions.
+- [ ] Core resource and failure metrics (with P6/P9).
+- [ ] Physical two-host TCP and mixed-peer tests against frozen TENT.
+
+Exit: real two-process and two-host TCP byte tests, mixed-peer tests for the
+frozen protocol, permission/range denial, restart, reconnect and lost-reply
+controls; a lost reply never authorizes ambiguous replay.
 
 ## P3 — HP-TCP and SHM
 
-Requirements: B02/B03; associated F04/F07-F11/F18.
+Requirements: B02/B03 with associated F04/F07–F11/F18.
 
-- [ ] HP-TCP: worker-owned persistent lanes/sockets; bounded tasks/bytes/sessions;
-  request and generation-scoped registration IDs; remote permissions; complete
-  WRITE ACK and READ response accounting; timeout, cancel and close/drain.
-- [ ] Reproduce IPv4 rail address validation, per-peer lane rotation, exact
-  large-READ partitioning and static rail pairing. Keep WRITEs on one lane and
-  preserve the reference's explicit restrictions.
-- [ ] SHM: actual shared mappings and offsets, registration/permission checks,
-  overlap/alias handling, process lifetime and cleanup. Match its opt-in default.
+- [ ] HP-TCP: worker-owned persistent lanes, bounded tasks/bytes/sessions,
+  generation-scoped registration IDs, remote permissions, WRITE ACK and READ
+  accounting, IPv4 rail validation, per-peer lane rotation, large-READ
+  partitioning and static rail pairing, as in TENT.
+- [ ] SHM: shared mappings and offsets, registration and permissions, alias
+  handling, process lifetime and cleanup, with TENT's opt-in default.
 
-Exit: Rust/TENT directional HP-TCP interoperability, fragmented frames,
-backpressure, partial READ/WRITE, stale registration after restart, unlink/
-unregister races, cancellation/drain and same-host shared-byte tests. Multi-rail
-qualification requires independently routed physical interfaces, not aliases on
-one loopback route.
+Exit: directional Rust/TENT HP-TCP interoperability, fragmented frames,
+backpressure, stale registration after restart, unlink/unregister races and
+same-host shared-byte tests. Multirail qualification needs independently routed
+physical interfaces.
 
 ## P4 — Host RDMA and endpoint ownership
 
 Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
+QP arrays, persistent multi-context MRs, concurrent grants, transport Workers,
+NUMA affinity, multirail slicing, discovery and periodic monitor recovery are
+implemented. Source and the bounded RoCE profile were independently accepted at
+`121ab95`, including four fresh live repeats; see
+[P4 review](qualification.md#p4-independent-review). The detailed P4.1–P4.12m
+history is in the
+[immutable plan before consolidation](https://github.com/OrbitInfra/OrbitTE/blob/f2c7e7f5d32bb9c231596752af6bd59142b1f3a9/docs/completion-plan.md#p4-implementation-record).
+
 ### P4 remaining delivery
 
-The host data path is implemented. This queue separates actual code gaps from
-qualification; a new test geometry is not a new implementation stage. The
-[frozen-source audit](architecture.md#p4-source-audit) records the corresponding
-TENT owners and deliberate differences.
+| Item | State |
+| --- | --- |
+| Discovery and recovery correspondence (paused contexts, automatic GID reselection, strict pins) | Implemented; [focused native gate](qualification.md#focused-native-recovery) passed and accepted |
+| Declared installed RoCE fault profiles: healthy traffic, idle restart, posted-RQ interruption, lost CQEs, [QP cleanup and in-flight DMA](qualification.md#installed-two-host-fault-qualification), [MR/MW cleanup](qualification.md#installed-memory-cleanup-and-replacement), [CQ/channel/PD cleanup](qualification.md#installed-dependency-cleanup), [rail accounting](qualification.md#installed-physical-rail-accounting), [automatic discovery](qualification.md#installed-automatic-discovery) | Qualified for the frozen installed profiles |
+| Physical link/device loss, provider teardown and the InfiniBand profile | **Unqualified**; needs authorized disposable hardware |
 
-| Order | Remaining work | Kind and completion condition |
-| --- | --- | --- |
-| 1 | Accept discovery/recovery correspondence | **Implemented; focused native gate passed:** paused PD/MR ownership, automatic GID reselection and strict pins pass the [one-RNIC native profile](qualification.md#focused-native-recovery) on both toolchains. CPU controls also cover all-paused registration and healthy-sibling dispatch. Source and bounded evidence independently accepted at `121ab95`; this observed-state override does not qualify physical link loss. |
-| 2 | Close the declared installed RoCE fault profile | **Qualified for the frozen installed profiles:** healthy traffic, idle restart, posted-RQ interruption and lost successful CQEs; [QP cleanup and in-flight DMA](qualification.md#installed-two-host-fault-qualification); [MR/MW cleanup and engine replacement](qualification.md#installed-memory-cleanup-and-replacement); and [CQ/channel/PD dependency cleanup](qualification.md#installed-dependency-cleanup). The last group passes six two-host cases on stable and Rust 1.85, plus ten affected regressions. Physical failures retain the separate acceptance conditions below. |
-| 3 | Finish physical/fabric qualification | **Unqualified:** physical link/device loss and provider teardown, the separate InfiniBand profile, and complete P4 acceptance. The [installed automatic-discovery profile](qualification.md#installed-automatic-discovery) now passes against a separately collected physical inventory on both toolchains. The independent reviewer accepted source, CPU/package gates and bounded RoCE evidence at `121ab95`, including four fresh live discovery/topology cases. Missing hardware does not pass this row. |
-
-**Physical rail contention/accounting is qualified for the bounded installed
-profile:** source `cc6ab0f` passes four two-host configurations on stable and
-Rust 1.85. Both physical RNICs carry concurrent parent slices on shared QPs;
-native WR/CQE identities, full payload/guard checks, exact byte counters and
-final owner drain agree. See [the artifact and limits](qualification.md#installed-physical-rail-accounting).
-Line-rate saturation and native arbitration/fairness qualification remain P6 work.
-
-**Installed automatic discovery is qualified for the declared RoCE inventory:**
-source `36890c8` passes four two-host automatic cases and two fixed-GID controls.
-The packaged collector independently reads PCI, NUMA, port, GID and network
-interface data before/after the process under the same resource locks. Public
-route selection, strict-pin rejection and memory priority tiers agree with it.
-Independent reviewer repetition also passes four fresh two-host cases. Physical
-transitions and InfiniBand remain open.
-
-The first row closes the two source gaps found in the frozen-source audit.
-Discovery now keeps an otherwise valid down-port context paused, as TENT's
-`enable` does. Its PD receives persistent MR copies while route admission stays
-disabled. Recovery repeats GID ranking only for automatic configuration, on the
-same selected device and port; explicit pins cannot move. Healthy ticks query
-the selected index. Native drain and the route generation still gate publication.
-New-device hotplug and general cross-rail retry policy remain separate work;
-the native observation fixture does not qualify physical link loss.
-
-For the installed RoCE profile, reuse the existing bounded consumer and recorded
-geometries: two hosts/two mlx5 RNICs, host Direct READ/WRITE in both directions,
-polling/events, 1–3 QPs per peer/context/operation, masks 1/2/3, 12/16/32 parents
-and the recorded requests up to 9 MiB. The 256 MiB backing limit is per peer;
-these are selected combinations, not every Cartesian product. The existing
-72-case healthy matrix and idle-restart, posted-RQ and lost-CQE matrices remain
-qualified only for their recorded packages. Re-run affected contracts when code
-changes; do not grow the matrix solely by increasing parent count or payload.
-The fixture's larger configurable limits are not blanket support claims.
-
-The missing fault evidence has distinct meanings:
-
-- Posted-RQ interruption proves pre-payload authority drain. Lost successful
-  CQEs prove recovery after lost engine observation. Neither proves termination
-  of physically interrupted DMA.
-- Native QP/MR/MW syscall and CQ/channel/PD dependency failures already have
-  scoped retention evidence. Their declared installed profiles now pass too.
-  CQ/channel failures retain actual backing and unresolved charges; idle PD
-  failure releases drained business memory and retains the device/PD only.
-  These results do not claim spontaneous hardware error coverage.
-- Physical loss requires an authorized disposable link/device and observations
-  of its real state. Query failure injection and QP ERR remain useful controls,
-  but do not qualify cable loss, device removal or provider teardown.
-- InfiniBand remains a separate unqualified fabric. RoCE results, including a
-  new GPU node allocation, cannot satisfy that requirement.
-
-QP arrays, persistent MRs, concurrent grant/SQ/RQ ownership, transport Workers,
-NUMA affinity and periodic monitor reclaim are implemented. They need regression
-coverage for relevant changes, not another feature milestone. Priority/QoS,
-bandwidth-aware spraying and generic retry/failover remain P6; direct GPU DMA,
-NVLink and GDS remain P5/P7; native API/wire compatibility remains P9. These
-boundaries do not remove any requirement from the complete TENT target.
-
-P4 stays open until the above code and qualification gates are accepted. A
-reviewer may accept a narrower RoCE profile explicitly, but that does not turn
-missing IB/physical-fault evidence into a pass. OrbitKV integration remains after
-the accepted P4 boundary; no dependency migration is part of this closeout.
-
-### P4 implementation record
-
-Current ownership and behavior live in [architecture](architecture.md),
-[RDMA contracts](rdma-cuda.md), [native cleanup](native-cleanup.md) and
-[installed consumers](installed-host.md). Exact source pins, scoped results,
-failed runs and artifact locations remain in [qualification](qualification.md).
-The detailed P4.1–P4.12m delivery history is preserved in the
-[immutable plan before this consolidation](https://github.com/OrbitInfra/OrbitTE/blob/f2c7e7f5d32bb9c231596752af6bd59142b1f3a9/docs/completion-plan.md#p4-implementation-record).
-It is historical evidence, not an execution queue. No raw evidence is moved or
-deleted by this consolidation.
+These results have distinct meanings. Posted-RQ interruption proves
+authorization drain before payload; lost CQEs prove recovery after lost engine
+observation; neither proves termination of physically interrupted DMA. Process-
+local syscall and dependency faults prove retention, not spontaneous hardware
+error coverage. RoCE results never satisfy the InfiniBand profile. Priority,
+spraying and retry policy belong to P6, GPU paths to P5/P7 and native API/wire
+compatibility to P9.
 
 ## P5 — CUDA, GPUDirect and staged transfers
 
-Requirements: B01 device directions, B04 CUDA, B05/B06; F02-F04/F07/F19.
+Requirements: B01 device directions, B04 CUDA, B05/B06; F02–F04/F07/F19.
 
-- [x] **P5.1 — NVIDIA allocation and synchronized staging (Implemented, not
-  Accepted).** Driver API device/pinned host owners; probed external device
-  ranges; shared transactional registration; private pinned copy staging,
-  context restore/synchronize, and retained unquiesced task/source/requester
-  owners with budgets. CUDA can feed TCP or the P4.1 host-MR path. CPU shim
-  gates cover copy/restore/sync/unpin and logical failure versus physical drain.
-  Hardware qualification is separate. GDR, IPC/NVLink/MNNVL, transport-wide stream
-  scheduling, producer lifecycle integration and reclaim proofs remain open.
+Done:
 
-  The binding maintenance substage reuses generated `cudarc` Driver API types
-  and signatures with fallible, selective `libloading` lookup. The pinned
-  dependency keeps Rust 1.85 and the existing quiescence/retention contract.
-- [x] **P5.2 — Owned copy streams and completion events (Implemented; local-copy
-  profile Qualified).** Each
-  `CudaMemory` lazily reuses a nonblocking stream and blocking completion event
-  under its allocation lock. Private pinned staging stays owned until that event
-  completes; failed submit/record drains the same stream, while an unproven wait
-  retains device, staging and native handles. Cleanup is never a completion
-  receipt. Public read/write still wait; external producers must be ready before
-  handoff. CPU controls cover concurrent reuse, delayed completion, partial
-  construction/submission, record/wait/destroy failures and budget retention.
-  The explicit `cuda_copy` GPU gate passes 24 GPU/size/toolchain combinations
-  on two H20 hosts, with full-byte/guard checks and final owner release. See
-  [exact artifacts and limits](qualification.md#cuda-copy-streams-and-completion-events);
-  native error injection remains a separate qualification requirement.
-- [x] **Owner-backed CUDA pointer/location contract (Implemented; source profile).**
-  CPU/pinned host and CUDA device/context metadata comes from actual owners;
-  registration locations are bounded to their range. External CUDA adoption
-  batches four attributes in one driver call and still checks the mapped extent.
-  Unexpected/default/managed attributes and driver errors cannot choose a CPU
-  dereference. Context-owned PCI/NUMA discovery is reused by staging; allowed
-  nodes are checked on each selection. See [the contract](rust-api.md#memory-type-and-location)
-  and [qualification](qualification.md#cuda-pointer-and-location). General CPU
-  page probing and the P8 plugin ABI remain separate.
-  Existing context/stream/event/export/import owners keep their scoped gates.
-- [x] **CUDA topology and owner-based RDMA selection (Implemented; source profile).**
-  F02 CUDA-visible device/PCI/NUMA entries and GPU-to-RNIC bridge-distance tiers
-  feed the existing `DeviceSelector`. Precompiled typed rank arrays remove
-  per-slice topology scans. Requester allocation and source path publication use
-  actual owner locations, preserving explicit masks/hints, known-cross-NUMA
-  rejection, stable context IDs and actual grant byte charges. Discovery creates
-  no CUDA contexts; missing PCI distance stays unknown. See
-  [contracts](rdma-cuda.md#device-port-gid-and-memory-topology-discovery) and
-  [source evidence](qualification.md#cuda-topology-and-rdma-selection).
-  Installed topology/routing and matched performance remain unqualified.
-- [x] **Custom topology input (Implemented; source profile).** F02 inline
-  priority matrices and native `nics`/`mems` files resolve to discovered stable
-  NIC IDs before context creation. Only configured candidates are eligible;
-  wildcard fallback, strict physical NUMA rules, masks and grant charge lifetimes
-  use the existing selector. No JSON/file/name work enters slice dispatch.
-  Explicit configuration errors fail initialization; physical metadata is kept.
-  See [configuration](rdma-cuda.md#custom-topology-and-priority-matrices) and
-  [source evidence](qualification.md#custom-topology-input). Hardware and matched
-  performance remain unqualified; global F01 configuration remains separate.
-- [x] **P5.3 — Explicit GPU direct RDMA (Source and bounded installed profile accepted with limits).**
-  Actual CUDA allocation/context registration, SYNC_MEMOPS and write visibility;
-  persistent requester MRs on selected contexts; exact source MR/PD/QP isolation
-  without unsupported PeerDirect MWs. The protocol binds an ordinary SEND receipt to the
-  grant; source ACK follows native close and GPU visibility. Failed registration
-  never selects staging. CPU controls cover aliases, partial construction,
-  payload/RQ MR and PD cleanup, context restore and retained owners/budgets.
-  Both installed compiler artifacts pass 72 H20/RoCE cases, covering both host
-  directions, CPU/GPU/GPU combinations, tiny requests, folded tails and two
-  contexts. Two extra live-PID repeats prove eight native context identities
-  close. Independent review accepts the bounded evidence; B host-wide context
-  non-growth remains unqualified because six additional entries have no assigned
-  owner. See [qualification](qualification.md#gpudirect-rdma). GPU source QP/MR
-  reuse, installed GPU topology qualification, custom scheduling policy, broader
-  providers and native GPU faults remain open; this is not full P5 acceptance.
-- [ ] **P5.4 — CUDA IPC/NVLink ownership and completion.** Follow frozen TENT
-  `NVLinkTransport`: same-host handle export/import, retained exporter/importer
-  allocations, peer copy streams/events, process-generation validation and
-  close/drain. Qualify independent producer/consumer processes on two local
-  NVIDIA GPUs, including failed imports, stale generations and early shutdown.
-  MNNVL fabric import/export and EGM remain separate topology profiles.
-  The first cooperative owned GPU/GPU path is implemented: explicit whole-
-  allocation export, physical mapping quota, event drain and matching import-
-  close receipts, with synchronous/async failure retention controls. Installed
-  stable/MSRV qualification passes 48 H20 cases plus four fresh independent
-  repeats; source and the bounded cooperative profile are independently accepted.
-  **P5.4b — bounded subbatch reuse (Accepted for the declared profile):**
-  consecutive same-region/native-context requests share one import and physical
-  charge; copied local owners survive through close. Exact envelope relocation,
-  typed pre-grant rejection fallback, per-slice cancellation and shared failure
-  spans have CPU controls, including nonzero submission indices and combined
-  cancel/cleanup failures. Installed consumers pass 28 H20 cases on stable/MSRV,
-  covering two local allocations and three ordered copies per import. Four fresh
-  independent repeats pass; source and bounded hardware evidence are accepted.
-  **P5.4c — local pinned host directions (Accepted for the declared profile):**
-  local owned pinned
-  host READ/WRITE and mixed host/GPU groups reuse the same native context,
-  subbatch import and close protocol. CPU access/RDMA leases share the host
-  owner; failed completion retains and fences actual pinned backing. Source
-  gates, 30 installed stable/MSRV H20 cases and four fresh independent repeats
-  pass. Source and the bounded profile are independently accepted.
-  **P5.4d — bounded cross-submission import cache (Accepted for the declared profile):**
-  opt-in transport-owned single-flight relocation entries retain context/import
-  and physical quota. Every reuse rechecks source authority. An independent
-  export owner retains registration and whole-allocation loan until explicit
-  native-close receipt; ready-offer prevents late initial grants after close.
-  Operation completion releases drained local owners. Requester close retries
-  lost close ACKs without repeating native close; mutual shutdown closes outgoing
-  imports first. CPU controls include cold concurrency, closed/unregistered/
-  read-only sources, lost receipts, late hello, source/requester capacity, actual
-  source-owner retention and native cleanup faults. Stable/MSRV installed
-  consumers pass 34 H20 cases plus four fresh independent repeats; source and
-  this fixed-working-set profile are accepted.
-  Idle LRU reclamation and continuing flush are implemented at `fd55f15` with
-  source controls: full-cache replacement retains old capacity and a new-key
-  reservation through native close/source ACK, and explicit flush keeps outgoing
-  admission open. Their current installed dynamic-working-set DMA and performance
-  remain unqualified. Remote host exports and broader stream scheduling remain
-  open; exporter-crash safety is explicitly unqualified. See
-  [the transport contract](cuda-ipc.md).
-  **P5.4e — grouped CUDA submission (source implemented at `f388416`):**
-  `NVLinkSubBatch` resolves actual allocation owners; one deduplicated GPU/host
-  lock order protects all copies through drain. Ordered enqueue shares the
-  first owner's reusable stream/event, with one trailing completion wait.
-  Clean submit/cancel recovery preserves the acknowledged prefix; shared
-  record/wait/restore failure covers every attempted request. CPU controls cover
-  mixed owners, aliases, reversed concurrent groups and failure spans. Current
-  installed DMA and performance qualification remain open; see
-  [group completion](qualification.md#cuda-ipc-group-completion).
-  **P5.4f — shared CUDA streams (source implemented at `28c673f`):**
-  `CUDAStreamPool` / `CUDAStreamHandle` reuse stream/event pairs across changing
-  local GPU/pinned allocations on the same native context. `nvlink_stream_count`
-  bounds lazy creation, exclusive leases and retained slots across contexts.
-  Idle context replacement and explicit requester close release native resources
-  outside the pool mutex. Uncertain creation/copy/restoration/cleanup stays
-  charged without reuse or native destroy retries. Group completion and receipts
-  are unchanged. Current installed DMA and performance remain unqualified; see
-  [stream ownership](qualification.md#cuda-ipc-stream-pool).
-  **P5.4g — shared event completion (source implemented at `0daa0a1`):**
-  already-ready events complete on the caller without a channel/worker hop;
-  one lazy NVLink completion worker queries all pending groups in their retained
-  native contexts. `IpcCopyGroup` owns actual whole-allocation loans and the
-  exclusive stream handle across NOT_READY, so independent submissions can
-  complete without waiting for a blocked event. Allocation conflicts obey the
-  original deadline; CPU/RDMA access stays excluded. Ready query plus context
-  restoration releases loans/stream before source receipt. Pending deadline or
-  query/restoration uncertainty retains touched owners and capacity. Setup and
-  receipts remain synchronous, and each Batch retains FIFO execution. Current
-  installed DMA/performance remain unqualified; see
-  [event progress](qualification.md#cuda-ipc-event-progress).
-  **P5.4h — native CUDA batch dispatch (source implemented at `d6b564f`):**
-  optional version-checked `cuMemcpyBatchAsync_v2` consumes same-context GPU/host
-  descriptor arrays. An O(n log n) dependency check permits shared reads and
-  preserves ordered enqueue for overlapping writes or missing capability.
-  Cancellation submits only the admitted prefix; native errors cannot replay
-  members or claim an unproven completed prefix. Actual owners, stream/event
-  progress and receipts remain shared. Focused source and observer controls pass;
-  current installed DMA/performance remain unqualified. See
-  [native batch evidence](qualification.md#cuda-ipc-native-batch-copy).
-- [x] **P5.5a — local staging chunks (Accepted for the declared profile).**
-  Engine-owned `ProxyManager` bounds lazy CUDA-pinned chunks across source,
-  requester and contexts. TCP and staged RDMA consume the same owner; full-range
-  GPU locking, tail copies, deadline boundaries, retained failures and explicit
-  whole-engine close preserve physical lifetime. CPU controls cover cancellation,
-  capacity/close races and combined CUDA/CQ errors. Stable/MSRV installed
-  consumers pass 24 H20 TCP/staged-RDMA cases plus four fresh independent
-  repeats. Source and this bounded healthy profile are accepted; physical CUDA
-  faults and default-capacity stress remain unqualified. See [local staging](staging.md).
-- [ ] **P5.5b — remote staging operations (healthy serial and bounded pipeline profiles accepted).**
-  Opt-in remote CUDA Pin/Delegate/Unpin uses the P5.5a chunk owner and real TCP
-  or RDMA CROSS legs. One handler and parent slot suffice; scoped phase receipts,
-  explicit private MR retirement and fallible chunk release fence reuse. CPU
-  controls cover partial effects, lost receipts and retained CUDA/MR failures.
-  Independent review accepts the serial source boundary at `64c9899`. Clean
-  stable/MSRV consumers at `9f2ad39` pass 16 H20 TCP/RDMA cases plus four fresh
-  independent repeats; source and this bounded healthy profile are accepted.
-  A bounded remote PRE/CROSS or CROSS/POST pipeline is now implemented: Pin
-  negotiates up to 16 slots, each physical slot retains its own CUDA stream/event,
-  and all accepted copies drain before private MR retirement/Unpin. CPU controls
-  cover multiple pending copies, tails, scope and failure retention. Clean
-  stable/MSRV consumers at `c0f6a9e` pass 24 fresh H20 TCP/RDMA cases, including
-  300 CROSS operations with safe MW index rollover. Four fresh independent
-  repeats and their cleanup audit pass; source and this healthy profile are
-  accepted. Independent source review accepts the first bounded requester stage
-  at `460d825`, including negotiated chunk sizes, exclusive GPU range loans and
-  clean package provenance. Its installed profile remains unqualified.
-  The requester now has an independent bounded PRE/POST ring, per-slot pending
-  ownership and final local drain before Unpin. Independent source review accepts
-  `c87c403`, including recovered submit/record errors, native context uncertainty
-  and multi-slot MR failure retention. New hardware requests are paused at the
-  user's direction: continue source implementation with hardware gates explicitly
-  deferred. Bounded CROSS command/completion queues and one joined session
-  worker now separate local CUDA progress from network/Delegate waits, with
-  explicit cancellation of queued commands and final remote receipt fencing.
-  Independent source review accepts `4441017`; worker panic controls retain
-  actual owners and admission without falsely reporting local drain.
-  A shared pool now starts at most eight shards, reuses idle threads and bounds
-  each shard queue to 64 sessions. Pin follows dequeue; queued timeout/cancel
-  destroys task captures before terminal delivery. Active work keeps its native
-  drain obligation, including caller unwind and task panic. Independent source
-  review accepts this boundary at `3db26ee`; see
-  [the shared-shard evidence](qualification.md#shared-staging-worker-shards).
-  Requester chunk progress now queries CUDA events and advances PRE/CROSS/POST
-  per slot without a window barrier. NOT_READY retains the same generation;
-  errors quarantine uncertain owners and drain accepted siblings. Independent
-  source review accepts this boundary at `1ac1d01`; see
-  [the event-loop evidence](qualification.md#requester-chunk-event-loop).
-  Bounded concurrent RDMA CROSS is now implemented: Pin negotiates native
-  capacity separately from CUDA rings, per-CROSS slice caps preserve actual
-  quotas, and scoped FinishCross selects bilateral completion before slot reuse.
-  Shared-QP reversed completion and aggregate failure controls cover the new
-  composition. Independent source review accepts `adc803f`; see
-  [the concurrent CROSS evidence](qualification.md#concurrent-rdma-cross).
-  Remote CUDA Delegate completion is now polled through scoped QueryDelegate
-  results, including depth one. Pending remote slots defer reuse while other
-  submitted CROSS owners progress; terminal confirmation gates final Unpin.
-  Independent source review accepts `3767dc5`; see [remote progress](qualification.md#remote-delegate-progress).
-  TCP payload and scoped staging control receipts now retain partial frames and
-  return pending with bounded socket work. Local failure can cancel and join
-  without the peer releasing its partial response; ordinary TCP shares TcpTask.
-  Independent source review accepts `736a16a`; see [socket progress](qualification.md#socket-progress).
-  Cancellable Connect/Pin and native handshake socket waits are implemented:
-  one pending socket keeps its original deadline and task stop; complete Pin
-  validation precedes publication, and cancellation still joins native drain.
-  Independent source review accepts `a2d1b9e`; see
-  [connection lifetime](qualification.md#connection-and-pin-lifetime).
-  Requester native finish now polls completion SEND and sealed reusable-grant
-  cleanup and retains partial DONE/ACK/READY frames while other CROSS payloads
-  remain queryable. Independent source review accepts `e2f4037`; see
-  [finish progress](qualification.md#native-rdma-finish-progress).
-  Requester native setup socket progress is implemented with RDMA-owned parent
-  admission and per-slice rendezvous, shared synchronous callers, and explicit
-  current-grant/sibling cleanup. Independent source review accepts `b2d9d3a`;
-  see [setup progress](qualification.md#native-rdma-setup-progress).
-  Host staging location selection is implemented: opt-in owner-derived GPU/NUMA
-  placement, mapped CUDA-registered backing, context/location reuse and physical
-  page accounting. Independent source review accepts `ab309f4`; hardware placement
-  remains unqualified. See [host staging location](qualification.md#host-staging-location).
-  Requester cold connection acquisition retains one grant lease and a pollable
-  canonical endpoint array. Independent source review accepts `06f685d`; see
-  [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
-  Pending persistent MR publication now yields through `GrantConstruction`,
-  preserving the original admission and connection claim with explicit cleanup.
-  Independent source review accepts `e69c47a`; see
-  [MR publication progress](qualification.md#persistent-mr-publication-progress).
-  Nonreusable requester QP retirement is implemented through the existing CQ
-  worker, with busy cleanup locks yielding and retained output awaiting a complete
-  lane receipt. Independent source review accepts `b2a0aba`; see
-  [retirement progress](qualification.md#nonreusable-qp-retirement-progress).
-  Reconcile remaining resource/source control boundaries with frozen TENT and qualify the current build before claiming full ProxyManager parity. See [the contract](staging.md#bounded-remote-pipeline)
-  and [qualification](qualification.md#bounded-remote-cuda-pipeline).
-- [ ] Cover mixed direct/staged batches, producer readiness and consumer-visible
-  completion without early source, destination or staging-buffer reuse.
-  The existing explicit GPU Direct RDMA / local TCP staging combination passes
-  the six READ/WRITE completion/failure controls. Source `5bdf4f2` removes repeated
-  per-request RDMA preflight scans/statistics sampling; native dispatch remains
-  authoritative. See [mixed batches](qualification.md#mixed-gpu-batches).
-  Per-request remote Pin/Direct selection is implemented at `27b73b5`, with
-  independent incoming Pin capability and existing host grant/registration policy;
-  see [remote selection](qualification.md#per-request-remote-staging).
-  GPU producer-stream readiness is implemented at `33ef0b1`, with explicit
-  stream-context controls corrected at `6909d69`. Actual allocation owners share
-  one reusable event generation across copies, staging, DMA and IPC access.
-  Owned CUDA-pinned host handoff is implemented at `eb609b4`, sharing the same
-  marker at CPU/staging, host DMA and local IPC access and final pin release.
-  Consumers use existing engine completion receipts; consumer-stream chaining
-  is not exposed. See [GPU readiness](qualification.md#cuda-producer-readiness)
-  and [pinned readiness](qualification.md#pinned-host-producer-readiness).
-  Current installed qualification remains open.
+| Substage | State | Evidence |
+| --- | --- | --- |
+| P5.1 NVIDIA allocation and synchronized staging | Implemented | [CUDA copy](qualification.md#cuda-copy-streams-and-completion-events) |
+| P5.2 Owned copy streams and completion events | Local-copy profile qualified (24 H20 cases) | [CUDA copy](qualification.md#cuda-copy-streams-and-completion-events) |
+| Owner-backed CUDA pointer/location metadata | Implemented | [pointer and location](qualification.md#cuda-pointer-and-location) |
+| CUDA topology and owner-based RDMA selection; custom topology input | Implemented | [topology](qualification.md#cuda-topology-and-rdma-selection), [custom input](qualification.md#custom-topology-input) |
+| P5.3 Explicit GPU direct RDMA | Bounded H20/RoCE profile accepted with a host-context inventory limit | [GPUDirect](qualification.md#gpudirect-rdma) |
+| P5.4 Cooperative CUDA IPC/NVLink | Accepted (48 cases) | [cooperative IPC](qualification.md#cooperative-cuda-ipc-and-nvlink) |
+| P5.4b Subbatch import reuse | Accepted (28 cases) | [subbatches](qualification.md#bounded-cuda-ipc-subbatches) |
+| P5.4c Local pinned host directions | Accepted (30 cases) | [pinned host](qualification.md#local-pinned-host-cuda-ipc) |
+| P5.4d Cross-submission import cache | Fixed working set accepted (34 cases); LRU reclaim and flush implemented | [cache](qualification.md#bounded-cross-submission-cuda-ipc-cache), [reclamation](qualification.md#cuda-ipc-cache-reclamation) |
+| P5.4e–h Grouped completion, shared stream pool, event progress, native batch copy | Implemented | [group](qualification.md#cuda-ipc-group-completion), [streams](qualification.md#cuda-ipc-stream-pool), [events](qualification.md#cuda-ipc-event-progress), [batch](qualification.md#cuda-ipc-native-batch-copy) |
+| P5.5a Local staging chunks | Accepted (24 cases) | [local chunks](qualification.md#local-cuda-staging-chunks) |
+| P5.5b Remote staging | Serial (16 cases) and ≤16-slot pipeline (24 cases) accepted; later requester ring, shard, event-loop, concurrent CROSS, Delegate query and pollable setup/finish work source-accepted only | [serial](qualification.md#serial-remote-cuda-staging), [pipeline](qualification.md#bounded-remote-cuda-pipeline) |
+| Mixed direct/staged batches, per-request remote staging, GPU and pinned producer readiness | Implemented | [mixed](qualification.md#mixed-gpu-batches), [remote selection](qualification.md#per-request-remote-staging), [readiness](qualification.md#cuda-producer-readiness) |
+
+Open:
+
+- [ ] MNNVL fabric export/import and the EGM option (B06).
+- [ ] GPU source QP/MR reuse for GPUDirect; remote host exports; exporter-crash
+  safety (currently unqualified).
+- [ ] Reconcile the remaining ProxyManager resource and control boundaries with
+  TENT before claiming full ProxyManager parity.
+- [ ] Installed qualification of the current build for every implemented-only
+  row above, plus native GPU fault injection.
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
-processes, CUDA/GDR/NVLink/MNNVL profile-specific tests, context/copy failures,
+processes, CUDA/GDR/NVLink/MNNVL profile tests, context and copy failures,
 partial submission, delayed completion, cancel, teardown and generation reuse.
-CPU shims and compiled CUDA stubs cannot pass this stage's device gates.
+CPU shims cannot pass this stage's device gates.
 
 ## P6 — Complete runtime behavior
 
-Requirements: F08-F20; all implemented transports consume the same owners.
+Requirements: F08–F20; every implemented transport consumes the same owners.
 
-- [ ] Implement the full selector contract: policy order/name, all intents,
-  priority, segment/memory/size filters, transport hints, device masks and QP
-  pools. Merge only requests whose authority and execution-policy fields agree.
-  Implemented: opt-in first-match policy order, original CPU/CUDA memory and
-  inclusive size filters, effective priority, Unspec candidate selection and
-  strict explicit hints. Describe publishes owner-derived capabilities and
-  process placement. The result drives existing sync/async transport execution;
-  no selector parsing/allocation occurs per slice. Named/intent/location/device
-  and QP-pool rules remain open. See [scope](transport-selection.md).
-- [ ] Implement FIFO/EDF admission, promotion, dispatch windows, independent
-  owner/byte budgets, staging reserves and deadline-infeasible cancellation.
-  Match eligibility rules, queue bypass, disabled defaults and absent-provider
-  behavior. Do not advertise an unconsumed local-recompute callback.
-  Implemented: opt-in FIFO/EDF over eligible whole-submission owners, preserved
-  same-Batch dependencies, independent dispatch owner/byte limits, preflight
-  oversize rejection, queue cancel/expiry and retained Unquiesced window charges.
-  Existing inflight budgets bound all accepted owners. See the [granularity and
-  source scope](async-batches.md#runtime-admission-and-dispatch-window).
-  Physical-request/alias granularity, staging reserves and deadline-infeasible
-  cancellation remain open; native fairness/performance remain unqualified.
-- [ ] Complete per-worker QoS, shared cross-process quotas and cleanup,
-  receiver credits/pacing, deadline bandwidth arbitration and telemetry.
-  Implemented: TCP and NVLink accept High/Medium/Low as advisory priorities.
-  RDMA carries priority through ordinary grants, slices and staging CROSS work
-  so each worker can order ready payloads across contexts. Opt-in same-NIC/same-tier
-  arbitration uses posted bytes and the transmit meter to apply TENT's bounded
-  greedy urgency ordering. Controls and
-  drain remain independent of payload priority. TENT head-only/per-entry aging and
-  optional shared priority-slot admission are implemented, including process
-  attachment/exit and timer-driven progress. The frozen shared_quota is a slot
-  gate, not a global byte limit. Sender credit consumption now gates actual
-  sync/async submissions and queue eligibility using application-delivered
-  cumulative byte/request grants; epoch fencing, freshness and unstarted refund
-  preserve actual ownership. The frozen ledger is the accounting reference, not
-  an existing network implementation. Bounded receiver issuance and on-demand
-  cumulative sync now consume successful actual-owner completion. Per-sender
-  windows, single-flight sync, endpoint-alias rejection and terminal retirement
-  preserve authority across lost responses. Automatic source-owned remote Pin
-  staging/consumer charges now follow negotiated slot and session owners through
-  native cleanup. Each Pin is bound to its automatic sender session. Manual
-  resource mapping, adaptive windows, uncertain-sender reclamation, full QoS/pacing and native
-  fairness remain open; see [automatic windows](async-batches.md#automatic-receiver-windows). Typed global/tenant/intent QoS resolution now feeds
-  effective RDMA priority and atomic per-contract retained byte/request caps.
-  Immutable engine-bound handles reuse compiled slots; fallback names cannot
-  create new budgets, and Unquiesced retains charges. Bounded TENT-format JSON/file
-  loading now feeds these same compiled fields, with no submission-path parsing.
-  Delay/reject now consumes the same policies through atomic queue/QoS/credit
-  admission, preserving same-Batch order, deadlines and actual-owner release.
-  Unsupported actions/fields and hierarchical/cluster quota enforcement remain
-  open. See [admission actions](async-batches.md#qos-admission-actions),
-  [QoS contract consumption](async-batches.md#qos-contracts),
-  [credit scope](async-batches.md#receiver-credit-gating) and
-  [scope and deliberate differences](rdma-cuda.md#request-priority-and-bandwidth-arbitration).
-- [ ] Complete round-robin/adaptive spraying. Implemented: topology penalties,
-  strict locality, negotiated port-rate seeds, whole-parent inverse-score slice
-  distribution, periodic eligible-rail exploration, separate selection EWMA and
-  posted busy-time transmit estimates. Exact folded-tail reservations remain
-  owned until grant cleanup. Optional effective LAG queries and header-supported
-  extended XDR rates are implemented; installed rate behavior and
-  throughput/fairness qualification remain open.
-- [ ] Implement submit/completion failover, physical-owner/alias mapping,
-  per-owner retry budgets and rail cooldown/probe/half-open state. Never replay
-  uncertain writes or recycle an old attempt without its declared proof.
-- [ ] Complete explicit progress, observational polling, background worker,
-  bounded wake/fallback behavior, notification fallback and shutdown races.
-- [ ] Complete required metrics and failure attribution; prove metrics disabled
-  mode and observer overhead independently.
+Done (source scope, CPU controls):
 
-Exit: production-state-machine tests with deterministic clocks/fault providers,
-race detection and real backends; priority/deadline fairness and byte/resource
-accounting under contention; installed cross-process quota recovery; no duplicate
-physical submit from merged aliases. Match reference behavior on safe inputs and
-record any deliberate safety differences with negative controls.
+- **Transport selection (first delivery).** First-match policy order with
+  CPU/CUDA memory, inclusive size and effective-priority filters, `Unspec`
+  selection and strict hints, driven by owner-derived Describe capabilities.
+  See [transport selection](transport-selection.md).
+- **Runtime admission.** Opt-in FIFO/EDF over whole submissions with independent
+  owner and byte dispatch windows, queue cancel and expiry, and retained
+  `Unquiesced` charges.
+- **Priority and arbitration.** RDMA High/Medium/Low dispatch across contexts,
+  TENT's urgency ordering, head-only or per-entry aging and shared priority
+  slots; TCP and NVLink accept every priority as advisory.
+- **QoS contracts.** Typed and TENT-format JSON global/tenant/intent policies
+  with per-contract byte/request caps and delay/reject admission.
+- **Receiver credits.** Sender credit gating, bounded automatic receiver
+  windows with cumulative sync, and staging/consumer owner credits for remote
+  Pin.
+- **Bandwidth-aware spraying.** Topology penalties, strict locality, rate-seeded
+  EWMA, weighted whole-parent distribution, periodic rail exploration and
+  effective link-rate discovery.
+
+Open:
+
+- [ ] Named policies, request intents, device masks and QP pools in selection,
+  with merge isolation (F12/F13).
+- [ ] Physical-request/alias granularity, merge mapping, staging reserves and
+  deadline-infeasible cancellation (F08/F14).
+- [ ] Hierarchical and cluster quotas, adaptive windows, uncertain-sender
+  reclamation and manual resource mapping (F15).
+- [ ] Submit- and completion-stage failover, per-owner retry budgets and rail
+  cooldown/probe/half-open state, never replaying uncertain writes (F17/F18).
+- [ ] Explicit progress, observational polling, bounded wake/fallback timing and
+  notification fallback (F09/F11).
+- [ ] Required metrics, failure attribution and disabled-mode overhead (F20).
+
+Exit: deterministic-clock and fault-provider state-machine tests, race detection
+and real backends; fairness and byte accounting under contention; installed
+cross-process quota recovery; no duplicate physical submit from merged aliases.
 
 ## P7 — Storage transports
 
@@ -822,467 +321,140 @@ Requirements: B07/B08 and F05 file-segment behavior. These paths are core:
 OrbitKV's SSD tier moves its DRAM↔SSD and GPU↔SSD bytes through them, while
 OrbitKV keeps extents, placement, eviction and recovery policy.
 
-- [x] P7.1 implements engine-local `file://` segments with cached size and
-  refresh, permissions, checked byte offsets and close with pending fd users.
-  Real temporary files cover these boundaries. See [file segments](storage.md).
-- [ ] Implement file payload READ/WRITE, short/error I/O and their owning completion state.
-- [ ] Implement io_uring queue/registered-buffer lifecycle, partial submission,
-  cancellation and actual completion drain before releasing file or memory.
-- [ ] Implement cuFile/GDS registration and both host/device READ and WRITE,
-  status/error propagation and explicit direct-versus-staged behavior.
-- [ ] Qualify three distinct bidirectional profiles: DRAM/file io_uring,
-  CUDA/DRAM/file staging and CUDA/file native GDS. Disable compatibility for the
-  native-only profile and record actual route evidence. A staged or
-  compatibility-mode pass cannot qualify native GDS.
-- [ ] Keep storage executors opt-in and prove the network/memory-only build
-  neither loads storage SDKs nor starts storage workers. File segment handles are core.
-- [ ] Audit BufIo source reachability. Preserve any actually consumed behavior;
-  document unselected reference code without inventing a public transport.
+- [x] **P7.1 — local file segments (Implemented).** Engine-local `file://`
+  segments with cached size and refresh, permissions, checked byte offsets and
+  close that drains pending fd users. See [file segments](storage.md).
+- [ ] File payload READ/WRITE, short and error I/O and their completion state.
+- [ ] io_uring queue lifecycle, partial submission, cancellation and completion
+  drain before releasing file or memory.
+- [ ] cuFile/GDS registration, host and device READ/WRITE, status propagation
+  and explicit direct-versus-staged behavior.
+- [ ] Qualify three distinct profiles: DRAM/file io_uring, CUDA/DRAM/file
+  staging and native CUDA/file GDS (compatibility mode disabled, with route
+  evidence).
+- [ ] Prove the network/memory-only build neither loads storage SDKs nor starts
+  storage workers; file segment handles stay core.
+- [ ] Audit BufIo reachability and document it without inventing a transport.
 
 Exit: real files with full-byte checks, truncation/short/error controls,
-concurrent unregister/close and cancellation. GDS requires supported hardware,
+concurrent unregister/close and cancellation. GDS needs supported hardware, a
 filesystem and a recorded direct path; an io_uring fallback is a different gate.
 
 ## P8 — Additional network providers
 
-These providers fit the selected host/NVIDIA purpose and remain optional
-modules in the target. Each is a separate delivery. Non-NVIDIA accelerator
-platforms, UB/URMA and dependent transports are excluded in the parity matrix; their
-ABI constants must return unavailable rather than instantiate device stubs.
+These optional providers are separate deliveries. Non-NVIDIA accelerators,
+UB/URMA and dependent transports are excluded; their ABI constants return
+unavailable instead of instantiating stubs.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
 | P8.1 | MPComm adapter, host/NVIDIA registration, peer registry and completion mapping | B15 | Compatible endpoints; NVIDIA GDR only with the frozen provider's required capability |
 | P8.2 | Libfabric attributes, registration, endpoint and host data path | B17 | Real compatible provider; EFA on EFA hosts |
 
-Exit per row: build without provider, explicit unavailable result, fake-provider
-contract tests, then actual installed bytes, permissions, faults, drain and
-applicable mixed-peer interoperability. Fake/stub-only implementations remain
-hardware-unqualified. Complete NVIDIA-scope parity requires acceptance of every
-in-scope requirement. Excluded accelerator and UB rows require no implementation
-or hardware qualification.
+Exit per row: build without the provider, explicit unavailable result,
+fake-provider contract tests, then real installed bytes, permissions, faults,
+drain and applicable mixed-peer interoperability.
 
 ## P9 — External APIs and operational compatibility
 
-Requirements: F01/F06/F20-F22 and the complete language inventory.
+Requirements: F01/F06/F20–F22 and the complete language inventory.
 
-- [ ] Complete and verify every C symbol/constant/layout and output allocation/
-  free contract. Exceptions/panics must not cross FFI. Preserve frozen struct
-  layouts and distinguish optional native extensions by version/profile.
-- [ ] Complete native C++ source adapters and the classic-TE surface that
-  delegates to TENT, including explicit progress and synchronous/wait helpers.
-  No adapter may invoke the old TE backend or omit richer native request fields.
-- [ ] Complete Python enums/classes/properties/overloads/context managers,
-  error translation, GIL release and actual buffer/exporter lifetime.
-- [ ] Complete etcd, Redis and HTTP metadata integrations, auth/config behavior,
-  transient failures, shared-schema interoperability and installed recipes.
-- [ ] Complete metrics names/types/labels/histograms and HTTP/JSON/Prometheus
-  endpoints, config precedence and disabled-mode behavior. Avoid secret-bearing
-  config/error diagnostics.
-- [ ] Exercise plugin ABI registration, bad/missing plugin behavior and actual
-  CUDA plugin loading, not just static platform compilation.
+- [ ] Every C symbol, constant, layout and output allocation/free contract; no
+  panic crosses FFI.
+- [ ] Native C++ source adapters and the classic-TE surface, including explicit
+  progress and sync/wait helpers, without calling the old TE backend.
+- [ ] Python classes, properties, overloads, context managers, error
+  translation, GIL release and buffer lifetime.
+- [ ] etcd, Redis and HTTP metadata stores with auth and failure behavior.
+- [ ] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints.
+- [ ] Device plugin ABI registration and real CUDA plugin loading.
 
-Exit: independent Rust, C, C++ and Python consumers run the parity cases against
-installed artifacts. Test optional-feature/provider matrices explicitly;
-`cargo --all-features` is not a substitute for incompatible SDK combinations.
+Exit: independent Rust, C, C++ and Python consumers run the parity cases
+against installed artifacts, with explicit provider/feature matrices.
 
 ## P10 — Fault, physical lifetime and interoperability acceptance
 
-Runs throughout P2-P9, with the complete matrix closed before a full-parity
-release. Requirements: every F/B row's applicable fault and interoperability
-cases, plus declared safety differences.
+Runs throughout P2–P9 and closes before a full-parity release.
 
-- [ ] Separate known-unsubmitted rejection/cancel from partial post, running
+- [ ] Separate known-unsubmitted rejection and cancel from partial post, running
   work, logical error, physical quiescence and completed cleanup.
-- [ ] Test requester/source crash, delayed/lost/duplicate replies and ACKs,
-  mid-payload disconnect, same-endpoint/address restart, stale registration and
-  provider keys, concurrent buffer reuse and admission exhaustion.
-- [ ] Test failed register/deregister, endpoint/context destruction, worker and
-  handler shutdown, device loss and late completions after logical cancellation.
-- [ ] For failover, prove the previous attempt cannot still modify destination
-  memory before replay/reuse; retain ambiguity under explicit budgets. Prove
-  eventual reclamation after a valid termination barrier for each claimed path.
-- [ ] Run same-host, physical two-host, multirail, storage, device and fabric
-  profiles separately; exercise both mixed C++/Rust requester/source directions.
-- [ ] Preserve failed runs and counterfactuals alongside accepted runs. A
-  watchdog kill, timeout or skipped hardware test does not supply physical drain.
+- [ ] Requester/source crash, delayed/lost/duplicate replies, mid-payload
+  disconnect, same-address restart, stale registrations and admission exhaustion.
+- [ ] Failed register/deregister, endpoint/context destruction, worker and
+  handler shutdown, device loss and late completions after cancellation.
+- [ ] For failover, prove the earlier attempt can no longer modify destination
+  memory before replay, and prove eventual reclamation for each claimed path.
+- [ ] Same-host, two-host, multirail, storage, device and fabric profiles, plus
+  both mixed C++/Rust directions; keep failed runs and counterfactuals.
 
 Exit: per-profile accepted evidence of correct bytes, monotonic authority,
-bounded ownership, no early reuse and eventual proven cleanup. Unresolved
-profiles remain unqualified; do not weaken their gates to finish a release.
+bounded ownership, no early reuse and eventual cleanup.
 
 ## P11 — Consumers, performance and release
 
-Requirements: F22 and applicable accepted backend/compatibility profiles.
+Requirements: F22 and the applicable accepted backend and compatibility profiles.
 
-- [ ] Run OrbitKV against an installed OrbitTE artifact through its existing
-  transfer owner. Audit the old patched ABI first; preserve still-needed source
-  epoch and source-close contracts. Keep cache semantics in OrbitKV. Record its
-  migration under the existing OrbitKV S3/S4/S8 queue and do not modify that
-  runtime dependency merely because this plan exists. A scoped installed
-  prerequisite is independently accepted at consumer `eb1cc90f` in
-  [OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307): the complete
-  CPython 3.11 wheel runs two separate Managers and an installed client, with
-  CUDA IPC registration/Publish, 16,384 GPU bytes through TCP and same-RNIC RDMA,
-  four original IPC slots repaid per case and normal client/Manager exit. The
-  frozen profile explicitly selects Torch CUDA 13.0.96 with an ordinary private
-  unversioned alias and compatibility driver 590.48.01 on H20/R535. The private
-  etcd fixture is killed/reaped. See [the runtime profile](rdma-cuda.md).
-  Default/natural loader configurations, uniform installed CUDA 13.1, inference
-  serving, cross-host Manager/GPU, GDR, physical faults and full adoption remain
-  open. The default complete consumer wheel still bundles TENT; selecting
-  OrbitTE does not map or use it for payloads.
-- [ ] Establish a separate consumer contract before claiming DeepInfer support.
-  Engine allocation/readiness and P/D ownership are not replaced by TE parity.
-- [ ] Compare frozen TENT and OrbitTE with equal bytes, budgets, topology,
-  registration, warmup and measurement windows. Include small/large, fragmented,
-  READ/WRITE, cold/warm endpoint, concurrent/mixed-priority, CPU/device/file and
-  multirail cases. Measure goodput, p50/p95/p99 latency, CPU, RSS/registered/
-  retained bytes, queue peaks, fairness and deadline misses.
-- [ ] Freeze independent paired repetitions and uncertainty before formal runs;
-  qualify instrumentation overhead separately. Initial proposed regression
-  guards are goodput ratio at least 0.95, p99 latency ratio at most 1.05 and
-  CPU-per-byte/peak-RSS ratios at most 1.10 versus the frozen reference, under
-  the same admitted resource caps. Ratify workload-specific guards in P0 before
-  collecting acceptance evidence; retain any failed guard unchanged afterward.
-- [ ] Test packaged crates/shared libraries/headers/Python wheels outside source
-  checkout, with exact provider discovery, runtime paths and artifact provenance.
-  Publish examples, support matrix and a concise release qualification record.
-- [ ] Verify installed build/link/runtime manifests contain no C++ Mooncake
-  engine/common/Store dependency. Keep upstream attribution and license notices
-  for translated source and any retained fixtures.
+- [ ] Run OrbitKV against an installed artifact through its transfer owner,
+  preserving the still-needed source-epoch and source-close contracts. A scoped
+  installed prerequisite was accepted at consumer `eb1cc90f`
+  ([OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307)).
+- [ ] A separate consumer contract before claiming DeepInfer support.
+- [ ] Matched TENT/OrbitTE comparisons (small/large, fragmented, READ/WRITE,
+  cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
+  goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
+  frozen reference, ratified in P0 before formal runs.
+- [ ] Packaged crates, shared libraries, headers and wheels tested outside the
+  checkout, with provider discovery, runtime paths and provenance.
+- [ ] Installed manifests prove no C++ Mooncake engine/common/Store dependency.
 
 CPU/TCP or NVIDIA/RDMA releases may ship earlier with explicit scoped support.
-The label **complete NVIDIA-scope TENT parity** requires all in-scope reference
-capabilities to be accepted; narrower releases do not remove remaining selected
-obligations. It does not claim the excluded accelerator platforms or UB. A feature
-being slower or unqualified is recorded
-as such rather than described as a performance advantage.
+**Complete NVIDIA-scope TENT parity** requires every in-scope capability to be
+accepted; it never claims the excluded accelerators or UB. A slower or
+unqualified feature is recorded as such.
+
+## Historical OrbitKV contracts
+
+At OrbitKV `a9befeec596bb9064d25d34f93d07fe59077809d` the audited transfer owner
+needs stable allocator registration, P2P segment lookup, batched READ,
+authoritative source epochs, source close/drain, generation-scoped
+notifications and NIC-load observations; OrbitKV keeps its generation scopes and
+mailbox policy. Consumer PRs #303 and #304 pin OrbitTE `02d64e55`; their evidence
+lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 
 ## Code ownership and repository layout
 
-Start with the existing `orbit-te` crate. Organize by owned behavior/resources:
-
 | Location | Responsibility |
 | --- | --- |
-| `src/engine.rs`, `src/batch.rs` | Engine lifetime, batch/task owners, admission, transport selection and notifications |
-| `src/memory.rs`, `src/segment.rs` | Backing allocation, range geometry, registration, descriptors and retirement |
-| `src/runtime/control_plane.rs` | Shared control service/channel, descriptors, notifications, source validation and dispatch |
-| `src/transport/tcp.rs` | TCP READ/WRITE payload behavior |
-| `src/transport/rdma/` | RDMA transport, context/PD, buffers, endpoints/store, CQ/workers, slices and provider ABI |
-| `src/cuda/` | NVIDIA allocation/context/driver ownership and synchronized staging |
-| `src/config.rs` | Effective configuration; observations live with the owner they measure |
-| `include/`, `bindings/` | C/C++ headers/adapters and Python packaging only |
-| `tests/` | Unit, integration, differential, fault and installed-artifact tests |
-| `benches/` | Reusable traces, generators, byte checks and matched-run drivers |
-| `docs/` | Maintained contracts, recipes, support matrix and this queue |
+| `src/engine.rs`, `src/batch.rs` | Engine lifetime, batch/task owners, admission and notifications |
+| `src/memory.rs`, `src/segment.rs`, `src/segment/file.rs` | Backing, registration, descriptors, file segments and retirement |
+| `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
+| `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
+| `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
+| `include/`, `bindings/` | Future C/C++ headers and Python packaging only |
+| `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
+| `benches/` | Future reusable traces and matched-run drivers |
+| `docs/` | Contracts, recipes, support matrix and this plan |
 
-This is an intended ownership map, not a requirement to create empty directories
-or a crate per box. Split crates only when a real FFI, packaging or resource
-boundary needs independent ownership. Keep transport safety in actual owners;
-avoid a generic forwarding facade or an independent cache/control coordinator.
+Split crates only at a real FFI, packaging or resource boundary. Keep transport
+safety in actual owners; avoid forwarding facades or a separate coordinator.
 
 ## Required gates and evidence
 
 | Gate | Trigger | What it may establish |
 | --- | --- | --- |
-| Source/CPU | Every implementation PR | Local contracts, property/concurrency tests, Rust checks and deterministic production-state-machine controls |
-| Real process/TCP/SHM | Control, TCP, memory or lifecycle changes | Actual cross-process bytes, errors, protocol and owned shutdown |
+| Source/CPU | Every implementation PR | Local contracts, property and concurrency tests, Rust checks |
+| Real process/TCP/SHM/file | Control, TCP, memory, storage or lifecycle changes | Real cross-process bytes, errors, protocol and owned shutdown |
 | Metadata services | P2/P9 metadata changes | Real etcd/Redis/HTTP behavior and schema interoperability |
-| RDMA/device/storage/provider | Corresponding implementation changes | Actual backend bytes and hardware-specific completion/lifetime behavior |
+| RDMA/device/storage/provider | Corresponding implementation changes | Real backend bytes and hardware-specific completion and lifetime |
 | Cross-language/mixed-peer | API, wire or binding changes | Installed caller behavior and directional interoperability |
-| Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit/regression only for the recorded profile |
-| Final installed artifact | Every supported release profile | Real package/runtime dependency and loader behavior outside source |
+| Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |
+| Final installed artifact | Every supported release profile | Real package, runtime dependency and loader behavior |
 
-The implementation PR must name its actual commands and required environment;
-do not create a broad gate that silently skips the profile it claims to test.
-Use tests that exercise production owners and a real boundary or useful local
-contract. Keep private Rust unit modules under `tests/unit/`, mirrored from
-`src/` and included by their owner without exposing internals for tests. Keep
-test-only providers/helpers under `tests/`. Miri, sanitizers,
-race/property/fuzz tools apply where supported; none establishes hardware DMA
-termination by itself.
-
-Select an explicit external artifact root before running experiments. Raw logs,
-traces, JSON/CSV, captures, manifests, generated charts and per-run reports stay
-outside the checkout and Git history. Source retains reusable workloads, small
-deterministic fixtures and reproduction instructions. Freeze libraries before
-runtime gates; never restage a mapped native library under another process.
-
-Each delivery handoff contains the commit, F/B requirement IDs, changed contracts,
-commands/results, installed artifact hashes/locations and remaining limits. The
-reviewing agent independently inspects the diff and reruns applicable gates
-before dependent work is accepted. Preparation, implementation, qualification
-and independent acceptance remain separate states.
-
-## Immediate next delivery
-
-The two discovery/recovery source gaps are implemented in `9e1fdea`
-(PR #57), and the focused native gate now passes on both toolchains.
-The installed requester QP cleanup-failure and actual in-flight DMA fixtures
-now pass their four frozen two-host cases on both compiler artifacts. Installed
-MR/MW retention and same-process engine replacement also pass six frozen cases.
-Installed CQ/completion-channel/PD dependency cleanup now passes six frozen cases
-and ten affected regressions on both final compiler artifacts.
-The bounded installed physical-rail accounting profile now passes four cases
-on both compiler artifacts, closing that item in the existing queue.
-Installed automatic discovery now passes four two-host cases against separately
-collected host inventories, plus two fixed-GID regressions.
-
-P4 implementation and its declared installed fault fixtures are complete.
-The independent review accepts source and bounded RoCE evidence at `121ab95`,
-including four fresh live repeats. Under the user's 2026-10-27 sequencing decision,
-P5.3 source and bounded GPU Direct evidence are independently accepted with the
-explicit host-context inventory limit in [qualification](qualification.md#gpudirect-rdma).
-The cooperative P5.4 GPU/GPU IPC substage is independently accepted with
-48 installed cases and four fresh repeats. P5.4b bounded subbatch reuse passes
-28 installed H20 cases plus four fresh repeats and is independently accepted
-for that profile. P5.4c local owned pinned host directions and mixed groups
-pass 30 installed cases plus four independent repeats and are accepted.
-P5.4d bounded cross-submission caching and explicit exporter lifetime owners
-pass 34 installed cases plus four fresh independent repeats and are accepted
-for the fixed-working-set profile. P5.5a local shared staging chunks pass
-24 installed TCP/staged-RDMA cases plus four fresh independent repeats; source
-and this bounded healthy profile are accepted. P5.5b serial remote
-Delegate/Pin/Unpin and nested admission pass 16 installed H20 TCP/RDMA cases
-plus four fresh independent repeats; source and this bounded healthy profile
-are accepted. The bounded remote pipeline now passes 24 fresh installed cases
-at `c0f6a9e`, with native per-slot stream/event lifetime evidence and 300-CROSS
-MW index rollover. Four fresh independent repeats and cleanup audits pass;
-source and this healthy profile are accepted. Independent source review accepts
-requester chunk-size negotiation, GPU range loans and chunk-visible failures at
-`460d825`. Independent requester PRE/POST rings, shared pending-copy ownership
-and final drain before Unpin are source-accepted at `c87c403`, with recovered
-submission and uncertain CUDA/MR cleanup controls. Installed qualification
-remains open. At the user's direction, continue source work without requesting
-new hardware tasks; qualify the current artifact on fresh nodes when hardware
-work resumes. Bounded CROSS windows and a session worker now decouple local CUDA
-progress from CROSS/Delegate waits; queue cancellation, native drain and final
-receipt fencing are source-accepted at `4441017`, including native uncertainty
-and worker-panic ownership controls. Shared ProxyManager shards are now implemented
-with lazy bounded admission, pre-Pin queue cancellation, task-terminal ownership
-and explicit thread close. Independent source review accepts `3db26ee` for
-this source/CPU ownership scope. Nonblocking requester chunk progress with
-per-slot event queries and immediate refill is source-accepted at `1ac1d01`.
-Bounded concurrent RDMA CROSS is implemented with shared native workers,
-independent payload query, per-slot FinishCross and aggregate cleanup. Independent
-source review accepts `adc803f`; see [the evidence](qualification.md#concurrent-rdma-cross).
-Remote Delegate progress separates acceptance from
-scoped event-query completion and retaining per-slot generations through pending
-results. Independent source review accepts `3767dc5`; see [the evidence](qualification.md#remote-delegate-progress).
-TCP payload and scoped staging control receipts now have bounded nonblocking
-progress and retain one framing owner. Independent source review accepts
-`736a16a`; see [socket progress](qualification.md#socket-progress). Cancellable
-Connect/Pin and native handshake socket waits are implemented with a single
-connection, full Pin validation and existing native drain ownership. Independent
-source review accepts `a2d1b9e`; see [connection lifetime](qualification.md#connection-and-pin-lifetime).
-Requester native finish progress is implemented with one framing owner, shared
-SEND/drain validation and partial completion frames. Independent source review
-accepts `e2f4037`; see [finish progress](qualification.md#native-rdma-finish-progress).
-Requester native setup socket progress is implemented with one outer framing
-owner and shared parent/slice states. Independent source review accepts
-`b2d9d3a`; see [setup progress](qualification.md#native-rdma-setup-progress).
-Host staging location selection is implemented and independently source-accepted
-at `ab309f4`. Requester cold connection acquisition yields while retaining
-one grant lease and the canonical endpoint array. Independent source review
-accepts `06f685d`; see [connection acquisition](qualification.md#cold-rdma-connection-acquisition).
-Persistent MR publication wait is implemented through an admitted grant owner;
-independent source review accepts `e69c47a`. Nonreusable requester QP retirement
-progress is independently source-accepted at `b2a0aba`; see
-[retirement progress](qualification.md#nonreusable-qp-retirement-progress).
-Native provider calls, resource creation/connect/copy, aggregate failure drain
-and source handlers retain explicit synchronous limits. Frozen TENT also uses
-synchronous source Pin/Delegate helpers and native provider calls; their remaining
-synchronous execution alone is not a missing parity contract.
-
-The explicit GPU Direct RDMA / local TCP staging batch boundary is implemented
-with six READ/WRITE completion and failure controls. The once-per-submission
-RDMA preflight optimization is source `5bdf4f2`; see
-[mixed batches](qualification.md#mixed-gpu-batches). Keep implementation and
-execution efficiency as the delivery focus, with tests scoped to the affected
-contracts and existing CI gates rather than expanding an independent test backlog.
-
-P5.5b/F19 explicit per-request remote staging is implemented at `27b73b5`.
-Direct RDMA and remote Pin requests share an engine and ordered batch, with
-independent incoming Pin capability and actual source authorization. Prepared
-owners retain staging intent; payload CROSS stays in TCP/RDMA and private host
-MRs follow host policy. See [remote selection](qualification.md#per-request-remote-staging).
-Producer readiness remains an explicit caller handoff; automatic routing/QoS
-remains P6. Qualification of the current installed build and full P5 remain open.
-
-P5.4d idle LRU reclaim and continuing flush are implemented at `fd55f15`.
-Changing working sets can continue within the entry limit; a replacement
-reserves its target while the old key remains charged until the native-close
-receipt is acknowledged. Provider work and control I/O stay outside the map
-lock. `flush_nvlink_cache` closes captured keys without closing requester
-admission. Active, constructing and uncertain mappings retain their existing
-owners; hardware qualification remains separate. See
-[cache reclamation](qualification.md#cuda-ipc-cache-reclamation).
-
-P5.4e/f/g implement ordered NVLink group enqueue, transport-owned stream/event
-reuse and shared event-query completion. Current source `0daa0a1` replaces the
-previous blocking wait with an inline ready-event fast path and one lazy
-completion worker for pending events. Whole-allocation loans
-and exclusive stream handles survive NOT_READY; independent groups can finish
-while another remains pending. Ready query and context restoration release local
-loans before source receipts; deadline/query/restore uncertainty retains touched
-owners and charged resources. Conflicting NVLink calls wait within their original
-deadline, while CPU/RDMA access is excluded. Setup/control receipts are still
-synchronous and each Batch still executes its submissions FIFO. Producer
-readiness stays an explicit caller handoff. See [event progress evidence](qualification.md#cuda-ipc-event-progress).
-Current installed DMA and matched native performance remain unqualified.
-
-P5.4h implements native CUDA batch-copy dispatch at `d6b564f`, following TENT's
-`startTransfer` arrays and trailing event. Driver version and exact v2 ABI
-selection precede submission. Independent groups use one native call; dependent
-groups keep ordered enqueue. Partial native errors never trigger replay. Source
-checks and native-observer controls pass; installed DMA and matched performance
-remain unqualified. See [batch dispatch](qualification.md#cuda-ipc-native-batch-copy).
-
-Explicit GPU producer readiness is implemented at `33ef0b1`, with source
-controls at `6909d69`. `CallerSyncEvent` follows frozen TENT's
-`syncWithCallerStream`: capture the producer's actual stream on the caller thread
-and consume a scoped event before allocation access. Aliases reuse one event;
-generation ownership and retained producer inputs survive cross-thread handoff.
-The wait remains CPU-blocking. See [readiness](qualification.md#cuda-producer-readiness).
-
-Owned CUDA-pinned host handoff is implemented at `eb609b4`: the actual
-`PinnedAllocation` lazily owns the same event, while `HostMemory` supplies
-CPU/DMA/IPC exclusion. Readiness precedes payload access and final native pin
-release. Ordinary host memory remains independent of CUDA, and staging without
-a producer creates no new event. See [pinned readiness](qualification.md#pinned-host-producer-readiness).
-
-The owner-backed P5 CUDA pointer/location contract (F02/F03) is implemented:
-bounded type/device/context locations, one batched external-pointer attribute
-query, mapped-range validation and reused staging locality. See
-[qualification](qualification.md#cuda-pointer-and-location). This does not close
-full platform parity or any missing installed hardware gate.
-
-The F02 CUDA topology inventory and owner-based RDMA selection are implemented:
-validated `cuda:N` device/PCI/NUMA entries and GPU-to-RNIC tiers feed the current
-topology and selector owners, with precompiled priorities and strict locality.
-Source/CPU controls exercise actual READ/WRITE slices and both peers' selection;
-installed topology and performance remain unqualified.
-
-The F02 custom topology/priority input is implemented: TENT inline matrices
-and native topology files resolve to the discovered stable device inventory,
-feeding the same precompiled selector. Known-cross-NUMA rejection, masks,
-failed context holes and actual grant charge lifetimes remain authoritative.
-Malformed explicit configuration is rejected before context/MR publication.
-
-P6/F16 bandwidth-aware per-slice RDMA selection is implemented in the existing
-`DeviceSelector`. Negotiated legacy port rates and successful payload-attempt
-observations drive the selection EWMA; posted-byte busy-time transmit estimates
-remain separate. Configured candidates, strict locality, masks and physical
-grant charges remain authoritative. Rate refresh preserves connection identity;
-available-NIC load snapshots are exposed without discovery. See
-[source evidence](qualification.md#rdma-bandwidth-selection).
-
-F16 whole-parent weighted slice distribution and periodic exploration are
-implemented, following TENT's `selectMultiPath`. One bounded allocation reserves
-exact folded-tail charges before native grants; compatible remote paths, masks
-and strict NUMA eligibility remain enforced. Every 100th smart multi-slice
-allocation rotates eligible rails, including short parents with more NICs than
-slices. The selector reads each candidate estimate once and uses no extra heap
-allocation. See [source scope](qualification.md#rdma-weighted-multipath).
-
-F16 effective link-rate discovery is implemented with the pinned `ibverbs-sys`
-and a thin C port-query shim. The installed header controls extended XDR
-availability; an optional runtime symbol supplies effective LAG bandwidth.
-Context/monitor owners retain the last effective value on query failure and
-feed the existing selector without replacing QPs. Unknown rates keep the
-explicit fallback. See [source scope](qualification.md#rdma-effective-link-rate).
-P6 request priority and worker bandwidth arbitration are implemented at source
-scope. [Public ordinary/sliced propagation and cross-context dispatch controls](qualification.md#rdma-request-priority)
-exercise the actual workers; they do not qualify native contention or performance.
-Priority aging/promotion and TENT-compatible shared priority-slot semantics are
-implemented with worker/process controls; see [scope](qualification.md#rdma-promotion-and-shared-slots).
-Shared slot attachment validates protocol, interval and clock namespace;
-worker-owned descriptors survive until the actual owner exits. No runtime
-rotation thread or shared byte counter is introduced.
-The FIFO/EDF runtime queue and independent dispatch window are implemented for
-whole ordered submissions. Eligible Batch heads retain admission sequence;
-queued cancel/expiry ends before I/O and uncertain native owners retain capacity.
-See [source evidence and TENT granularity differences](qualification.md#runtime-admission-and-dispatch-window).
-Sender credit consumption is implemented: bounded peer/source-epoch bindings,
-atomic cumulative payload byte/request reservations, queue eligibility and direct
-dispatch waits, freshness and exact-epoch fencing. Unstarted groups can refund;
-committed and Unquiesced owners cannot fabricate new grants. Manual bindings
-accept application updates; automatic bindings use the receiver-owned windows
-described below. This is not native rate pacing. See
-[source controls and limits](qualification.md#receiver-credit-gating).
-QoS contract consumption is implemented at source scope: typed global,
-tenant-default and intent overlays compile once; immutable policies feed the
-actual priority path and atomic per-contract retained-byte/request admission.
-Queued and uncertain owners preserve charges, while clean drain returns them.
-This follows frozen TENT's resolution fields and adds real consumption; it does
-not establish parent/child tenant limits or full QoS parity; delay/reject
-consumption is recorded below.
-See [source controls](qualification.md#qos-contract-consumption).
-The source implements receiver issuance and update synchronization. Source-owned windows bound aggregate authorization; actual successful
-data-owner Drop publishes completion totals, and existing waiters coalesce
-single-flight cumulative sync without extra threads or per-slice RPCs. Unknown
-Open outcomes retain identity; endpoint aliases cannot clone authority; close
-requires successful drain and preserves terminal tombstones. This does not
-qualify physical receiver capacity, adaptive sharing or crashed-sender recovery.
-See [source controls](qualification.md#automatic-receiver-credit-windows).
-The source implements automatic staging and consumer resource charging.
-Pin binds an automatic sender session. The source charges its actual
-negotiated ring depth and one session. Stage leases return credits only after
-cleanup, and the consumer requires every child stage to drain. Native constructor
-failure and retained owners preserve charges. This extends the frozen credit
-schema with actual ProxyManager ownership; manual resource mapping and generic
-consumer credits remain open. See [scope](qualification.md#staging-and-consumer-owner-credits).
-The supported TENT-format JSON QoS loader now feeds the existing compiled
-contracts. String/file entry points preserve disabled/default semantics, strict
-field validation, normalized identities and binary byte units. Bounded parsing
-stays outside engine compilation and transfer dispatch. Existing public quota
-and RDMA priority controls consume JSON input; see [scope](qualification.md#json-qos-configuration).
-Defined delay/reject consumption is implemented at source scope. Delay-enabled
-engines join whole-group QoS, receiver credit and dispatch-window admission at
-the Batch head. Pending groups hold only global inflight capacity, cannot steal
-quota from predecessors and preserve cancellation/absolute deadlines. Reject-only
-configurations keep immediate admission; all acquired charges follow actual
-ownership through drain. See [scope](qualification.md#qos-admission-actions).
-P6 transport policy order and memory/size/priority eligibility now drive actual
-submission at source scope. Unspec selects within the first matching rule;
-explicit hints remain strict. Owner-derived Describe metadata and cached IPC
-placement feed selection without driver probes or payload locks. See
-[scope](transport-selection.md) and [evidence](qualification.md#transport-policy-selection).
-The next functional delivery is named policy and intent selection, connected to
-existing effective QoS resolution and actual prepared requests. Preserve compiled
-lookup and merge isolation; device masks/QP pools follow with their execution owners.
-Transport fallback, local recompute and compression remain rejected until their
-real execution owners exist.
-Hierarchical/cluster quotas, adaptive windows, uncertain-sender reclamation,
-physical-owner queue granularity, physical staging reserves and deadline-infeasible
-cancellation remain open parts of P6.
-Installed shared-slot behavior and native fairness remain unqualified.
-Matched throughput remains unqualified; no new hardware task is requested. MNNVL/EGM remain open P5 work.
-The frozen NVLink consumer boundary is `getTransferStatus` after event query,
-which OrbitTE already follows through engine completion. Consumer-stream chaining
-is an unimplemented extension, not an additional frozen-TENT parity gate.
-Native ordering and performance claims still require matched hardware.
-
-New hardware evidence must name fresh nodes; unavailable gates remain unqualified.
-OrbitKV linkage remains deferred. Keep the physical/fabric requirements in
-[P4 remaining delivery](#p4-remaining-delivery) unqualified; the available
-resources provide RoCE without a disposable physical port or InfiniBand fabric.
-Do not reopen completed source work or repeat unaffected matrices.
-Freeze each missing scenario and its proof before implementing any needed
-fixture; use the existing native and installed consumers. Add a case only
-for an uncovered contract or a demonstrated bug. Keep source checks,
-installed-artifact checks and hardware results separate. A documentation
-cleanup or layout refactor does not qualify hardware or close P4.
-
-New test nodes require fresh job/stage, host, provider and RNIC-lock inventories;
-never reuse executor identities from a terminated job. A node with one usable
-RNIC can qualify only its declared single-rail profile. GPU allocation alone
-says nothing about RNIC count, fabric or GPUDirect capability. Keep manifests,
-logs and failed controls outside Git.
-
-OrbitKV dependency migration, whole-engine shutdown consumption and installed
-Manager/serving qualification resume under P11 after the accepted P4 boundary.
-Historical consumer evidence remains valid only for its recorded artifact and
-profile. The 33-symbol/native schema oracle, mixed-peer wire compatibility and
-remaining parity rows stay in their existing stages.
+Each PR names its exact commands and environment; no broad gate may silently
+skip the profile it claims. Raw logs, traces, manifests and per-run reports stay
+outside Git under an explicitly selected artifact root; source keeps reusable
+workloads, small fixtures and reproduction steps. Each handoff lists the commit,
+F/B IDs, changed contracts, commands and results, artifact hashes and remaining
+limits, and an independent reviewer reruns the applicable gates before
+acceptance. New hardware evidence names fresh nodes and inventories; missing
+hardware stays unqualified.
