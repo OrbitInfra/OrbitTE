@@ -56,7 +56,8 @@ pub struct TransferRequest {
     /// contract, with `priority` as its fallback. Some captures its own requested
     /// priority at resolution and replaces this request's legacy priority.
     pub qos: Option<crate::EffectiveQosPolicy>,
-    /// Local RDMA payload dispatch priority. TCP/NVLink require High.
+    /// Priority for transport policy matching and RDMA payload dispatch.
+    /// TCP and NVLink accept all priorities and treat them as advisory.
     /// This does not reorder requests within a batch or preempt posted DMA.
     pub priority: Priority,
     /// Use Pin/Delegate/Unpin for the remote CUDA range over TCP or RDMA.
@@ -95,7 +96,7 @@ impl TransferRequest {
         self
     }
 
-    /// Set the dispatch priority used in the absence of a QoS override.
+    /// Set the requested priority used in the absence of a QoS override.
     #[must_use]
     pub fn with_priority(mut self, priority: Priority) -> Self {
         self.priority = priority;
@@ -707,9 +708,6 @@ impl TransferEngine {
                     None => TransportSelector::select_default(&context)?,
                 }
             };
-            if priority != Priority::High && transport != Transport::Rdma {
-                return Err(Error::Unavailable("request priority requires RDMA"));
-            }
             if request.remote_staging && transport == Transport::Nvlink {
                 return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
             }

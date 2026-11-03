@@ -764,10 +764,11 @@ Requirements: F08-F20; all implemented transports consume the same owners.
   cancellation remain open; native fairness/performance remain unqualified.
 - [ ] Complete per-worker QoS, shared cross-process quotas and cleanup,
   receiver credits/pacing, deadline bandwidth arbitration and telemetry.
-  Implemented: public High/Medium/Low request priority propagates through ordinary
-  grants, slices and staging CROSS work; each worker orders ready payloads across
-  contexts. Opt-in same-NIC/same-tier arbitration consumes posted bytes and the
-  transmit meter, using TENT's bounded greedy urgency ordering. Controls and
+  Implemented: TCP and NVLink accept High/Medium/Low as advisory priorities.
+  RDMA carries priority through ordinary grants, slices and staging CROSS work
+  so each worker can order ready payloads across contexts. Opt-in same-NIC/same-tier
+  arbitration uses posted bytes and the transmit meter to apply TENT's bounded
+  greedy urgency ordering. Controls and
   drain remain independent of payload priority. TENT head-only/per-entry aging and
   optional shared priority-slot admission are implemented, including process
   attachment/exit and timer-driven progress. The frozen shared_quota is a slot

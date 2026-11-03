@@ -165,12 +165,12 @@ request's `priority` only when no layer specifies one. It cannot bypass a
 configured default budget. With QoS disabled, ordinary `qos=None` requests keep
 their prior behavior; an explicitly resolved disabled handle retains its
 context priority. A handle from another engine returns `ForeignQosPolicy` during
-preparation. This new request field requires `qos: None` in existing literals.
+preparation. Use `request.with_qos(policy)` to attach a resolved handle.
 
-Effective priority follows the existing transport contract: RDMA supports
-High/Medium/Low, including ordinary and sliced payloads and staging CROSS work;
-TCP/NVLink currently require High. Unsupported effective priorities fail during
-preparation. Policies neither reorder requests within a Batch nor change
+All transports accept High, Medium and Low. A selector rule with a priority
+filter matches the effective priority exactly. TCP and NVLink treat the
+result as advisory. RDMA workers use it for ordinary and sliced payloads and
+staging CROSS work. Policies neither reorder requests within a Batch nor change
 FIFO/EDF selection. Byte/request caps apply to all data transports through the
 shared preparation owner.
 

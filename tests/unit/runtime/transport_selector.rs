@@ -141,8 +141,10 @@ fn transport_selector_uses_both_owners_and_preserves_staging_intent() {
     context.remote_segment.nvlink = None;
     context.remote_segment.rdma = false;
     assert_eq!(select(&context), Transport::Tcp);
-    context.priority = Priority::Medium;
-    assert!(TransportSelector::select_default(&context).is_err());
+    for priority in [Priority::Medium, Priority::Low] {
+        context.priority = priority;
+        assert_eq!(select(&context), Transport::Tcp);
+    }
     context.priority = Priority::High;
     context.remote_staging = true;
     assert!(TransportSelector::select_default(&context).is_err());
@@ -154,6 +156,60 @@ fn transport_selector_uses_both_owners_and_preserves_staging_intent() {
     let host = region(MemoryType::Cpu, false);
     context.remote = &host;
     assert!(TransportSelector::select_default(&context).is_err());
+}
+
+#[test]
+fn qos_low_prefetch_selects_tcp_without_rdma() -> Result<()> {
+    use crate::{QosConfig, QosRequestContext};
+
+    let config = r#"{
+        "policy":[{"name":"prefetch","segment_type":"memory","priority":"low","transports":["rdma","tcp"]}],
+        "qos":{"tenants":[{"name":"reader","intents":{"background_prefetch":{"priority":"low"}}}]}
+    }"#;
+    let source = TransferEngine::new(EngineConfig::default())?;
+    let remote =
+        source.register_memory(vec![1, 2, 3, 4].into_boxed_slice(), Permission::RemoteRead)?;
+    let requester = TransferEngine::new(EngineConfig {
+        selector: Some(TransportSelectorConfig::from_json(config)?),
+        qos: QosConfig::from_json(config)?,
+        ..Default::default()
+    })?;
+    let local = requester.register_memory(vec![0; 4].into_boxed_slice(), Permission::LocalOnly)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let request = TransferRequest::new(
+        Transport::Unspec,
+        local.base_address(),
+        remote.base_address(),
+        4,
+    );
+    // The default High priority does not match the only policy.
+    assert!(matches!(
+        requester.submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            std::slice::from_ref(&request),
+            TIMEOUT
+        ),
+        Err(Error::Unavailable("no matching transport selection policy"))
+    ));
+    let prefetch = requester.resolve_qos(&QosRequestContext {
+        tenant_id: "reader".into(),
+        intent: "background_prefetch".into(),
+        requested_priority: Priority::High,
+    })?;
+    assert_eq!(prefetch.effective_priority(), Priority::Low);
+    let report = requester.submit_and_wait(
+        TransferOp::Read,
+        &peer,
+        &[request.with_qos(prefetch)],
+        TIMEOUT,
+    )?;
+    assert!(report.is_complete());
+    assert_eq!(report.transferred_bytes, 4);
+    let mut actual = [0; 4];
+    local.read(0, &mut actual)?;
+    assert_eq!(actual, [1, 2, 3, 4]);
+    Ok(())
 }
 
 #[test]
