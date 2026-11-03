@@ -375,22 +375,37 @@ impl SenderCreditLedger {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare(
         self: &Arc<Self>,
         peer: &RemoteSegment,
         bytes: usize,
         requests: usize,
     ) -> Result<CreditPermit> {
-        let charge = [
-            u64::try_from(bytes).map_err(|_| Error::ResourceExhausted)?,
-            u64::try_from(requests).map_err(|_| Error::ResourceExhausted)?,
-        ];
+        self.prepare_owners(peer, &[[bytes as u64, requests as u64]])?
+            .pop()
+            .ok_or(Error::Internal("credit permit missing"))
+    }
+
+    pub(crate) fn prepare_owners(
+        self: &Arc<Self>,
+        peer: &RemoteSegment,
+        charges: &[[u64; 2]],
+    ) -> Result<Vec<CreditPermit>> {
         let key = CreditKey::from(peer);
         let mut state = self.lock();
-        let id = state
+        let mut permits = Vec::new();
+        permits
+            .try_reserve_exact(charges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        let last = state
             .next_owner
-            .checked_add(1)
+            .checked_add(charges.len() as u64)
             .ok_or(Error::ResourceExhausted)?;
+        state
+            .owners
+            .try_reserve(charges.len())
+            .map_err(|_| Error::ResourceExhausted)?;
         let entry = state
             .entries
             .get_mut(&key)
@@ -403,32 +418,37 @@ impl SenderCreditLedger {
                 "receiver credit connection is not ready",
             ));
         }
-        if entry.exceeds_window(charge) {
+        if charges.iter().any(|&charge| entry.exceeds_window(charge)) {
             return Err(Error::ResourceExhausted);
         }
         entry.active = entry
             .active
-            .checked_add(1)
+            .checked_add(charges.len())
             .ok_or(Error::ResourceExhausted)?;
         let epoch = entry.epoch;
-        state.owners.insert(
-            id,
-            CreditOwner {
-                key,
-                epoch,
-                charge,
-                reserved: false,
-                committed: false,
-                completed: false,
-            },
-        );
-        state.next_owner = id;
-        Ok(CreditPermit {
-            reservation: Arc::new(CreditReservation {
-                ledger: Arc::clone(self),
+        for &charge in charges {
+            state.next_owner += 1;
+            let id = state.next_owner;
+            state.owners.insert(
                 id,
-            }),
-        })
+                CreditOwner {
+                    key,
+                    epoch,
+                    charge,
+                    reserved: false,
+                    committed: false,
+                    completed: false,
+                },
+            );
+            permits.push(CreditPermit {
+                reservation: Arc::new(CreditReservation {
+                    ledger: self.clone(),
+                    id,
+                }),
+            });
+        }
+        debug_assert_eq!(state.next_owner, last);
+        Ok(permits)
     }
 
     pub(crate) fn stats(&self, peer: &RemoteSegment) -> Option<ReceiverCreditStats> {

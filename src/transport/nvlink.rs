@@ -19,7 +19,7 @@ use subbatch::{NVLinkSubBatch, subbatch_len};
 
 use crate::cuda::CUDAStreamPool;
 use crate::cuda::ipc::IpcExport;
-use crate::engine::{PreparedSubmission, remaining};
+use crate::engine::remaining;
 use crate::memory::checked_range;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
 use crate::segment::ProcessIdentity;
@@ -66,21 +66,26 @@ impl NVLinkTransport {
         Ok(stats)
     }
 
+    pub(crate) fn group_len(
+        requests: &[crate::engine::PreparedTransfer],
+        limit: usize,
+        deadline: Instant,
+    ) -> usize {
+        subbatch_len(requests, limit, deadline)
+    }
+
     pub(crate) fn transfer(
         &self,
-        submission: &PreparedSubmission,
+        (operation, deadline): (TransferOp, Instant),
         group: (&crate::RemoteSegment, &[crate::engine::PreparedTransfer]),
         requester: SourceEpoch,
-        max_bytes: usize,
         mut begin: impl FnMut(usize) -> bool,
     ) -> std::result::Result<usize, TransferFailure> {
         let (peer, requests) = group;
-        let mut count = subbatch_len(requests, max_bytes, submission.deadline);
+        let mut count = requests.len();
         loop {
             let mut retry_single = false;
             let requests = &requests[..count];
-            let operation = submission.operation;
-            let deadline = submission.deadline;
             let start = requests.iter().map(|r| r.remote_offset).min().unwrap_or(0);
             let end = requests
                 .iter()

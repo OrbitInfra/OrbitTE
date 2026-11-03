@@ -26,6 +26,8 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
         let request = PreparedTransfer {
             #[cfg(feature = "rdma")]
             priority: Default::default(),
+            #[cfg(feature = "rdma")]
+            rdma_cancel: None,
             #[cfg(feature = "cuda")]
             remote_staging: false,
             selection: crate::runtime::transport_selector::SelectionResult::plain(Transport::Tcp),
@@ -135,6 +137,8 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
     let request = PreparedTransfer {
         #[cfg(feature = "rdma")]
         priority: Default::default(),
+        #[cfg(feature = "rdma")]
+        rdma_cancel: None,
         #[cfg(feature = "cuda")]
         remote_staging: false,
         selection: crate::runtime::transport_selector::SelectionResult::plain(Transport::Tcp),

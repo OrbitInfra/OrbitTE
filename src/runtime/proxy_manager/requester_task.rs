@@ -9,7 +9,7 @@ use super::stage_buffer_cache::StageBufferCache;
 use super::stage_registration::{PinnedStage, StageRegistration};
 use super::staging_task::{Command, StagingTask, WORKER_STOPPED, receive};
 use super::worker_shard::{TaskHandle, Terminal};
-use crate::engine::{PreparedSubmission, PreparedTransfer, Source, remaining};
+use crate::engine::{PreparedTransfer, Source, remaining};
 use crate::memory::Allocation;
 use crate::runtime::control_plane::buffer;
 use crate::{Error, HostMemory, RemoteEffect, TransferOp};
@@ -17,19 +17,16 @@ use crate::{Error, HostMemory, RemoteEffect, TransferOp};
 impl ProxyManager {
     pub(crate) fn transfer_remote(
         self: &Arc<Self>,
-        submission: &PreparedSubmission,
+        (operation, deadline): (TransferOp, Instant),
+        credit: Option<&crate::runtime::receiver_credit::CreditReservation>,
         peer: &crate::RemoteSegment,
         request: &PreparedTransfer,
         source: &Arc<Source>,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
-        let operation = submission.operation;
-        let deadline = submission.deadline;
         let mut effect = RemoteEffect::None;
         let result = (|| {
-            let binding = submission
-                .credit
-                .as_ref()
-                .map(|credit| credit.reservation.pin_binding())
+            let binding = credit
+                .map(|credit| credit.pin_binding())
                 .transpose()?
                 .flatten();
             let mut transfer = |stages: &mut StageBufferCache<'_>| {

@@ -9,7 +9,7 @@ impl CqLane {
         claim: u64,
         remote: Descriptor,
         operation: TransferOp,
-        priority: crate::Priority,
+        dispatch: impl Into<PayloadDispatch>,
         deadline: Instant,
     ) -> Result<()> {
         remaining(deadline)?;
@@ -52,7 +52,9 @@ impl CqLane {
                 .payload_operation
                 .is_some_and(|previous| previous != operation);
             request.payload_operation = Some(operation);
+            let PayloadDispatch { priority, cancel } = dispatch.into();
             request.work = Some(Work {
+                cancel,
                 queue,
                 operation: operation.into(),
                 remote,
@@ -110,6 +112,7 @@ impl CqLane {
             };
             let send_queue = Arc::clone(&record.send_queue);
             request.work = Some(Work {
+                cancel: None,
                 queue: slice::SendWork::control(
                     send_queue,
                     namespace * crate::transport::rdma::WR_ID_STRIDE + slot,
@@ -318,6 +321,7 @@ impl CqLane {
             message.memory.bytes_mut().copy_from_slice(&binding);
             request.message_sent = true;
             request.work = Some(Work {
+                cancel: None,
                 queue: slice::SendWork::control(
                     send_queue,
                     namespace * crate::transport::rdma::WR_ID_STRIDE + 1,

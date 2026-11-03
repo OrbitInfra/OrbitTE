@@ -31,7 +31,7 @@ external output directory; failed runs are kept.
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
 | Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
-| Named NIC masks and endpoint QP pools on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
+| Named NIC masks, endpoint QP pools, merged owners and deadline drops on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
 | GPUDirect host-wide context non-growth | Unqualified | [GPUDirect gate](rdma-cuda.md#gpudirect-rdma-ownership) | [GPUDirect](#gpudirect-rdma) |
 | P4 InfiniBand profile, physical link/device loss, provider teardown | Unqualified; needs disposable hardware | [Installed host](installed-host.md) | [P4 review](#p4-independent-review) |
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
@@ -2289,8 +2289,15 @@ scheduler overhead/throughput remain unqualified. No hardware job was requested.
 
 Source implements opt-in `LocalTransferAdmissionQueue` and an independent
 owner/byte dispatch window, corresponding to frozen TENT's admission and window
-refill owners. OrbitTE's scheduling unit is the complete ordered submission;
-physical-request/alias granularity, staging reserves and MLU remain open.
+refill owners. Physical requests can carry multiple public task IDs. Real TCP
+controls observe the exact number and length of payloads, per-owner credit and
+QoS, absolute task mapping, cancellation, guards and a lost WRITE receipt.
+The RDMA sys shim drives two NIC rates through the production selector and
+queue. It checks both a zero-post drop and a successful payload on a different
+rail. Cancelling a dispatched RDMA alias twice drains the shim's two accepted
+work requests, suppresses the remaining slices and preserves destination guards.
+A real proxy session exercises reserved capacity through its CUDA shim.
+The packaged two-RNIC gate above checks a zero-post deadline drop followed by two shuffled aliases under a one-owner cap on each selected rail. It has not been run. Physical NIC deadline predictions and workload fairness remain unqualified.
 
 CPU controls use real TCP writes and notification receipts to distinguish FIFO
 from EDF, preserve a later same-Batch group's dependency despite its earlier
@@ -2338,13 +2345,12 @@ throughput remain unqualified. No new hardware task is requested.
 Source implements typed `QosContractResolver` overlays and immutable engine-bound
 `EffectiveQosPolicy` handles. Frozen TENT supplies the resolution model only;
 OrbitTE additionally feeds effective priority into existing transports and
-atomically reserves aggregate retained bytes/requests per compiled contract.
-This is whole-submission ownership with per-contract charge coalescing, not
-hierarchical tenant limits or cluster-wide isolation.
+atomically reserves permits for physical owners against their compiled
+contract. Hierarchical tenant limits and cluster-wide isolation remain open.
 
 Four focused CPU controls cover overlay/zero/normalization rules, bounded static
 slots, mixed-contract all-or-nothing admission with a later slot already full,
-nonadjacent same-contract coalescing, repeated and unknown-name resolution sharing
+independent owners sharing one contract, repeated and unknown-name resolution sharing
 budgets, implicit default/unspec enforcement, foreign policy rejection, clean
 release after real TCP writes, credit-wait cancellation/expiry and the difference
 between returning inflight QoS budgets and retaining committed cumulative credit.
@@ -2402,7 +2408,8 @@ Manual resource updates and generic application-consumption credits remain open.
 
 Focused controls use real control sockets and CUDA/verbs ABI fixtures: negotiated
 depth differs from the requester's proposal; TCP and RDMA READ/WRITE ordered
-groups finish after a requester fence; missing bindings cannot bypass admission;
+owners already committed finish after a requester fence; a later owner cannot start,
+and missing bindings cannot bypass admission;
 partial native allocation retains its one constructed stage and the consumer;
 unassigned reservation rollback, aggregate windows and busy-Close fencing preserve
 capacity. Sender payload reports cannot release source resource owners. Existing
@@ -2458,7 +2465,7 @@ charged until actual cleanup, including Unquiesced retention.
 
 Two public TCP controls cover same-Batch dependencies under EDF, independent
 work bypassing a QoS-blocked byte head, exact payload order, actual-owner release,
-intrinsically oversized groups, mixed-slot rejection precedence, rejection after
+intrinsically oversized owners, mixed-slot rejection precedence, rejection after
 enqueue, joint receiver-credit accounting, cancellation and deadline expiry.
 Existing parser controls cover action normalization, inherited replacement and
 unsupported actions. The existing RDMA shared-CQ cleanup-failure control now

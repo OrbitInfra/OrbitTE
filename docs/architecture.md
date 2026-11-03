@@ -93,19 +93,28 @@ receipt precludes automatic replay. See [notifications](cpu-tcp.md#notification-
 | `runtime/receiver_credit.rs::SenderCreditLedger` | Cumulative grant/consumed accounting per peer binding | `SenderCreditLedger` (no runtime consumer in TENT) |
 | `receiver_credit/issuer.rs::ReceiverCreditIssuer`, `sync.rs` | Fixed per-sender windows, tombstones and single-flight cumulative sync | No counterpart |
 
-`PreparedSubmission` owns, in release order, its memory references, optional
-`QosPermit`, `QueuePermit`, `CreditPermit` and requester-admission permit.
-Backing drops first, then QoS, queue metadata and credit, so another dispatch can
-never reacquire a releasing owner's quota. `Unquiesced` quarantine keeps all of
-them. Dispatch locks queue → QoS → credit ledger and obtains every slot, credit
-and window or none; network I/O for credit sync runs outside these locks.
+`runtime/request_merge.rs` maps original task IDs to physical owners after
+registration, permission and route resolution. TENT sorts by hint and address.
+OrbitTE also fences overlapping destinations and self-copy dependencies to
+preserve public byte order. One source epoch, target and operation apply to the
+whole submit. The peer advertises its transfer limit in Describe so a merge
+cannot create an oversized grant on a smaller receiver.
 
-FIFO uses admission sequence and EDF uses `(absolute deadline, sequence)` in a
-balanced tree; a head that does not fit the byte window blocks later heads, as in
-TENT. OrbitTE schedules whole ordered submissions where TENT schedules physical
-requests, which keeps ordered failure prefixes and NVLink copy groups intact.
-Disabled features allocate no queue, resolver or ledger, and none of this runs
-per slice. See [async batches](async-batches.md).
+Each physical owner holds its QoS permit, queue window and receiver credit.
+Dispatch takes queue → QoS → credit locks. Credit sync and payload I/O run
+outside them. EDF ranks independent batch heads. Reserving the only slot for
+a successor would deadlock its FIFO worker. The worker advances its eligible
+prefix while independent batches share the window. Files have no TENT memory-buffer key.
+The direct file path keeps its native batches. When the runtime queue is
+enabled, each file owner enters separately, as in TENT’s queued dispatch.
+
+The source describes one exact location per registered view. TENT’s
+`coalesceRegions` buckets multiple NUMA probe entries within one buffer.
+OrbitTE has no such per-page location list. Adjacent registered views keep
+their separate IDs, permissions and lifetimes. The queue reserves capacity
+for a real proxy session, whose private CROSS tasks already have a bounded
+lifetime inside that owner. This avoids reacquiring the parent’s window from
+its worker. See [admission](async-batches.md#runtime-admission-and-dispatch-window).
 
 ## RDMA resource owners
 

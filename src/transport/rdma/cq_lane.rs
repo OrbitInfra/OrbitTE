@@ -27,6 +27,7 @@ pub(super) enum Fault {
     Unavailable(&'static str),
     Timeout,
     Exhausted,
+    Cancelled,
 }
 
 impl Fault {
@@ -38,6 +39,7 @@ impl Fault {
             Error::Internal(message) => Self::Internal(message),
             Error::Unavailable(message) => Self::Unavailable(message),
             Error::Timeout => Self::Timeout,
+            Error::Cancelled => Self::Cancelled,
             Error::ResourceExhausted => Self::Exhausted,
             _ => Self::Internal("unexpected RDMA progress failure"),
         }
@@ -50,6 +52,7 @@ impl Fault {
             Self::Internal(message) => Error::Internal(message),
             Self::Unavailable(message) => Error::Unavailable(message),
             Self::Timeout => Error::Timeout,
+            Self::Cancelled => Error::Cancelled,
             Self::Exhausted => Error::ResourceExhausted,
         }
     }
@@ -110,7 +113,31 @@ impl GrantDrain {
     }
 }
 
+pub(crate) struct PayloadDispatch {
+    priority: crate::Priority,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(test)]
+impl From<crate::Priority> for PayloadDispatch {
+    fn from(priority: crate::Priority) -> Self {
+        Self {
+            priority,
+            cancel: None,
+        }
+    }
+}
+impl From<&crate::engine::PreparedTransfer> for PayloadDispatch {
+    fn from(request: &crate::engine::PreparedTransfer) -> Self {
+        Self {
+            priority: request.priority,
+            cancel: request.rdma_cancel.clone(),
+        }
+    }
+}
+
 struct Work {
+    cancel: Option<Arc<AtomicBool>>,
     queue: slice::SendWork,
     operation: slice::Operation,
     remote: Descriptor,

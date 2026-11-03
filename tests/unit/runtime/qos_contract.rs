@@ -184,6 +184,7 @@ fn public_mixed_contract_admission_is_atomic_and_repeated_resolution_cannot_bypa
                 max_dispatch_owners: 1,
                 max_dispatch_bytes: 8,
                 deadline_aware: false,
+ ..Default::default()
             }),
             ..Default::default()
         })
@@ -254,7 +255,7 @@ fn public_mixed_contract_admission_is_atomic_and_repeated_resolution_cannot_bypa
     assert_eq!(
         a.usage().unwrap(),
         QosUsage {
-            owners: 1,
+            owners: 2,
             inflight_bytes: 2,
             inflight_requests: 2
         }
@@ -262,7 +263,7 @@ fn public_mixed_contract_admission_is_atomic_and_repeated_resolution_cannot_bypa
     assert_eq!(b.usage().unwrap().inflight_requests, 1);
     let report = requester.execute(&prepared, None);
     assert_eq!(report.completed_requests, 3);
-    assert_eq!(a.usage().unwrap().inflight_requests, 2); // Actual owner still retained.
+    assert_eq!(a.usage().unwrap().inflight_requests, 1); // The final physical owner is still retained.
     drop(prepared);
     let mut bytes = [0; 3];
     remote.read(0, &mut bytes).unwrap();
@@ -397,6 +398,7 @@ fn queued_credit_waits_retain_qos_and_clean_failures_return_only_inflight_budget
                 max_dispatch_owners: 1,
                 max_dispatch_bytes: 8,
                 deadline_aware: false,
+                ..Default::default()
             }),
             ..Default::default()
         })

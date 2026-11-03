@@ -170,6 +170,7 @@ fn public_auto_windows_wait_for_actual_drop_and_replenish_without_per_request_sy
                     max_dispatch_owners: 2,
                     max_dispatch_bytes: 8,
                     deadline_aware: true,
+                    ..Default::default()
                 }),
                 ..EngineConfig::default()
             })
@@ -212,14 +213,7 @@ fn public_auto_windows_wait_for_actual_drop_and_replenish_without_per_request_sy
             Err(Error::ResourceExhausted)
         ));
         let held = requester
-            .prepare(
-                TransferOp::Write,
-                &peer,
-                &[make(0, 1), make(1, 1)],
-                None,
-                TIMEOUT,
-                None,
-            )
+            .prepare(TransferOp::Write, &peer, &[make(0, 2)], None, TIMEOUT, None)
             .unwrap();
         assert!(requester.execute(&held, None).is_complete());
         assert_eq!(
@@ -242,7 +236,7 @@ fn public_auto_windows_wait_for_actual_drop_and_replenish_without_per_request_sy
                 .receiver_credit_stats(&peer)
                 .unwrap()
                 .completed_requests,
-            3
+            2
         );
         assert_eq!(requester.receiver_credit_stats(&peer).unwrap().sequence, 2);
         assert!(
@@ -270,7 +264,7 @@ fn public_auto_windows_wait_for_actual_drop_and_replenish_without_per_request_sy
                 stats.consumed_requests,
                 stats.active_owners
             ),
-            (3, 6, 6, 0)
+            (3, 5, 5, 0)
         );
         let mut bytes = [0; 4];
         remote.read(0, &mut bytes).unwrap();
@@ -339,6 +333,9 @@ impl Relay {
                         }
                         Err(error) => panic!("credit relay accept: {error}"),
                     };
+                    // BSD can inherit O_NONBLOCK from the listener. The relay
+                    // must consume the whole RPC even if the body arrives later.
+                    incoming.set_nonblocking(false).unwrap();
                     incoming.set_read_timeout(Some(TIMEOUT)).unwrap();
                     incoming.set_write_timeout(Some(TIMEOUT)).unwrap();
                     let mut bytes = [0; 52 + 64];

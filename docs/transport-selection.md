@@ -108,6 +108,11 @@ The QP uses the CQ at that index modulo the lane count.
 Unbound traffic can use a named pool's QP and inherit its settings too. Both
 ends use the selected index for fresh connections and cache reuse.
 
+The selector runs on each original public range before merging. Two adjacent
+requests can fold only if their resolved results agree. A merged length cannot
+reroute them through a size rule or a different pool. See
+[physical owners](async-batches.md#physical-owners-and-public-tasks).
+
 ## Owner-based eligibility
 
 `open_segment` receives source-owned memory type and IPC export consent, plus
@@ -150,7 +155,7 @@ The reference is frozen TENT commit
 | `select`, hint and host staging | One immutable selection before admission, carried into TCP, RDMA, NVLink, file I/O and the TCP/RDMA CROSS leg |
 | `resolveDeviceMasks`, RDMA sub-batch grouping | One resolution per engine topology. Each prepared request retains its own mask and QP range through every child grant |
 | Endpoint `qp_pools`, `selectQpInPool`, `setupOneQP` | Contiguous index segments and pool SL/TC on the physical RC QP. An individual grant retains its connection, range and native owner |
-| `canMergeRequests` policy boundary | File and NVLink grouping preserve requested name and intent. Adjacent requests with different bindings stay separate. Physical aliases and general merging belong to S8 |
+| `canMergeRequests` policy boundary | Physical merging compares the complete preselected route, including its policy, intent, mask and QP pool, along with hint, priority, QoS and registration authority. A larger physical span keeps its members’ selected route |
 
 TENT's automatic memory order follows the buffer's registered transport list.
 OrbitTE registrations advertise capabilities without an insertion order, so
@@ -169,11 +174,13 @@ This is an implementation property, not a measured throughput comparison.
 
 ## Protocol and qualification
 
-Describe replies carry a four-byte region count, 36 bytes of segment
+Describe replies carry a four-byte region count, 44 bytes of segment
 capabilities, then 32 bytes per region. Bits 0–2 of capability byte zero
 identify RDMA, remote staging and NVLink. Bit 3 denotes a boot-only identity
 when NVLink is disabled. Bytes 4–19 hold the boot identity when known and
-20–35 hold the process nonce only for NVLink. Bytes 1–3 are reserved. Region
+20–35 hold the process nonce only for NVLink. Bytes 36–43 give the maximum
+accepted transfer length as a big-endian unsigned integer. An unknown limit
+prevents folding two requests. Bytes 1–3 are reserved. Region
 bytes 25 and 26 carry memory type and IPC export consent.
 
 The RDMA path reply carries the advertised endpoint width. The rendezvous

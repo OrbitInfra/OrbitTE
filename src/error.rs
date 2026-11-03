@@ -42,6 +42,8 @@ pub enum Error {
     ResourceExhausted,
     Protocol(&'static str),
     Timeout,
+    /// Dispatch prediction exceeded the configured local deadline threshold.
+    DeadlineInfeasible,
     Internal(&'static str),
     Io(io::Error),
 }
@@ -68,6 +70,7 @@ impl Error {
             Self::EpochMismatch => Self::EpochMismatch,
             Self::ResourceExhausted => Self::ResourceExhausted,
             Self::Timeout => Self::Timeout,
+            Self::DeadlineInfeasible => Self::DeadlineInfeasible,
             Self::InvalidConfig(msg) => Self::InvalidConfig(msg),
             Self::Unavailable(msg) => Self::Unavailable(msg),
             Self::Protocol(msg) => Self::Protocol(msg),
@@ -142,6 +145,9 @@ impl fmt::Display for Error {
             }
             Self::ResourceExhausted => f.write_str("engine resource budget exhausted"),
             Self::Protocol(message) => write!(f, "invalid OrbitTE frame: {message}"),
+            Self::DeadlineInfeasible => {
+                f.write_str("transfer cannot meet its deadline at the selected transport rate")
+            }
             Self::Timeout => f.write_str("operation deadline expired"),
             Self::Internal(message) => write!(f, "internal engine failure: {message}"),
             Self::Io(error) => write!(f, "transport I/O failed: {error}"),

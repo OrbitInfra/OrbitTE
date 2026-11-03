@@ -9,15 +9,13 @@ pub(super) struct ArbFlow {
 }
 
 fn predicted_mlu(flow: &ArbFlow, now: Instant, bandwidth: f64, bytes_ahead: u64) -> f64 {
-    let Some(deadline) = flow.deadline else {
-        return 0.0;
-    };
-    if deadline <= now {
-        return f64::MAX;
-    }
-    (bytes_ahead as f64 + flow.length as f64)
-        / bandwidth
-        / deadline.duration_since(now).as_secs_f64()
+    crate::runtime::deadline_mlu::deadline_mlu(
+        bytes_ahead,
+        flow.length,
+        flow.deadline,
+        now,
+        bandwidth,
+    )
 }
 
 /// Index is the original FIFO position and breaks every tie, including the tail.

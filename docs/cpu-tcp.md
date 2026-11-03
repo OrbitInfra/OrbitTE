@@ -133,7 +133,7 @@ operation or status and one zero reserved byte.
 | --- | --- |
 | Request, 52 bytes | Expected epoch (16), registration ID (8), offset (8), length (8) |
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
-| Descriptor payload | Region count (4), segment capabilities (36), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), zero reserved bytes (5) |
+| Descriptor payload | Region count (4), segment capabilities (44, including an eight-byte big-endian maximum transfer length), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), zero reserved bytes (5) |
 
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
@@ -152,7 +152,7 @@ out-of-bounds ranges and oversized payloads are rejected.
 READ: request → success header and the requested bytes. WRITE: request → ready →
 bytes → final success. Notify: request → ready → body and marker → final success.
 Each side commits only complete bodies, a dropped reply never authorizes replay,
-and describe replies are bounded at 40 + 4,096 × 32 bytes.
+and describe replies are bounded at 48 + 4,096 × 32 bytes.
 
 ## Verification
 

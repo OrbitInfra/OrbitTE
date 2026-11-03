@@ -499,7 +499,7 @@ impl RdmaGrant {
         &mut self,
         remote: &Descriptor,
         operation: TransferOp,
-        priority: crate::Priority,
+        dispatch: impl Into<cq_lane::PayloadDispatch>,
         deadline: Instant,
     ) -> Result<()> {
         self.progress.submit(
@@ -507,7 +507,7 @@ impl RdmaGrant {
             self.claim,
             *remote,
             operation,
-            priority,
+            dispatch,
             deadline,
         )?;
         self.progress.wait(&self.record, self.claim, deadline)

@@ -258,6 +258,19 @@ impl RdmaTransport {
         Ok(stats)
     }
 
+    pub(crate) fn admission_bandwidth(&self, mask: u64) -> f64 {
+        // Recovery may own this lock. Missing evidence must never cause a drop.
+        let Ok(contexts) = self.context_set.try_lock() else {
+            return 0.0;
+        };
+        if contexts.closed {
+            return 0.0;
+        }
+        contexts
+            .selector
+            .as_ref()
+            .map_or(0.0, |selector| selector.admission_bandwidth(mask))
+    }
     pub(crate) fn nic_load_stats(&self) -> Result<Vec<super::NicLoadStats>> {
         let contexts = self
             .context_set
@@ -319,6 +332,10 @@ fn close_slices(slices: &mut [RdmaSlice], mut result: Result<()>, requester: boo
 }
 
 impl RdmaTransport {
+    pub(crate) fn wake_cancel(&self) {
+        self.workers.wake_cancel();
+    }
+
     pub(crate) fn transfer(
         &self,
         operation: TransferOp,
@@ -329,6 +346,13 @@ impl RdmaTransport {
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
+            if request
+                .rdma_cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::Acquire))
+            {
+                return Err(Error::Cancelled);
+            }
             let location = request.local.location()?.location;
             let local_paths = self.request_paths(location, &request.selection)?;
             if (local_paths.len() > 1 || self.qp_width() > 1)
@@ -395,7 +419,7 @@ impl RdmaTransport {
                     }
                     slice
                         .grant
-                        .transfer(&slice.remote, operation, request.priority, deadline)?;
+                        .transfer(&slice.remote, operation, request, deadline)?;
                     self.finish_requester_slice(&mut channel, &mut slice, &request.local)
                 })();
                 return close_slices(std::slice::from_mut(&mut slice), transfer, true);

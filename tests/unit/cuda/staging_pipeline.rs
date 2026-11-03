@@ -747,3 +747,76 @@ fn source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin() {
     closing.join().unwrap();
     assert!(device.pins.lock().unwrap().is_empty());
 }
+
+#[test]
+fn only_a_validated_proxy_session_can_take_internal_owner_and_byte_reserves() {
+    use crate::{IntentType, RuntimeQueueConfig};
+    let source = engine(Transport::Tcp, 2);
+    let requester = TransferEngine::new(EngineConfig {
+        max_inflight_batches: 4,
+        runtime_queue: Some(RuntimeQueueConfig {
+            max_outstanding_owners: 2,
+            max_outstanding_bytes: 8,
+            staging_owner_reserve: 1,
+            staging_byte_reserve: 4,
+            max_dispatch_owners: 2,
+            ..Default::default()
+        }),
+        ..config(2)
+    })
+    .unwrap();
+    let gpu = memory(&allocation(&[0x57; 64]));
+    let device = register(&source, gpu);
+    let host = source
+        .register_memory(vec![0x81; 8].into(), Permission::RemoteReadWrite)
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0xcc; 8].into(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(
+            source.endpoint(),
+            source.source_epoch(),
+            crate::test_support::EVENTUAL_PROGRESS,
+        )
+        .unwrap();
+    let plain = TransferRequest::new(Transport::Tcp, local.base_address(), host.base_address(), 4);
+    let t = crate::test_support::EVENTUAL_PROGRESS;
+    let held = requester
+        .prepare(
+            TransferOp::Read,
+            &peer,
+            std::slice::from_ref(&plain),
+            None,
+            t,
+            None,
+        )
+        .unwrap();
+    assert!(matches!(
+        requester.submit_and_wait(
+            TransferOp::Read,
+            &peer,
+            &[plain.clone().with_intent(IntentType::StagingInternal)],
+            t
+        ),
+        Err(Error::ResourceExhausted)
+    ));
+    let stage = [0, 2].map(|off| {
+        TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + 2 + off,
+            device.base_address() + off,
+            2,
+        )
+        .with_remote_staging(true)
+    });
+    let result = requester
+        .submit_and_wait(TransferOp::Read, &peer, &stage, t)
+        .unwrap();
+    assert_eq!(result.completed_requests, 2);
+    assert_eq!(source.stats().unwrap().staging.remote_pins, 1);
+    let mut got = [0; 8];
+    local.read(0, &mut got).unwrap();
+    assert_eq!(got, [0xcc, 0xcc, 0x57, 0x57, 0x57, 0x57, 0xcc, 0xcc]);
+    drop(held);
+}

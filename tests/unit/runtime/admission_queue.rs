@@ -15,6 +15,7 @@ fn dispatch_window_preserves_fifo_ties_and_never_bypasses_a_large_head() {
             max_dispatch_owners: 2,
             max_dispatch_bytes: 8,
             deadline_aware,
+            ..Default::default()
         });
         let now = Instant::now();
         let first = queue.try_admit(5, now + TIMEOUT, None, None, None).unwrap();
@@ -63,6 +64,7 @@ fn engines(deadline_aware: bool) -> (TransferEngine, Arc<TransferEngine>) {
                 max_dispatch_owners: 1,
                 max_dispatch_bytes: 8,
                 deadline_aware,
+                ..Default::default()
             }),
             ..EngineConfig::default()
         })
@@ -133,6 +135,7 @@ fn public_fifo_edf_dispatch_preserves_batch_dependencies_and_drains_after_close(
         assert_eq!(
             requester.stats().unwrap().runtime_queue.unwrap(),
             RuntimeQueueStats {
+                deadline_infeasible_drops: 0,
                 queued_owners: 3,
                 queued_bytes: 8,
                 dispatching_owners: 1,
@@ -229,7 +232,7 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
         .submit(TransferOp::Write, &peer, &requests[..2], None, TIMEOUT)
         .unwrap();
     batch.seal().unwrap();
-    batch.cancel(0).unwrap();
+    batch.cancel_all().unwrap();
     assert_eq!(batch.wait(TIMEOUT).unwrap().state, BatchState::Cancelled);
     batch.free().unwrap();
     let mut expired = requester
@@ -283,11 +286,25 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
         [
             TaskState::Completed,
             TaskState::Cancelled,
-            TaskState::Skipped
+            TaskState::Completed
         ]
     );
     remote.read(0, &mut bytes).unwrap();
-    assert_eq!(bytes, [7, 0, 0]);
+    assert_eq!(bytes, [7, 0, 7]);
+    let result = &partial.submissions().unwrap()[0];
+    assert_eq!(
+        (result.completed_requests, result.transferred_bytes),
+        (1, 1)
+    );
+    let failure = result.failure.as_ref().unwrap();
+    assert_eq!(
+        (
+            failure.request_index,
+            failure.affected_requests,
+            failure.remote_effect
+        ),
+        (1, 2, crate::RemoteEffect::Unknown)
+    );
     partial.free().unwrap();
     assert_eq!(requester.stats().unwrap().inflight_batches, 0);
     assert_eq!(
@@ -295,3 +312,6 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
         RuntimeQueueStats::default()
     );
 }
+
+#[path = "admission_queue/physical.rs"]
+mod physical;

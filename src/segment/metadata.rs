@@ -70,6 +70,7 @@ impl ProcessIdentity {
 /// provider health. Execution still checks authoritative owners and readiness.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SegmentMetadata {
+    pub(crate) max_transfer_bytes: u64,
     pub(crate) boot: Option<SourceEpoch>,
     pub(crate) rdma: bool,
     pub(crate) remote_staging: bool,
@@ -77,7 +78,7 @@ pub(crate) struct SegmentMetadata {
 }
 
 impl SegmentMetadata {
-    pub(crate) const WIRE_SIZE: usize = 36;
+    pub(crate) const WIRE_SIZE: usize = 44;
 
     pub(crate) fn same_machine(self, peer: Self) -> bool {
         let machine = |segment: Self| segment.nvlink.map(|id| id.machine).or(segment.boot);
@@ -88,11 +89,12 @@ impl SegmentMetadata {
 
     pub(crate) fn encode(&self, bytes: &mut [u8]) {
         bytes.fill(0);
+        bytes[36..44].copy_from_slice(&self.max_transfer_bytes.to_be_bytes());
         bytes[0] = u8::from(self.rdma)
             | (u8::from(self.remote_staging) << 1)
             | (u8::from(self.nvlink.is_some()) << 2);
         if let Some(identity) = self.nvlink {
-            identity.encode(&mut bytes[4..]);
+            identity.encode(&mut bytes[4..36]);
         } else if let Some(boot) = self.boot {
             bytes[0] |= 8;
             bytes[4..20].copy_from_slice(&boot.0);
@@ -105,14 +107,17 @@ impl SegmentMetadata {
             || bytes[0] & 12 == 12
             || bytes[1..4].iter().any(|b| *b != 0)
             || (bytes[0] & 12 == 0 && bytes[4..20].iter().any(|b| *b != 0))
-            || (bytes[0] & 4 == 0 && bytes[20..].iter().any(|b| *b != 0))
+            || (bytes[0] & 4 == 0 && bytes[20..36].iter().any(|b| *b != 0))
             || (bytes[0] & 12 != 0 && bytes[4..20] == [0; 16])
-            || (bytes[0] & 4 != 0 && bytes[20..] == [0; 16])
+            || (bytes[0] & 4 != 0 && bytes[20..36] == [0; 16])
         {
             return Err(Error::Protocol("invalid segment capabilities"));
         }
-        let identity = ProcessIdentity::decode(&bytes[4..]);
+        let identity = ProcessIdentity::decode(&bytes[4..36]);
+        let mut cap = [0; 8];
+        cap.copy_from_slice(&bytes[36..44]);
         Ok(Self {
+            max_transfer_bytes: u64::from_be_bytes(cap),
             boot: (bytes[0] & 12 != 0).then_some(identity.machine),
             rdma: bytes[0] & 1 != 0,
             remote_staging: bytes[0] & 2 != 0,

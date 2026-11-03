@@ -39,6 +39,33 @@ chunks, file loans and admission stay with their owners until physical drain.
 consume allocation capacity. `submit_async` allocates, submits one group and
 seals it. See the [async example](../examples/async_batch.rs).
 
+## Physical owners and public tasks
+
+Every public request keeps its task ID and length. `task_status(i).physical_owner`
+is the absolute public ID of the first task carried by that physical transfer.
+All aliases see the same running, cancellation and terminal state. Each reports
+only bytes within its own range. Cancelling any alias addresses the owner.
+Cancelling one memory owner leaves independent successors eligible. A queued
+cancellation removes the owner before payload I/O. A running RDMA
+owner cancels unposted slices and drains every accepted post before retiring
+its backing.
+
+Memory requests merge by default. Both addresses must be adjacent inside the
+same local and remote registrations, with matching hint, resolved route, QoS,
+priority, staging mode, intent, named policy and deadline. Both peers’ transfer
+size limits apply. Shuffled slices can share an owner. The payload starts at the
+lowest address and the owner executes at its first public position. Overlapping
+destinations and self-transfer read/write dependencies fence reordering. Set
+`EngineConfig::merge_requests` to false for one physical transfer per request.
+File segments have no remote registered-buffer boundary in TENT and retain
+independent physical requests.
+
+A submission report counts the successful **public prefix**. Its failure span
+includes later aliases whose owner ran before that failure. Read individual
+task results to distinguish confirmed bytes, failures and skipped neighbours.
+An attached notification covers the original public interval and fires only
+after all of its owners succeed.
+
 ## Explicit progress
 
 `engine.progress_batch(id)?` dispatches at most one FIFO group or notification
@@ -91,36 +118,51 @@ let engine = TransferEngine::new(EngineConfig {
         max_dispatch_owners: 8,
         max_dispatch_bytes: 32 << 20,
         deadline_aware: true,
+        ..Default::default()
     }),
     ..EngineConfig::default()
 })?;
 # Ok::<(), orbit_te::Error>(())
 ```
 
-Each nonempty submission is one owner. `max_inflight_batches/bytes` still bound
-everything accepted, queued or uncertain; the queue adds limits on concurrently
-dispatching submissions and their bytes (including notifications). A group
-larger than `max_dispatch_bytes` returns `ResourceExhausted` before any task is
-published. The default config allows 64 owners, 64 MiB and FIFO.
+The queue admits all physical owners of a submit together. Defaults allow
+1,024 outstanding owners and 1 GiB, with 64 owners and 64 MiB in the dispatch
+window. Public task capacity is checked separately. A single owner larger
+than the dispatch window returns `ResourceExhausted` before any task is
+published. Notification bytes count once on the first owner. Requester-wide
+`max_inflight_batches` still bounds submissions.
 
-FIFO follows admission order. With `deadline_aware: true`, eligible heads go
-earliest-deadline-first with FIFO ties. Only the oldest submission in each batch
-is eligible, so a short deadline cannot overtake its own predecessor. A head that
-does not fit blocks later heads until capacity frees. EDF never preempts a
-reservation or posted DMA, and RDMA `Priority` orders payloads independently.
+`staging_owner_reserve` and `staging_byte_reserve` default to zero. Ordinary
+admission can consume only the total minus each reserve. Internal staging can
+use available capacity up to both totals. OrbitTE reserves once for the
+validated ProxyManager session that runs PRE/CROSS/POST. Its child chunks
+share that charge. A public staging intent alone cannot spend the reserve.
 
-The queue covers synchronous and asynchronous submissions on TCP, RDMA, NVLink
-and outer staged transfers, using existing caller and batch workers. Cancellation
-or expiry of a queued group returns before any I/O. Standalone notifications,
-segment open, batch allocation, empty submissions and internal staging CROSS work
-bypass the queue. `EngineStats::runtime_queue` reports queued and dispatching
-owners and bytes; `Unquiesced` keeps a reservation until reclaim is proven.
+FIFO orders eligible owners by admission. `deadline_aware` selects EDF with
+FIFO ties. A submission’s eligible prefix can fill the window. A blocked owner
+keeps its successors from taking the resources it needs, and a later append
+waits for the earlier submit to drain. Independent batches can progress.
+`with_deadline(instant)` may shorten an owner’s absolute submission deadline.
+`promotion_slack_ns` promotes future deadlines strictly inside that slack
+and preserves EDF within the promoted set. The default, zero, disables promotion.
 
-TENT separates `tryAdmit`, `pickForDispatch` and `refillDispatchWindow` and
-schedules physical requests (including merged aliases); OrbitTE schedules whole
-ordered submissions. Physical-request granularity, staging reserves and
-deadline-infeasible cancellation are open. See
-[qualification](qualification.md#runtime-admission-and-dispatch-window).
+With EDF and a positive `mlu_local_threshold`, dispatch can cancel an owner
+whose predicted transfer time divided by its remaining time reaches the
+threshold. The estimate includes eligible payload bytes already dispatched
+on that transport plus the owner’s payload. A known RDMA rate and an expired
+deadline yield an infeasible prediction. TCP, NVLink, files and proxy staging
+currently have no independent bandwidth estimate. An unknown rate leaves the
+owner eligible for ordinary dispatch. Ordinary execution timeouts still apply.
+
+A drop removes queue accounting before I/O, publishes `Error::DeadlineInfeasible`
+to its aliases and increments `RuntimeQueueStats::deadline_infeasible_drops`
+once. Other eligible owners can run, including later tasks in the same submit.
+A later WRITE in a failed report’s span can therefore have an unknown effect,
+including when an earlier owner was cancelled.
+The engine exposes this decision through status and stats. It installs no
+local-decoding or compression callback. See
+[RDMA deadline prediction](rdma-cuda.md#request-priority-and-bandwidth-arbitration)
+and the [verification controls](qualification.md#runtime-admission-and-dispatch-window).
 
 ## QoS contracts
 
@@ -177,7 +219,7 @@ Each **resolved contract** has one budget: an unknown tenant shares the global
 default, an unknown intent shares its tenant's default, and an explicit intent
 has its own bucket. Unknown names cannot create new counters, and an intent
 budget is not also charged to its tenant default. `max_inflight_bytes` counts
-payload bytes and `max_inflight_requests` counts public requests. In the default
+physical payload bytes and `max_inflight_requests` counts physical owners. In the default
 reject mode, a group over its cap returns `ResourceExhausted` before any charge.
 Accepted work keeps its charge until its prepared owner is actually released;
 `Unquiesced` keeps it. Identities are application-supplied, not authentication.
@@ -200,7 +242,7 @@ empty, replaces the inherited one). Typed Rust uses `QosDegradedActions` with
 | --- | --- |
 | Absent, `[]` or `["reject"]` | Return `ResourceExhausted` |
 | `["delay"]` or `["delay", "reject"]` | Wait until capacity frees or the original deadline passes |
-| Any, with a group larger than its cap | Reject during preparation |
+| Any, with a physical owner larger than its cap | Reject during preparation |
 
 Delay requires `EngineConfig::runtime_queue`; otherwise engine creation returns
 `InvalidConfig`:
@@ -222,7 +264,7 @@ let engine = TransferEngine::new(EngineConfig {
 When delay is enabled anywhere, every capped contract acquires capacity at its
 batch head, together with receiver credit and the dispatch window, with no
 partial charge while waiting; independent batches can pass a blocked head. If a
-reject-only slot fills after enqueue, that submission fails at dispatch with no
+reject-only slot fills after enqueue, that owner fails at dispatch with no
 remote effect and its later tasks are skipped. Waiting never extends the
 deadline. TENT parses these action names but does not execute them; this
 behavior is OrbitTE's extension. See
@@ -296,13 +338,13 @@ API, not a TENT wire message). Totals are **cumulative**, not increments:
 | Charge | Meaning |
 | --- | --- |
 | `DataBytes` | Sum of payload lengths, excluding notification bytes |
-| `RequestSlots` | Number of public requests |
+| `RequestSlots` | One per physical owner |
 | `StagingSlots`, `ConsumerSlots` | Automatic remote Pin owners only (below) |
 
 Decreasing totals or repeated resources reject the update; old or duplicate
 sequences are ignored. A credit-starved head waits without reserving the dispatch
 window, so other peers proceed. Credit is reserved with dispatch eligibility,
-refunded if the group is cancelled before its first transport handoff, and fully
+refunded if the owner is cancelled before its transport handoff, and fully
 committed at that handoff, even if the transfer later fails. Completion does not
 return credit; the issuer grants new cumulative totals.
 
@@ -310,7 +352,7 @@ return credit; the issuer grants new cumulative totals.
 fences new and uncommitted work and returns `BatchBusy` until every owner drains.
 `receiver_credit_stats(peer)` reports owners and consumption. TENT's
 `SenderCreditLedger` provides this accounting model but is not wired into its
-admission path; OrbitTE consumes it per submission. See
+admission path; OrbitTE consumes it per physical owner. See
 [qualification](qualification.md#receiver-credit-gating).
 
 ## Automatic receiver windows
@@ -347,17 +389,17 @@ requester.disconnect_receiver_credit(&peer, Duration::from_secs(3))?;
 ```
 
 The receiver reserves a fixed byte/request window per sender engine;
-`max_bytes` and `max_requests` bound the sum, and each submission must fit its
+`max_bytes` and `max_requests` bound the sum, and each physical owner must fit its
 window. Defaults are 128 sessions, 64 MiB / 1024 aggregate and 1 MiB / 16
 requests per sender. A receiver epoch can have only one endpoint binding per
 requester, and a lost connect reply is recovered by retrying the same peer.
 
 Grants are `window + completed_total`. The sender reports only successfully
-completed groups, published when the actual prepared owner drops; failed,
-cancelled or uncertain groups earn nothing. When the next group lacks credit, its
+completed owners, published when the physical permit drops. Failed, cancelled
+or uncertain owners earn nothing. When the next owner lacks credit, its
 existing worker performs one cumulative sync, shared by concurrent waiters, with
 no background thread or per-slice RPC. `disconnect_receiver_credit` returns
-`BatchBusy` until every committed group has completed, then returns the window
+`BatchBusy` until every committed owner has completed, then returns the window
 and leaves a tombstone. Sender crashes are not reclaimed automatically.
 `receiver_credit_issuer_stats()` reports sender and window counts.
 
@@ -395,9 +437,11 @@ complete, even when the group reports zero completed requests and zero bytes.
 A failed remote staging request can show completed READ chunks while reporting
 zero completed bytes. Each group's `NotificationStatus` is separate.
 
-`cancel(task)` and `cancel_all()` stop work that has not started. A running
-operation finishes or hits its deadline; cancellation never interrupts an
-unproven physical operation or relabels committed bytes.
+`cancel(task)` and `cancel_all()` stop work that has not started. Running TCP, NVLink and remote staging return `Error::Unavailable` for a cancel.
+RDMA wakes its posting workers. Slices already posted can still move bytes and
+complete normally. File operations keep their backend cancellation and drain
+rules. `cancel_all()` still attempts each queued owner if a running one cannot
+cancel.
 File requests wait for missing CQEs until 30 seconds after the submission
 deadline. Expiry returns `Error::Unquiesced` and keeps unresolved owners and
 admission charges retained.
@@ -441,5 +485,4 @@ cannot confirm completion, its physical owners stay charged. The free-list sweep
 continues past a stuck ID. Per-batch reclaim failures on a recoverable cuFile
 operation are capped at 4,096 consecutive errors. A pending reply resets the
 count. Uncertain destruction is parked immediately. The [shared CPU trace](cpu-oracle.md)
-compares async allocate, append, status and free. Request merging and failover
-remain open.
+compares async allocate, append, status and free. Transport failover remains open.

@@ -295,21 +295,16 @@ fn rounds(
                                     as u64,
                             case.payload,
                         );
-                        let request = if case.selector {
-                            selector::request(case, request)?
+                        let operation = if case.read {
+                            TransferOp::Read
                         } else {
-                            request
+                            TransferOp::Write
                         };
-                        let report = engine.submit_and_wait(
-                            if case.read {
-                                TransferOp::Read
-                            } else {
-                                TransferOp::Write
-                            },
-                            segment,
-                            &[request],
-                            TIMEOUT,
-                        )?;
+                        let report = if case.selector {
+                            selector::transfer(case, engine, segment, operation, request)?
+                        } else {
+                            engine.submit_and_wait(operation, segment, &[request], TIMEOUT)?
+                        };
                         if report.failure.is_some()
                             || !report.locally_drained
                             || report.transferred_bytes != case.payload

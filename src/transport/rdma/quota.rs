@@ -249,6 +249,21 @@ impl DeviceSelector {
         self.devices[id].set_bandwidth(mbps);
     }
 
+    pub(super) fn admission_bandwidth(&self, mask: u64) -> f64 {
+        let Ok(state) = self.state.try_lock() else {
+            return 0.0;
+        };
+        let selected = state.available & mask;
+        self.devices
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| selected & (1u64 << i) != 0)
+            .try_fold(0.0, |total, (_, info)| {
+                info.transmit_estimate().map(|rate| total + rate)
+            })
+            .unwrap_or(0.0)
+    }
+
     pub(super) fn stats(&self) -> Vec<NicLoadStats> {
         let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.devices

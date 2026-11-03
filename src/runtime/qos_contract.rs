@@ -298,15 +298,11 @@ impl QosContractResolver {
         })))
     }
 
-    pub(crate) fn admit(&self, charges: Vec<QosCharge>) -> Result<Option<QosPermit>> {
-        if charges.is_empty() {
-            return Ok(None);
+    pub(crate) fn admit(&self, charges: Vec<Option<QosCharge>>) -> Result<Vec<Option<QosPermit>>> {
+        match &self.quota {
+            Some(quota) => quota.admit(charges),
+            None => Ok(charges.into_iter().map(|_| None).collect()),
         }
-        self.quota
-            .as_ref()
-            .ok_or(Error::Internal("QoS quota missing"))?
-            .admit(charges)
-            .map(Some)
     }
 }
 

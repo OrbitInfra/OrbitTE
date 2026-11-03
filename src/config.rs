@@ -20,10 +20,20 @@ pub enum StagingLocation {
 /// Total retained work remains bounded by EngineConfig's inflight budgets.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeQueueConfig {
-    /// Maximum submissions holding dispatch reservations simultaneously.
+    /// Total queued and dispatching physical owners and their bytes.
+    pub max_outstanding_owners: usize,
+    pub max_outstanding_bytes: usize,
+    /// Capacity which only internal staging sessions may consume.
+    pub staging_owner_reserve: usize,
+    pub staging_byte_reserve: usize,
+    /// Skip a dispatch reaching this predicted deadline MLU. Zero disables it.
+    pub mlu_local_threshold: f64,
+    /// Promote future deadlines strictly within this slack ahead of other heads.
+    pub promotion_slack_ns: u64,
+    /// Maximum physical owners holding dispatch reservations simultaneously.
     pub max_dispatch_owners: usize,
-    /// Whole-submission bytes, including its attached notification. A submission
-    /// larger than this window is rejected before publishing tasks or doing I/O.
+    /// Payload bytes in the window, plus notification bytes on the first owner.
+    /// An owner larger than this window is rejected before publishing tasks or doing I/O.
     pub max_dispatch_bytes: usize,
     /// Earliest absolute submission deadline first, with FIFO ties. False uses
     /// admission FIFO. Later groups in the same Batch wait for their predecessor.
@@ -34,6 +44,12 @@ pub struct RuntimeQueueConfig {
 impl Default for RuntimeQueueConfig {
     fn default() -> Self {
         Self {
+            max_outstanding_owners: 1024,
+            max_outstanding_bytes: 1 << 30,
+            staging_owner_reserve: 0,
+            staging_byte_reserve: 0,
+            mlu_local_threshold: 0.0,
+            promotion_slack_ns: 0,
             max_dispatch_owners: 64,
             max_dispatch_bytes: 64 << 20,
             deadline_aware: false,
@@ -44,6 +60,8 @@ impl Default for RuntimeQueueConfig {
 /// Immutable per-engine budgets. No process environment is read or modified.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Merge adjacent requests within the same pair of registered ranges.
+    pub merge_requests: bool,
     /// Maximum number of 16 MiB slices in one cuFile batch.
     #[cfg(feature = "gds")]
     pub gds_batch_depth: u32,
@@ -160,6 +178,7 @@ impl Default for EngineConfig {
             staging_pipeline_depth: 1,
             #[cfg(feature = "rdma")]
             rdma: None,
+            merge_requests: true,
             bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
             max_registered_regions: 1024,
             max_registered_bytes: 1 << 30,
@@ -190,6 +209,16 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(q) = self.runtime_queue {
+            if q.staging_owner_reserve > q.max_outstanding_owners
+                || q.staging_byte_reserve > q.max_outstanding_bytes
+                || !q.mlu_local_threshold.is_finite()
+            {
+                return Err(Error::InvalidConfig(
+                    "invalid runtime queue staging reserve or deadline threshold",
+                ));
+            }
+        }
         if let Some(credit) = self.receiver_credit {
             credit.validate()?;
         }

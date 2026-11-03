@@ -931,7 +931,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
             .submit(TransferOp::Read, &peer, &[request], None, queued_timeout)
             .unwrap();
         if queued_cancel {
-            assert!(batch.cancel(0).unwrap());
+            assert!(matches!(batch.cancel(0), Err(Error::Unavailable(_))));
             assert!(batch.cancel(1).unwrap());
         }
         batch.seal().unwrap();
@@ -975,7 +975,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
         );
         let tasks = batch.task_statuses().unwrap();
         assert_eq!(tasks[0].state, TaskState::Completed);
-        assert_eq!(tasks[0].cancel_requested, queued_cancel);
+        assert!(!tasks[0].cancel_requested);
         let failure = tasks[1].failure.as_ref().unwrap();
         assert!(if queued_cancel {
             matches!(failure.error, Error::Cancelled)
@@ -1402,4 +1402,258 @@ fn free_fences_hook_retries_without_joining_a_peer_that_has_not_replied() {
     }
     listener.set_nonblocking(true).unwrap();
     assert!(matches!(listener.accept(),Err(error) if error.kind()==io::ErrorKind::WouldBlock));
+}
+
+#[test]
+fn one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit() {
+    use crate::{QosConfig, QosPolicyFields, QosUsage, RuntimeQueueConfig, TaskState, Transport};
+    let t = common::EVENTUAL_PROGRESS;
+    let (listener, mut peer) = fault_peer();
+    peer.metadata.max_transfer_bytes = 8;
+    let engine = Arc::new(
+        TransferEngine::new(EngineConfig {
+            runtime_queue: Some(RuntimeQueueConfig {
+                max_outstanding_owners: 1,
+                max_dispatch_owners: 1,
+                ..Default::default()
+            }),
+            max_receiver_credit_sessions: 1,
+            qos: Some(QosConfig {
+                defaults: QosPolicyFields {
+                    max_inflight_requests: Some(1),
+                    max_inflight_bytes: Some(4),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let local = engine
+        .register_memory(vec![0x91, 1, 2, 3, 4, 0x92].into(), Permission::LocalOnly)
+        .unwrap();
+    engine.activate_receiver_credit(&peer, 1, 0).unwrap();
+    engine
+        .apply_receiver_credit(
+            &peer,
+            &crate::ReceiverCreditUpdateV1 {
+                schema_version: 1,
+                flags: 0,
+                receiver_session_id: peer.epoch,
+                qos_class: 0,
+                epoch: 1,
+                sequence: 1,
+                freshness_ttl_ms: 0,
+                grants: vec![
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::DataBytes,
+                        grant_total: 4,
+                    },
+                    crate::CreditAmount {
+                        resource: crate::CreditResource::RequestSlots,
+                        grant_total: 1,
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    let q = engine.resolve_qos(&Default::default()).unwrap();
+    let req = [3, 1].map(|i| {
+        TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + i,
+            peer.regions[0].base_address() + i,
+            2,
+        )
+        .with_qos(q.clone())
+    });
+    let mut batch = engine
+        .submit_async(TransferOp::Write, &peer, &req, None, t)
+        .unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    stream.set_read_timeout(Some(t)).unwrap();
+    let mut header = [0; REQUEST_SIZE];
+    stream.read_exact(&mut header).unwrap();
+    let header = Request::decode(&header).unwrap();
+    assert!(header.operation == Operation::TcpWrite);
+    assert_eq!((header.region, header.offset, header.length), (1, 1, 4));
+    assert_eq!(
+        q.usage().unwrap(),
+        QosUsage {
+            owners: 1,
+            inflight_requests: 1,
+            inflight_bytes: 4
+        }
+    );
+    let usage = engine.stats().unwrap();
+    assert_eq!(usage.inflight_bytes, 4);
+    let queue = usage.runtime_queue.unwrap();
+    assert_eq!((queue.dispatching_owners, queue.dispatching_bytes), (1, 4));
+    let credits = engine.receiver_credit_stats(&peer).unwrap();
+    assert_eq!(
+        (
+            credits.active_owners,
+            credits.consumed_requests,
+            credits.consumed_bytes
+        ),
+        (1, 1, 4)
+    );
+    assert!(
+        batch
+            .task_statuses()
+            .unwrap()
+            .iter()
+            .all(|t| t.physical_owner == 0 && t.state == TaskState::Running)
+    );
+    assert!(matches!(batch.cancel(1), Err(Error::Unavailable(_))));
+    assert!(
+        batch
+            .task_statuses()
+            .unwrap()
+            .iter()
+            .all(|t| !t.cancel_requested)
+    );
+    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+    stream
+        .write_all(
+            &Reply {
+                status: 9,
+                epoch: peer.epoch,
+                length: 0,
+            }
+            .encode(),
+        )
+        .unwrap();
+    let mut bytes = [0xaa; 8];
+    stream.read_exact(&mut bytes[1..5]).unwrap();
+    assert_eq!(bytes, [0xaa, 1, 2, 3, 4, 0xaa, 0xaa, 0xaa]);
+    stream
+        .write_all(
+            &Reply {
+                status: 0,
+                epoch: peer.epoch,
+                length: 0,
+            }
+            .encode(),
+        )
+        .unwrap();
+    assert_eq!(batch.wait(t).unwrap().completed_tasks, 2);
+    assert!(
+        batch
+            .task_statuses()
+            .unwrap()
+            .iter()
+            .all(|t| t.transferred_bytes == 2
+                && t.state == TaskState::Completed
+                && t.locally_drained)
+    );
+    assert_eq!(batch.submissions().unwrap()[0].completed_requests, 2);
+    assert_eq!(q.usage().unwrap(), QosUsage::default());
+    batch.free().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+}
+
+#[test]
+fn shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write() {
+    let timeout = common::EVENTUAL_PROGRESS;
+    for asynchronous in [false, true] {
+        let (listener, mut peer) = fault_peer();
+        peer.metadata.max_transfer_bytes = 8;
+        let engine = Arc::new(TransferEngine::new(Default::default()).unwrap());
+        let local = engine
+            .register_memory(vec![1, 2, 3, 4, 5, 6, 7, 8].into(), Permission::LocalOnly)
+            .unwrap();
+        let req = [0, 5, 2].map(|i| {
+            TransferRequest::new(
+                crate::Transport::Tcp,
+                local.base_address() + i,
+                peer.regions[0].base_address() + i,
+                2,
+            )
+        });
+        let epoch = peer.epoch;
+        let handle = thread::spawn(move || {
+            for (off, len) in [(0, 4), (5, 2)] {
+                let (mut s, _) = listener.accept().unwrap();
+                s.set_read_timeout(Some(timeout)).unwrap();
+                let mut h = [0; REQUEST_SIZE];
+                s.read_exact(&mut h).unwrap();
+                let r = Request::decode(&h).unwrap();
+                assert_eq!((r.offset, r.length), (off, len));
+                s.write_all(
+                    &Reply {
+                        status: 9,
+                        epoch,
+                        length: 0,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+                let mut bytes = vec![0; len as usize];
+                s.read_exact(&mut bytes).unwrap();
+                if off == 0 {
+                    assert_eq!(bytes, [1, 2, 3, 4]);
+                    s.write_all(
+                        &Reply {
+                            status: 0,
+                            epoch,
+                            length: 0,
+                        }
+                        .encode(),
+                    )
+                    .unwrap();
+                } else {
+                    assert_eq!(bytes, [6, 7]);
+                } // second WRITE loses its final receipt
+            }
+            listener
+        });
+        let (completed, bytes, index, span, effect) = if asynchronous {
+            let mut b = engine
+                .submit_async(TransferOp::Write, &peer, &req, None, timeout)
+                .unwrap();
+            assert_eq!(b.wait(timeout).unwrap().completed_tasks, 2);
+            let tasks = b.task_statuses().unwrap();
+            assert_eq!(
+                (
+                    tasks[0].physical_owner,
+                    tasks[1].physical_owner,
+                    tasks[2].physical_owner
+                ),
+                (0, 1, 0)
+            );
+            assert_eq!(tasks[2].transferred_bytes, 2);
+            let s = b.submissions().unwrap().remove(0);
+            let f = s.failure.unwrap();
+            b.free().unwrap();
+            (
+                s.completed_requests,
+                s.transferred_bytes,
+                f.request_index,
+                f.affected_requests,
+                f.remote_effect,
+            )
+        } else {
+            let r = engine
+                .submit_and_wait(TransferOp::Write, &peer, &req, timeout)
+                .unwrap();
+            let f = r.failure.unwrap();
+            (
+                r.completed_requests,
+                r.transferred_bytes,
+                f.request_index,
+                f.affected_requests,
+                f.remote_effect,
+            )
+        };
+        assert_eq!(
+            (completed, bytes, index, span, effect),
+            (1, 2, 1, 2, RemoteEffect::Unknown)
+        );
+        let l = handle.join().unwrap();
+        l.set_nonblocking(true).unwrap();
+        assert!(matches!(l.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+    }
 }

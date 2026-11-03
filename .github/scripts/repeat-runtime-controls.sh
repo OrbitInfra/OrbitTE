@@ -21,6 +21,20 @@ controls=(
   notification::tests::attached_targets_retry_only_missing_peers_and_keep_self_deliverable
   notification::tests::notification_routes_try_only_unposted_unavailable_channels
   notification::tests::notification_receive_keeps_draining_after_a_channel_fails
+  runtime::receiver_credit::issuer::tests::lost_open_and_close_replies_preserve_identity_and_sync_cancel_is_retryable
+  engine::tests::cancelling_a_running_rdma_alias_drains_posts_and_suppresses_the_remaining_slices
+  engine::tests::direct_running_cancel_detach_and_close_keep_dma_lease_until_actual_worker_exit
+  runtime::control_plane::tests::one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit
+  runtime::control_plane::tests::shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write
+  runtime::request_merge::tests::shuffled_aliases_keep_absolute_public_ids_lengths_and_notification_intervals
+  runtime::request_merge::tests::cancelling_a_queued_alias_uncharges_one_owner_without_touching_either_range
+  runtime::admission_queue::tests::physical::physical_windows_charge_only_live_wire_bytes_and_use_each_transports_current_rate
+  runtime::admission_queue::tests::physical::promotion_partitions_critical_future_slack_stably_across_admits
+  runtime::admission_queue::tests::physical::same_submit_can_fill_the_window_and_an_exact_threshold_drop_frees_capacity
+  transport::rdma::rdma_transport::tests::rails::admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_post
+  transport::rdma::rdma_transport::tests::rails::an_infeasible_merged_write_does_not_hide_a_later_feasible_tcp_owner
+  cuda::tests::staging_pipeline::only_a_validated_proxy_session_can_take_internal_owner_and_byte_reserves
+  cuda::tests::staging_credit::automatic_staging_credit_uses_negotiated_depth_and_only_committed_owners_finish_after_fence
 )
 for iteration in {1..50}; do
   echo "Iteration $iteration/50 with RUST_TEST_THREADS=$RUST_TEST_THREADS"

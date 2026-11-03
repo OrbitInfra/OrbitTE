@@ -113,6 +113,13 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             .selector
             .then(|| super::selector::config(case))
             .transpose()?,
+        runtime_queue: case.selector.then_some(orbit_te::RuntimeQueueConfig {
+            max_outstanding_owners: 1,
+            max_dispatch_owners: 1,
+            deadline_aware: true,
+            mlu_local_threshold: 1.0,
+            ..Default::default()
+        }),
         bind_addr: bind,
         max_registered_bytes: case.length(),
         max_transfer_bytes: case.payload,

@@ -116,6 +116,20 @@ impl ProgressState {
             }
             return false;
         }
+        // An accepted post owns its buffer through its real CQE. Cancellation
+        // can suppress only payload slices that have not crossed that boundary.
+        if work
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Acquire))
+            && !work.queue.pending()
+            && !work.queue.finished()
+        {
+            request.failure = Some(Fault::Cancelled);
+            record.actions.fetch_and(!WORK, Ordering::Release);
+            record.changed.notify_all();
+            return false;
+        }
         if namespace.is_none()
             && matches!(
                 work.operation,

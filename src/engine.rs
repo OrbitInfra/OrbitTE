@@ -1,3 +1,5 @@
+mod admission;
+use admission::OwnerAdmission;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -6,11 +8,12 @@ use crate::batch::{AllocationBudget, Batch, BatchId, BatchProgress};
 use crate::memory::MemoryRegistry;
 use crate::notification::{NotificationInbox, NotificationRoutes, Target};
 use crate::runtime::admission_queue::{
-    LocalTransferAdmissionQueue, QueuePermit, RuntimeQueueStats,
+    LocalTransferAdmissionQueue, QueueTicket, RuntimeQueueStats,
 };
 use crate::runtime::control_plane::{self, ControlService};
-use crate::runtime::qos_contract::{QosCharge, QosContractResolver, QosPermit};
-use crate::runtime::receiver_credit::{CreditPermit, ReceiverCreditIssuer, SenderCreditLedger};
+use crate::runtime::qos_contract::QosContractResolver;
+use crate::runtime::receiver_credit::{ReceiverCreditIssuer, SenderCreditLedger};
+use crate::runtime::request_merge::TaskMap;
 #[cfg(any(feature = "io-uring", feature = "gds"))]
 use crate::runtime::transport_selector::Filters;
 use crate::runtime::transport_selector::{
@@ -61,6 +64,8 @@ pub enum Priority {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct TransferRequest {
+    /// Optional absolute owner deadline, capped by the submission timeout.
+    pub deadline: Option<Instant>,
     /// Bind to exactly this policy and segment type. Resolved during preparation.
     pub policy_name: Option<crate::PolicyName>,
     /// Business intent for automatic policy selection, independent of QoS.
@@ -96,12 +101,19 @@ impl TransferRequest {
             local_address,
             remote_address,
             length,
+            deadline: None,
             policy_name: None,
             intent: crate::IntentType::Unspec,
             qos: None,
             priority: Priority::default(),
             remote_staging: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     /// Bind to a named selector rule. Allocate the bounded name at request construction.
@@ -142,6 +154,8 @@ impl TransferRequest {
 pub(crate) struct PreparedTransfer {
     #[cfg(feature = "rdma")]
     pub(crate) priority: Priority,
+    #[cfg(feature = "rdma")]
+    pub(crate) rdma_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     #[cfg(feature = "cuda")]
     pub(crate) remote_staging: bool,
     pub(crate) selection: SelectionResult,
@@ -292,7 +306,10 @@ impl TransferEngine {
             })
             .transpose()?;
         #[allow(unused_mut)]
-        let mut metadata = SegmentMetadata::default();
+        let mut metadata = SegmentMetadata {
+            max_transfer_bytes: config.max_transfer_bytes as u64,
+            ..Default::default()
+        };
         #[cfg(feature = "rdma")]
         {
             metadata.rdma = rdma.is_some();
@@ -344,7 +361,7 @@ impl TransferEngine {
             drained: Condvar::new(),
         });
         let allocations = Arc::new(AllocationBudget::new());
-        let progress_worker = Self::start_progress(&config, &allocations, &runtime_queue)?;
+        let progress_worker = Self::start_progress(&config, &allocations, &runtime_queue, &source)?;
         let control = ControlService::start(Arc::clone(&source), &config)?;
         let receiver_credits = (config.max_receiver_credit_sessions != 0).then(|| {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
@@ -373,7 +390,18 @@ impl TransferEngine {
         config: &EngineConfig,
         allocations: &Arc<AllocationBudget>,
         queue: &Option<Arc<LocalTransferAdmissionQueue>>,
+        _source: &Source,
     ) -> Result<Option<crate::runtime::progress_worker::ProgressWorker>> {
+        #[cfg(feature = "rdma")]
+        if let (Some(queue), Some(rdma)) = (queue, &_source.rdma) {
+            let rdma = Arc::downgrade(rdma);
+            queue.set_bandwidth(Box::new(move |transport, mask| {
+                if transport != Transport::Rdma {
+                    return 0.0;
+                }
+                rdma.upgrade().map_or(0.0, |r| r.admission_bandwidth(mask))
+            }))?;
+        }
         (config.enable_progress_worker || queue.is_some())
             .then(|| {
                 crate::runtime::progress_worker::ProgressWorker::start(
@@ -386,6 +414,17 @@ impl TransferEngine {
             .transpose()
     }
 
+    #[cfg(feature = "rdma")]
+    pub(crate) fn wake_rdma_cancel(&self) {
+        if let Some(rdma) = &self.source.rdma {
+            rdma.wake_cancel();
+        }
+    }
+    pub(crate) fn cancel_queued(&self, ticket: &QueueTicket) -> bool {
+        self.runtime_queue
+            .as_ref()
+            .is_some_and(|q| q.cancel(ticket))
+    }
     pub(crate) fn defers_busy_free(&self) -> bool {
         self.config.enable_progress_worker
     }
@@ -922,7 +961,7 @@ impl TransferEngine {
             None => 0,
         };
         let mut total_bytes = notification_bytes;
-        let mut qos_charges = Vec::new();
+        let mut contracts = Vec::with_capacity(requests.len());
         match &mut payload {
             PreparedTarget::Memory {
                 requests: prepared, ..
@@ -962,9 +1001,7 @@ impl TransferEngine {
             total_bytes = total_bytes
                 .checked_add(request.length)
                 .ok_or(Error::ResourceExhausted)?;
-            if let Some(contract) = contract {
-                QosCharge::add(&mut qos_charges, contract, request.length)?;
-            }
+            contracts.push(contract);
             let (peer, prepared) = match &mut payload {
                 PreparedTarget::Memory { peer, requests } => (peer, requests),
                 #[cfg(any(feature = "io-uring", feature = "gds"))]
@@ -1100,6 +1137,8 @@ impl TransferEngine {
             prepared.push(PreparedTransfer {
                 #[cfg(feature = "rdma")]
                 priority,
+                #[cfg(feature = "rdma")]
+                rdma_cancel: None,
                 #[cfg(feature = "cuda")]
                 remote_staging: request.remote_staging,
                 selection,
@@ -1115,32 +1154,55 @@ impl TransferEngine {
             gds.cleanup();
         }
         let admission = self.admit_batch(total_bytes)?;
-        let qos = match &self.qos {
-            Some(resolver) => resolver.admit(qos_charges)?,
-            None => None,
-        };
-        let credit = match (target, &self.receiver_credits) {
-            (TransferTarget::Memory(peer), Some(ledger)) if !requests.is_empty() => {
-                Some(ledger.prepare(peer, total_bytes - notification_bytes, requests.len())?)
+        let mapping = Arc::new(match &mut payload {
+            PreparedTarget::Memory {
+                peer,
+                requests: transfers,
+            } => TaskMap::merge(
+                requests,
+                transfers,
+                &contracts,
+                self.source
+                    .metadata
+                    .boot
+                    .zip(peer.metadata.boot)
+                    .is_none_or(|(local, remote)| local == remote),
+                operation,
+                self.config
+                    .max_transfer_bytes
+                    .min(usize::try_from(peer.metadata.max_transfer_bytes).unwrap_or(usize::MAX)),
+                self.config.merge_requests,
+            ),
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            PreparedTarget::File { .. } => TaskMap::identity(requests),
+        });
+        #[cfg(feature = "rdma")]
+        if batch.is_some() {
+            match &mut payload {
+                PreparedTarget::Memory {
+                    requests: transfers,
+                    ..
+                } => {
+                    for (transfer, owner) in transfers.iter_mut().zip(&mapping.owners) {
+                        if transfer.selection.transport == Transport::Rdma
+                            && !requests[owner.representative].remote_staging
+                        {
+                            transfer.rdma_cancel = Some(Arc::default());
+                        }
+                    }
+                }
+                #[cfg(any(feature = "io-uring", feature = "gds"))]
+                PreparedTarget::File { .. } => {}
             }
-            _ => None,
-        };
-        let queue = self
-            .runtime_queue
-            .as_ref()
-            .filter(|_| !requests.is_empty())
-            .map(|queue| {
-                queue.try_admit(
-                    total_bytes,
-                    deadline,
-                    batch,
-                    credit
-                        .as_ref()
-                        .map(|credit| Arc::clone(&credit.reservation)),
-                    qos.as_ref().and_then(QosPermit::reservation),
-                )
-            })
-            .transpose()?;
+        }
+        let owners = self.admit_physical(
+            &payload,
+            &mapping,
+            requests,
+            &contracts,
+            (batch, deadline),
+            notification_bytes,
+        )?;
         let prepared = PreparedSubmission {
             #[cfg(feature = "gds")]
             gds_pending: Mutex::default(),
@@ -1148,9 +1210,9 @@ impl TransferEngine {
             payload,
             notification: notification.cloned(),
             deadline,
-            queue,
-            credit,
-            _qos: qos,
+            owners,
+            uncertain: Mutex::default(),
+            mapping,
             admission: Some(admission),
         };
         #[cfg(feature = "gds")]
@@ -1177,10 +1239,11 @@ impl TransferEngine {
 
     pub(crate) fn retain_undrained(
         &self,
-        prepared: PreparedSubmission,
+        mut prepared: PreparedSubmission,
         progress: Option<(Arc<BatchProgress>, usize)>,
         publish: impl FnOnce(),
     ) {
+        prepared.retain_uncertain_owners();
         #[cfg(feature = "gds")]
         let pending = prepared
             .gds_pending
@@ -1200,6 +1263,17 @@ impl TransferEngine {
     }
 
     pub(crate) fn execute(
+        &self,
+        submission: &PreparedSubmission,
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> BatchReport {
+        let report = self.execute_physical(submission, progress);
+        submission
+            .mapping
+            .public_report(report, submission.operation)
+    }
+
+    pub(crate) fn execute_physical(
         &self,
         submission: &PreparedSubmission,
         progress: Option<(&BatchProgress, usize)>,
@@ -1234,22 +1308,6 @@ impl TransferEngine {
                 NotificationStatus::NotRequested
             },
         };
-        let cancelled =
-            || progress.is_some_and(|(progress, first)| progress.cancel_requested(first));
-        let admission = match (&submission.queue, &submission.credit) {
-            (Some(queue), _) => queue.wait(cancelled),
-            (None, Some(credit)) => credit.reservation.wait(*deadline, cancelled),
-            (None, None) => Ok(()),
-        };
-        if let Err(error) = admission {
-            report.failure = Some(TransferFailure {
-                request_index: 0,
-                affected_requests: 1,
-                error,
-                remote_effect: RemoteEffect::None,
-            });
-            return report;
-        }
         let (peer, requests) = match payload {
             PreparedTarget::Memory { peer, requests } => (peer, requests),
             #[cfg(any(feature = "io-uring", feature = "gds"))]
@@ -1257,9 +1315,31 @@ impl TransferEngine {
                 let mut first = 0;
                 while first < requests.len() {
                     let transport = requests[first].selection.transport;
+                    let owner = &submission.owners[first];
+                    let owner_deadline = owner.deadline;
+                    if let Err(error) = owner.start(|| {
+                        progress.is_some_and(|(p, base)| p.cancel_requested(base + first))
+                    }) {
+                        report.failure = Some(TransferFailure {
+                            request_index: first,
+                            affected_requests: 1,
+                            error,
+                            remote_effect: RemoteEffect::None,
+                        });
+                        break;
+                    }
                     let count = requests[first..]
                         .iter()
-                        .take_while(|r| r.selection == requests[first].selection)
+                        .enumerate()
+                        .take_while(|(i, r)| {
+                            r.selection == requests[first].selection
+                                && submission.owners[first + *i].deadline == owner_deadline
+                        })
+                        .take(if self.runtime_queue.is_some() {
+                            1
+                        } else {
+                            usize::MAX
+                        })
                         .count();
                     let group = &requests[first..first + count];
                     let progress = progress.map(|(p, base)| (p, base + first));
@@ -1276,7 +1356,7 @@ impl TransferEngine {
                             io.execute(
                                 *operation,
                                 group,
-                                *deadline,
+                                owner_deadline,
                                 progress,
                                 &mut result,
                                 #[cfg(feature = "cuda")]
@@ -1288,7 +1368,7 @@ impl TransferEngine {
                             gds.execute(
                                 *operation,
                                 group,
-                                *deadline,
+                                owner_deadline,
                                 progress,
                                 &mut result,
                                 &submission.gds_pending,
@@ -1304,6 +1384,13 @@ impl TransferEngine {
                             remote_effect: RemoteEffect::None,
                         });
                     }
+                    #[cfg(feature = "gds")]
+                    let result = submission.finish_gds_range(result, group, progress);
+                    if result.locally_drained {
+                        submission.retire_owners(first, count, result.completed_requests);
+                    } else {
+                        submission.retain_window(first..first + count);
+                    }
                     report.completed_requests += result.completed_requests;
                     report.transferred_bytes += result.transferred_bytes;
                     report.locally_drained = result.locally_drained;
@@ -1318,30 +1405,76 @@ impl TransferEngine {
             }
         };
         let mut index = 0;
+        let mut first_interruption = None;
+        // A queue drop or an accepted task cancel retires just this owner.
+        // Later owners on the same worker can still carry independent payload.
+        let mut interrupt = |index: usize, reason: Error, effect: RemoteEffect| {
+            if let Some((p, base)) = progress {
+                let task_error = if matches!(reason, Error::DeadlineInfeasible) {
+                    Error::DeadlineInfeasible
+                } else {
+                    Error::Cancelled
+                };
+                p.fail_owners(
+                    base,
+                    TransferFailure {
+                        request_index: index,
+                        affected_requests: 1,
+                        error: task_error,
+                        remote_effect: effect,
+                    },
+                    true,
+                );
+            }
+            let first = first_interruption.get_or_insert(TransferFailure {
+                request_index: index,
+                affected_requests: 1,
+                error: reason,
+                remote_effect: effect,
+            });
+            if effect == RemoteEffect::Unknown {
+                first.remote_effect = effect;
+            }
+            submission.retire_owners(index, 1, 0);
+        };
         while index < requests.len() {
             let request = &requests[index];
-            if let Some((progress, first_task)) = progress {
-                if !progress.begin_task(first_task + index) {
+            let owner = &submission.owners[index];
+            let owner_deadline = owner.deadline;
+            let cancelled = || progress.is_some_and(|(p, base)| p.cancel_requested(base + index));
+            let start = owner.start(cancelled).and_then(|()| {
+                if progress.is_some_and(|(p, base)| !p.begin_task(base + index)) {
+                    Err(Error::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(error) = start {
+                if matches!(error, Error::DeadlineInfeasible)
+                    || (matches!(error, Error::Cancelled) && cancelled())
+                {
+                    interrupt(index, error, RemoteEffect::None);
+                    index += 1;
+                    continue;
+                }
+                report.failure = Some(TransferFailure {
+                    request_index: index,
+                    affected_requests: 1,
+                    error,
+                    remote_effect: RemoteEffect::None,
+                });
+                break;
+            }
+            let credit = owner.credit();
+            if let Some(c) = &credit {
+                if let Err(error) = c.commit() {
                     report.failure = Some(TransferFailure {
                         request_index: index,
                         affected_requests: 1,
-                        error: Error::Cancelled,
+                        error,
                         remote_effect: RemoteEffect::None,
                     });
                     break;
-                }
-            }
-            if index == 0 {
-                if let Some(credit) = &submission.credit {
-                    if let Err(error) = credit.reservation.commit() {
-                        report.failure = Some(TransferFailure {
-                            request_index: 0,
-                            affected_requests: 1,
-                            error,
-                            remote_effect: RemoteEffect::None,
-                        });
-                        break;
-                    }
                 }
             }
             let single = |result: std::result::Result<(), (Error, RemoteEffect)>| {
@@ -1354,22 +1487,38 @@ impl TransferEngine {
                         remote_effect,
                     })
             };
+            #[cfg(feature = "cuda")]
+            let cohort = if request.selection.transport == Transport::Nvlink {
+                crate::transport::nvlink::NVLinkTransport::group_len(
+                    &requests[index..index + submission.native_group(index)],
+                    self.config.max_transfer_bytes,
+                    owner_deadline,
+                )
+            } else {
+                1
+            };
+            #[cfg(not(feature = "cuda"))]
+            let cohort = 1;
             let result = match request.selection.transport {
                 Transport::IoUring | Transport::Gds | Transport::Unspec => single(Err((
                     Error::Internal("unresolved transport"),
                     RemoteEffect::None,
                 ))),
                 #[cfg(feature = "cuda")]
-                Transport::Tcp | Transport::Rdma if request.remote_staging => single(
-                    self.source
-                        .proxy
-                        .transfer_remote(submission, peer, request, &self.source),
-                ),
+                Transport::Tcp | Transport::Rdma if request.remote_staging => {
+                    single(self.source.proxy.transfer_remote(
+                        (*operation, owner_deadline),
+                        credit.as_deref(),
+                        peer,
+                        request,
+                        &self.source,
+                    ))
+                }
                 Transport::Tcp => single(TcpTransport::transfer(
                     *operation,
                     peer,
                     request,
-                    *deadline,
+                    owner_deadline,
                     #[cfg(feature = "cuda")]
                     &self.source.proxy,
                 )),
@@ -1378,10 +1527,9 @@ impl TransferEngine {
                     {
                         match &self.source.nvlink {
                             Some(transport) => transport.transfer(
-                                submission,
-                                (peer, &requests[index..]),
+                                (*operation, owner_deadline),
+                                (peer, &requests[index..index + cohort]),
                                 self.source.epoch,
-                                self.config.max_transfer_bytes,
                                 |next| {
                                     progress.is_none_or(|(progress, first_task)| {
                                         progress.begin_task(first_task + index + next)
@@ -1411,7 +1559,7 @@ impl TransferEngine {
                                 peer,
                                 request,
                                 self.source.epoch,
-                                *deadline,
+                                owner_deadline,
                             ),
                             None => Err((
                                 Error::Unavailable("RDMA is not configured"),
@@ -1439,7 +1587,22 @@ impl TransferEngine {
                     progress.complete_task(first_task + index + next, request.length);
                 }
             }
+            // Earlier completed physical owners have a transport receipt. Release
+            // their windows before waiting for another owner in this submission.
+            if matches!(&result,Err(f) if matches!(f.error,Error::Unquiesced{..})) {
+                submission.retain_window(index..index + cohort);
+            } else {
+                submission.retire_owners(index, completed, completed);
+            }
             if let Err(mut failure) = result {
+                if request.selection.transport == Transport::Rdma
+                    && matches!(failure.error, Error::Cancelled)
+                    && cancelled()
+                {
+                    interrupt(index, failure.error, failure.remote_effect);
+                    index += 1;
+                    continue;
+                }
                 report.locally_drained = !matches!(failure.error, Error::Unquiesced { .. });
                 failure.request_index += index;
                 report.failure = Some(failure);
@@ -1447,10 +1610,38 @@ impl TransferEngine {
             }
             index += completed;
         }
-        if report.is_complete() && !requests.is_empty() {
-            if let Some(credit) = &submission.credit {
-                credit.reservation.complete();
+        if let Some(mut interrupted) = first_interruption {
+            // The report counts the successful public prefix. Async task
+            // statuses retain independent successes after the first gap.
+            let first = interrupted.request_index;
+            let mut end = index;
+            if *operation == TransferOp::Write && report.completed_requests > first {
+                interrupted.remote_effect = RemoteEffect::Unknown;
             }
+            if let Some(failure) = report.failure.take() {
+                end = failure.request_index + failure.affected_requests;
+                if failure.remote_effect == RemoteEffect::Unknown {
+                    interrupted.remote_effect = RemoteEffect::Unknown;
+                }
+                if let Error::Unquiesced { operation, code } = &failure.error {
+                    interrupted.error = Error::Unquiesced {
+                        operation,
+                        code: *code,
+                    };
+                }
+                if let Some((p, base)) = progress {
+                    p.fail_owners(base, failure, report.locally_drained);
+                }
+            }
+            report.completed_requests = first;
+            report.transferred_bytes = submission.mapping.owners[..first]
+                .iter()
+                .map(|o| o.length)
+                .sum();
+            interrupted.affected_requests = end - first;
+            report.failure = Some(interrupted);
+        }
+        if report.is_complete() && !requests.is_empty() {
             if let Some(notification) = notification {
                 report.notification = match self.notify(peer, notification, *deadline) {
                     Ok(()) => NotificationStatus::Delivered,
@@ -1829,12 +2020,9 @@ pub(crate) struct PreparedSubmission {
     payload: PreparedTarget,
     pub(crate) notification: Option<Notification>,
     pub(crate) deadline: Instant,
-    // Backing drops first. Return QoS before advancing the Batch head so a
-    // reject-only successor does not see its predecessor's retiring charge.
-    _qos: Option<QosPermit>,
-    queue: Option<QueuePermit>,
-    // Remove queue metadata before credit rollback can wake/refill the queue.
-    pub(crate) credit: Option<CreditPermit>,
+    pub(crate) mapping: Arc<TaskMap>,
+    owners: Vec<OwnerAdmission>,
+    uncertain: Mutex<Option<std::ops::Range<usize>>>,
     pub(crate) admission: Option<BatchPermit>,
 }
 
@@ -1856,14 +2044,22 @@ impl PreparedSubmission {
 
     fn finish_gds_report(
         &self,
-        mut report: BatchReport,
+        report: BatchReport,
         progress: Option<(&BatchProgress, usize)>,
     ) -> BatchReport {
         let PreparedTarget::File { requests, .. } = &self.payload else {
             return report;
         };
+        self.finish_gds_range(report, requests, progress)
+    }
+    fn finish_gds_range(
+        &self,
+        mut report: BatchReport,
+        requests: &[crate::segment::file::FileRequest],
+        progress: Option<(&BatchProgress, usize)>,
+    ) -> BatchReport {
         if report.locally_drained {
-            if let Err((index, error)) = self.finish_gds_buffers() {
+            if let Err((index, error)) = Self::release_buffers(requests) {
                 // A cancelled/queued group can be the last registration borrower.
                 // Its admission stays charged even if it never obtained a native batch.
                 *self.gds_pending.lock().unwrap_or_else(|p| p.into_inner()) =
@@ -1911,10 +2107,16 @@ impl PreparedSubmission {
 
     fn finish_gds_buffers(&self) -> std::result::Result<(), (usize, Error)> {
         if let PreparedTarget::File { requests, .. } = &self.payload {
-            for (index, request) in requests.iter().enumerate() {
-                if let Some(buffer) = &request.buffer {
-                    buffer.release().map_err(|e| (index, e))?;
-                }
+            Self::release_buffers(requests)?;
+        }
+        Ok(())
+    }
+    fn release_buffers(
+        requests: &[crate::segment::file::FileRequest],
+    ) -> std::result::Result<(), (usize, Error)> {
+        for (index, request) in requests.iter().enumerate() {
+            if let Some(buffer) = &request.buffer {
+                buffer.release().map_err(|e| (index, e))?;
             }
         }
         Ok(())
@@ -1949,12 +2151,7 @@ impl Drop for PreparedSubmission {
             if let PreparedTarget::File { requests, .. } = &mut self.payload {
                 std::mem::forget(std::mem::take(requests));
             }
-            std::mem::forget((
-                self.admission.take(),
-                self._qos.take(),
-                self.queue.take(),
-                self.credit.take(),
-            ));
+            std::mem::forget((self.admission.take(), std::mem::take(&mut self.owners)));
         }
     }
 }
@@ -1981,6 +2178,13 @@ struct RequesterAdmission {
 pub(crate) struct BatchPermit {
     batches: Arc<RequesterAdmission>,
     bytes: usize,
+}
+impl BatchPermit {
+    fn retain_bytes(&mut self, bytes: usize) {
+        let mut usage = self.batches.usage.lock().unwrap_or_else(|p| p.into_inner());
+        usage.bytes -= self.bytes - bytes;
+        self.bytes = bytes;
+    }
 }
 impl Drop for BatchPermit {
     fn drop(&mut self) {

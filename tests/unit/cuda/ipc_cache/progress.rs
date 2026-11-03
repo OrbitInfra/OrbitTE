@@ -35,7 +35,7 @@ fn ipc_shared_poller_completes_independent_groups_while_one_event_is_pending() {
         )
         .unwrap();
     super::super::ipc::wait_query(&dst);
-    assert!(batch.cancel(0).unwrap());
+    assert!(matches!(batch.cancel(0), Err(Error::Unavailable(_))));
     assert!(matches!(
         batch.wait(Duration::from_millis(5)),
         Err(Error::Timeout)

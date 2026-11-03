@@ -175,6 +175,7 @@ fn credit_eligible_large_head_keeps_byte_order_without_reserving_early() {
         max_dispatch_owners: 2,
         max_dispatch_bytes: 8,
         deadline_aware: false,
+        ..Default::default()
     });
     let ledger = SenderCreditLedger::new(2, Some(&queue));
     ledger.activate(&peer, 1, 7).unwrap();
@@ -242,6 +243,7 @@ fn engine(queue: bool) -> Arc<TransferEngine> {
                 max_dispatch_owners: 1,
                 max_dispatch_bytes: 8,
                 deadline_aware: true,
+                ..Default::default()
             }),
             ..EngineConfig::default()
         })
@@ -435,7 +437,7 @@ fn cancel_expiry_and_fence_release_unstarted_credit_but_handoff_never_refunds() 
         let mut partial = requester
             .submit_async(TransferOp::Write, &peer, &pair, None, TIMEOUT)
             .unwrap();
-        partial.cancel(1).unwrap(); // One grant cannot admit the two-request group yet.
+        partial.cancel(1).unwrap(); // Only the first physical owner has credit.
         grant.sequence = 2;
         for amount in &mut grant.grants {
             amount.grant_total = 2;
@@ -454,7 +456,7 @@ fn cancel_expiry_and_fence_release_unstarted_credit_but_handoff_never_refunds() 
                 stats.consumed_requests,
                 stats.active_owners
             ),
-            (2, 2, 0)
+            (1, 1, 0)
         );
         let mut bytes = [0; 2];
         remote.read(0, &mut bytes).unwrap();
@@ -475,7 +477,7 @@ fn cancel_expiry_and_fence_release_unstarted_credit_but_handoff_never_refunds() 
                 .receiver_credit_stats(&peer)
                 .unwrap()
                 .consumed_bytes,
-            3
+            2
         );
         assert_eq!(
             requester
