@@ -1,0 +1,224 @@
+key	absent	case	source	lifecycle	constructor_precedence
+enable_auto_failover_on_poll	true	config.engine	src/common/config_lifecycle.cpp:142	runtime candidate	merged config
+enable_progress_worker	false	config.engine	src/runtime/transfer_engine_impl.cpp:404	bootstrap	merged config
+enable_runtime_queue	false	config.engine	src/runtime/transfer_engine_impl.cpp:405	bootstrap	merged config
+local_segment_name	""	config.engine	src/runtime/transfer_engine_impl.cpp:388	bootstrap	restore explicit value
+log_level	"info"	config.engine	src/runtime/transfer_engine_impl.cpp:386	runtime candidate	merged config
+max_failover_attempts	3	config.engine	src/common/config_lifecycle.cpp:140	runtime candidate	merged config
+merge_requests	true	config.engine	src/runtime/transfer_engine_impl.cpp:402	runtime candidate	merged config
+metadata_servers	""	config.engine	src/runtime/transfer_engine_impl.cpp:384	bootstrap	restore explicit value
+metadata_type	"p2p"	config.engine	src/runtime/transfer_engine_impl.cpp:383	bootstrap	restore explicit value
+metrics/enabled	true	config.metrics	include/tent/metrics/config_loader.h:63	bootstrap	metrics config over metrics environment
+metrics/http_host	"0.0.0.0"	config.metrics	include/tent/metrics/config_loader.h:65	bootstrap	metrics config over metrics environment
+metrics/http_port	9100	config.metrics	include/tent/metrics/config_loader.h:64	bootstrap	metrics config over metrics environment
+metrics/http_server_threads	2	config.metrics	include/tent/metrics/config_loader.h:66	bootstrap	metrics config over metrics environment
+metrics/report_interval_seconds	30	config.metrics	include/tent/metrics/config_loader.h:68	runtime candidate	metrics config over metrics environment
+notification/rpc_fallback	true	config.engine	src/runtime/transfer_engine_impl.cpp:403	bootstrap	merged config
+policy	built-in memory/file policies	config.policy	src/runtime/transport_selector.cpp:126	runtime candidate	merged config
+policy[]/devices	unset (all)	config.policy	src/runtime/transport_selector.cpp:222	runtime candidate	merged config
+policy[]/intent_type	unset (any)	config.policy	src/runtime/transport_selector.cpp:211	runtime candidate	merged config
+policy[]/local_memory	unset (any)	config.policy	src/runtime/transport_selector.cpp:162	runtime candidate	merged config
+policy[]/max_size	unset (no maximum)	config.policy	src/runtime/transport_selector.cpp:175	runtime candidate	merged config
+policy[]/min_size	unset (no minimum)	config.policy	src/runtime/transport_selector.cpp:172	runtime candidate	merged config
+policy[]/name	"unnamed"	config.policy	src/runtime/transport_selector.cpp:141	runtime candidate	merged config
+policy[]/priority	unset (any)	config.policy	src/runtime/transport_selector.cpp:180	runtime candidate	merged config
+policy[]/qp_pool	"" (spray across QPs)	config.policy	src/runtime/transport_selector.cpp:269	runtime candidate	merged config
+policy[]/remote_memory	unset (any)	config.policy	src/runtime/transport_selector.cpp:166	runtime candidate	merged config
+policy[]/same_machine	unset (any)	config.policy	src/runtime/transport_selector.cpp:155	runtime candidate	merged config
+policy[]/segment_type	"" (skip invalid/missing segment type)	config.policy	src/runtime/transport_selector.cpp:144	runtime candidate	merged config
+policy[]/service_level	-1	config.policy	src/runtime/transport_selector.cpp:249	runtime candidate	merged config
+policy[]/traffic_class	-1	config.policy	src/runtime/transport_selector.cpp:258	runtime candidate	merged config
+policy[]/transports	empty; fall back to the target buffer's registered transports when present	config.policy	src/runtime/transport_selector.cpp:232	runtime candidate	merged config
+qos	absent or empty disables resolver	config.policy	src/runtime/qos_contract.cpp:280	runtime candidate	merged config
+qos/defaults	absent	config.policy	src/runtime/qos_contract.cpp:286	runtime candidate	merged config
+qos/defaults/allowed_degraded_actions	unset; parsed actions: delay, fallback_transport, local_recompute, compress, reject	config.policy	src/runtime/qos_contract.cpp:207	runtime candidate	merged config
+qos/defaults/max_inflight_bytes	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/defaults/max_inflight_requests	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/defaults/priority	inherit requested priority	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants	[]	config.policy	src/runtime/qos_contract.cpp:286	runtime candidate	merged config
+qos/tenants[]/defaults	absent	config.policy	src/runtime/qos_contract.cpp:286	runtime candidate	merged config
+qos/tenants[]/defaults/allowed_degraded_actions	unset; parsed actions: delay, fallback_transport, local_recompute, compress, reject	config.policy	src/runtime/qos_contract.cpp:207	runtime candidate	merged config
+qos/tenants[]/defaults/max_inflight_bytes	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/defaults/max_inflight_requests	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/defaults/priority	inherit requested priority	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/intents	absent (object keyed by normalized intent)	config.policy	src/runtime/qos_contract.cpp:307	runtime candidate	merged config
+qos/tenants[]/intents/{intent}/allowed_degraded_actions	unset; parsed actions: delay, fallback_transport, local_recompute, compress, reject	config.policy	src/runtime/qos_contract.cpp:207	runtime candidate	merged config
+qos/tenants[]/intents/{intent}/max_inflight_bytes	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/intents/{intent}/max_inflight_requests	unset (no limit)	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/intents/{intent}/priority	inherit requested priority	config.policy	src/runtime/qos_contract.cpp:206	runtime candidate	merged config
+qos/tenants[]/name	required unique nonempty name	config.policy	src/runtime/qos_contract.cpp:307	runtime candidate	merged config
+qos/version	1	config.policy	src/runtime/qos_contract.cpp:286	runtime candidate	merged config
+rpc_server_hostname	""	config.engine	src/runtime/transfer_engine_impl.cpp:387	bootstrap	restore explicit value
+rpc_server_port	0 (choose a listening port)	config.engine	src/runtime/transfer_engine_impl.cpp:149	bootstrap	restore explicit value
+rpc_server_threads	1 unless transports/tcp/enable is explicitly true, then clamp(hardware_concurrency,4,8)	config.engine	src/runtime/transfer_engine_impl.cpp:179	bootstrap	merged config
+runtime_queue/deadline_aware	false	config.policy	src/runtime/transfer_engine_impl.cpp:416	runtime candidate	merged config
+runtime_queue/max_dispatch_bytes	64UL << 20	config.policy	src/runtime/transfer_engine_impl.cpp:424	runtime candidate	merged config
+runtime_queue/max_dispatch_owners	64UL	config.policy	src/runtime/transfer_engine_impl.cpp:422	runtime candidate	merged config
+runtime_queue/max_outstanding_bytes	1UL << 30	config.policy	src/runtime/transfer_engine_impl.cpp:410	runtime candidate	merged config
+runtime_queue/max_outstanding_owners	1024UL	config.policy	src/runtime/transfer_engine_impl.cpp:408	runtime candidate	merged config
+runtime_queue/mlu_local_threshold	0.0	config.policy	src/runtime/transfer_engine_impl.cpp:418	runtime candidate	merged config
+runtime_queue/progress_fallback_interval_us	50000UL	config.policy	src/runtime/transfer_engine_impl.cpp:427	runtime candidate	merged config
+runtime_queue/promotion_slack_ns	0UL	config.policy	src/runtime/transfer_engine_impl.cpp:420	runtime candidate	merged config
+runtime_queue/staging_byte_reserve	0UL	config.policy	src/runtime/transfer_engine_impl.cpp:414	runtime candidate	merged config
+runtime_queue/staging_owner_reserve	0UL	config.policy	src/runtime/transfer_engine_impl.cpp:412	runtime candidate	merged config
+staging/shutdown_drain_timeout_ms	30000L	config.cuda	src/runtime/proxy_manager.cpp:31	bootstrap	merged config
+topology/custom_json_path	""	config.rdma	src/runtime/topology.cpp:366	bootstrap	merged config
+topology/priority_matrix	absent; inline matrix precedes custom_json_path	config.rdma	src/runtime/topology.cpp:353	bootstrap	merged config
+topology/rdma_blacklist	[]	config.rdma	src/platform/ascend/ascend_probe.cpp:81	bootstrap	merged config
+topology/rdma_whitelist	[] (discover all)	config.rdma	src/platform/ascend/ascend_probe.cpp:80	bootstrap	restore explicit value
+transports/ascend_direct/agent_mode	false	config.excluded	src/transport/ascend/resource_config.cpp:238	bootstrap	restore explicit value
+transports/ascend_direct/base_port	20000; ASCEND_BASE_PORT can override the initial default	config.excluded	src/transport/ascend/resource_config.cpp:256	bootstrap	merged config
+transports/ascend_direct/enable	true	config.excluded	src/runtime/transport_loader.cpp:129	bootstrap	merged config
+transports/ascend_direct/fabric_mem	false	config.excluded	src/platform/ascend/ascend_allocator.cpp:45	bootstrap	restore explicit value
+transports/ascend_direct/global_resource_config	""	config.excluded	src/transport/ascend/resource_config.cpp:292	bootstrap	merged config
+transports/ascend_direct/rdma_sl	""	config.excluded	src/transport/ascend/resource_config.cpp:268	bootstrap	merged config
+transports/ascend_direct/rdma_tc	""	config.excluded	src/transport/ascend/resource_config.cpp:267	bootstrap	merged config
+transports/ascend_direct/store_te_init	false	config.excluded	src/platform/ascend/ascend_allocator.cpp:48	bootstrap	restore explicit value
+transports/ascend_direct/transfer_timeout_ms	10000; explicit leaf precedes ASCEND_TRANSFER_TIMEOUT	config.excluded	src/transport/ascend/resource_config.cpp:244	bootstrap	merged config
+transports/fabric/devices	[]	config.optional	src/transport/fabric/fabric_transport.cpp:122	bootstrap	merged config
+transports/fabric/enable	true	config.optional	src/runtime/transport_loader.cpp:168	bootstrap	merged config
+transports/fabric/fabric_name	""	config.optional	src/transport/fabric/fabric_transport.cpp:120	bootstrap	merged config
+transports/fabric/idle_sleep_us	50	config.optional	src/transport/fabric/fabric_transport.cpp:126	bootstrap	merged config
+transports/fabric/max_mr_size	0 (provider-limited)	config.optional	src/transport/fabric/fabric_transport.cpp:140	bootstrap	merged config
+transports/fabric/max_posted_ops	0	config.optional	src/transport/fabric/fabric_transport.cpp:133	bootstrap	merged config
+transports/fabric/max_pte_entries	22 * 1024 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:135	bootstrap	merged config
+transports/fabric/max_register_threads	8	config.optional	src/transport/fabric/fabric_transport.cpp:138	bootstrap	merged config
+transports/fabric/op_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:132	bootstrap	merged config
+transports/fabric/post_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:127	bootstrap	merged config
+transports/fabric/provider	"auto"	config.optional	src/transport/fabric/fabric_transport.cpp:118	bootstrap	merged config
+transports/fabric/quiesce_timeout_ms	10000	config.optional	src/transport/fabric/fabric_transport.cpp:129	bootstrap	merged config
+transports/fabric/slice_size	512 * 1024	config.optional	src/transport/fabric/fabric_transport.cpp:124	bootstrap	merged config
+transports/force_tcp	false	config.network	src/runtime/transfer_engine_impl.cpp:229	bootstrap	restore true by forcing TCP
+transports/gds/enable	false	config.storage	src/runtime/transport_loader.cpp:124	bootstrap	merged config
+transports/gds/io_batch_depth	32	config.storage	src/transport/gds/gds_transport.cpp:268	bootstrap	merged config
+transports/hp_tcp	absent	config.network	src/runtime/hp_tcp_transport_config.cpp:81	bootstrap	merged config
+transports/hp_tcp/advertise_address	""	config.network	src/runtime/hp_tcp_transport_config.cpp:105	bootstrap	merged config
+transports/hp_tcp/bind_address	""	config.network	src/runtime/hp_tcp_transport_config.cpp:104	bootstrap	merged config
+transports/hp_tcp/connect_timeout_ms	2000	config.network	src/runtime/hp_tcp_transport_config.cpp:120	bootstrap	merged config
+transports/hp_tcp/connections_per_peer	4	config.network	src/runtime/hp_tcp_transport_config.cpp:112	bootstrap	merged config
+transports/hp_tcp/enable	false	config.network	src/common/config.cpp:169	bootstrap	merged config
+transports/hp_tcp/idle_connection_timeout_ms	60000	config.network	src/runtime/hp_tcp_transport_config.cpp:124	bootstrap	merged config
+transports/hp_tcp/max_outstanding_bytes	1ULL << 32	config.network	src/runtime/hp_tcp_transport_config.cpp:116	bootstrap	merged config
+transports/hp_tcp/max_outstanding_tasks	4096	config.network	src/runtime/hp_tcp_transport_config.cpp:114	bootstrap	merged config
+transports/hp_tcp/max_transfer_bytes	1ULL << 30	config.network	src/runtime/hp_tcp_transport_config.cpp:118	bootstrap	merged config
+transports/hp_tcp/port	0	config.network	src/runtime/hp_tcp_transport_config.cpp:109	bootstrap	merged config
+transports/hp_tcp/progress_timeout_ms	30000	config.network	src/runtime/hp_tcp_transport_config.cpp:122	bootstrap	merged config
+transports/hp_tcp/rail_addresses	[]	config.network	src/runtime/hp_tcp_transport_config.cpp:107	bootstrap	merged config
+transports/hp_tcp/worker_count	16	config.network	src/runtime/hp_tcp_transport_config.cpp:111	bootstrap	merged config
+transports/hylink/enable	false	config.excluded	src/runtime/transport_loader.cpp:163	bootstrap	merged config
+transports/io_uring/enable	true	config.storage	src/runtime/transport_loader.cpp:108	bootstrap	merged config
+transports/io_uring/pinned_staging	false	config.storage	src/transport/io_uring/io_uring_transport.cpp:152	bootstrap	merged config
+transports/io_uring/staging_slot_kb	size_t{4096}	config.storage	src/transport/io_uring/io_uring_transport.cpp:156	bootstrap	merged config
+transports/io_uring/staging_slots	size_t{32}	config.storage	src/transport/io_uring/io_uring_transport.cpp:158	bootstrap	merged config
+transports/memfabric/enable	false	config.excluded	src/runtime/transport_loader.cpp:173	bootstrap	merged config
+transports/memfabric/store_te_init	false	config.excluded	src/transport/memfabric/memfabric_transport.cpp:82	bootstrap	restore explicit value
+transports/mlu/enable	true	config.excluded	src/runtime/transport_loader.cpp:148	bootstrap	merged config
+transports/mnnvl/egm	false	config.cuda	src/transport/mnnvl/mnnvl_transport.cpp:242	bootstrap	merged config
+transports/mnnvl/enable	true only in the loader branch selected by presence of MC_ENABLE_MNNVL	config.cuda	src/runtime/transport_loader.cpp:115	bootstrap	merged config
+transports/mpcomm/disable_gpu_direct_rdma	false	config.optional	src/transport/mpcomm/mpcomm_transport.cpp:38	bootstrap	merged config
+transports/mpcomm/enable	true	config.optional	src/runtime/transport_loader.cpp:158	bootstrap	merged config
+transports/nvlink/async_memcpy_threshold	2048 KiB for NVLink; MNNVL reads 1024 scaled by 128 KiB but does not dispatch on it	config.cuda	src/transport/io_uring/io_uring_transport.cpp:201	bootstrap	merged config
+transports/nvlink/enable	true when CUDA is built and MC_ENABLE_MNNVL is absent	config.cuda	src/runtime/transport_loader.cpp:118	bootstrap	merged config
+transports/nvlink/handle_type	"fabric"	config.cuda	src/transport/mnnvl/mnnvl_transport.cpp:236	bootstrap	merged config
+transports/nvlink/host_register	false for legacy NVLink; true for MNNVL	config.cuda	src/transport/mnnvl/mnnvl_transport.cpp:241	bootstrap	merged config
+transports/rdma/bandwidth_learning_rate	0.01	config.rdma	src/transport/rdma/workers.cpp:141	runtime candidate	merged config
+transports/rdma/bind_address	""	config.rdma	src/transport/rdma/rdma_transport.cpp:371	bootstrap	merged config
+transports/rdma/deadline_bw_arbitration	false	config.rdma	src/transport/rdma/workers.cpp:198	runtime candidate	merged config
+transports/rdma/default_bandwidth_gbps	400.0	config.rdma	src/transport/rdma/workers.cpp:217	runtime candidate	merged config
+transports/rdma/device/gid_index	-1	config.rdma	src/transport/rdma/rdma_transport.cpp:181	bootstrap	merged config
+transports/rdma/device/max_cqe	4096	config.rdma	src/transport/rdma/rdma_transport.cpp:182	bootstrap	merged config
+transports/rdma/device/num_comp_channels	1	config.rdma	src/transport/rdma/rdma_transport.cpp:179	bootstrap	merged config
+transports/rdma/device/num_cq_list	inherits num_lanes (6 absent overrides)	config.rdma	src/transport/rdma/rdma_transport.cpp:109	bootstrap	merged config
+transports/rdma/device/port	1	config.rdma	src/transport/rdma/rdma_transport.cpp:180	bootstrap	merged config
+transports/rdma/disable_gpu_direct_rdma	false	config.rdma	src/transport/rdma/rdma_transport.cpp:271	bootstrap	merged config
+transports/rdma/enable	true	config.rdma	src/runtime/transport_loader.cpp:94	bootstrap	merged config
+transports/rdma/enable_priority_filtering	true	config.rdma	src/transport/rdma/workers.cpp:179	runtime candidate	merged config
+transports/rdma/enable_smart_scheduling	true	config.rdma	src/transport/rdma/workers.cpp:114	runtime candidate	merged config
+transports/rdma/endpoint/endpoint_store_cap	65536	config.rdma	src/transport/rdma/rdma_transport.cpp:184	bootstrap	merged config
+transports/rdma/endpoint/flow_label	0	config.rdma	src/transport/rdma/rdma_transport.cpp:191	bootstrap	merged config
+transports/rdma/endpoint/hop_limit	16	config.rdma	src/transport/rdma/rdma_transport.cpp:190	bootstrap	merged config
+transports/rdma/endpoint/max_dest_rd_atomic	16	config.rdma	src/transport/rdma/rdma_transport.cpp:197	bootstrap	merged config
+transports/rdma/endpoint/max_inline_bytes	64	config.rdma	src/transport/rdma/rdma_transport.cpp:188	bootstrap	merged config
+transports/rdma/endpoint/max_qp_wr	256	config.rdma	src/transport/rdma/rdma_transport.cpp:186	bootstrap	merged config
+transports/rdma/endpoint/max_rd_atomic	16	config.rdma	src/transport/rdma/rdma_transport.cpp:203	bootstrap	merged config
+transports/rdma/endpoint/max_sge	4	config.rdma	src/transport/rdma/rdma_transport.cpp:185	bootstrap	merged config
+transports/rdma/endpoint/min_rnr_timer	12	config.rdma	src/transport/rdma/rdma_transport.cpp:198	bootstrap	merged config
+transports/rdma/endpoint/path_mtu	4096	config.rdma	src/transport/rdma/rdma_transport.cpp:213	bootstrap	merged config
+transports/rdma/endpoint/pkey_index	0	config.rdma	src/transport/rdma/rdma_transport.cpp:189	bootstrap	merged config
+transports/rdma/endpoint/qp_mul_factor	inherits num_lanes; nonempty pools replace the QP total	config.rdma	src/transport/rdma/rdma_transport.cpp:111	bootstrap	merged config
+transports/rdma/endpoint/qp_pools	[] (flat QP range)	config.rdma	src/transport/rdma/rdma_transport.cpp:231	bootstrap	merged config
+transports/rdma/endpoint/qp_pools[]/name	required string; skip unnamed entry	config.rdma	src/transport/rdma/rdma_transport.cpp:237	bootstrap	merged config
+transports/rdma/endpoint/qp_pools[]/num_qp	0; skip nonpositive entry	config.rdma	src/transport/rdma/rdma_transport.cpp:243	bootstrap	merged config
+transports/rdma/endpoint/qp_pools[]/service_level	-1 (endpoint default)	config.rdma	src/transport/rdma/rdma_transport.cpp:249	bootstrap	merged config
+transports/rdma/endpoint/qp_pools[]/traffic_class	-1 (endpoint default)	config.rdma	src/transport/rdma/rdma_transport.cpp:250	bootstrap	merged config
+transports/rdma/endpoint/rq_psn	0	config.rdma	src/transport/rdma/rdma_transport.cpp:196	bootstrap	merged config
+transports/rdma/endpoint/send_retry_count	7	config.rdma	src/transport/rdma/rdma_transport.cpp:201	bootstrap	merged config
+transports/rdma/endpoint/send_rnr_count	7	config.rdma	src/transport/rdma/rdma_transport.cpp:202	bootstrap	merged config
+transports/rdma/endpoint/send_timeout	14	config.rdma	src/transport/rdma/rdma_transport.cpp:200	bootstrap	merged config
+transports/rdma/endpoint/service_level	0	config.rdma	src/transport/rdma/rdma_transport.cpp:193	bootstrap	merged config
+transports/rdma/endpoint/signal_interval	1	config.rdma	src/transport/rdma/rdma_transport.cpp:187	bootstrap	merged config
+transports/rdma/endpoint/sq_psn	0	config.rdma	src/transport/rdma/rdma_transport.cpp:199	bootstrap	merged config
+transports/rdma/endpoint/src_path_bits	0	config.rdma	src/transport/rdma/rdma_transport.cpp:194	bootstrap	merged config
+transports/rdma/endpoint/static_rate	0	config.rdma	src/transport/rdma/rdma_transport.cpp:195	bootstrap	merged config
+transports/rdma/endpoint/traffic_class	0	config.rdma	src/transport/rdma/rdma_transport.cpp:192	bootstrap	merged config
+transports/rdma/ewma_max_bandwidth_multiplier	10.0	config.rdma	src/transport/rdma/workers.cpp:161	runtime candidate	merged config
+transports/rdma/ewma_min_bandwidth_multiplier	0.1	config.rdma	src/transport/rdma/workers.cpp:159	runtime candidate	merged config
+transports/rdma/gdr_cooldown_secs	30	config.rdma	src/transport/rdma/gdr_reachability.cpp:39	runtime candidate	merged config
+transports/rdma/gdr_error_threshold	2	config.rdma	src/transport/rdma/gdr_reachability.cpp:35	runtime candidate	merged config
+transports/rdma/gdr_error_window_secs	10	config.rdma	src/transport/rdma/gdr_reachability.cpp:36	runtime candidate	merged config
+transports/rdma/local_rotation_interval_us	200	config.rdma	src/transport/rdma/workers.cpp:183	runtime candidate	merged config
+transports/rdma/log_slice_affinity	false	config.rdma	src/transport/rdma/rdma_transport.cpp:265	bootstrap	merged config
+transports/rdma/max_bandwidth_gbps	800.0	config.rdma	src/transport/rdma/workers.cpp:221	runtime candidate	merged config
+transports/rdma/max_timeout_ns	10000000000	config.rdma	src/transport/rdma/rdma_transport.cpp:422	bootstrap	merged config
+transports/rdma/min_bandwidth_gbps	10.0	config.rdma	src/transport/rdma/workers.cpp:219	runtime candidate	merged config
+transports/rdma/num_lanes	6; explicit num_lanes or one consistent legacy CQ/QP/worker setting selects the effective count	config.rdma	src/transport/rdma/rdma_transport.cpp:107	bootstrap	merged config
+transports/rdma/numa_penalties	[] (use built-in penalties)	config.rdma	src/transport/rdma/workers.cpp:125	runtime candidate	merged config
+transports/rdma/pci_relaxed_ordering	1	config.rdma	src/common/config.cpp:234	bootstrap	merged config
+transports/rdma/priority_promotion_per_entry	false	config.rdma	src/transport/rdma/workers.cpp:203	runtime candidate	merged config
+transports/rdma/priority_promotion_timeout_us	10000	config.rdma	src/transport/rdma/workers.cpp:192	runtime candidate	merged config
+transports/rdma/rail_cooldown_secs	30	config.rdma	include/tent/transport/rdma/rail_monitor.h:45	runtime candidate	merged config
+transports/rdma/rail_error_threshold	3	config.rdma	include/tent/transport/rdma/rail_monitor.h:41	runtime candidate	merged config
+transports/rdma/rail_error_window_secs	10	config.rdma	include/tent/transport/rdma/rail_monitor.h:43	runtime candidate	merged config
+transports/rdma/rail_probe_interval_secs	1	config.rdma	include/tent/transport/rdma/rail_monitor.h:47	bootstrap	merged config
+transports/rdma/score_epsilon	1e-12	config.rdma	src/transport/rdma/workers.cpp:172	runtime candidate	merged config
+transports/rdma/score_jitter_range	1e-9	config.rdma	src/transport/rdma/workers.cpp:169	runtime candidate	merged config
+transports/rdma/shared_quota_shm_path	""	config.rdma	src/transport/rdma/workers.cpp:262	bootstrap	merged config
+transports/rdma/slot_rotation_interval_ms	2	config.rdma	src/transport/rdma/workers.cpp:210	runtime candidate	merged config
+transports/rdma/strict_local_numa	false	config.rdma	src/transport/rdma/workers.cpp:133	runtime candidate	merged config
+transports/rdma/transmit_bandwidth_learning_rate	0.9	config.rdma	src/transport/rdma/workers.cpp:145	bootstrap	merged config
+transports/rdma/transmit_meter_interval_ns	10000000	config.rdma	src/transport/rdma/workers.cpp:151	bootstrap	merged config
+transports/rdma/transmit_meter_max_interval_ns	50000000	config.rdma	src/transport/rdma/workers.cpp:154	bootstrap	merged config
+transports/rdma/workers/block_size	65536	config.rdma	src/transport/rdma/rdma_transport.cpp:259	bootstrap	merged config
+transports/rdma/workers/grace_period_ns	5000000	config.rdma	src/transport/rdma/rdma_transport.cpp:260	bootstrap	merged config
+transports/rdma/workers/max_retry_count	8	config.rdma	src/transport/rdma/rdma_transport.cpp:258	bootstrap	merged config
+transports/rdma/workers/num_workers	inherits num_lanes (6 absent overrides)	config.rdma	src/transport/rdma/rdma_transport.cpp:113	bootstrap	merged config
+transports/rdma/workers/rail_topo_path	""	config.rdma	src/transport/rdma/rdma_transport.cpp:261	bootstrap	merged config
+transports/shm/cxl_mount_path	""	config.network	src/transport/shm/shm_transport.cpp:60	bootstrap	merged config
+transports/shm/enable	false	config.network	src/runtime/transport_loader.cpp:90	bootstrap	merged config
+transports/sunrise_link/async_memcpy_threshold	0	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:324	bootstrap	merged config
+transports/sunrise_link/enable	true	config.excluded	src/runtime/transport_loader.cpp:136	bootstrap	merged config
+transports/sunrise_link/enable_port_striping	false	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:771	bootstrap	merged config
+transports/tcp/enable	true in loader; false when deriving RPC thread count from an absent key	config.network	src/runtime/hp_tcp_transport_config.cpp:136	bootstrap	merged config
+transports/tcp/max_concurrent_tasks	16	config.network	src/transport/tcp/tcp_transport.cpp:85	bootstrap	merged config
+transports/tcp/max_retry_count	3	config.network	src/transport/tcp/tcp_transport.cpp:78	bootstrap	merged config
+transports/tcp/retry_base_delay_ms	100	config.network	src/transport/tcp/tcp_transport.cpp:80	bootstrap	merged config
+transports/tcp/retry_max_delay_ms	2000	config.network	src/transport/tcp/tcp_transport.cpp:82	bootstrap	merged config
+transports/tpu/enable	true	config.excluded	src/runtime/transport_loader.cpp:143	bootstrap	merged config
+transports/ub/device_filter	[]	config.excluded	include/tent/transport/ub/params.h:190	bootstrap	merged config
+transports/ub/enable	false	config.excluded	src/runtime/transport_loader.cpp:101	bootstrap	merged config
+transports/ub/enable_bandwidth_estimation	true	config.excluded	include/tent/transport/ub/params.h:100	bootstrap	merged config
+transports/ub/enable_notifications	false	config.excluded	include/tent/transport/ub/params.h:103	bootstrap	merged config
+transports/ub/endpoint_cooldown_ms	1000	config.excluded	include/tent/transport/ub/params.h:96	bootstrap	merged config
+transports/ub/jetty_per_endpoint	6	config.excluded	include/tent/transport/ub/params.h:67	bootstrap	merged config
+transports/ub/jfc_per_context	6	config.excluded	include/tent/transport/ub/params.h:64	bootstrap	merged config
+transports/ub/max_endpoints	65536	config.excluded	include/tent/transport/ub/params.h:70	bootstrap	merged config
+transports/ub/max_retries	8	config.excluded	include/tent/transport/ub/params.h:91	bootstrap	merged config
+transports/ub/max_slices_per_task	65536	config.excluded	include/tent/transport/ub/params.h:83	bootstrap	merged config
+transports/ub/poller_count	2	config.excluded	include/tent/transport/ub/params.h:62	bootstrap	merged config
+transports/ub/slice_size	65536	config.excluded	include/tent/transport/ub/params.h:74	bootstrap	merged config
+transports/ub/slice_timeout_ms	5000	config.excluded	include/tent/transport/ub/params.h:93	bootstrap	merged config
+transports/ub/worker_count	6	config.excluded	include/tent/transport/ub/params.h:60	bootstrap	merged config
+transports/xpu/disable_ipc	false	config.excluded	src/transport/xpu/xpu_transport.cpp:203	bootstrap	merged config
+transports/xpu/enable	true	config.excluded	src/runtime/transport_loader.cpp:153	bootstrap	merged config
+use_legacy_transport_selection	false	config.engine	src/runtime/transfer_engine_impl.cpp:462	bootstrap	merged config
+verbose	false	config.engine	src/runtime/transfer_engine_impl.cpp:582	bootstrap	merged config

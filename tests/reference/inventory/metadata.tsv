@@ -1,0 +1,23 @@
+item	source	case	acceptance
+SegmentDesc	include/tent/runtime/segment.h	metadata.segment	Require name, type, machine_id, rpc_server_addr and detail. Type string selects memory or file; unknown type fails. Omit empty rdma_server_name; missing value makes nicPathServerName use name.
+MemorySegmentDesc	include/tent/runtime/segment.h	metadata.segment	Require buffers, devices and device_attrs; topology is a JSON string containing topology JSON. Missing topology or transport_attrs is accepted. Non-string numeric map keys encode as arrays of [key,value] pairs.
+FileSegmentDesc	include/tent/runtime/segment.h	metadata.segment	Require buffers; each FileBufferDesc has path, uint64 length and offset. Preserve nonzero offset in the document.
+BufferDesc	include/tent/runtime/segment.h	metadata.segment	Encode addr, length, location, transports, regions, transport_attrs, rkey, shm_path, mnnvl_handle and internal. Native transport enums encode as integers. Never serialize ref_count, lkey or permission.
+Region	include/tent/runtime/segment.h	metadata.segment	Each region has size and location; order preserves the tiling of its parent buffer.
+DeviceDesc	include/tent/runtime/segment.h	metadata.segment	Require name, lid, gid and transport_attrs. Preserve a numeric transport key and its string value.
+Topology	src/runtime/topology.cpp	metadata.segment	Decode the inner nics/mems object. NIC fields: name, pci_bus_id, type, numa_node and optional device_attrs. Memory fields: name, pci_bus_id, type, numa_node and ordered device_list/rankN arrays.
+snapshot	src/runtime/segment_manager.cpp	metadata.segment	getLocalJson publishes a cached immutable dump. Compare the decoded document; JSON object member order and numeric map iteration order have no semantic significance.
+central-key	src/runtime/segment_registry.cpp	metadata.registry	Publish, get and remove under mooncake/tent/ plus the segment name. Value is the SegmentDesc JSON document; malformed or missing entries cannot become valid descriptors.
+store-selection	src/runtime/metastore.cpp	metadata.registry	etcd/redis/http require matching compiled plugin. Preserve Redis database and credential precedence without recording values; real service acceptance is deferred to optional S18.
+p2p	src/runtime/segment_registry.cpp	metadata.registry	Look up the peer by segment name via GetSegmentDesc; an empty response is InvalidEntry. Subscribe and invalidate by name on updates.
+rdma	src/transport/rdma/endpoint.cpp	wire.bootstrap	Pair flattened ordered QPN vectors positionally, retain separate notify QPN and validate peer GID and reply_msg. A QP pool is local configuration, absent from the bootstrap envelope.
+hp_tcp.segment	src/transport/hp_tcp/hp_tcp_protocol.cpp	wire.hp	Parse the nested endpoint attribute string: protocol, version, incarnation, ordered hosts/ports and max_transfer_bytes. Invalid protocol, address metadata or zero size cannot authorize a connection.
+hp_tcp.buffer	src/transport/hp_tcp/hp_tcp_protocol.cpp	wire.hp	Decode the registration ID and global_read_only/global_read_write permission with protocol/version. Reject a zero registration or an unknown permission.
+fabric.peer	src/transport/fabric/fabric_attrs.cpp	wire.fabric	JSON includes version, provider, virt_addr and NIC entries with hex-encoded address, name and NUMA. Decode NUL and non-ASCII address bytes losslessly.
+fabric.buffer	src/transport/fabric/fabric_attrs.cpp	wire.fabric	Decode contiguous chunks with off, len, nics and parallel 64-bit keys. Reject holes, bad indices and incomplete coverage.
+mpcomm	src/transport/mpcomm/mpcomm_peer_registry.cpp	wire.mpcomm	Publish version-prefixed host:port from the segment host and the actual MPComm port; decode the accepted unprefixed form and reject a malformed prefix or port.
+shm	src/transport/shm/shm_transport.cpp	metadata.segment	shm_path names the shared file. The frozen SHM registration omits shm_offset from BufferDesc; OrbitTE's offset-bearing Describe is a separate codec.
+nvlink	src/transport/nvlink/nvlink_transport.cpp	metadata.segment	Legacy GPU IPC exports serialized handle bytes in shm_path. Keep the raw OrbitTE IPC handle descriptor separate.
+mnnvl	src/transport/mnnvl/mnnvl_transport.cpp	metadata.segment	Fabric allocation publishes serialized handle bytes in mnnvl_handle. A peer import cannot infer fabric reachability from the segment address.
+ub	src/runtime/control_plane.cpp	wire.excluded	Keep the dedicated bootstrap envelope and separate generation fields. Recognize the reserved RPC without implementing UB.
+exportLocalSegment/importRemoteSegment	src/runtime/transfer_engine_impl.cpp	metadata.registry	Native declarations are stubs returning NotImplemented. No fabricated export token or successful import.

@@ -1,0 +1,16 @@
+tent_request_t	48	8	opcode=0/4	source=8/8	target_id=16/8	target_offset=24/8	length=32/8	priority=40/4	transport_hint=44/4
+tent_status_t	16	8	status=0/4	transferred_bytes=8/8
+struct tent_buffer_info	80	8	base=0/8	length=8/8	location=16/64
+tent_segment_info_t	16	8	type=0/4	num_buffers=4/4	buffers=8/8
+tent_notifi_record_t	4360	8	handle=0/8	name=8/256	msg=264/4096
+tent_notifi_info	16	8	num_records=0/4	records=8/8
+tent_memory_options_t	344	8	location=0/64	permission=64/4	transport_type=68/4	shm_path=72/256	shm_offset=328/8	internal=336/4
+tent_nic_load_stat_t	80	8	device_name=0/64	inflight_bytes=64/8	ewma_bandwidth_bps=72/8
+location_t	48	8	start=0/8	length=8/8	location=16/32
+device_plugin_t	72	8	class_name=0/8	create_plugin=8/8	destroy_plugin=16/8	alloc=24/8	free=32/8	memcpy_sync=40/8	query_location=48/8	get_device_count=56/8	get_device_pci_bus_id=64/8
+handles	engine=8	batch=8	segment=8	local=0
+opcodes	read=0	write=1
+status	waiting=0	pending=1	invalid=2	canceled=3	completed=4	timeout=5	failed=6
+permissions	local_rw=0	global_ro=1	global_rw=2
+segment_type	memory=0	file=1
+plugin	symbol=tent_register_device_plugin	handled_error=-3	location_bytes=32

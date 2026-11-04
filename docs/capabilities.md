@@ -12,7 +12,9 @@ crates.io only reserves the package name.
 
 [Qualification](qualification.md) records the exact artifacts, cases and limits
 behind every hardware result. The [v0.3.14 delta](tent-parity.md#v0314-delta)
-identifies the release changes still awaiting a port.
+records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+lists the six native direction flags and their provider conditions. Wire
+fixtures and CPU codec checks are available for the future mixed-peer profile.
 
 ## Transports
 

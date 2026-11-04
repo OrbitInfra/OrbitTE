@@ -35,6 +35,11 @@ jobs:
           rustup toolchain install stable --profile minimal
       - name: Compare frozen native TENT and OrbitTE
         run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbitte-native-cpu"
+      - name: Check the S16 acceptance inventory and replay frozen wire fixtures
+        run: |
+          native="$RUNNER_TEMP/orbitte-native-cpu"
+          python3 tests/reference/inventory/check.py --source "$native/reference"
+          python3 tests/reference/wire/check.py --source "$native/reference" --build "$native/tent-build" --output "$RUNNER_TEMP/orbitte-wire"
       - name: Compare frozen RDMA slice geometry and controls
         run: python3 tests/reference/rdma_geometry.py --tent-source "$RUNNER_TEMP/orbitte-native-cpu/reference" --output "$RUNNER_TEMP/orbitte-rdma-geometry"
       - name: Preserve RDMA geometry evidence
@@ -49,6 +54,7 @@ jobs:
         with:
           name: frozen-tent-cpu
           path: |
+            ${{ runner.temp }}/orbitte-wire/*.json
             ${{ runner.temp }}/orbitte-native-cpu/manifest.json
             ${{ runner.temp }}/orbitte-native-cpu/*.stdout
             ${{ runner.temp }}/orbitte-native-cpu/*.stderr

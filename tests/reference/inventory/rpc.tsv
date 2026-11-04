@@ -1,0 +1,13 @@
+id	name	request_attachment	response_attachment	case
+1	GetSegmentDesc	empty	cached SegmentDesc JSON or empty if no snapshot	wire.segment
+2	BootstrapRdma	BootstrapDesc JSON with ordered local and peer NIC paths, data QPN vector, LID, GID, notify QPN and reply_msg	BootstrapDesc; nonempty reply_msg fails, empty local_gid fails	wire.bootstrap
+3	SendData	little-endian uint64 peer address and length followed by exactly the caller's bytes	empty success, error text on range, permission or copy failure	wire.tcp
+4	RecvData	little-endian uint64 peer address and length	payload of exactly the requested length; service error text must differ in length from requested data	wire.tcp
+5	Notify	JSON object with name and msg strings	empty only on delivery; malformed notification prefix differs from callback rejection	wire.rpc
+6	Probe	empty	empty	wire.rpc
+7	Delegate	JSON opcode READ or WRITE, source pointer as integer, target_id, target_offset, length; local policy fields omitted	empty success, Status text on failure	wire.stage
+8	Pin	JSON location string	JSON unsigned address, zero on exhaustion	wire.stage
+9	Unpin	JSON unsigned address	empty success	wire.stage
+10	SubscribeSegmentUpdate	JSON subscriber RPC address string	empty; enroll subscriber for updates	wire.segment
+11	NotifySegmentUpdated	JSON segment name string	empty; invalidate all cached descriptors for that name	wire.segment
+12	BootstrapUb	UbBootstrapDesc JSON with separate Jetty, EID and generation fields	UB envelope; recognize reserved ID, native transport excluded	wire.excluded

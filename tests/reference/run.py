@@ -305,6 +305,7 @@ def main() -> int:
             flags = [
                 f"-D{key}={value}" for key, value in CONTRACT["cmake_options"].items()
             ]
+            flags.append("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
             flags.append("-DFETCHCONTENT_SOURCE_DIR_YALANTINGLIBS=" + str(ylt))
             run(
                 "tent-configure",

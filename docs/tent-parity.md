@@ -265,20 +265,12 @@ the modules needed to compare with TENT's effective configuration.
 
 ## C and language binding inventory
 
-All functions below come from the frozen [public header][api]. Freeze sizes,
-alignments, integer widths, constants and ownership with ABI fixtures during P0.
-
-| Family | Required C entrypoints |
-| --- | --- |
-| Configuration | `tent_load_config_from_file`, `tent_set_config` |
-| Engine | `tent_create_engine`, `tent_destroy_engine`, `tent_available`, `tent_segment_name`, `tent_rpc_server_addr_port` |
-| Segment | `tent_open_segment`, `tent_close_segment`, `tent_get_segment_info`, `tent_free_segment_info` |
-| Basic memory | `tent_allocate_memory`, `tent_free_memory`, `tent_register_memory`, `tent_unregister_memory` |
-| Extended memory | `tent_register_memory_with_perm`, `tent_register_memory_batch`, `tent_unregister_memory_batch`, `tent_allocate_memory_ex`, `tent_register_memory_ex`, `tent_register_memory_batch_ex` |
-| Batch and submit | `tent_allocate_batch`, `tent_free_batch`, `tent_submit`, `tent_submit_notif` |
-| Notification | `tent_send_notifs`, `tent_recv_notifs`, `tent_free_notifs` |
-| Status/cancel | `tent_task_status`, `tent_cancel_task`, `tent_overall_status`, `tent_task_status_list` |
-| Rail observations | `tent_get_nic_load_stats` |
+The [acceptance inventory][inventory] is the shared input to S17–S23. Each
+public C declaration has a call/ownership case. The companion C probe checks
+the frozen public and plugin layouts on Linux LP64. The index also identifies
+reference tests by source and GTest filter, and maps config, environment,
+direction flags, metrics, metadata and logical RPCs to their owners and
+acceptance triggers. The [public header][api] remains the upstream authority.
 
 The richer Rust/C++ surface additionally covers `Request.policy_name`,
 `deadline_ns`, `intent_type`, peer probing, explicit `progressBatch`, topology
@@ -305,10 +297,12 @@ pools must also share the same ordered pool layout, width and link-layer setting
 The control RPC assigns IDs for descriptor lookup, RDMA bootstrap, SendData,
 RecvData, Notify, Probe, Delegate, Pin, Unpin, update subscription, update
 notification and UB bootstrap. The UB bootstrap ID stays recognized but
-unavailable, like the excluded transports. See [the RPC contract][rpc]. P0 must
-freeze the actual framing/serialization and any external YLT/common
-dependencies before choosing the Rust codec. RPC function IDs alone are not a wire specification.
-Do the same for segment metadata, HP-TCP frames and provider handshakes.
+unavailable, like the excluded transports. See [the RPC contract][rpc]. The [wire fixtures][fixtures] freeze YLT request/reply headers, the
+struct_pack function argument, opaque attachments, segment JSON, and HP-TCP
+and provider bootstrap encodings. Linux CI compares them with unmodified
+v0.3.14 code and replays TCP data frames against a registered TENT source.
+OrbitTE continues to use its own control protocol until a peer explicitly
+selects a future interoperability profile.
 
 Interoperability is directional: test a Rust requester against a C++ source
 and a C++ requester against a Rust source, with permission errors, restarts and
@@ -349,3 +343,6 @@ the engine until separately integrated and qualified.
 [uring]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp
 [bufio]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/bufio/bufio_transport.cpp
 [gds]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/gds/gds_transport.cpp
+
+[inventory]: https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory
+[fixtures]: https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/wire

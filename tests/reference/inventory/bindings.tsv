@@ -1,0 +1,8 @@
+surface	source	case	acceptance
+C++ engine	include/tent/transfer_engine.h	binding.cpp	Construct with defaults, path and Config; cover request-only policy_name, deadline_ns and intent_type, progressBatch, peer probing, topology and status overloads.
+classic TE	../src/transfer_engine.cpp	binding.cpp	Route supported legacy submissions and sync/wait through TENT, check frozen unsupported multi-backend operations explicitly.
+Python request and enums	src/python/pybind.cpp	binding.python	Preserve OpCode, TransferStatusEnum, Permission, TransportType, IntentType and SegmentInfoType; compare property names/overloads for Request, MemoryOptions, TransferStatus, Notification and segment information.
+Python engine and guards	src/python/pybind.cpp	binding.python	Compare TransferEngine methods and context-manager behavior of MemoryGuard/BatchGuard. Blocking calls release the GIL; buffer exporters and registrations survive submitted work.
+plugin table	include/tent/device_plugin.h	binding.plugin	Resolve tent_register_device_plugin; compare class_name and the eight function pointer slots and location_t against abi.lp64. Missing or unusable plugins return unavailable.
+plugin copy	plugins/cuda/cuda_plugin.cpp	binding.plugin	Handled copy failure returns TENT_DEVICE_PLUGIN_ERROR and cannot fall back to host memcpy; distinguish a legacy nonzero not-handled status, including exact caller-context restoration.
+Python guard acceptance	tests/test_python_guards.py	binding.python	Port the context-manager exits to wheel tests and check that pending receipts keep the exporter alive.
