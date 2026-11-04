@@ -104,7 +104,7 @@ jobs:
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           filters=(r1b_ adaptive_congestion_control::tests:: poll_retirement_keeps_native_owners device_teardown_failures_are_retained partial_retirement_distinguishes_closed)
           count=$("$binary" "${filters[@]}" --list | awk '/: test$/ {n++} END {print n+0}')
-          test "$count" -ge 16
+          test "$count" -ge 17
           for i in $(seq 1 50); do
             RUST_TEST_THREADS=$(nproc) "$binary" "${filters[@]}" > "$RUNNER_TEMP/r1b.log" || { cat "$RUNNER_TEMP/r1b.log"; exit 1; }
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"

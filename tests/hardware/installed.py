@@ -174,6 +174,11 @@ def verify(profile, case, evidence):
                 if row[operation + '_bytes'] != value:
                     raise ValueError('installed native byte ledger disagrees with requested bytes')
         if case['mode'] == 'installed-selective':
+            mapped = profile['rails'][int(case['mask'] == 2)]
+            expected = [dict(round=r, nic=mapped, allocated=(r + 1) * case['payload'], alternate_allocated=0,
+                             peer_rank=int(role == 'source')) for r in range(3)]
+            if records('ORBITTE_MAPPED_RAIL ') != expected:
+                raise ValueError('wildcard selection did not preserve the mapped physical peer')
             rows = records('ORBITTE_SELECTIVE ')
             if [r.get('round') for r in rows] != [0, 1, 2]:
                 raise ValueError('missing selective signaling round')

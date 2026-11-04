@@ -2600,3 +2600,54 @@ fn r1b_freeing_a_batch_with_unreaped_unsignaled_wrs_keeps_its_loan_and_charge() 
     requester.close(TIMEOUT)?;
     Ok(())
 }
+
+#[test]
+fn r1b_masked_wildcard_moves_bytes_on_the_lower_ranked_mapped_peer() -> Result<()> {
+    for (mask, name, other) in [(1, "rail0", "rail2"), (4, "rail2", "rail0")] {
+        let mut target = runtime(5, 8);
+        target.config.priority_matrix = Some(format!(r#"{{"*":[["{other}"],["{name}"]]}}"#));
+        let mut local_runtime = runtime(mask, 8);
+        local_runtime.config.rail_topology = Some(format!(
+            r#"{{"all":[{{"local":"{name}","remote":"{other}"}},{{"local":"{name}","remote":"{name}"}}],"direct":[{{"local":"{name}","remote":"{name}"}}]}}"#
+        ));
+        let source = rdma_fixture_with_runtime(target);
+        let requester = rdma_fixture_with_runtime(local_runtime);
+        let local = requester.register_memory(vec![0x63; 16].into(), Permission::LocalOnly)?;
+        let remote = source.register_memory(vec![0x29; 16].into(), Permission::RemoteReadWrite)?;
+        let paths = source_runtime(&source).paths(crate::MemoryLocation::Cpu(None))?;
+        assert_eq!(
+            paths.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            [other, name]
+        );
+        for (round, op) in [TransferOp::Read, TransferOp::Write]
+            .into_iter()
+            .enumerate()
+        {
+            local.write(0, &[0x63; 16])?;
+            remote.write(0, &[0x29; 16])?;
+            exchange(&requester, &source, &local, &remote, op);
+            for engine in [&source, &requester] {
+                let stats = engine.nic_load_stats()?;
+                assert_eq!(
+                    stats
+                        .iter()
+                        .find(|n| n.device_name == name)
+                        .unwrap()
+                        .allocated_bytes,
+                    ((round + 1) * 8) as u64
+                );
+                assert_eq!(
+                    stats
+                        .iter()
+                        .find(|n| n.device_name == other)
+                        .unwrap()
+                        .allocated_bytes,
+                    0
+                );
+            }
+        }
+        requester.close(TIMEOUT)?;
+        source.close(TIMEOUT)?;
+    }
+    Ok(())
+}

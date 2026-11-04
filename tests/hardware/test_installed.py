@@ -81,9 +81,13 @@ class InstalledHostEvidence(unittest.TestCase):
             for r in range(3):
                 n = r + 1 if role == 'requester' else 0
                 row = dict(round=r, wrs=8*n, cqes=3*n, atomics=False, init_limit=0, resp_limit=32, init=1, resp=32)
+                mapped = dict(round=r, nic=self.profile['rails'][1], allocated=(r + 1) * self.case['payload'],
+                              alternate_allocated=0, peer_rank=int(role == 'source'))
+                result['stdout.log'] += '\nORBITTE_MAPPED_RAIL ' + json.dumps(mapped)
                 result['stdout.log'] += '\nORBITTE_SELECTIVE ' + json.dumps(row)
         installed.verify(self.profile, self.case, evidence)
         for old, new in [('"cqes": 3', '"cqes": 8'), ('"wrs": 8', '"wrs": 3'), ('"atomics": false', '"atomics": true'),
+                         ('"alternate_allocated": 0', '"alternate_allocated": 8'), ('"peer_rank": 0', '"peer_rank": 1'),
                          ('"init": 1', '"init": 0'), ('"resp": 32', '"resp": 16'), ('"round": 1', '"round": 0')]:
             bad = copy.deepcopy(evidence)
             bad['requester']['stdout.log'] = bad['requester']['stdout.log'].replace(old, new)

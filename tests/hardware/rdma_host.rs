@@ -118,6 +118,14 @@ impl Case {
         {
             return Err("unsupported installed-host profile".into());
         }
+        if case.selective
+            && (case.parents != 1
+                || case.lanes != 1
+                || !matches!(case.mask, 1 | 2)
+                || case.payload != 8 * case.block + 17)
+        {
+            return Err("selective gate requires eight WRs on one requester QP".into());
+        }
         if case.length() > 256 << 20 {
             return Err("installed-host backing exceeds 256 MiB".into());
         }
@@ -347,6 +355,36 @@ fn rounds(
             return Err(format!("byte/sentinel mismatch at round {round}, byte {index}").into());
         }
         if case.selective {
+            let expected = &case.rails[usize::from(case.mask == 2)];
+            let nics = engine.nic_load_stats()?;
+            let selected = nics
+                .iter()
+                .find(|n| n.device_name == *expected)
+                .ok_or("missing mapped NIC")?;
+            let other = nics
+                .iter()
+                .find(|n| n.device_name != *expected)
+                .ok_or("missing alternate NIC")?;
+            let rank = if case.source {
+                let topology = engine.topology()?.ok_or("missing source topology")?;
+                let wildcard = topology
+                    .mem_list
+                    .iter()
+                    .find(|m| m.name == "*")
+                    .ok_or("missing wildcard memory entry")?;
+                if !wildcard.device_list[0].contains(&other.device_id)
+                    || !wildcard.device_list[1].contains(&selected.device_id)
+                {
+                    return Err("mapped peer must be in the lower wildcard tier".into());
+                }
+                1
+            } else {
+                0
+            };
+            println!(
+                "ORBITTE_MAPPED_RAIL {{\"round\":{round},\"nic\":{:?},\"allocated\":{},\"alternate_allocated\":{},\"peer_rank\":{rank}}}",
+                selected.device_name, selected.allocated_bytes, other.allocated_bytes
+            );
             let caps = stats
                 .last_connected_qp
                 .ok_or("missing connected QP depth evidence")?;
