@@ -1,0 +1,158 @@
+{
+  "BootstrapRdma": {
+    "request": {
+      "attachment": "{\"local_gid\":\"fe80::1\",\"local_lid\":7,\"local_nic_path\":\"left/rail0\",\"notify_qp_num\":19,\"peer_nic_path\":\"right/rail1\",\"qp_num\":[17,18],\"reply_msg\":\"\"}",
+      "body_hex": "0940a55504010002000000",
+      "header_hex": "15000000000000000d6674ff0b00000094000000"
+    },
+    "response": {
+      "attachment": "{\"local_gid\":\"fe80::1\",\"local_lid\":7,\"local_nic_path\":\"left/rail0\",\"notify_qp_num\":19,\"peer_nic_path\":\"right/rail1\",\"qp_num\":[17,18],\"reply_msg\":\"\"}",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000094000000"
+    }
+  },
+  "BootstrapUb": {
+    "request": {
+      "attachment": "{\"capabilities\":[],\"endpoint_generation\":0,\"jetty_ids\":[7],\"jetty_uasids\":[9],\"local_device_id\":-1,\"local_device_name\":\"\",\"local_eid\":\"\",\"local_eid_index\":-1,\"local_nic_path\":\"\",\"peer_nic_path\":\"\",\"protocol_version\":1,\"reply_msg\":\"\",\"segment_generation\":0,\"segment_name\":\"excluded\"}",
+      "body_hex": "0940a5550401000c000000",
+      "header_hex": "15000000000000000d6674ff0b0000001a010000"
+    },
+    "response": {
+      "attachment": "{\"capabilities\":[],\"endpoint_generation\":0,\"jetty_ids\":[7],\"jetty_uasids\":[9],\"local_device_id\":-1,\"local_device_name\":\"\",\"local_eid\":\"\",\"local_eid_index\":-1,\"local_nic_path\":\"\",\"peer_nic_path\":\"\",\"protocol_version\":1,\"reply_msg\":\"\",\"segment_generation\":0,\"segment_name\":\"excluded\"}",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "1500000000000000070000001a010000"
+    }
+  },
+  "Delegate": {
+    "request": {
+      "attachment": "{\"length\":3,\"opcode\":\"WRITE\",\"source\":4096,\"target_id\":7,\"target_offset\":8}",
+      "body_hex": "0940a55504010007000000",
+      "header_hex": "15000000000000000d6674ff0b0000004b000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "GetSegmentDesc": {
+    "request": {
+      "attachment": "",
+      "body_hex": "0940a55504010001000000",
+      "header_hex": "15000000000000000d6674ff0b00000000000000"
+    },
+    "response": {
+      "attachment": "{\"detail\":{\"buffers\":[{\"addr\":72623859790382856,\"internal\":false,\"length\":64,\"location\":\"cpu:0\",\"mnnvl_handle\":\"\",\"regions\":[{\"location\":\"cpu:0\",\"size\":64}],\"rkey\":[31,32],\"shm_path\":\"\",\"transport_attrs\":[[13,\"{\\\"permission\\\":\\\"global_read_write\\\",\\\"protocol\\\":\\\"tent_hp_tcp\\\",\\\"registration_id\\\":9,\\\"version\\\":1}\"]],\"transports\":[13,1]}],\"device_attrs\":{\"rack\":\"A\"},\"devices\":[{\"gid\":\"fe80::1\",\"lid\":7,\"name\":\"rail0\",\"transport_attrs\":[[1,\"device-attr\"]]}],\"topology\":\"{\\n    \\\"mems\\\": [\\n        {\\n            \\\"device_list\\\": {\\n                \\\"rank0\\\": [\\n                    0\\n                ],\\n                \\\"rank1\\\": [],\\n                \\\"rank2\\\": []\\n            },\\n            \\\"name\\\": \\\"cpu:0\\\",\\n            \\\"numa_node\\\": -1,\\n            \\\"pci_bus_id\\\": \\\"\\\",\\n            \\\"type\\\": 0\\n        },\\n        {\\n            \\\"device_list\\\": {\\n                \\\"rank0\\\": [\\n                    0\\n                ],\\n                \\\"rank1\\\": [],\\n                \\\"rank2\\\": []\\n            },\\n            \\\"name\\\": \\\"*\\\",\\n            \\\"numa_node\\\": -1,\\n            \\\"pci_bus_id\\\": \\\"\\\",\\n            \\\"type\\\": 4\\n        }\\n    ],\\n    \\\"nics\\\": [\\n        {\\n            \\\"name\\\": \\\"rail0\\\",\\n            \\\"numa_node\\\": -1,\\n            \\\"pci_bus_id\\\": \\\"\\\",\\n            \\\"type\\\": 0\\n        }\\n    ]\\n}\",\"transport_attrs\":[[13,\"{\\\"endpoints\\\":[{\\\"host\\\":\\\"127.0.0.1\\\",\\\"port\\\":19001},{\\\"host\\\":\\\"127.0.0.2\\\",\\\"port\\\":19002}],\\\"incarnation\\\":\\\"00112233445566778899aabbccddeeff\\\",\\\"max_transfer_bytes\\\":4096,\\\"protocol\\\":\\\"tent_hp_tcp\\\",\\\"version\\\":1}\"]]},\"machine_id\":\"host-A\",\"name\":\"source\",\"rdma_server_name\":\"rail-A\",\"rpc_server_addr\":\"127.0.0.1:19000\",\"type\":\"memory\"}",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "150000000000000007000000a6060000"
+    }
+  },
+  "Notify": {
+    "request": {
+      "attachment": "{\"msg\":\"a\\\"b\",\"name\":\"session\"}",
+      "body_hex": "0940a55504010005000000",
+      "header_hex": "15000000000000000d6674ff0b0000001f000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "NotifySegmentUpdated": {
+    "request": {
+      "attachment": "\"source\"",
+      "body_hex": "0940a5550401000b000000",
+      "header_hex": "15000000000000000d6674ff0b00000008000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "Pin": {
+    "request": {
+      "attachment": "\"cpu:0\"",
+      "body_hex": "0940a55504010008000000",
+      "header_hex": "15000000000000000d6674ff0b00000007000000"
+    },
+    "response": {
+      "attachment": "8192",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000004000000"
+    }
+  },
+  "Probe": {
+    "request": {
+      "attachment": "",
+      "body_hex": "0940a55504010006000000",
+      "header_hex": "15000000000000000d6674ff0b00000000000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "RecvData": {
+    "request": {
+      "attachment_hex": "08070605040302010300000000000000",
+      "body_hex": "0940a55504010004000000",
+      "header_hex": "15000000000000000d6674ff0b00000010000000"
+    },
+    "response": {
+      "attachment_hex": "61007a",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000003000000"
+    }
+  },
+  "SendData": {
+    "request": {
+      "attachment_hex": "0807060504030201030000000000000061007a",
+      "body_hex": "0940a55504010003000000",
+      "header_hex": "15000000000000000d6674ff0b00000013000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "SubscribeSegmentUpdate": {
+    "request": {
+      "attachment": "\"peer:1234\"",
+      "body_hex": "0940a5550401000a000000",
+      "header_hex": "15000000000000000d6674ff0b0000000b000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  },
+  "Unknown": {
+    "request": {
+      "attachment": "",
+      "body_hex": "0940a55504010063000000",
+      "header_hex": "15000000000000000d6674ff0b00000000000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "77facf9d04800c001d556e6b6e6f776e2054454e54205250432066756e6374696f6e3a203939",
+      "header_hex": "15000a00000000002600000000000000"
+    }
+  },
+  "Unpin": {
+    "request": {
+      "attachment": "8192",
+      "body_hex": "0940a55504010009000000",
+      "header_hex": "15000000000000000d6674ff0b00000004000000"
+    },
+    "response": {
+      "attachment": "",
+      "body_hex": "ebcf018904fa00",
+      "header_hex": "15000000000000000700000000000000"
+    }
+  }
+}

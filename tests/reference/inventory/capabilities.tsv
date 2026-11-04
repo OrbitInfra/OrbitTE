@@ -1,0 +1,20 @@
+transport	value	dram_to_dram	dram_to_gpu	gpu_to_dram	gpu_to_gpu	dram_to_file	gpu_to_file	notify	cancel	source	case
+unspec	0	-	-	-	-	-	-	-	-	include/tent/common/types.h	cap.select
+rdma	1	yes	GDR	GDR	GDR	no	no	yes	yes	src/transport/rdma/rdma_transport.cpp	cap.select
+mnnvl	2	EGM	yes	EGM	non-CPU platform	no	no	no	no	src/transport/mnnvl/mnnvl_transport.cpp	cap.select
+shm	3	yes	no	no	no	no	no	no	no	src/transport/shm/shm_transport.cpp	cap.select
+nvlink	4	no	yes	yes	yes	no	no	no	no	src/transport/nvlink/nvlink_transport.cpp	cap.select
+gds	5	no	no	no	no	except USE_XPU_GDS	yes	no	no	src/transport/gds/gds_transport.cpp	cap.select
+io_uring	6	no	no	no	no	yes	non-CPU platform	no	no	src/transport/io_uring/io_uring_transport.cpp	cap.select
+tcp	7	yes	yes	non-CPU platform	non-CPU platform	no	no	yes	no	src/transport/tcp/tcp_transport.cpp	cap.select
+ascend	8	yes	yes	yes	yes	no	no	no	no	src/transport/ascend/ascend_direct_transport.cpp	cap.excluded
+sunrise_link	9	yes	yes	yes	yes	no	no	yes	no	src/transport/sunrise_link/sunrise_link_transport.cpp	cap.excluded
+tpu	10	no	yes	yes	no	no	no	no	no	src/transport/tpu/tpu_transport.cpp	cap.excluded
+ub	11	yes	no	no	no	no	no	no	yes	src/transport/ub/ub_transport.cpp	cap.excluded
+mpcomm	12	yes	GDR	GDR	GDR	no	no	no	no	src/transport/mpcomm/mpcomm_transport.cpp	cap.select
+hp_tcp	13	yes	no	no	no	no	no	yes	yes	src/transport/hp_tcp/hp_tcp_transport.cpp	cap.select
+xpu	14	no	yes	yes	yes	no	no	no	no	src/transport/xpu/xpu_transport.cpp	cap.excluded
+hylink	15	no	yes	yes	yes	no	no	no	no	src/transport/hylink/hylink_transport.cpp	cap.excluded
+fabric	16	yes	no	no	no	no	no	no	no	src/transport/fabric/fabric_transport.cpp	cap.select
+mlu	17	no	yes	yes	no	no	no	no	no	src/transport/mlu/mlu_transport.cpp	cap.excluded
+memfabric	18	yes	yes	yes	yes	no	no	no	no	src/transport/memfabric/memfabric_transport.cpp	cap.excluded

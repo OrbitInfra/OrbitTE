@@ -1,0 +1,119 @@
+{
+  "fabric_buffer": {
+    "chunks": [
+      {
+        "keys": [
+          4294967298
+        ],
+        "len": 64,
+        "nics": [
+          0
+        ],
+        "off": 0
+      }
+    ]
+  },
+  "fabric_peer": {
+    "nics": [
+      {
+        "addr": "00ff",
+        "name": "nic-A",
+        "numa": 0
+      }
+    ],
+    "provider": "tcp",
+    "version": 1,
+    "virt_addr": false
+  },
+  "file": {
+    "detail": {
+      "buffers": [
+        {
+          "length": 256,
+          "offset": 128,
+          "path": "/sample"
+        }
+      ]
+    },
+    "machine_id": "host-A",
+    "name": "disk",
+    "rpc_server_addr": "127.0.0.1:19000",
+    "type": "file"
+  },
+  "memory": {
+    "detail": {
+      "buffers": [
+        {
+          "addr": 72623859790382856,
+          "internal": false,
+          "length": 64,
+          "location": "cpu:0",
+          "mnnvl_handle": "",
+          "regions": [
+            {
+              "location": "cpu:0",
+              "size": 64
+            }
+          ],
+          "rkey": [
+            31,
+            32
+          ],
+          "shm_path": "",
+          "transport_attrs": [
+            [
+              13,
+              "{\"permission\":\"global_read_write\",\"protocol\":\"tent_hp_tcp\",\"registration_id\":9,\"version\":1}"
+            ]
+          ],
+          "transports": [
+            13,
+            1
+          ]
+        }
+      ],
+      "device_attrs": {
+        "rack": "A"
+      },
+      "devices": [
+        {
+          "gid": "fe80::1",
+          "lid": 7,
+          "name": "rail0",
+          "transport_attrs": [
+            [
+              1,
+              "device-attr"
+            ]
+          ]
+        }
+      ],
+      "topology": "{\n    \"mems\": [\n        {\n            \"device_list\": {\n                \"rank0\": [\n                    0\n                ],\n                \"rank1\": [],\n                \"rank2\": []\n            },\n            \"name\": \"cpu:0\",\n            \"numa_node\": -1,\n            \"pci_bus_id\": \"\",\n            \"type\": 0\n        },\n        {\n            \"device_list\": {\n                \"rank0\": [\n                    0\n                ],\n                \"rank1\": [],\n                \"rank2\": []\n            },\n            \"name\": \"*\",\n            \"numa_node\": -1,\n            \"pci_bus_id\": \"\",\n            \"type\": 4\n        }\n    ],\n    \"nics\": [\n        {\n            \"name\": \"rail0\",\n            \"numa_node\": -1,\n            \"pci_bus_id\": \"\",\n            \"type\": 0\n        }\n    ]\n}",
+      "transport_attrs": [
+        [
+          13,
+          "{\"endpoints\":[{\"host\":\"127.0.0.1\",\"port\":19001},{\"host\":\"127.0.0.2\",\"port\":19002}],\"incarnation\":\"00112233445566778899aabbccddeeff\",\"max_transfer_bytes\":4096,\"protocol\":\"tent_hp_tcp\",\"version\":1}"
+        ]
+      ]
+    },
+    "machine_id": "host-A",
+    "name": "source",
+    "rdma_server_name": "rail-A",
+    "rpc_server_addr": "127.0.0.1:19000",
+    "type": "memory"
+  },
+  "mpcomm": "v1:192.0.2.1:4321",
+  "opaque_cuda_handle": "FFFEFDFCFBFAF9F8F7F6F5F4F3F2F1F0EFEEEDECEBEAE9E8E7E6E5E4E3E2E1E0DFDEDDDCDBDAD9D8D7D6D5D4D3D2D1D0CFCECDCCCBCAC9C8C7C6C5C4C3C2C1C0",
+  "rdma": {
+    "local_gid": "fe80::1",
+    "local_lid": 7,
+    "local_nic_path": "left/rail0",
+    "notify_qp_num": 19,
+    "peer_nic_path": "right/rail1",
+    "qp_num": [
+      17,
+      18
+    ],
+    "reply_msg": ""
+  }
+}

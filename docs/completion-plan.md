@@ -38,7 +38,7 @@ artifacts and hardware profiles.
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
-| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping and oracle open |
+| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | CPU oracle and S16 acceptance inventory/wire fixtures implemented; broader differential fault and performance cases open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Complete at source level |
@@ -90,7 +90,8 @@ direct/staged batches. S15b implements OrbitKV's local GPU↔pinned DRAM
 copy mechanics on the caller's stream, including strided DMA, batched 1D
 copies and a mapped-host kernel. The [installed comparison](qualification.md#caller-stream-local-cuda-copy)
 and the P5 hardware verification queue remain open.
-S16 freezes the inventory and wire fixtures, followed by S17 configuration.
+S16 freezes the reference acceptance inventory and native wire fixtures. S17
+uses its per-key configuration defaults and precedence cases.
 S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
 OrbitKV uses the existing P2P control plane. S19–S26 retain their order.
 
@@ -111,20 +112,22 @@ Done:
   observations, and six comparator controls must reject broken results. See
   [CPU oracle](cpu-oracle.md). It covers selected valid-input CPU behavior only.
 
+- **S16 — acceptance inventory and wire fixtures (Implemented).** The
+  [reference inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+  maps all 33 C functions, configuration and environment inputs, direction flags,
+  metrics, metadata, logical RPCs and 88 reference test sources. A native C probe
+  freezes LP64 layouts. The pinned C++ codecs and loopback dispatcher check
+  control RPCs, memory/file metadata, HP-TCP frames and provider attributes.
+  S17–S23 extend those cases with their own evidence.
+
 Open:
 
-- [ ] Freeze the reference source, build options, optional providers and
-  dependency revisions for an isolated C++ oracle outside the normal build.
-- [ ] Map all 33 C functions, the richer native/Python/classic-TE surfaces,
-  config keys and precedence, capability bits, metrics, metadata and wire
-  messages to deterministic acceptance cases, marking reference stubs.
-- [ ] Map the 88 reference C++ files ending in `test.cpp`, Python guards and tebench byte
-  checks to retained cases with their hardware triggers; mark excluded
-  accelerator and UB cases out of scope with explicit unavailable behavior.
-- [ ] Define a common request trace and runner contract for C++ and Rust,
-  comparing bytes and allowed transitions, with broken lifetime/epoch controls.
-- [ ] Freeze control-RPC framing, metadata formats, HP-TCP frames, provider
-  bootstrap messages and C ABI fixtures.
+- [ ] Pin optional-provider SDKs and build options for the profiles outside
+  the isolated CPU reference build.
+- [ ] Extend the CPU oracle to the remaining native/Python/classic-TE behavior,
+  Python guards and tebench byte checks, with hardware triggers where needed.
+- [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
+  lifetime/epoch controls and mixed Rust/TENT peers under S23.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 

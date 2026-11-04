@@ -1,0 +1,10 @@
+item	source	case	acceptance
+Prometheus GET /metrics	src/metrics/tent_metrics.cpp	metrics.record	Parse the families in metrics.tsv. Histograms have cumulative buckets, +Inf, sum and count. Preserve label order and units.
+JSON GET /metrics/json	src/metrics/tent_metrics.cpp	metrics.record	Compare typed values for the same recorded events; self-observation remains available while runtime recording is disabled.
+Summary GET /metrics/summary	src/metrics/tent_metrics.cpp	metrics.record	Check the human-readable summary. Self-observation serialization labels are prometheus and json.
+Health GET /health	src/metrics/tent_metrics.cpp	metrics.record	Check the live HTTP health response independently of transfer counters; a failed bind degrades to log-only.
+QoS classes	src/common/qos_metrics.cpp	metrics.qos	In class inputs require name, threads and slo_us, optional weight and measured isolated_gbps. Reject invalid totals/duplicate classes; absent measurements remain unavailable.
+QoS report JSONL	src/common/qos_metrics.cpp	metrics.qos	Compare schema_version, block_size, batch_size, num_threads, aggregate_throughput_gbps, weighted_goodput_gbps, jain_fairness, max_isolation_leakage, link_capacity_gbps, total_utilization and classes.
+QoS class observations	src/common/qos_metrics.cpp	metrics.qos	Per class compare name, threads, slo_us, weight, operations, transferred_bytes, throughput_gbps, p99_us, slo_attainment, goodput_gbps, weighted_goodput_gbps, isolated_throughput_gbps and isolation_leakage. Missing optional fields serialize as null.
+NIC load	src/transfer_engine_c.cpp	c.rails	Compare device_name, inflight_bytes and ewma_bandwidth_bps through the C array/count contract. No fabricated per-rail bandwidth sample.
+Quota and receiver-credit observations	src/runtime/receiver_credit.cpp	metrics.qos	Check resource reservations, outstanding grants and releases at their respective owners. The orbitte_* operational gauges are extensions, separate from the frozen tent_* families.

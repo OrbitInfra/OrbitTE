@@ -13,6 +13,14 @@ performance parity. See [capabilities](capabilities.md) for support and the
 
 ## Engine and transport boundary
 
+S16 keeps the upstream serializer and headers inside the frozen CPU oracle.
+The [acceptance inventory](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+connects each public field or message to its source, owner, test trigger and
+expected result. The oracle captures the two YLT envelope layers separately
+from TENT's attachments. The Rust control plane uses its existing codec.
+S23 can replay the same fixtures in both peer directions.
+
+
 Callers build a `TransferRequest` with a transport (or `Transport::Unspec`) and
 two absolute addresses; the operation is chosen at submission, and an optional
 engine-resolved QoS handle sets priority and caps. Public request, transport and

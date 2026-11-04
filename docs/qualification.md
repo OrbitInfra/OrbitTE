@@ -20,6 +20,12 @@ Source CI builds the public consumers for the default, `rdma`, `cuda` and combin
 features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
+The [S16 reference checks](https://github.com/OrbitInfra/OrbitTE/tree/main/tests/reference/inventory)
+compare the frozen C headers, configuration precedence, provider metadata and
+native request/reply bytes on Linux. TCP data fixtures also run against a real
+registered TENT source with guard bytes. These checks supply inputs for S23's
+future directional mixed-peer gate.
+
 ## Verification queue
 
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below
