@@ -88,9 +88,11 @@ Ownership (the core contract of this codebase):
 
 Code:
 
-- Rust edition 2024, MSRV 1.85. Pin new dependencies exactly (`=x.y.z`) and
-  confirm they build on 1.85. Prefer runtime `libloading` over link-time SDK
-  dependencies.
+- Rust edition 2024, MSRV 1.85. Give shared dependencies semver-compatible
+  requirements with explicit minimum versions. Commit Cargo.lock and run CI
+  with `--locked` on stable and 1.85. Reserve exact pins for bindings whose
+  compatibility requires a release-specific audit, and document the reason
+  beside each pin in Cargo.toml. Prefer runtime `libloading` for native SDKs.
 - New native modules are opt-in Cargo features, Linux only. A build without a
   feature must not load or start that module.
 - `#![deny(unsafe_code)]` stays. Use scoped `#[allow(unsafe_code)]`, with a

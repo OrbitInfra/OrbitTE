@@ -23,6 +23,11 @@ fn native_kind(t: MnnvlHandleType) -> Kind {
         MnnvlHandleType::PosixFd => Kind::CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR,
     }
 }
+pub(super) fn handle_bits(kind: Kind) -> u32 {
+    // SAFETY: the CUDA ABI represents this flag set as an unsigned 32-bit
+    // integer. cudarc 0.19 uses either a repr(u32) enum or a transparent mask.
+    unsafe { std::mem::transmute::<Kind, u32>(kind) }
+}
 fn location(kind: Location, device: i32) -> sys::CUmemLocation {
     let (type_, id) = match kind {
         Location::Device => (sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE, device),

@@ -112,6 +112,18 @@ jobs:
       - name: Build packaged MNNVL and EGM consumer
         if: matrix.features == 'cuda'
         run: python3 tests/hardware/build_installed.py --consumer mnnvl --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-mnnvl"
+      - name: Check shared cudarc with an independent consumer
+        if: matrix.toolchain == 'stable' && matrix.features == 'cuda'
+        run: |
+          library=("$RUNNER_TEMP"/orbitte-installed-mnnvl/crate/orbit-te-*)
+          consumer="$RUNNER_TEMP/shared-cudarc"
+          cargo new --lib --vcs none "$consumer"
+          printf 'orbit-te = { path = "%s", features = ["cuda"] }\n' "${library[0]}" >> "$consumer/Cargo.toml"
+          echo 'cudarc = { version = "=0.19.8", features = ["cuda-13000"] }' >> "$consumer/Cargo.toml"
+          cd "$consumer"
+          cargo generate-lockfile
+          cargo check --locked
+          cargo metadata --locked --format-version 1 | jq -e '[.packages[] | select(.name == "cudarc") | .version] == ["0.19.8"]'
       - name: Repeat shared mapping lifetime and process controls 50 times
         if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |

@@ -181,7 +181,7 @@ impl Mapping {
                 if ty != sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED as u32
                     || location_type != expected.type_ as u32
                     || id != expected.id
-                    || types & native_kind(self.kind) as u32 == 0
+                    || types & handle_bits(native_kind(self.kind)) == 0
                 {
                     return Err(Error::Unavailable("CUDA VMM allocation property mismatch"));
                 }
