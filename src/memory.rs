@@ -714,7 +714,7 @@ impl RegisteredMemory {
             NonNull::new((self.0.allocation.base_address() + offset as u64) as usize as *mut u8)
                 .ok_or(Error::InvalidRange)?;
         #[cfg(target_os = "linux")]
-        let mut shared_access = None;
+        let shared_access;
         match &self.0.allocation {
             Allocation::Host(memory) => {
                 let mut backing = memory
@@ -733,7 +733,13 @@ impl RegisteredMemory {
                 backing.dma.push(range.clone());
             }
             #[cfg(all(feature = "cuda", feature = "rdma"))]
-            Allocation::Cuda(memory) => memory.acquire_dma(range.clone())?,
+            Allocation::Cuda(memory) => {
+                memory.acquire_dma(range.clone())?;
+                #[cfg(target_os = "linux")]
+                {
+                    shared_access = None;
+                }
+            }
             #[cfg(all(feature = "cuda", not(feature = "rdma")))]
             Allocation::Cuda(_) => return Err(Error::Unavailable("file I/O requires DRAM")),
         }

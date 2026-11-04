@@ -69,6 +69,7 @@ pub(super) struct Sys {
     pub unlink: fn(&Namespace, Name) -> io::Result<()>,
     pub reopen: fn(&File, bool) -> io::Result<File>,
     pub lock: fn(&File, i64, i64, bool) -> io::Result<()>,
+    pub unlock: fn(&File, i64, i64) -> io::Result<()>,
     pub conflicts: fn(&File, i64, i64, bool) -> io::Result<bool>,
 }
 pub(super) const NATIVE: Sys = Sys {
@@ -80,6 +81,7 @@ pub(super) const NATIVE: Sys = Sys {
     unlink,
     reopen,
     lock,
+    unlock,
     conflicts,
 };
 fn open(ns: &Namespace, name: Name, create: bool, write: bool) -> io::Result<File> {
@@ -181,7 +183,7 @@ fn reopen(fd: &File, write: bool) -> io::Result<File> {
         .custom_flags(libc::O_CLOEXEC)
         .open(format!("/proc/self/fd/{}", fd.as_raw_fd()))
 }
-fn record(fd: &File, start: i64, len: i64, write: bool, query: bool) -> io::Result<bool> {
+fn record(fd: &File, start: i64, len: i64, kind: libc::c_int, query: bool) -> io::Result<bool> {
     fn offset(n: i64) -> io::Result<libc::off_t> {
         let v = n as libc::off_t;
         if i128::from(v) == i128::from(n) {
@@ -191,7 +193,7 @@ fn record(fd: &File, start: i64, len: i64, write: bool, query: bool) -> io::Resu
         }
     }
     let mut range = libc::flock {
-        l_type: if write { libc::F_WRLCK } else { libc::F_RDLCK } as _,
+        l_type: kind as _,
         l_whence: libc::SEEK_SET as _,
         l_start: offset(start)?,
         l_len: offset(len)?,
@@ -214,10 +216,26 @@ fn record(fd: &File, start: i64, len: i64, write: bool, query: bool) -> io::Resu
     }
 }
 fn lock(fd: &File, start: i64, len: i64, write: bool) -> io::Result<()> {
-    record(fd, start, len, write, false).map(|_| ())
+    record(
+        fd,
+        start,
+        len,
+        if write { libc::F_WRLCK } else { libc::F_RDLCK },
+        false,
+    )
+    .map(|_| ())
+}
+fn unlock(fd: &File, start: i64, len: i64) -> io::Result<()> {
+    record(fd, start, len, libc::F_UNLCK, false).map(|_| ())
 }
 fn conflicts(fd: &File, start: i64, len: i64, write: bool) -> io::Result<bool> {
-    record(fd, start, len, write, true)
+    record(
+        fd,
+        start,
+        len,
+        if write { libc::F_WRLCK } else { libc::F_RDLCK },
+        true,
+    )
 }
 
 pub(super) fn unlink_same(sys: &Sys, ns: &Namespace, name: Name, id: Stat) -> io::Result<()> {

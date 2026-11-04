@@ -367,10 +367,8 @@ fn source_grants_and_read_only_page_protection_follow_each_registration() -> Res
         Err(Error::PermissionDenied)
     ));
     src.unregister_memory(&duplicate)?;
-    assert!(matches!(
-        dst.submit_and_wait(TransferOp::Read, &peer, &[r], WAIT),
-        Err(Error::RegionNotFound)
-    ));
+    let after = dst.submit_and_wait(TransferOp::Read, &peer, &[r], WAIT);
+    assert!(matches!(after, Err(Error::RegionNotFound)), "{after:?}");
     assert!(live.exists());
     assert_eq!(bytes(&ro), [0x61; 12]);
     src.unregister_memory(&rw)?;
@@ -378,6 +376,72 @@ fn source_grants_and_read_only_page_protection_follow_each_registration() -> Res
     drop((ro, duplicate, rw, private));
     src.free_shm_memory(host)?;
     assert!(!live.exists());
+    Ok(())
+}
+
+#[test]
+fn unregister_revokes_even_an_inherited_grant_fd_and_preserves_uncertain_owners() -> Result<()> {
+    static DUP: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
+    fn duplicate(fd: &fs::File, write: bool) -> io::Result<fs::File> {
+        let grant = (NATIVE.reopen)(fd, write)?;
+        if write {
+            *DUP.lock().unwrap() = Some(grant.try_clone()?);
+        }
+        Ok(grant)
+    }
+    static TABLE: Sys = Sys {
+        reopen: duplicate,
+        ..NATIVE
+    };
+    let dir = Dir::new();
+    let mut c = config(&dir.0);
+    c.tcp = false;
+    let src = engine(c.clone(), &TABLE)?;
+    let dst = engine(c.clone(), &NATIVE)?;
+    let host = src.allocate_shm_memory(12)?;
+    let remote = grant(&src, &host, 0, 12, Permission::RemoteRead);
+    let peer = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    let local = dst.register_memory(vec![0xf3; 12].into(), Permission::LocalOnly)?;
+    let q = req(Transport::Shm, &local, &remote, 2, 8);
+    let inherited = DUP.lock().unwrap().take().unwrap();
+    src.unregister_memory(&remote)?;
+    let after = dst.submit_and_wait(TransferOp::Read, &peer, &[q], WAIT);
+    assert!(matches!(after, Err(Error::RegionNotFound)), "{after:?}");
+    assert_eq!(bytes(&remote), [0; 12]);
+    assert_eq!(bytes(&local), [0xf3; 12]);
+    drop(inherited);
+    drop(remote);
+    src.free_shm_memory(host)?;
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn failed(_: &fs::File, _: i64, _: i64) -> io::Result<()> {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    static FAIL: Sys = Sys {
+        unlock: failed,
+        ..NATIVE
+    };
+    let src = engine(c, &FAIL)?;
+    let host = src.allocate_shm_memory(12)?;
+    let backing = path(&dir.0, &host.shared().unwrap());
+    let r = grant(&src, &host, 0, 12, Permission::RemoteRead);
+    for result in [
+        src.unregister_memory(&r),
+        src.close_source(WAIT),
+        src.close_source(WAIT),
+    ] {
+        assert!(matches!(
+            result,
+            Err(Error::Unquiesced {
+                operation: "SHM revoke",
+                code: libc::EIO
+            })
+        ));
+    }
+    drop((r, host, src));
+    assert!(backing.exists());
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

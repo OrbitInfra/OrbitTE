@@ -17,8 +17,33 @@ use std::{
 pub(crate) struct Export {
     record: Descriptor,
     live: Option<File>,
+    revoke_error: Option<i32>,
     _owner: RegisteredMemory,
     local: Arc<Local>,
+}
+impl Export {
+    fn revoke(&mut self) -> Result<()> {
+        if let Some(code) = self.revoke_error {
+            return Err(Error::Unquiesced {
+                operation: "SHM revoke",
+                code,
+            });
+        }
+        if let Some(fd) = &self.live {
+            // Closing only our descriptor could leave the OFD locked in a
+            // concurrently forked child until exec. Unlock both directions first.
+            (self.local.mapping.sys.unlock)(fd, self.record.live(false), 2).map_err(|e| {
+                let code = e.raw_os_error().unwrap_or(-1);
+                self.revoke_error = Some(code);
+                Error::Unquiesced {
+                    operation: "SHM revoke",
+                    code,
+                }
+            })?;
+            drop(self.live.take());
+        }
+        Ok(())
+    }
 }
 type Key = (Name, u64, u64, u64, bool);
 #[derive(Default)]
@@ -113,6 +138,7 @@ impl ShmTransport {
             pending.push(Export {
                 record,
                 live: Some(owner),
+                revoke_error: None,
                 local,
                 _owner: m.clone(),
             });
@@ -141,7 +167,7 @@ impl ShmTransport {
                     exports
                         .entries
                         .get(&r.id())
-                        .filter(|e| e.live.is_some())
+                        .filter(|e| e.live.is_some() && e.revoke_error.is_none())
                         .map(|e| e.record)
                 })
                 .collect(),
@@ -153,13 +179,20 @@ impl ShmTransport {
             .lock()
             .map_err(|_| Error::Internal("SHM export table lock"))?;
         if let Some(e) = table.entries.get_mut(&id) {
-            drop(e.live.take());
+            e.revoke()?;
         }
         Self::sweep_locked(&mut table.entries)
     }
     fn sweep_locked(table: &mut BTreeMap<u64, Export>) -> Result<()> {
         let mut result = Ok(());
         table.retain(|_, e| {
+            if let Some(code) = e.revoke_error {
+                result = Err(Error::Unquiesced {
+                    operation: "SHM revoke",
+                    code,
+                });
+                return true;
+            }
             if e.live.is_some() {
                 return true;
             }
@@ -188,12 +221,14 @@ impl ShmTransport {
             .map_err(|_| Error::Internal("SHM export table lock"))?;
         Self::sweep_locked(&mut table.entries)
     }
-    pub(crate) fn fence_exports(&self) {
+    pub(crate) fn fence_exports(&self) -> Result<()> {
         let mut table = self.exports.lock().unwrap_or_else(|p| p.into_inner());
         table.closed = true;
+        let mut result = Ok(());
         for e in table.entries.values_mut() {
-            drop(e.live.take());
+            result = result.and(e.revoke());
         }
+        result
     }
     pub(crate) fn drain_exports(&self, deadline: Instant) -> Result<()> {
         loop {
@@ -317,8 +352,10 @@ impl ShmTransport {
 }
 impl Drop for ShmTransport {
     fn drop(&mut self) {
-        self.fence_exports();
-        if let Err(e) = self.drain_exports(Instant::now() + crate::transport::DESTRUCTION_TIMEOUT) {
+        let fence = self.fence_exports();
+        if let Err(e) =
+            fence.and(self.drain_exports(Instant::now() + crate::transport::DESTRUCTION_TIMEOUT))
+        {
             let table = self.exports.get_mut().unwrap_or_else(|p| p.into_inner());
             log::error!(
                 "retaining {} SHM grants with unconfirmed peer copies: {e}",

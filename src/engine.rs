@@ -1907,7 +1907,7 @@ impl TransferEngine {
         admission.open = false;
         #[cfg(target_os = "linux")]
         if let Some(shm) = &self.source.shm {
-            shm.fence_exports();
+            shm.fence_exports()?;
         }
         while admission.active != 0 {
             let remaining = remaining(deadline)?;
@@ -2028,7 +2028,7 @@ impl TransferEngine {
             requester.open = false;
             #[cfg(target_os = "linux")]
             if let Some(shm) = &self.source.shm {
-                shm.fence_exports();
+                shm.fence_exports()?;
             }
         }
         // Peers may export to each other. Release outgoing imports before
