@@ -170,6 +170,23 @@ unsafe extern "C" fn retain(_: *mut driver::Context, _: c_int) -> Status {
 unsafe extern "C" fn release(_: c_int) -> Status {
     unreachable!()
 }
+unsafe extern "C" fn ctx_current(out: *mut driver::Context) -> Status {
+    // SAFETY: the context guard supplies a writable handle for the calling thread.
+    unsafe {
+        *out = STACK.with(|s| s.borrow().last().copied().unwrap_or(0)) as driver::Context;
+    }
+    SUCCESS
+}
+unsafe extern "C" fn ctx_set(ctx: driver::Context) -> Status {
+    STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        stack.pop();
+        if !ctx.is_null() {
+            stack.push(ctx as usize);
+        }
+    });
+    SUCCESS
+}
 unsafe extern "C" fn push(context: driver::Context) -> Status {
     STACK.with(|s| s.borrow_mut().push(context as usize));
     event("push");
@@ -636,6 +653,8 @@ pub(super) fn driver() -> Arc<Driver> {
         flush_rdma,
         primary_retain: retain,
         primary_release: release,
+        current: ctx_current,
+        set_current: ctx_set,
         push,
         pop,
         synchronize: sync,
@@ -645,6 +664,7 @@ pub(super) fn driver() -> Arc<Driver> {
         ipc_export,
         ipc_open,
         ipc_close,
+        copy_sync,
         copy_batch: None,
         copy_device,
         to_host,
@@ -890,6 +910,31 @@ unsafe extern "C" fn ipc_close(address: u64) -> Status {
     status(error)
 }
 
+unsafe extern "C" fn copy_sync(dst: u64, src: u64, length: usize) -> Status {
+    event("sync_copy");
+    let device = current();
+    device.ipc_copies.fetch_add(1, Ordering::AcqRel);
+    let error = device.copy_error.load(Ordering::Acquire);
+    let host = device.pins.lock().unwrap().iter().any(|(&start, buf)| {
+        let covered = start..start + buf.len();
+        covered.contains(&(src as usize)) || covered.contains(&(dst as usize))
+    });
+    if !host {
+        // Model a device copy returning before the default stream executes it.
+        enqueue(
+            std::ptr::null_mut(),
+            src as usize,
+            dst as usize,
+            if error == 0 { length } else { 0 },
+        );
+    } else if error == 0 {
+        // SAFETY: both admitted ranges are owned and pinned host copies complete on return.
+        unsafe {
+            std::ptr::copy(src as *const u8, dst as *mut u8, length);
+        }
+    }
+    status(error)
+}
 unsafe extern "C" fn copy_device(
     destination: u64,
     source: u64,

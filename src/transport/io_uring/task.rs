@@ -11,10 +11,14 @@ use crate::memory::DmaLease;
 use crate::{Error, Result, TransferOp};
 
 pub(super) struct Bounce {
-    ptr: NonNull<u8>,
+    pub(super) ptr: NonNull<u8>,
     layout: Layout,
 }
 
+#[allow(unsafe_code)]
+// SAFETY: Bounce uniquely owns stable aligned bytes. Moving it never moves those
+// bytes. Pool leases or the task’s CQE protect access for the entire native use.
+unsafe impl Send for Bounce {}
 impl Bounce {
     #[allow(unsafe_code)]
     pub(super) fn new(length: usize, alignment: usize) -> Result<Self> {
@@ -35,11 +39,27 @@ impl Drop for Bounce {
     }
 }
 
+enum Scratch {
+    Slot(super::pool::Slot),
+    Pageable {
+        buffer: Bounce,
+        _charge: super::pool::Charge,
+    },
+}
+impl Scratch {
+    fn address(&self) -> NonNull<u8> {
+        match self {
+            Self::Slot(slot) => slot.ptr,
+            Self::Pageable { buffer, .. } => buffer.ptr,
+        }
+    }
+}
+
 pub(super) struct Task {
     file: Arc<File>,
     memory: Option<DmaLease>,
     length: usize,
-    bounce: Option<Bounce>,
+    bounce: Option<Scratch>,
     offset: u64,
     pub(super) result: Option<i32>,
     pub(super) late: bool,
@@ -50,7 +70,7 @@ impl Task {
     pub(super) fn new(
         operation: TransferOp,
         request: &FileRequest,
-        allocate: fn(usize, usize) -> Result<Bounce>,
+        transport: &super::IoUringTransport,
     ) -> Result<(Self, libc::iovec)> {
         let memory = request
             .local
@@ -72,19 +92,39 @@ impl Task {
         };
         #[cfg(not(feature = "cuda"))]
         let direct_host = None;
+        let host_pinned = direct_host.is_some();
         let (file, alignment) = match direct_host {
             Some(descriptor) => descriptor,
             None => request.lease.io_file(request.offset, request.length)?,
         };
-        let bounce = if memory.address().as_ptr() as usize % alignment != 0 {
-            let bounce = allocate(request.length, alignment)?;
+        let staging_alignment = if !host_pinned && transport.pool.enabled {
+            alignment.max(4096)
+        } else {
+            alignment
+        };
+        let bounce = if memory.address().as_ptr() as usize % staging_alignment != 0 {
+            let bounce = match transport.pool.acquire(
+                request.length,
+                staging_alignment,
+                super::pool::Access::Host,
+                super::pool::Slab::host,
+            )? {
+                Some(slot) => Scratch::Slot(slot),
+                None => {
+                    let charge = transport.pool.charge(request.length)?;
+                    Scratch::Pageable {
+                        buffer: (transport.allocate)(request.length, staging_alignment)?,
+                        _charge: charge,
+                    }
+                }
+            };
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
                 // The fresh bounce is disjoint and has exactly that capacity.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         memory.address().as_ptr(),
-                        bounce.ptr.as_ptr(),
+                        bounce.address().as_ptr(),
                         request.length,
                     );
                 }
@@ -96,7 +136,7 @@ impl Task {
         let iov = libc::iovec {
             iov_base: bounce
                 .as_ref()
-                .map_or(memory.address(), |bounce| bounce.ptr)
+                .map_or(memory.address(), Scratch::address)
                 .as_ptr()
                 .cast(),
             iov_len: memory.len(),
@@ -147,7 +187,7 @@ impl Task {
                 // the iovec. The bound above and the exclusive loan protect both ranges.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        bounce.ptr.as_ptr(),
+                        bounce.address().as_ptr(),
                         memory.address().as_ptr(),
                         result as usize,
                     );

@@ -77,7 +77,9 @@ impl Fixture {
     ) -> Arc<Mutex<RingTrace>> {
         let trace = Arc::new(Mutex::new(RingTrace::default()));
         let observed = Arc::clone(&trace);
+        let pool = self.engine.io_uring.as_ref().unwrap().pool.clone();
         Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
+            pool,
             allocate: task::Bounce::new,
             create: Arc::new(move |size| {
                 before(size)?;
@@ -212,6 +214,7 @@ fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     )?;
     let path = f.path.clone();
     Arc::get_mut(&mut f.engine).unwrap().io_uring = Some(IoUringTransport {
+        pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
             assert_eq!(n, depth);
@@ -402,6 +405,7 @@ enum Fault {
     ShortThenError,
     NoSpace,
     ReapError,
+    WaitError,
     OversizedCqe,
     CqeError,
 }
@@ -442,8 +446,14 @@ impl Ring for FaultRing {
             _ => self.inner.submit(n),
         }
     }
-    fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+    fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
         if self.fault == Fault::ReapError {
+            return Err(io::Error::from_raw_os_error(libc::EIO));
+        }
+        self.inner.peek()
+    }
+    fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+        if matches!(self.fault, Fault::ReapError | Fault::WaitError) {
             return Err(io::Error::from_raw_os_error(libc::EIO));
         }
         let (id, n) = self.inner.reap(until)?;
@@ -463,6 +473,7 @@ impl Ring for FaultRing {
 fn fault_fixture(fault: Fault) -> Result<Fixture> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
             Ok(Box::new(FaultRing {
@@ -575,6 +586,9 @@ impl Ring for HoldReap {
     fn submit(&mut self, n: u32) -> io::Result<usize> {
         self.inner.submit(n)
     }
+    fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
+        self.inner.peek()
+    }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
         self.started
             .send(ReapWait {
@@ -606,7 +620,14 @@ fn held_file(
     let (started, starting) = mpsc::sync_channel(1);
     let (release, releasing) = mpsc::sync_channel(1);
     let releasing = Arc::new(Mutex::new(releasing));
+    let pool = engine
+        .io_uring
+        .as_ref()
+        .ok_or(Error::Unavailable("test io_uring"))?
+        .pool
+        .clone();
     engine.io_uring = Some(IoUringTransport {
+        pool,
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
             Ok(Box::new(HoldReap {
@@ -914,6 +935,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
 fn failed_second_bounce_releases_first_loan_before_any_ring_is_created() -> Result<()> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         create: Arc::new(|_| panic!("incomplete preflight touched the ring")),
         allocate: |length, alignment| {
             if length == 3 {
@@ -969,4 +991,300 @@ fn direct_reopen_uses_the_admitted_inode_and_honors_read_only_access() -> Result
     assert_eq!(bytes, vec![0x6d; 4096]);
     assert_eq!(fs::read(&f.path)?, vec![0xcc; 4096]);
     f.engine.close_file_segment(&segment, TIMEOUT)
+}
+
+#[test]
+fn r1c_failed_wait_drains_consumed_sqes_from_the_mapped_cq() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let f = fault_fixture(Fault::WaitError)?;
+    let r = f.run(TransferOp::Read, &[f.request(1, 2, 2), f.request(5, 6, 2)])?;
+    assert!(r.is_complete() && r.locally_drained);
+    let mut bytes = [0; 8];
+    f.memory.read(0, &mut bytes)?;
+    assert_eq!(bytes, [0x9a, b'c', b'd', 0x9a, 0x9a, b'g', b'h', 0x9a]);
+    assert_eq!(f.engine.stats()?.inflight_bytes, 0);
+    Ok(())
+}
+
+#[test]
+fn r1c_aligned_slots_and_pageable_fallback_are_bounded_before_ring_creation() -> Result<()> {
+    let options = IoUringConfig {
+        pinned_staging: true,
+        staging_slot_kb: 1,
+        staging_slots: 1,
+    };
+    assert_eq!(IoUringConfig::default().slot_size()?, 0);
+    assert_eq!(options.slot_size()?, 4096);
+    for (kb, slots) in [(0, 1), (usize::MAX, 2), (1, 0), (1, 4097), (1 << 20, 2)] {
+        assert!(matches!(
+            IoUringConfig {
+                pinned_staging: true,
+                staging_slot_kb: kb,
+                staging_slots: slots
+            }
+            .slot_size(),
+            Err(Error::InvalidConfig(_))
+        ));
+    }
+    for uncertain in [false, true] {
+        let pool = pool::Pool::new(options, 4096)?;
+        let err = if uncertain {
+            Error::Unquiesced {
+                operation: "pinned slab setup",
+                code: 1,
+            }
+        } else {
+            Error::ResourceExhausted
+        };
+        let r = pool.acquire(4096, 4096, pool::Access::Host, |_| Err(err));
+        if uncertain {
+            assert!(matches!(r, Err(Error::Unquiesced { .. })));
+            assert!(matches!(
+                pool.acquire(1, 4096, pool::Access::Host, |_| panic!(
+                    "retried ambiguous allocation"
+                )),
+                Err(Error::Unquiesced { .. })
+            ));
+            assert!(matches!(pool.close(), Err(Error::Unquiesced { .. })));
+        } else {
+            assert!(r?.is_none());
+            assert!(
+                pool.acquire(1, 4096, pool::Access::Host, |_| panic!(
+                    "rebuilt disabled pool"
+                ))?
+                .is_none()
+            );
+        }
+    }
+    let initializing = pool::Pool::new(options, 4096)?;
+    assert_eq!(initializing.stats().slot_acquisitions, 0);
+    std::thread::scope(|scope| -> Result<()> {
+        let (entered, building) = mpsc::channel();
+        let (release, go) = mpsc::channel();
+        let first = scope.spawn(|| {
+            initializing
+                .acquire(8, 4096, pool::Access::Host, move |n| {
+                    entered.send(()).unwrap();
+                    go.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+                    Ok(pool::Slab::Host(task::Bounce::new(n, 4096)?))
+                })
+                .map(|s| s.is_some())
+        });
+        building.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        let (done, observed) = mpsc::channel();
+        let pool_ref = &initializing;
+        scope.spawn(move || {
+            done.send(
+                pool_ref
+                    .acquire(8, 4096, pool::Access::Host, |_| panic!("duplicate slab"))
+                    .map(|s| s.is_none()),
+            )
+            .unwrap()
+        });
+        let missed = observed.recv_timeout(EVENTUAL_PROGRESS);
+        release.send(()).unwrap();
+        assert!(first.join().unwrap()? && missed.unwrap()?);
+        Ok(())
+    })?;
+    let pool = pool::Pool::new(options, 4096)?;
+    let charge = pool.charge(4096)?;
+    assert!(matches!(pool.charge(1), Err(Error::ResourceExhausted)));
+    drop(charge);
+    assert_eq!(pool.stats().pageable_bytes, 0);
+    let first = pool
+        .acquire(4096, 4096, pool::Access::Host, pool::Slab::host)?
+        .unwrap();
+    assert_eq!(first.ptr.as_ptr() as usize % 4096, 0);
+    assert!(
+        pool.acquire(1, 4096, pool::Access::Host, |_| panic!())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        pool.acquire(4097, 4096, pool::Access::Host, |_| panic!())
+            .unwrap()
+            .is_none()
+    );
+    let address = first.ptr;
+    drop(first);
+    assert_eq!(
+        pool.acquire(1, 4096, pool::Access::Host, |_| panic!())?
+            .unwrap()
+            .ptr,
+        address
+    );
+    if !kernel() {
+        return Ok(());
+    }
+    let image: Vec<_> = (0..16384).map(|i| (i % 251) as u8).collect();
+    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let mut f = Fixture::new(
+        &dir,
+        &image,
+        TransferEngine::new(crate::EngineConfig {
+            io_uring: options,
+            ..Default::default()
+        })?,
+    )?;
+    let io = Arc::get_mut(&mut f.engine)
+        .unwrap()
+        .io_uring
+        .as_mut()
+        .unwrap();
+    let observed = io.pool.clone();
+    io.create = Arc::new(move |width| {
+        let s = observed.stats();
+        assert_eq!((s.active_slots, s.pageable_bytes), (1, 12288));
+        ring::create(width)
+    });
+    let start = usize::from(f.memory.base_address() as usize % 4096 == 0);
+    let requests = [
+        f.request(start, 0, 4096),
+        f.request(start + 4097, 4096, 4096),
+        f.request(start + 12290, 8192, 8192),
+    ];
+    let report = f.run(TransferOp::Read, &requests)?;
+    assert!(report.is_complete() && report.locally_drained, "{report:?}");
+    let mut expected = vec![0x9a; 32768];
+    for (at, src, len) in [
+        (start, 0, 4096),
+        (start + 4097, 4096, 4096),
+        (start + 12290, 8192, 8192),
+    ] {
+        expected[at..at + len].copy_from_slice(&image[src..src + len]);
+    }
+    let mut bytes = vec![0; 32768];
+    f.memory.read(0, &mut bytes)?;
+    assert_eq!(bytes, expected);
+    let stats = f.engine.stats()?.io_uring.unwrap();
+    assert_eq!(
+        (
+            stats.active_slots,
+            stats.pageable_bytes,
+            stats.slot_acquisitions,
+            stats.slot_misses
+        ),
+        (0, 0, 1, 2)
+    );
+    let io = Arc::get_mut(&mut f.engine)
+        .unwrap()
+        .io_uring
+        .as_mut()
+        .unwrap();
+    io.allocate = |_, _| Err(Error::ResourceExhausted);
+    io.create = Arc::new(|_| panic!("rejected preflight entered the ring"));
+    let report = f.run(TransferOp::Write, &requests)?;
+    assert!(matches!(
+        report.failure.unwrap().error,
+        Error::ResourceExhausted
+    ));
+    assert_eq!(fs::read(&f.path)?, image);
+    let stats = f.engine.stats()?.io_uring.unwrap();
+    assert_eq!((stats.active_slots, stats.pageable_bytes), (0, 0));
+    Ok(())
+}
+
+#[test]
+fn r1c_freed_file_batch_keeps_its_slot_until_the_consumed_cqe() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let (f, started, release) = held_file(EngineConfig {
+        enable_progress_worker: true,
+        io_uring: IoUringConfig {
+            pinned_staging: true,
+            staging_slot_kb: 4,
+            staging_slots: 1,
+        },
+        ..Default::default()
+    })?;
+    let mut batch = f.engine.submit_async(
+        TransferOp::Read,
+        &f.segment,
+        &[f.request(1, 1, 4)],
+        None,
+        TIMEOUT,
+    )?;
+    let released = batch.allocation_release_receipt();
+    let wait = started.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    batch.free()?;
+    let held = f.engine.stats()?;
+    let busy = f.memory.write(1, b"x").is_err();
+    let pinned = wait.ring.upgrade().is_some();
+    release.send(()).unwrap();
+    released.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    assert!(busy && pinned);
+    assert_eq!(
+        (
+            held.deferred_batches,
+            held.inflight_bytes,
+            held.io_uring.unwrap().active_slots
+        ),
+        (1, 4, 1)
+    );
+    let final_stats = f.engine.stats()?;
+    assert_eq!(
+        (
+            final_stats.inflight_bytes,
+            final_stats.io_uring.unwrap().active_slots
+        ),
+        (0, 0)
+    );
+    let mut got = [0; 6];
+    f.memory.read(0, &mut got)?;
+    assert_eq!(got, [0x9a, b'2', b'3', b'4', b'5', 0x9a]);
+    Ok(())
+}
+
+#[test]
+fn r1c_storage_environment_overrides_only_the_enabled_file_pool() -> Result<()> {
+    const CHILD: &str = "ORBITTE_TEST_FILE_POOL_ENV";
+    if std::env::var_os(CHILD).is_some() {
+        let e = TransferEngine::new(EngineConfig::default())?;
+        if kernel() {
+            let s = e.stats()?.io_uring.unwrap();
+            assert_eq!(
+                (s.slot_bytes, s.slots, s.active_slots, s.slot_acquisitions),
+                (8192, 3, 0, 0)
+            );
+        }
+        return Ok(());
+    }
+    let enabled = IoUringConfig {
+        pinned_staging: true,
+        ..Default::default()
+    };
+    for val in ["On", "YES", "true", "1", "unknown"] {
+        assert!(
+            enabled
+                .resolve(|k| (k == "MC_IOURING_PINNED_STAGING").then(|| val.into()))?
+                .pinned_staging
+        );
+    }
+    for val in ["OFF", "no", "FALSE", "0"] {
+        assert!(
+            !enabled
+                .resolve(|k| Some(
+                    if k == "MC_IOURING_PINNED_STAGING" {
+                        val
+                    } else {
+                        "invalid"
+                    }
+                    .into()
+                ))?
+                .pinned_staging
+        );
+    }
+    for key in ["MC_IOURING_STAGING_SLOT_KB", "MC_IOURING_STAGING_SLOTS"] {
+        assert!(
+            matches!(enabled.resolve(|k|(k==key).then(||"-7".into())),Err(Error::InvalidConfig(k)) if k==key)
+        );
+    }
+    let status=std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact","transport::io_uring::tests::r1c_storage_environment_overrides_only_the_enabled_file_pool"])
+        .env(CHILD,"1").env("MC_IOURING_PINNED_STAGING","1").env("MC_IOURING_STAGING_SLOT_KB","5").env("MC_IOURING_STAGING_SLOTS","3").status()?;
+    assert!(status.success());
+    Ok(())
 }

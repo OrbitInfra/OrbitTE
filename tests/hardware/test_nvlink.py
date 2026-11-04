@@ -60,6 +60,34 @@ class NativeEvidence(unittest.TestCase):
                 elif host and row['kind']=='copy': row['kind']='dtoh' if 3000 <= row['source'] < 3200 else 'htod'
         return source, requester
 
+    def test_blocking_copy_requires_exact_context_and_a_device_drain(self):
+        for memory in ('device', 'host'):
+            source, raw = self.evidence('healthy', memory)
+            rows = []
+            for row in raw:
+                kind = row['kind']
+                if kind in ('copy', 'htod', 'dtoh'):
+                    rows.extend([dict(row, kind='current', context=0), dict(row, kind='push', context=32),
+                                 dict(row, kind='sync_copy')])
+                    if memory == 'device':
+                        rows.append(dict(row, kind='stream_sync', stream=0))
+                    rows.extend([dict(row, kind='pop', context=32), dict(row, kind='current', context=0)])
+                elif kind not in ('record', 'wait'):
+                    rows.append(row.copy())
+            for i, row in enumerate(rows, 1):
+                row['seq'] = i
+            validate = lambda ledger: nvlink_run.validate_native(source, ledger, 17, 'sync-healthy', 101, 102, memory)
+            self.assertEqual(validate(rows)['copies'], 2)
+            for fault in ('restore', 'async', 'wrong_range') + (('drain',) if memory == 'device' else ()):
+                bad = copy.deepcopy(rows)
+                i = next(i for i, row in enumerate(bad) if row['kind'] == 'sync_copy')
+                if fault == 'restore': next(r for r in bad[i+1:] if r['kind'] == 'current')['context'] = 32
+                if fault == 'async': bad[i]['kind'] = 'copy'
+                if fault == 'wrong_range': bad[i]['length'] += 1
+                if fault == 'drain': bad[i+1]['stream'] = 7
+                with self.subTest(memory=memory, fault=fault), self.assertRaises(AssertionError):
+                    validate(bad)
+
     def queried_evidence(self, mode, memory):
         source, requester = self.evidence(mode, memory)
         rows = []
@@ -353,6 +381,9 @@ class NativeEvidence(unittest.TestCase):
             result = subprocess.run([str(control)], env={**os.environ, 'LD_PRELOAD': str(library), 'ORBITTE_IPC_LOG': str(log)}, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             rows = [json.loads(line) for line in log.read_text().splitlines()]
+            sync, rows = rows[-3:], rows[:-3]
+            self.assertEqual([(r['kind'], r['code']) for r in sync], [('current', 0), ('sync_copy', 1), ('stream_sync', 700)])
+            self.assertEqual((sync[0]['context'], sync[1]['destination'], sync[1]['source'], sync[1]['length'], sync[2]['stream']), (42, 456, 123, 17, 0))
             batch_rows, rows = rows[-3:], rows[:-3]
             self.assertEqual([(r['kind'], r['code']) for r in batch_rows], [('copy_batch',700),('batch_copy',700),('batch_copy',700)])
             self.assertEqual((batch_rows[0]['count'], batch_rows[0]['source_order'], batch_rows[0]['first']), (2,1,0))
@@ -380,7 +411,7 @@ class NativeEvidence(unittest.TestCase):
             self.assertEqual(staged.returncode, 0, staged.stderr)
             staged_rows = [json.loads(line) for line in staged_log.read_text().splitlines()]
             returns = [r for r in staged_rows if not r['kind'].endswith('_begin')]
-            self.assertEqual([(r['kind'],r['code']) for r in returns], [(r['kind'],r['code']) for r in rows+lifecycle+batch_rows if not r['kind'].endswith('_begin')])
+            self.assertEqual([(r['kind'],r['code']) for r in returns], [(r['kind'],r['code']) for r in rows+lifecycle+batch_rows+sync if not r['kind'].endswith('_begin')])
             begins = [r for r in staged_rows if r['kind'].endswith('_begin')]
             self.assertEqual(len(begins), 10)
             for begin in begins:

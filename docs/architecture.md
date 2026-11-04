@@ -61,7 +61,12 @@ An idle engine retains no storage thread or ring after the setup probe.
 For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. CUDA/file submissions use the same
-worker and ring for successive rounds of pinned chunks from `ProxyManager`.
+worker and ring for successive rounds. The optional file pool lends one
+aligned slot per eligible request. A miss uses the charged pageable or proxy
+fallback. Unlike TENT’s eager allocation, the slab is created on first use.
+`r1c_aligned_slots_and_pageable_fallback_are_bounded_before_ring_creation`
+checks capacity and preflight rollback. A mapped-CQ poll can recover a
+failed wait, while the destruction deadline still quarantines missing receipts.
 The whole GPU range stays loaned through file receipts and CUDA copy events.
 GDS binds a cuFile handle to the retained file entry and pins the CUDA
 registration across queued and running batches. Its caller owns status polling
@@ -404,7 +409,15 @@ TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers
 | `cuda/pinned.rs::PinnedAllocation` | Pinned host allocation, context and lazily created readiness event |
 | `runtime/proxy_manager.rs`, `proxy_manager/` | Shared staging chunks, remote sessions, rings and worker shards |
 
-Each copy holds its staging until the recorded event completes. A failed enqueue
+The Driver API guard saves and verifies the caller’s exact context, including
+a null binding. Copy and final pinned-buffer cleanup errors reach the caller.
+An uncertain restore poisons the owner even if the visible binding can be
+repaired. The same-device custom-context and no-context controls inject failures
+at save, switch, copy and restore. Host and CUDA allocations dispatch by owner,
+so a handled CUDA failure cannot fall through to host memcpy. The external
+plugin ABI is deferred to S22.
+
+Each asynchronous copy holds its staging until the recorded event completes. A failed enqueue
 or record requires a proven stream drain; otherwise the allocation, staging,
 stream/event and context are retained. Destroying a stream or event never proves
 DMA completion. This follows TENT's

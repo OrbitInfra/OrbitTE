@@ -34,6 +34,9 @@ static _Atomic(int (*)(ipc_handle *, uint64_t)) export_native;
 static _Atomic(int (*)(uint64_t *, ipc_handle, unsigned)) open_native;
 static _Atomic(int (*)(uint64_t)) close_native;
 static _Atomic(int (*)(uint64_t, uint64_t, size_t, void *)) copy_native;
+static _Atomic(int (*)(uint64_t, uint64_t, size_t)) sync_copy_native;
+static _Atomic(int (*)(void *)) stream_sync_native;
+static _Atomic(int (*)(void **)) current_native;
 static _Atomic(int (*)(void *, void *)) record_native;
 static _Atomic(int (*)(void *)) wait_native, query_native;
 static _Atomic(int (*)(void **)) pop_native;
@@ -120,6 +123,23 @@ static int close_wrap(uint64_t address) {
     }
     int code = close_native(address); emit("close", "\"address\":%" PRIu64 ",\"code\":%d", address, code); return code;
 }
+static int sync_copy_wrap(uint64_t dst, uint64_t src, size_t length) {
+    int code = sync_copy_native(dst, src, length);
+    emit("sync_copy", "\"source\":%" PRIu64 ",\"destination\":%" PRIu64 ",\"length\":%zu,\"code\":%d", src, dst, length, code);
+    return code;
+}
+static int stream_sync_wrap(void *stream) {
+    int code = stream_sync_native(stream);
+    if (getenv("ORBITTE_SYNC_OBSERVE"))
+        emit("stream_sync", "\"stream\":%" PRIuPTR ",\"code\":%d", (uintptr_t)stream, code);
+    return code;
+}
+static int current_wrap(void **context) {
+    int code = current_native(context);
+    if (getenv("ORBITTE_SYNC_OBSERVE"))
+        emit("current", "\"context\":%" PRIuPTR ",\"code\":%d", code ? (uintptr_t)0 : (uintptr_t)*context, code);
+    return code;
+}
 static int copy_wrap(uint64_t destination, uint64_t source, size_t length, void *stream) {
     int code = copy_native(destination, source, length, stream);
     emit("copy", "\"source\":%" PRIu64 ",\"destination\":%" PRIu64 ",\"length\":%zu,\"stream\":%" PRIuPTR ",\"code\":%d", source, destination, length, (uintptr_t)stream, code); return code;
@@ -160,7 +180,7 @@ static int staging(void) {
 }
 static int push_wrap(void *context) {
     int code = push_native(context);
-    if (staging()) emit("push", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)context, code);
+    if (staging() || getenv("ORBITTE_SYNC_OBSERVE")) emit("push", "\"context\":%" PRIuPTR ",\"code\":%d", (uintptr_t)context, code);
     return code;
 }
 #define CREATE_WRAP(name, field) \
@@ -185,7 +205,12 @@ DESTROY_WRAP(event_destroy, event)
 
 void *dlsym(void *library, const char *name) {
     pthread_mutex_lock(&lock);
-    if (!lookup) *(void **)(&lookup) = dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
+#ifdef __aarch64__
+    const char *version = "GLIBC_2.17";
+#else
+    const char *version = "GLIBC_2.2.5";
+#endif
+    if (!lookup) *(void **)(&lookup) = dlvsym(RTLD_NEXT, "dlsym", version);
     if (!lookup) _exit(125);
     void *result = lookup(library, name);
 #define WRAP(symbol, field, wrapper) if (result && !strcmp(name, symbol)) { __typeof__(atomic_load(&field)) target; memcpy(&target, &result, sizeof(target)); atomic_store(&field, target); result = (void *)(wrapper); }
@@ -202,6 +227,9 @@ void *dlsym(void *library, const char *name) {
     WRAP("cuIpcCloseMemHandle", close_native, close_wrap)
     WRAP("cuMemcpyBatchAsync_v2", batch_native, batch_wrap)
     WRAP("cuMemcpyAsync", copy_native, copy_wrap)
+    WRAP("cuMemcpy", sync_copy_native, sync_copy_wrap)
+    WRAP("cuStreamSynchronize", stream_sync_native, stream_sync_wrap)
+    WRAP("cuCtxGetCurrent", current_native, current_wrap)
     WRAP("cuEventRecord", record_native, record_wrap)
     WRAP("cuEventSynchronize", wait_native, wait_wrap)
     WRAP("cuEventQuery", query_native, query_wrap)

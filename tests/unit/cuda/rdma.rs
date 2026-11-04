@@ -105,8 +105,7 @@ fn failed_gpu_visibility_or_context_restore_retains_actual_allocation_and_blocks
         ));
         assert_eq!(memory.allocation.lock().unwrap().dma, vec![4..12]);
         if case == "pop" {
-            assert_eq!(STACK.with(|s| s.borrow().len()), 1);
-            STACK.with(|s| s.borrow_mut().clear());
+            assert!(STACK.with(|s| s.borrow().is_empty()));
         }
         drop(memory);
         drop(owner);
@@ -340,8 +339,7 @@ fn successful_native_registration_followed_by_failed_pop_never_publishes_gpu_mem
         (stats.persistent_mrs, stats.retained_persistent_mrs),
         (0, 0)
     );
-    assert_eq!(STACK.with(|s| s.borrow().len()), 1);
-    STACK.with(|s| s.borrow_mut().clear());
+    assert!(STACK.with(|s| s.borrow().is_empty()));
     engine.close(Duration::from_secs(2)).unwrap();
     drop(engine);
     drop(memory);

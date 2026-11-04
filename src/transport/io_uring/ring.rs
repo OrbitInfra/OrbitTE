@@ -11,6 +11,7 @@ pub(super) trait Ring {
     fn queued(&mut self) -> usize;
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()>;
     fn submit(&mut self, count: u32) -> io::Result<usize>;
+    fn peek(&mut self) -> io::Result<Option<(u64, i32)>>;
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)>;
 }
 
@@ -39,6 +40,13 @@ impl Ring for IoUring {
     fn submit(&mut self, count: u32) -> io::Result<usize> {
         // SAFETY: count covers only published SQEs in this single-issuer ring.
         unsafe { self.submitter().enter::<libc::sigset_t>(count, 0, 0, None) }
+    }
+
+    fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
+        Ok(self
+            .completion()
+            .next()
+            .map(|cqe| (cqe.user_data(), cqe.result())))
     }
 
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {

@@ -28,6 +28,7 @@ pub(crate) fn run_case(
     let engine = Arc::new(
         TransferEngine::new(EngineConfig {
             nvlink: true,
+            nvlink_async_memcpy_threshold_kb: 0,
             selector: (case == "policy").then(|| crate::TransportSelectorConfig::from_json(r#"{"policy":[
                 {"name":"gpu","segment_type":"memory","intent_type":"migration","transports":["nvlink"]},
                 {"name":"ordinary","segment_type":"memory","transports":["tcp"]}]}"#).unwrap()),

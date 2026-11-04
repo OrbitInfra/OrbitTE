@@ -76,10 +76,30 @@ def normalize_batches(rows):
     return output
 
 
+def validate_sync_receipt(cycle, opened, closed, copy, memory):
+    tid = copy['tid']
+    rows = [r for r in cycle if r['tid'] == tid and opened['seq'] < r['seq'] < closed['seq']]
+    i = rows.index(copy)
+    switched = i > 1 and rows[i-1]['kind'] == 'push'
+    saved = rows[i-2] if switched else rows[i-1]
+    assert i > 0 and saved['kind'] == 'current' and (switched or saved['context']), 'missing saved caller context'
+    after = rows[i+1:]
+    if memory == 'device':
+        assert after and after[0]['kind'] == 'stream_sync' and after[0]['stream'] == 0, 'missing DtoD legacy stream drain'
+        after = after[1:]
+    if switched:
+        assert after and after[0]['kind'] == 'pop' and after[0]['context'] == rows[i-1]['context'], 'wrong popped context'
+        after = after[1:]
+    assert after and after[0]['kind'] == 'current' and after[0]['context'] == saved['context'], 'caller context changed'
+    assert not any(r['kind'] in ('record', 'query', 'wait', 'copy_batch') for r in rows), 'unexpected asynchronous IPC work'
+    assert closed['tid'] == tid and closed['address'] == opened['address'], 'mismatched sync import close'
+
+
 def validate_native(source, requester, payload, mode, source_pid, requester_pid, memory="device"):
+    sync = mode == "sync-healthy"
     cached = mode.startswith("cache-")
     batched = cached or mode.startswith("batch-")
-    mode = mode.removeprefix("cache-").removeprefix("batch-")
+    mode = mode.removeprefix("cache-").removeprefix("batch-").removeprefix("sync-")
     for rows, pid in [(source, source_pid), (requester, requester_pid)]:
         assert [row['seq'] for row in rows] == list(range(1, len(rows)+1)), 'native sequence gap'
         assert all(row['pid'] == pid and (row['code'] == 0 or row['kind'] == 'query' and row['code'] == 600) for row in rows), 'native PID/driver result'
@@ -130,7 +150,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
         end = closes[index]['seq'] if mode != 'requester-exit' else boundary
         interval = [row for row in cycle if row['seq'] < end]
         if not cached: assert not any(r['kind'] in ('pin','allocate') for r in interval), 'temporary allocation inside IPC copy cycle'
-        cycle_copies = [r for r in interval if r['kind'] in ('copy','htod','dtoh') and (not cached or not local_device_copy(r,requester,select(local,'allocate')))]
+        cycle_copies = [r for r in interval if r['kind'] in ('copy','htod','dtoh','sync_copy') and (not cached or not local_device_copy(r,requester,select(local,'allocate')))]
         copies.extend(cycle_copies)
         assert len(cycle_copies) == (15 if cached and mode=='healthy' else 3 if batched else 1), 'copies outside their import cycle'
         read = mode == 'healthy' and index == 0
@@ -143,10 +163,15 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
             if not cached: assert copy['tid'] == opened['tid'], 'copy/import thread mismatch'
             allocation = local[(part % 3 if cached else part) % len(local)]
             expected_api = ('dtoh' if read else 'htod') if allocation['kind']=='pin' else 'copy'
-            assert copy['kind'] == expected_api, 'wrong native copy API'
+            assert copy['kind'] == ('sync_copy' if sync else expected_api), 'wrong native copy API'
             assert allocation['seq'] < copy['seq'], 'copy before requester allocation'
             remote, own = opened['address']+67+offset, allocation['address']+67+offset
             assert (copy['source'], copy['destination'], copy['length']) == ((remote, own, length) if read else (own, remote, length)), 'copy range/direction'
+        if sync:
+            copy, = cycle_copies
+            validate_sync_receipt(cycle, opened, closes[index], copy, memory)
+            completion_groups += 1
+            continue
         group_size = 3 if batched else 1
         for start in range(0, len(cycle_copies), group_size):
             group = cycle_copies[start:start+group_size]
@@ -199,6 +224,7 @@ def validate_native(source, requester, payload, mode, source_pid, requester_pid,
                 assert after_close and after_close[0]['kind'] == 'pop', 'close context not immediately restored'
     assert len(copies) == (15 if cached and mode=='healthy' else expected*(3 if batched else 1)), 'native IPC copy count'
     assert len(select(requester,'copy')) == len(select(copies,'copy')), 'device copy outside IPC cycle'
+    assert len(select(requester,'sync_copy')) == (len(copies) if sync else 0), 'sync copy outside IPC cycle'
     for rows, allocations in [(source, source_alloc), (requester, select(local,'allocate'))]:
         ipc_sequences = {row['seq'] for row in copies} if rows is requester else set()
         for copy in rows:
@@ -234,7 +260,7 @@ def run(args):
                 'binary_sha256': digest(args.binary), 'observer_sha256': digest(args.observer),
                 'started_unix': time.time(), 'children': [], 'performance_measurement': False}
     locks, children, files = [], [], []
-    mode = args.mode.removeprefix("cache-").removeprefix("batch-")
+    mode = args.mode.removeprefix("cache-").removeprefix("batch-").removeprefix("sync-")
 
     def inventory(name):
         result = subprocess.run(['nvidia-smi', '--query-gpu=index,uuid,memory.used', '--format=csv,noheader,nounits'], text=True, capture_output=True, check=True, timeout=15)
@@ -253,6 +279,7 @@ def run(args):
         env = {**os.environ, 'CUDA_VISIBLE_DEVICES': ','.join(manifest['gpu_uuids']),
                'LD_PRELOAD': str(args.observer.resolve()), 'ORBITTE_IPC_LOG': str(root/(role+'.native.jsonl'))}
         if role == 'requester' and mode != 'stale': env['ORBITTE_IPC_HOLD'] = str(root/'release-close')
+        if args.mode == 'sync-healthy': env['ORBITTE_SYNC_OBSERVE'] = '1'
         command = [str(args.binary.resolve()), role, str(ordinal), str(args.payload), str(root), args.mode, args.memory]
         output = (root/(role+'.stdout')).open('w'); error = (root/(role+'.stderr')).open('w')
         files.extend([output,error])
@@ -343,5 +370,5 @@ if __name__ == '__main__':
     for name in ('binary-sha256', 'observer-sha256', 'devices'): parser.add_argument('--'+name, required=True)
     parser.add_argument('--memory', choices=('device','host','mixed'), default='device')
     parser.add_argument('--payload', type=int, required=True)
-    parser.add_argument('--mode', choices=('healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit','cache-healthy','cache-graceful','cache-requester-exit'), default='healthy')
+    parser.add_argument('--mode', choices=('healthy','sync-healthy','graceful','requester-exit','stale','batch-healthy','batch-graceful','batch-requester-exit','cache-healthy','cache-graceful','cache-requester-exit'), default='healthy')
     run(parser.parse_args())

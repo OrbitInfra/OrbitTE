@@ -83,7 +83,7 @@ def run(args):
         with (args.output / 'stdout').open('w') as stdout, (args.output / 'stderr').open('w') as stderr:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                                     env={**os.environ, 'CUDA_VISIBLE_DEVICES': args.gpu}, timeout=180)
-        expected = 'STORAGE_CUDA_OK staged_bytes=16458 chunks=6 pinned_bytes=16458 direct=true retained=0'
+        expected = 'STORAGE_CUDA_OK staged_bytes=16458 chunks=6 pinned_bytes=16458 direct=true retained=0 pooled_transfers=2 pool_misses=2 contexts=absent,custom'
         if result.returncode or (args.output / 'stdout').read_text().strip() != expected:
             raise RuntimeError('installed GPU/file exercise failed; inspect stdout and stderr')
 

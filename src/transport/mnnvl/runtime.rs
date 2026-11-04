@@ -10,6 +10,7 @@ impl NVLinkTransport {
             engine.max_inflight_bytes,
             engine.nvlink_cache_entries,
             engine.nvlink_stream_count,
+            0,
         )?;
         owner.fabric = Some(Platform::install(
             c,

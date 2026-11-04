@@ -95,9 +95,11 @@ and otherwise assumes 4096 bytes. tmpfs uses the buffered fd.
 
 After a short submit, the worker flushes only the remaining SQEs. On a
 persistent submit failure it drains the consumed prefix and fails the unsent
-tail. Cancellation stops queued work. All waits for consumed SQEs share one
+tail. Freeing an active batch keeps the ring and its buffers alive. If the
+blocking wait fails, the owner polls the mapped CQ for the same consumed SQEs.
+Cancellation stops queued work. All waits for consumed SQEs share one
 cutoff, 30 seconds after the submission deadline. If a CQE is still missing
-then, the group reports `Error::Unquiesced` at the first unsuccessful index
+or the mapped CQ itself cannot be read, the group reports `Error::Unquiesced` at the first unsuccessful index
 with `locally_drained = false`.
 The ring, fds, iovecs, outstanding bounce buffers, memory loans and admission
 charges stay retained. See [real-file controls](qualification.md#local-file-segments).
@@ -106,11 +108,28 @@ charges stay retained. See [real-file controls](qualification.md#local-file-segm
 
 With the Linux `cuda,io-uring` features, use the same submission APIs with a
 registered CUDA address. The caller or batch worker holds the whole device
-range and consumes its producer event before access. By default TENT allocates
-a host buffer per staged request. v0.3.14 also offers an opt-in pinned slot
-pool. OrbitTE leases page-aligned pinned chunks from the
-engine's `ProxyManager`, bounded by `staging_chunk_count` and
-`staging_chunk_size`. The ring is sized for the device chunks and unsplit host
+range and consumes its producer event before access. By default the engine
+leases page-aligned pinned chunks from its `ProxyManager`, bounded by
+`staging_chunk_count` and `staging_chunk_size`. Set
+`EngineConfig.io_uring.pinned_staging` to enable TENT's optional file pool.
+`staging_slot_kb` defaults to 4096 and rounds up to a 4 KiB boundary.
+`staging_slots` defaults to 32. The checked total is at most 1 GiB.
+At engine creation, `MC_IOURING_PINNED_STAGING`, `MC_IOURING_STAGING_SLOT_KB`
+and `MC_IOURING_STAGING_SLOTS` override the corresponding typed settings.
+The size overrides apply only when enabled. Invalid boolean values preserve
+the configured switch, as in TENT. Invalid enabled sizes return a configuration
+error before allocating a slab.
+The first eligible request creates one slab. Its slots can serve an entire
+GPU request or an unaligned DRAM request. CUDA uses portable pinned memory.
+The CPU platform uses ordinary page-aligned memory.
+
+A GPU with an explicit or GPU-local NUMA placement can use the slab only if
+its node matches. A request that cannot lease a suitable slot immediately uses the existing
+GPU chunk pool or an aligned pageable host buffer charged against
+`max_inflight_bytes`. Exhausting both budgets fails before submitting that
+round. `EngineStats.io_uring` exposes slot size, capacity, active slots, hits,
+misses, pinned backing and outstanding pageable bytes. A slot stays owned
+until its CQE and any GPU copy are complete and the caller context is restored. The ring is sized for the device chunks and unsplit host
 requests, up to `max_batch_requests` and the Linux submission queue limit.
 Each round fills that width from the remaining pieces while chunks are
 available. If none can be leased the request fails with `ResourceExhausted`.

@@ -161,7 +161,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             '[package]\nname = ' + json.dumps(binary_name) + '\nversion = "0.0.0"\n'
             'edition = "2024"\nrust-version = "1.85"\npublish = false\n'
             '[workspace]\n[dependencies]\n'
-            'orbit-te = { path = ' + json.dumps(str(library)) + ', features = ' + json.dumps(features) + ' }\n')
+            'orbit-te = { path = ' + json.dumps(str(library)) + ', features = ' + json.dumps(features) + ' }\n'
+            + ('libloading = "0.8.9"\n' if consumer_kind == 'storage-cuda' else ''))
         shutil.copy2(library / 'Cargo.lock', consumer / 'Cargo.lock')
         metadata = json.loads(run('metadata', ['cargo', 'metadata', '--offline', '--format-version', '1'], cwd=consumer))
         dependency = [p for p in metadata['packages'] if p['name'] == 'orbit-te']

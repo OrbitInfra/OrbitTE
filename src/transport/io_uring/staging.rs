@@ -12,6 +12,7 @@ const MAX_SQ_ENTRIES: usize = 32_768;
 
 pub(super) struct Submission<'a> {
     pub requests: &'a [FileRequest],
+    pub pool: &'a Arc<pool::Pool>,
     pub proxy: &'a Arc<ProxyManager>,
     pub operation: TransferOp,
     pub deadline: Instant,
@@ -31,13 +32,41 @@ struct Request {
     error: Option<Error>,
 }
 
+enum DeviceStage {
+    Slot(pool::Slot),
+    Proxy(StageBufferLease),
+}
+impl DeviceStage {
+    fn address(&self) -> Result<(std::ptr::NonNull<u8>, usize)> {
+        match self {
+            Self::Slot(s) => Ok((s.ptr, s.length)),
+            Self::Proxy(s) => {
+                let b = s.buffer()?;
+                Ok((b.address, b.length))
+            }
+        }
+    }
+    fn copy(
+        &mut self,
+        owner: &mut StagingCopy,
+        offset: usize,
+        length: usize,
+        to_device: bool,
+    ) -> Result<()> {
+        match self {
+            Self::Slot(s) => owner.copy_file_slot(s, offset, length, to_device),
+            Self::Proxy(s) => owner.copy(s, offset, length, to_device),
+        }
+    }
+}
+
 struct Piece {
     request: usize,
     offset: usize,
     file_offset: u64,
     length: usize,
     // Host pieces borrow their fd and original buffer from the logical Task.
-    stage: Option<(StageBufferLease, Arc<File>)>,
+    stage: Option<(DeviceStage, Arc<File>)>,
     receipt: Option<(i32, bool)>,
 }
 
@@ -77,7 +106,7 @@ impl Submission<'_> {
                 Backing::Device(gpu.staging_loan(offset, request.length, self.proxy)?)
             } else {
                 piece_count = piece_count.saturating_add(1);
-                let (task, iov) = Task::new(self.operation, request, transport.allocate)?;
+                let (task, iov) = Task::new(self.operation, request, transport)?;
                 Backing::Host(task, iov)
             };
             tasks.push(Request {
@@ -107,7 +136,7 @@ impl Submission<'_> {
         } else {
             // No destructor, pool return or retry can race outstanding native work.
             for piece in &mut live.pieces {
-                if let Some((stage, _)) = &mut piece.stage {
+                if let Some((DeviceStage::Proxy(stage), _)) = &mut piece.stage {
                     stage.quarantine();
                 }
             }
@@ -131,7 +160,7 @@ impl Submission<'_> {
             }
             live.ring.push(&entries)?;
             for piece in &mut live.pieces {
-                if let Some((stage, _)) = &mut piece.stage {
+                if let Some((DeviceStage::Proxy(stage), _)) = &mut piece.stage {
                     stage.submitting();
                 }
             }
@@ -180,7 +209,7 @@ impl Submission<'_> {
                 return Err(error);
             }
             for piece in &mut live.pieces {
-                if let Some((mut stage, _)) = piece.stage.take() {
+                if let Some((DeviceStage::Proxy(mut stage), _)) = piece.stage.take() {
                     stage.drained();
                     stage.release()?;
                 }
@@ -209,20 +238,34 @@ impl Submission<'_> {
                 let (stage, iov) = match backing {
                     Backing::Host(_, iov) => (None, *iov),
                     Backing::Device(copy) => {
-                        let stage = match copy.pin(self.proxy, None) {
-                            Ok(s) => s,
-                            Err(Error::ResourceExhausted) if leased => return Ok(()),
-                            Err(e) => return Err(e),
+                        let slot = if offset == 0 {
+                            self.pool.acquire(
+                                request.length,
+                                4096,
+                                pool::Access::Device(copy.file_node()),
+                                |size| copy.file_slab(size, self.proxy).map(pool::Slab::Pinned),
+                            )?
+                        } else {
+                            None
+                        };
+                        let stage = if let Some(slot) = slot {
+                            DeviceStage::Slot(slot)
+                        } else {
+                            match copy.pin(self.proxy, None) {
+                                Ok(s) => DeviceStage::Proxy(s),
+                                Err(Error::ResourceExhausted) if leased => return Ok(()),
+                                Err(e) => return Err(e),
+                            }
                         };
                         leased = true;
-                        let buffer = stage.buffer()?;
-                        let address = buffer.address.as_ptr();
+                        let (address, capacity) = stage.address()?;
+                        let address = address.as_ptr();
                         if address as usize % 4096 != 0 {
                             return Err(Error::Unavailable(
                                 "CUDA file staging requires a page-aligned chunk",
                             ));
                         }
-                        let length = buffer.length.min(request.length - offset);
+                        let length = capacity.min(request.length - offset);
                         let file =
                             request
                                 .lease
@@ -264,7 +307,7 @@ impl Submission<'_> {
                     copy.check_access()?;
                     if self.operation == TransferOp::Write {
                         remaining(self.deadline)?;
-                        if let Err(e) = copy.copy(stage, piece.offset, piece.length, false) {
+                        if let Err(e) = stage.copy(copy, piece.offset, piece.length, false) {
                             task.error = Some(e.for_report());
                             return Err(e);
                         }
@@ -300,7 +343,7 @@ impl Submission<'_> {
                         return Err(unquiesced(code));
                     }
                     copy.check_access()?;
-                    copy.copy(stage, piece.offset, bytes, true)?;
+                    stage.copy(copy, piece.offset, bytes, true)?;
                 }
             }
             _ => return Err(Error::Internal("file receipt without its backing")),

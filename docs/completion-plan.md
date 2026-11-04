@@ -79,7 +79,8 @@ selected profiles while other rows stay open.
 
 S14 MNNVL/EGM is merged. P3, P6 and P7 completed their original source steps.
 R1a pinned Mooncake v0.3.14 and its CPU oracle. R1b implements the six RDMA
-deltas at source level. R1c covers storage and CUDA, and R1d covers
+deltas at source level. R1c implements the storage and CUDA release deltas.
+R1d covers
 HP-TCP, TCP, diagnostics and metrics. Each PR starts on main after the
 preceding one merges. The [release delta](tent-parity.md#v0314-delta) lists
 the open ports and the controls already present.
@@ -251,12 +252,12 @@ Done:
 
 | Substage | State | Evidence |
 | --- | --- | --- |
-| P5.1 NVIDIA allocation and synchronized staging | Implemented | [CUDA copy](qualification.md#cuda-copy-streams-and-completion-events) |
+| P5.1 NVIDIA allocation and synchronized staging | Implemented, including exact caller-context restoration | [CUDA copy](qualification.md#cuda-copy-streams-and-completion-events) |
 | P5.2 Owned copy streams and completion events | Local-copy profile qualified (24 H20 cases) | [CUDA copy](qualification.md#cuda-copy-streams-and-completion-events) |
 | Owner-backed CUDA pointer/location metadata | Implemented | [pointer and location](qualification.md#cuda-pointer-and-location) |
 | CUDA topology and owner-based RDMA selection; custom topology input | Implemented | [topology](qualification.md#cuda-topology-and-rdma-selection), [custom input](qualification.md#custom-topology-input) |
 | P5.3 Explicit GPU direct RDMA | Bounded H20/RoCE profile accepted with a host-context inventory limit | [GPUDirect](qualification.md#gpudirect-rdma) |
-| P5.4 Cooperative CUDA IPC/NVLink | Accepted (48 cases) | [cooperative IPC](qualification.md#cooperative-cuda-ipc-and-nvlink) |
+| P5.4 Cooperative CUDA IPC/NVLink | Original profile accepted (48 cases). Single small synchronous copies implemented, installed profile unqualified | [cooperative IPC](qualification.md#cooperative-cuda-ipc-and-nvlink) |
 | P5.4b Subbatch import reuse | Accepted (28 cases) | [subbatches](qualification.md#bounded-cuda-ipc-subbatches) |
 | P5.4c Local pinned host directions | Accepted (30 cases) | [pinned host](qualification.md#local-pinned-host-cuda-ipc) |
 | P5.4d Cross-submission import cache | Fixed working set accepted (34 cases); LRU reclaim and flush implemented | [cache](qualification.md#bounded-cross-submission-cuda-ipc-cache), [reclamation](qualification.md#cuda-ipc-cache-reclamation) |
@@ -341,7 +342,7 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** One ring per submission,
   exact short/error byte counts, partial submission, queued cancellation and
   CQE drain before releasing registered memory or file leases.
-- [x] **P7.3 — CUDA/file staging (Implemented).** Caller-driven rounds of
+- [x] **P7.3 — CUDA/file staging (Implemented).** An optional file pool supplies whole-request pinned slots. Larger requests and pool misses use caller-driven rounds of
   charged pinned chunks, device-range loans and event-confirmed copyback.
   The installed GPU/NVMe profile is unqualified.
 - [x] **P7.4 — GDS/cuFile (Implemented).** Registered CUDA buffers and direct
