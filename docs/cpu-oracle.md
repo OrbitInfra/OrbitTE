@@ -8,15 +8,18 @@ This is a correctness gate, not a throughput comparison or mixed-peer test.
 
 ## Reference and build boundary
 
-The machine-readable [contract](../tests/reference/contract.json) pins Mooncake
-`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`, its pybind11 gitlink and YLT archive
+The machine-readable [contract](../tests/reference/contract.json) pins Mooncake v0.3.14 at
+`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, its pybind11 gitlink and YLT archive
 revision/SHA-256. The runner checks clean reference source, both Git revisions
 and the archive hash before building. Compiler commands, effective CMake cache,
 binary/library hashes and loaded dependencies remain in external artifacts.
 Native code is compiled from the unmodified reference; no C++ implementation
 is copied into OrbitTE.
 
-The reference build disables CUDA/HIP, runtime metrics and YLT IBV. Upstream
+The runner configures Mooncake's root CMake project, which defines the CLI11
+header target needed by TENT, and builds only `tent_shared` and its dependencies.
+The reference build disables Mooncake Store and its Rust bindings, CUDA/HIP,
+runtime metrics and YLT IBV. Upstream
 CMake can still compile/link discovered RDMA or HTTP support. The native driver
 explicitly enables TCP and disables every other transport, selects P2P metadata,
 uses four RPC threads, and disables merging, the runtime queue and background
@@ -98,7 +101,7 @@ For an already provisioned clean reference and verified archive:
 ```sh
 python3 tests/reference/run.py \
   --tent-source /var/tmp/tent-reference \
-  --ylt-archive /var/tmp/7801bc9ad9021781f15217552214e325a1cf7373.tar.gz \
+  --ylt-archive /var/tmp/45c6463c0afbcc46262e373effa30635be3846a0.tar.gz \
   --output /var/tmp/orbitte-native-002
 ```
 

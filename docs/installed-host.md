@@ -170,7 +170,7 @@ local drain and WRITE effects unknown. After drain, the destination must contain
 both copied and untouched sentinel bytes (zero-progress or fully completed copies
 fail), with every other byte unchanged. Both processes then run three more
 healthy rounds. The trigger corresponds to TENT's
-[`beginDestroyNoLock`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp)
+[`beginDestroyNoLock`](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp)
 ERR transition.
 
 ## MR/MW cleanup and engine replacement

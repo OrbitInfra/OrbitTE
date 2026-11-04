@@ -31,7 +31,7 @@ jobs:
       - name: Install reference build dependencies
         timeout-minutes: 10
         run: |
-          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev clang-18 libclang-18-dev
+          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev clang-18 libclang-18-dev
           rustup toolchain install stable --profile minimal
       - name: Compare frozen native TENT and OrbitTE
         run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbitte-native-cpu"

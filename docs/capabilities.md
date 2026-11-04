@@ -11,7 +11,8 @@ crates.io only reserves the package name.
 | **Planned** | Not implemented yet; the stage is listed in the [completion plan](completion-plan.md) |
 
 [Qualification](qualification.md) records the exact artifacts, cases and limits
-behind every hardware result.
+behind every hardware result. The [v0.3.14 delta](tent-parity.md#v0314-delta)
+identifies the release changes still awaiting a port.
 
 ## Transports
 
@@ -74,7 +75,7 @@ behind every hardware result.
 | --- | --- | --- |
 | Rust API | Implemented | See [Rust API](rust-api.md) |
 | TENT C, C++ and Python APIs | Planned (P9) | |
-| TENT configuration and metadata stores | Planned (P9) | `MC_TENT_CONF`, etcd, Redis and HTTP |
+| TENT configuration and metadata stores | Planned (P9) | S17 covers `MC_TENT_CONF`. OrbitKV uses P2P. Optional S18 covers etcd, Redis and HTTP for other consumers |
 | TENT wire interoperability | Planned (P9) | OrbitTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection

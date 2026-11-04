@@ -39,7 +39,11 @@ Use `Transport::HpTcp`, an `"hp_tcp"` policy candidate, or `Transport::Unspec`. 
 
 ## Rails and ownership
 
-Each lane runs on one socket worker. Peers rotate independently. A READ splits evenly across rails when each rail can carry at least 1 MiB. The first rails carry any remainder. Each slice binds the corresponding local IPv4 address and connects to the peer's address at the same index. A WRITE always uses a single lane. Each rail needs at least one lane. With multiple rails, use a wildcard listener. A single rail can also use a matching bind address.
+Each lane runs on one socket worker. OrbitTE rotates lanes independently per peer.
+R1d tracks v0.3.14’s least-loaded lane selection for a single-slice operation.
+See the [release delta](tent-parity.md#v0314-delta).
+
+A READ splits evenly across rails when each rail can carry at least 1 MiB. The first rails carry any remainder. Each slice binds the corresponding local IPv4 address and connects to the peer's address at the same index. A WRITE always uses a single lane. Each rail needs at least one lane. With multiple rails, use a wildcard listener. A single rail can also use a matching bind address.
 
 The source advertises globally readable host regions, with write access only for `RemoteReadWrite`. Registration IDs use the source incarnation. The source checks the requested range, ID and permission before touching memory. Removing a registration denies new lookups while an accepted handler holds the backing through its response or socket teardown. A rejected WRITE drains exactly its framed body under the progress timeout before the source replies and closes. Public free and cancel retain the physical owner's charges until every slice stops accessing memory.
 

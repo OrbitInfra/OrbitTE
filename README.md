@@ -126,5 +126,5 @@ follow [AGENTS.md](AGENTS.md).
 ## License
 
 OrbitTE is an independent [OrbitInfra](https://github.com/OrbitInfra) project,
-licensed under [Apache-2.0](LICENSE). [Mooncake TENT](https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent)
+licensed under [Apache-2.0](LICENSE). [Mooncake TENT](https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent)
 is its frozen capability and architecture reference.

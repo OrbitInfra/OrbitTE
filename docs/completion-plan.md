@@ -77,17 +77,25 @@ selected profiles while other rows stay open.
 
 ## Current focus
 
-Since 2026-11-03 no GPU or RDMA machine is available. All remaining in-scope
-capabilities are implemented at source level first, with CPU controls driving
-production owners and installed hardware gates written but not run; their
-commands wait in the qualification verification queue for one later hardware
-pass. [AGENTS.md](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md)
-fixes the order (S0–S26) for this period; this plan remains the status record.
+S14 MNNVL/EGM is merged. P3, P6 and P7 completed their original source steps.
+The next work is R1 alignment with Mooncake v0.3.14. R1a updates the reference
+and CPU oracle. R1b covers RDMA, R1c covers storage and CUDA, and R1d covers
+HP-TCP, TCP, diagnostics and metrics. Each PR starts on main after the
+preceding one merges. The [release delta](tent-parity.md#v0314-delta) lists
+the open ports and the controls already present.
 
-S0 and S0b delivered the request API and pre-release wire rules. S1–S5
-complete P7 at source level. S6 implements P6 selector routing and S7 implements explicit progress and
-notification fallback. S8 implements physical admission and merge. S9 covers transport failover and RDMA rail recovery. S10 exposes engine and transport metrics. OrbitKV
-integration stays deferred to P11.
+S15 then closes the remaining P5 staging and GPU Direct work. S15b adds an
+OrbitTE local CUDA copy engine for OrbitKV, with event-completed copies on
+the caller's stream, strided and batched descriptors, and a kernel for
+fragmented batches. Its interface awaits the OrbitKV consumer specification.
+S16 freezes the inventory and wire fixtures, followed by S17 configuration.
+S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
+OrbitKV uses the existing P2P control plane. S19–S26 retain their order.
+
+CPU controls run in CI. GPU and RDMA changes require written installed gates
+in the [verification queue](qualification.md#verification-queue). Prior hardware
+results apply to the recorded artifact and profile. See the
+[work order](https://github.com/OrbitInfra/OrbitTE/blob/main/AGENTS.md#7-work-order).
 
 ## P0 — Freeze contracts and executable comparison
 
@@ -108,7 +116,7 @@ Open:
 - [ ] Map all 33 C functions, the richer native/Python/classic-TE surfaces,
   config keys and precedence, capability bits, metrics, metadata and wire
   messages to deterministic acceptance cases, marking reference stubs.
-- [ ] Map the 84 reference C++ test sources, Python guards and tebench byte
+- [ ] Map the 88 reference C++ files ending in `test.cpp`, Python guards and tebench byte
   checks to retained cases with their hardware triggers; mark excluded
   accelerator and UB cases out of scope with explicit unavailable behavior.
 - [ ] Define a common request trace and runner contract for C++ and Rust,
@@ -299,8 +307,9 @@ Source-level exit complete. The following contracts have CPU controls.
 - **Quotas and credits (S11, F15).** Each NIC accounts its own slices. Host
   processes share the mapped priority slot. The sender ledger atomically
   reserves four named resources. Fixed receiver windows and remote Pin
-  staging/consumer charges retire only on confirmed drain. Frozen TENT has
-  no cluster byte allocator, adaptive window controller or dead-sender reaper.
+  staging/consumer charges retire only on confirmed drain. TENT receiver credits
+  use fixed windows and have no cluster byte allocator or dead-sender reaper.
+  R1b covers the separate v0.3.14 RDMA congestion windows.
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.
@@ -369,7 +378,7 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
   progress and sync/wait helpers, without calling the old TE backend.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
-- [ ] etcd, Redis and HTTP metadata stores with auth and failure behavior.
+- [ ] Optional S18 for a non-OrbitKV consumer: etcd, Redis and HTTP metadata stores with auth and failure behavior.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
 - [ ] Device plugin ABI registration and real CUDA plugin loading.
 
@@ -448,7 +457,7 @@ safety in actual owners; avoid forwarding facades or a separate coordinator.
 | --- | --- | --- |
 | Source/CPU | Every implementation PR | Local contracts, property and concurrency tests, Rust checks |
 | Real process/TCP/SHM/file | Control, TCP, memory, storage or lifecycle changes | Real cross-process bytes, errors, protocol and owned shutdown |
-| Metadata services | P2/P9 metadata changes | Real etcd/Redis/HTTP behavior and schema interoperability |
+| Optional metadata services | S18 when a consumer requires an external store | Real etcd/Redis/HTTP behavior and schema interoperability |
 | RDMA/device/storage/provider | Corresponding implementation changes | Real backend bytes and hardware-specific completion and lifetime |
 | Cross-language/mixed-peer | API, wire or binding changes | Installed caller behavior and directional interoperability |
 | Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |

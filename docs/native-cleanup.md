@@ -78,15 +78,15 @@ PD failure. Each result remains scoped to its installed or libtest artifact.
 ## Native TENT correspondence
 
 The frozen reference is Mooncake TENT
-`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`.
 Its `RdmaEndPoint::deconstructUnlocked` retains QPs when destruction fails;
 `RdmaContext::disable` preserves CQ/PD/device resources when endpoint cleanup
 fails. This is the same endpoint/context ownership boundary used here.
 
-There is a deliberate difference in failure policy. TENT's endpoint monitor
-can retry destruction; its context cleanup logs some later destructor errors
-and clears those pointers. OrbitTE reports `Unquiesced` and quarantines the
-remaining native owners without automatically retrying an ambiguous failure.
+In v0.3.14 an explicit endpoint teardown or context disable can be retried.
+The native destructors fail stop if teardown still reports live resources.
+OrbitTE reports `Unquiesced` and quarantines the remaining native owners after
+an ambiguous destroy. R1b will map the terminal teardown controls.
 It also preserves unresolved grant loans and quota until a native receipt
 proves cancellation. This gate validates that Rust contract; it does not claim
 identical error policy or native wire compatibility.

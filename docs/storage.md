@@ -106,8 +106,9 @@ charges stay retained. See [real-file controls](qualification.md#local-file-segm
 
 With the Linux `cuda,io-uring` features, use the same submission APIs with a
 registered CUDA address. The caller or batch worker holds the whole device
-range and consumes its producer event before access. TENT allocates a host
-buffer per request. OrbitTE leases page-aligned pinned chunks from the
+range and consumes its producer event before access. By default TENT allocates
+a host buffer per staged request. v0.3.14 also offers an opt-in pinned slot
+pool. OrbitTE leases page-aligned pinned chunks from the
 engine's `ProxyManager`, bounded by `staging_chunk_count` and
 `staging_chunk_size`. The ring is sized for the device chunks and unsplit host
 requests, up to `max_batch_requests` and the Linux submission queue limit.

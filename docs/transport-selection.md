@@ -149,7 +149,7 @@ CUDA ordinal. Process identity reuses the existing IPC handshake owner.
 ## Correspondence with TENT
 
 The reference is frozen TENT commit
-`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`, specifically
+`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, specifically
 `runtime/transport_selector.h` and `runtime/transport_selector.cpp`.
 
 | TENT owner/behavior | OrbitTE implementation |

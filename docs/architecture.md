@@ -348,7 +348,7 @@ implementations were about 11k physical lines (OrbitTE 38 Rust files, TENT 28
 `.cpp`/`.h` files, tests excluded). Per-request MW authority, exact source
 receipts, bilateral epochs and conservative retention are deliberate OrbitTE
 contracts beyond TENT's registered-region path. The audit found two gaps
-against the [context implementation][context], both since implemented:
+against the [context implementation at the audited revision](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp), both since implemented:
 
 | Behavior | Frozen TENT | OrbitTE at `f2c7e7f` | Current source |
 | --- | --- | --- | --- |
@@ -362,7 +362,7 @@ fabric qualification stays in the [P4 queue](completion-plan.md#p4-remaining-del
 
 ## Correspondence and remaining differences
 
-The reference is frozen at `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; see
+The reference is frozen at `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`; see
 TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers].
 
 | Area | Current OrbitTE | Difference from TENT |
@@ -374,10 +374,10 @@ TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers
 | CQ layout | Separate SQ and RQ CQ per lane | TENT uses one lane CQ for data QPs |
 | Worker load | Unfinished grant charge, including retained native work | Failover and remaining deadline policy are P6 |
 
-[transport]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transport/rdma/rdma_transport.h
-[endpoint]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp
-[context]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp
-[workers]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/rdma/workers.cpp
+[transport]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/transport/rdma/rdma_transport.h
+[endpoint]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/rdma/endpoint.cpp
+[context]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/rdma/context.cpp
+[workers]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/rdma/workers.cpp
 
 ## CUDA copy stream ownership
 
@@ -395,7 +395,7 @@ Each copy holds its staging until the recorded event completes. A failed enqueue
 or record requires a proven stream drain; otherwise the allocation, staging,
 stream/event and context are retained. Destroying a stream or event never proves
 DMA completion. This follows TENT's
-[CUDAStreamPool](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/platform/cuda/cuda_stream_pool.cpp)
+[CUDAStreamPool](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/platform/cuda/cuda_stream_pool.cpp)
 handles and NVLink's event-after-copy completion. The staging owners and their
 progress states are described in [CUDA staging](staging.md#tent-correspondence),
 and the readiness handoff in

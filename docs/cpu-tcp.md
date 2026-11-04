@@ -7,7 +7,7 @@ payload path uses Rust sockets; the crates.io alpha does not contain it.
 ## Architecture correspondence
 
 The reference is Mooncake TENT
-[`e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`](https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent).
+[`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`](https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent).
 
 | TENT responsibility | Rust owner | Delivered subset |
 | --- | --- | --- |

@@ -13,8 +13,10 @@ the [completion plan](completion-plan.md) holds the status of each stage.
 A build or CPU fixture never qualifies DMA, a fabric, GPU direct transfer or
 performance, and an earlier hardware result does not cover later changes. Wire
 labels v3–v23 below identify historical artifacts; current builds follow the
-[pre-release wire policy](tent-parity.md#wire-and-consumer-boundaries). Source CI
-builds the public consumers for the default, `rdma`, `cuda` and combined
+[pre-release wire policy](tent-parity.md#wire-and-consumer-boundaries).
+The current [CPU oracle](cpu-oracle.md) uses Mooncake v0.3.14 (`e1ea5d31`). Earlier
+reviews and installed profiles retain the reference revision used for each run.
+Source CI builds the public consumers for the default, `rdma`, `cuda` and combined
 features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
@@ -349,7 +351,7 @@ rules. The [contract](staging.md#cold-rdma-connection-acquisition) defines the
 remaining synchronous native boundaries.
 
 Evidence directory: `/root/orbitte-artifacts/cold-connection-progress-20261031/`.
-Frozen TENT reference: `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+The cold-connection review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
 Independent source review accepts `06f685d` for this source/CPU boundary; see
 `independent-review/source-review-06f685d.json`. The CPU controls use two
 independent verbs ABI contexts, actual endpoint construction reservations and
@@ -1815,7 +1817,7 @@ chunk sizes from page-rounded host backing and names the remaining limits.
 
 External evidence directory:
 `/root/orbitte-artifacts/staging-location-selection-20261030/`.
-Frozen TENT design input is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`;
+The host-staging design input was TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`;
 `independent-review/design-review-60fe19b.json` records the initial independent
 owner/placement review. Independent source review accepts `ab309f4`, whose
 production code is identical to `2c1872d`. The only subsequent source change
@@ -1880,7 +1882,7 @@ Evidence directory: `/root/orbitte-artifacts/nvlink-cache-reclaim-20261031/`.
 `source-inputs.json`, `environment.json` and `gates.json` bind the primary source,
 toolchain, focused IPC/NVLink gates, formatting and all-target Clippy. Independent
 review and final CI records are recorded in that directory before PR readiness.
-Frozen TENT reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
+This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`: its
 transport relocation map caches imported pointers and closes them at uninstall.
 The bounded LRU and source release protocol are deliberate OrbitTE extensions.
 
@@ -1918,7 +1920,7 @@ Evidence directory: `/root/orbitte-artifacts/nvlink-group-completion-20261031/`.
 compiler, focused gates and log hashes. Independent review and final CI are
 recorded in that directory before PR readiness.
 
-Frozen TENT reference remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
+This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`.
 Its `NVLinkSubBatch` / `startTransfer` also associates a group with one trailing
 event. OrbitTE follows the ordered async-copy path while reusing allocation-owned
 stream/event resources; native `cudaMemcpyBatchAsync`, device-wide pooling and
@@ -1954,7 +1956,7 @@ These are CPU ownership/API-count observations, not native CUDA performance.
 Evidence directory: `/root/orbitte-artifacts/nvlink-stream-pool-20261101/`.
 `source-manifest.json` binds file hashes; `gates.json` records commands and log
 hashes. Independent review and final CI are recorded there before PR readiness.
-Frozen TENT remains `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; its lazy
+This review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; its lazy
 per-device stream pool and move-only handles supply the naming and ownership
 pattern. OrbitTE adds actual-context matching, a cross-context slot bound,
 reusable completion events and explicit quarantine/close ownership.
@@ -2165,7 +2167,7 @@ sliced transfers. Source path publication enforces its own locality, while
 compatible same-name pairing remains preferred. Strict NUMA rejection is
 independent of PCI rank and explicit masks; unknown locality remains eligible.
 
-The frozen TENT reference is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
+The topology review used TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
 `platform/cuda/cuda_probe.cpp`, `runtime/topology.*` and
 `transport/rdma/quota.h`. OrbitTE follows its three-tier discovery and
 `strict_local_numa` eligibility contracts. Invalid/unknown PCI distance cannot
@@ -2195,7 +2197,7 @@ bandwidth/QoS policy and full F02/P5 parity remain open; OrbitKV linkage is defe
 ## Custom topology input
 
 F02 custom topology configuration is implemented for the RDMA inventory. The
-reference is frozen TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
+reference was TENT `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`,
 `runtime/topology.cpp` (`parsePriorityMatrix`, `parseCustomTopology`,
 `loadFromConfig`) and `transport/rdma/quota.cpp` candidate construction.
 OrbitTE accepts the two JSON forms and inline-over-file precedence, resolving
