@@ -97,6 +97,21 @@ jobs:
           trap 'rmdir "$standin"' EXIT
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --posix
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --tmpfs "$standin"
+      - name: Repeat MNNVL fabric and EGM shim controls 50 times
+        if: matrix.toolchain == 'stable' && (matrix.features == 'cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        run: |
+          set -o pipefail
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          count=$("$binary" --list | awk '/^cuda::tests::fabric::.*: test$/ {n++} END {print n+0}')
+          test "$count" -ge 10
+          for i in $(seq 1 50); do
+            RUST_TEST_THREADS=$(nproc) "$binary" cuda::tests::fabric:: > "$RUNNER_TEMP/mnnvl.log" || { cat "$RUNNER_TEMP/mnnvl.log"; exit 1; }
+            grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/mnnvl.log"
+          done
+      - name: Build packaged MNNVL and EGM consumer
+        if: matrix.features == 'cuda'
+        run: python3 tests/hardware/build_installed.py --consumer mnnvl --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-mnnvl"
       - name: Repeat shared mapping lifetime and process controls 50 times
         if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |

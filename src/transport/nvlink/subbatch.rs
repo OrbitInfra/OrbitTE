@@ -28,7 +28,10 @@ pub(super) fn subbatch_len(
     for request in &requests[1..] {
         // Keep each physical owner’s selected policy and source grant.
         if request.selection != first.selection
-            || request.selection.transport != Transport::Nvlink
+            || !matches!(
+                request.selection.transport,
+                Transport::Nvlink | Transport::Mnnvl
+            )
             || request.remote.id != first.remote.id
             || context(request).ok() != Some(first_context)
         {

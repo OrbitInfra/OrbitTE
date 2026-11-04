@@ -14,6 +14,7 @@ use crate::memory::checked_range;
 use crate::{Error, HostMemory, Result};
 
 mod driver;
+pub(crate) mod fabric;
 pub(crate) mod ipc;
 mod pinned;
 mod probe;
@@ -65,7 +66,7 @@ pub fn retained_resources() -> RetainedResources {
     }
 }
 
-struct Context {
+pub(crate) struct Context {
     driver: Arc<Driver>,
     raw: NonNull<sys::CUctx_st>,
     device: i32,
@@ -161,6 +162,7 @@ struct DeviceAllocation {
     producer: Option<CallerSyncEvent>,
     dma: Vec<std::ops::Range<usize>>,
     ipc_extent: Option<usize>,
+    fabric: Option<Box<fabric::Mapping>>,
     #[cfg(feature = "rdma")]
     rdma: Option<rdma::Ordering>,
 }
@@ -197,17 +199,22 @@ impl Drop for DeviceAllocation {
         let released = !self.uncertain
             && self.wait_producer().is_ok()
             && !self.context.poisoned.load(Ordering::Acquire)
-            && (!self.owned
-                || self
-                    .context
-                    .current(|| {
-                        // SAFETY: this owns the allocation; copies were synchronized.
-                        check("cuMemFree", unsafe {
-                            (self.context.driver.free)(self.address)
+            && (if let Some(v) = self.fabric.as_mut() {
+                v.close().is_ok()
+            } else {
+                !self.owned
+                    || self
+                        .context
+                        .current(|| {
+                            // SAFETY: this owns the allocation; copies were synchronized.
+                            check("cuMemFree", unsafe {
+                                (self.context.driver.free)(self.address)
+                            })
                         })
-                    })
-                    .is_ok());
+                        .is_ok()
+            });
         if !released {
+            std::mem::forget(self.fabric.take());
             RETAINED_DEVICE.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(Arc::clone(&self.context));
             if let Some(owner) = self.owner.take() {
@@ -345,6 +352,7 @@ impl CudaMemory {
             copy_stream: None,
             producer: None,
             dma: Vec::new(),
+            fabric: None,
             ipc_extent: ipc.then_some(physical_length),
             #[cfg(feature = "rdma")]
             rdma: None,
@@ -429,6 +437,7 @@ impl CudaMemory {
                 copy_stream: None,
                 producer: None,
                 dma: Vec::new(),
+                fabric: None,
                 ipc_extent: None,
                 #[cfg(feature = "rdma")]
                 rdma: None,

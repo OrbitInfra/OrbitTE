@@ -74,6 +74,7 @@ impl Relay {
             epoch,
             regions: vec![RemoteRegion {
                 memory_type: crate::MemoryType::Cuda,
+                fabric: None,
                 hp_registered: false,
                 ipc_exportable: true,
                 epoch,

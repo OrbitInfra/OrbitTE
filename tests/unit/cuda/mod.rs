@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod connect_progress;
+pub(super) mod fabric;
 #[cfg(feature = "rdma")]
 mod finish_progress;
 #[cfg(feature = "gds")]

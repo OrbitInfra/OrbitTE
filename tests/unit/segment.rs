@@ -21,6 +21,7 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
     let epoch = SourceEpoch([1; 16]);
     let region = |id, address, length| RemoteRegion {
         memory_type: crate::MemoryType::Cpu,
+        fabric: None,
         hp_registered: false,
         ipc_exportable: false,
         epoch,

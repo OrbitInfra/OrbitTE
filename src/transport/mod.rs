@@ -3,6 +3,7 @@ pub(crate) mod gds;
 pub(crate) mod hp_tcp;
 #[cfg(feature = "io-uring")]
 pub(crate) mod io_uring;
+pub(crate) mod mnnvl;
 #[cfg(feature = "cuda")]
 pub(crate) mod nvlink;
 #[cfg(feature = "rdma")]

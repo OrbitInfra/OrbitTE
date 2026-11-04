@@ -53,6 +53,7 @@ pub enum Transport {
     Shm,
     Rdma,
     Nvlink,
+    Mnnvl,
     /// Linux io_uring for local regular files and registered memory.
     IoUring,
     /// Local cuFile batch I/O.
@@ -315,7 +316,7 @@ impl TransferEngine {
             })
             .transpose()?;
         #[cfg(feature = "cuda")]
-        let nvlink = config
+        let mut nvlink = config
             .nvlink
             .then(|| {
                 crate::transport::nvlink::NVLinkTransport::new(
@@ -325,6 +326,16 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
+        #[cfg(feature = "cuda")]
+        if let Some(c) = &config.mnnvl {
+            match crate::transport::nvlink::NVLinkTransport::install_mnnvl(c, &config) {
+                Ok(owner) => nvlink = Some(owner),
+                Err(e @ (Error::Unavailable(_) | Error::Backend { .. })) => {
+                    log::warn!("MNNVL unavailable: {e}")
+                }
+                Err(e) => return Err(e),
+            }
+        }
         #[allow(unused_mut)]
         let hp_listener = config
             .hp_tcp
@@ -349,7 +360,14 @@ impl TransferEngine {
         }
         #[cfg(feature = "cuda")]
         {
-            metadata.nvlink = nvlink.as_ref().map(|transport| transport.identity);
+            metadata.nvlink = nvlink
+                .as_ref()
+                .filter(|t| t.fabric.is_none())
+                .map(|transport| transport.identity);
+            metadata.mnnvl = nvlink
+                .as_ref()
+                .and_then(|t| t.fabric.as_ref())
+                .map(|f| f.caps);
             metadata.remote_staging = config.remote_staging;
         }
         metadata.boot = metadata
@@ -723,6 +741,40 @@ impl TransferEngine {
         })
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn mnnvl_platform(&self) -> Result<&crate::cuda::fabric::Platform> {
+        self.source
+            .nvlink
+            .as_ref()
+            .and_then(|t| t.fabric.as_deref())
+            .ok_or(Error::Unavailable("MNNVL is unavailable"))
+    }
+    /// Allocate initialized CUDA VMM storage exportable over the configured fabric.
+    #[cfg(feature = "cuda")]
+    pub fn allocate_mnnvl(
+        &self,
+        device: i32,
+        length: usize,
+    ) -> Result<Arc<crate::cuda::CudaMemory>> {
+        let _permit = self.source.admit()?;
+        self.mnnvl_platform()?.allocate_device(device, length)
+    }
+    /// Allocate host-NUMA VMM storage on a socket with an attached, visible GPU.
+    #[cfg(feature = "cuda")]
+    pub fn allocate_egm(&self, numa_node: u32, length: usize) -> Result<Arc<HostMemory>> {
+        let _permit = self.source.admit()?;
+        self.mnnvl_platform()?.allocate_egm(numa_node, length)
+    }
+    /// Release the last MNNVL device allocation handle with a checked native receipt.
+    #[cfg(feature = "cuda")]
+    pub fn free_mnnvl(&self, memory: Arc<crate::cuda::CudaMemory>) -> Result<()> {
+        self.mnnvl_platform()?.free_device(memory)
+    }
+    /// Release the last EGM host allocation handle, including the rounded VA range.
+    #[cfg(feature = "cuda")]
+    pub fn free_egm(&self, memory: Arc<HostMemory>) -> Result<()> {
+        self.mnnvl_platform()?.free_host(memory)
+    }
     /// Allocate named shared host storage. Register one or more ranges with register_host_memory.
     pub fn allocate_shm_memory(&self, length: usize) -> Result<Arc<HostMemory>> {
         let _admission = self.source.admit()?;
@@ -829,6 +881,19 @@ impl TransferEngine {
     }
 
     fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if let Some(f) = self.source.nvlink.as_ref().and_then(|t| t.fabric.as_ref()) {
+            for m in memory {
+                match f.register(m) {
+                    Err(e @ Error::Unquiesced { .. }) => {
+                        std::mem::forget(m.clone());
+                        return Err(e);
+                    }
+                    Err(e) => log::warn!("registration unavailable to MNNVL: {e}"),
+                    Ok(()) => (),
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         let pending = self
             .source
@@ -1234,7 +1299,11 @@ impl TransferEngine {
             let context = SelectionContext {
                 local_memory: local.memory_type(),
                 #[cfg(feature = "cuda")]
-                local_ipc: local.ipc_requester(),
+                local_ipc: if self.source.metadata.mnnvl.is_some() {
+                    local.0.fabric.get().is_some_and(|r| r.local)
+                } else {
+                    local.ipc_requester()
+                },
                 #[cfg(not(feature = "cuda"))]
                 local_ipc: false,
                 remote: &remote,
@@ -1655,7 +1724,10 @@ impl TransferEngine {
                 }
             }
             #[cfg(feature = "cuda")]
-            let cohort = if request.selection.transport == Transport::Nvlink {
+            let cohort = if matches!(
+                request.selection.transport,
+                Transport::Nvlink | Transport::Mnnvl
+            ) {
                 crate::transport::nvlink::NVLinkTransport::group_len(
                     &requests[index..index + submission.native_group(index)],
                     self.config.max_transfer_bytes,

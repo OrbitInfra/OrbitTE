@@ -272,6 +272,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
             epoch,
             regions: vec![RemoteRegion {
                 memory_type: crate::MemoryType::Cpu,
+                fabric: None,
                 hp_registered: false,
                 ipc_exportable: false,
                 epoch,

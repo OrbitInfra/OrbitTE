@@ -10,7 +10,7 @@ mod copy;
 pub(crate) use copy::{IpcCopy, IpcCopyCompletion, IpcCopyGroup};
 
 pub(crate) struct IpcExport {
-    memory: Option<Arc<CudaMemory>>,
+    memory: Option<Allocation>,
     pub(crate) handle: [u8; 64],
     pub(crate) extent: usize,
     exposed: bool,
@@ -41,13 +41,34 @@ impl IpcExport {
         allocation.dma.push(0..memory.length);
         drop(allocation);
         Ok(Self {
-            memory: Some(memory),
+            memory: Some(Allocation::Cuda(memory)),
             handle: handle.reserved.map(|b| b.to_ne_bytes()[0]),
             extent,
             exposed: false,
         })
     }
 
+    pub(crate) fn fabric(
+        memory: Allocation,
+        share: &super::fabric::Share,
+        deadline: Instant,
+    ) -> Result<Self> {
+        match &memory {
+            Allocation::Cuda(m) => {
+                let mut a = m.lock_ipc(deadline)?;
+                a.prepare_access(&(0..m.len()))?;
+                a.dma.try_reserve(1).map_err(|_| Error::ResourceExhausted)?;
+                a.dma.push(0..m.len());
+            }
+            Allocation::Host(m) => m.lock_cuda_pinned(deadline)?.begin_ipc(),
+        }
+        Ok(Self {
+            memory: Some(memory),
+            handle: share.bytes,
+            extent: share.extent,
+            exposed: false,
+        })
+    }
     /// Call before the first socket write that can reveal any handle bytes.
     pub(crate) fn expose(&mut self) {
         self.exposed = true;
@@ -65,7 +86,9 @@ impl Drop for IpcExport {
             if self.exposed {
                 RETAINED_EXPORT.fetch_add(1, Ordering::AcqRel);
                 std::mem::forget(memory);
-            } else {
+            } else if let Allocation::Host(host) = memory {
+                host.release_ipc();
+            } else if let Allocation::Cuda(memory) = memory {
                 memory
                     .allocation
                     .lock()
@@ -78,6 +101,7 @@ impl Drop for IpcExport {
 }
 
 pub(crate) struct IpcMapping {
+    fabric: Option<Box<super::fabric::Mapping>>,
     context: Arc<Context>,
     address: u64,
     pending: bool,
@@ -90,6 +114,7 @@ impl IpcMapping {
         let context = memory.ipc_owner_context(deadline)?;
         Ok(Self {
             context,
+            fabric: None,
             address: 0,
             pending: false,
             uncertain: false,
@@ -121,6 +146,24 @@ impl IpcMapping {
         })
     }
 
+    pub(crate) fn open_fabric(
+        &mut self,
+        platform: &super::fabric::Platform,
+        handle: [u8; 64],
+        extent: usize,
+    ) -> Result<()> {
+        match platform.import(&self.context, extent, handle) {
+            Ok(v) => {
+                self.address = v.address;
+                self.fabric = Some(Box::new(v));
+                Ok(())
+            }
+            Err(e) => {
+                self.uncertain = matches!(e, Error::Unquiesced { .. });
+                Err(e)
+            }
+        }
+    }
     /// Release completed local copy owners while retaining the remote import.
     /// A later import-close failure cannot retroactively invalidate these copies.
     pub(crate) fn finish_copies(&mut self) -> Result<()> {
@@ -152,6 +195,12 @@ impl IpcMapping {
             });
         }
         if self.address == 0 {
+            return Ok(());
+        }
+        if let Some(v) = self.fabric.as_mut() {
+            v.close()?;
+            self.address = 0;
+            self.fabric.take();
             return Ok(());
         }
         let context = Arc::clone(&self.context);
@@ -197,6 +246,7 @@ impl Drop for IpcMapping {
                     Allocation::Host(memory) => memory.fence_cuda(),
                 }
             }
+            std::mem::forget(self.fabric.take());
             std::mem::forget(std::mem::take(&mut self.memories));
             std::mem::forget(Arc::clone(&self.context));
         }
@@ -247,7 +297,7 @@ impl Allocation {
                     .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
                 Ok(Arc::clone(&allocation.context))
             }
-            Self::Host(memory) => Ok(Arc::clone(&memory.cuda_pinned(deadline)?.context)),
+            Self::Host(memory) => memory.lock_cuda_pinned(deadline)?.context(),
         }
     }
 

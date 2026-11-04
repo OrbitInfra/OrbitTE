@@ -38,6 +38,7 @@ fn fragmented_read_commits_only_the_full_payload_and_eof_preserves_guards() {
             local_offset: 3,
             remote: RemoteRegion {
                 memory_type: crate::MemoryType::Cpu,
+                fabric: None,
                 hp_registered: false,
                 ipc_exportable: false,
                 epoch,
@@ -153,6 +154,7 @@ fn write_backpressure_retains_snapshot_and_registration_until_terminal_failure()
         local_offset: 0,
         remote: RemoteRegion {
             memory_type: crate::MemoryType::Cpu,
+            fabric: None,
             hp_registered: false,
             ipc_exportable: false,
             epoch,

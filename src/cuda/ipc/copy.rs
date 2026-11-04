@@ -23,6 +23,7 @@ pub(crate) struct IpcCopyGroup {
     stream: CUDAStreamHandle,
     // Unique whole-allocation loans; the flag distinguishes touched owners.
     loans: Vec<(Allocation, bool)>,
+    shared: Vec<crate::transport::shm::RangeLock>,
     pending: bool,
     pub(crate) attempted: usize,
     submitted: usize,
@@ -39,7 +40,14 @@ impl IpcCopyGroup {
     }
 
     /// Consume the group, releasing proven loans/stream before publishing completion.
-    pub(crate) fn complete(self, result: Result<()>) -> IpcCopyCompletion {
+    pub(crate) fn complete(mut self, mut result: Result<()>) -> IpcCopyCompletion {
+        if !self.pending {
+            for lock in self.shared.drain(..) {
+                if let Err(error) = crate::transport::shm::RangeLock::finish(Some(lock)) {
+                    result = Err(error)
+                }
+            }
+        }
         let result = if self.pending && !matches!(result, Err(Error::Unquiesced { .. })) {
             Err(Error::Unquiesced {
                 operation: "CUDA IPC completion before drain",
@@ -67,6 +75,9 @@ impl IpcCopyGroup {
 
 impl Drop for IpcCopyGroup {
     fn drop(&mut self) {
+        if self.pending {
+            std::mem::forget(std::mem::take(&mut self.shared));
+        }
         for (memory, touched) in self.loans.drain(..) {
             let retain = self.pending && touched;
             match &memory {
@@ -102,10 +113,10 @@ enum CopyAccess<'a> {
 }
 
 impl CopyAccess<'_> {
-    fn context(&self) -> Result<&Arc<Context>> {
+    fn context(&self) -> Result<Arc<Context>> {
         match self {
-            Self::Device(allocation) => Ok(&allocation.context),
-            Self::Host(access) => Ok(&access.allocation()?.context),
+            Self::Device(allocation) => Ok(allocation.context.clone()),
+            Self::Host(access) => access.context(),
         }
     }
 
@@ -137,6 +148,7 @@ impl IpcMapping {
         let mut group = IpcCopyGroup {
             stream,
             loans: Vec::new(),
+            shared: Vec::new(),
             pending: false,
             attempted: 0,
             submitted: 0,
@@ -210,6 +222,15 @@ impl IpcMapping {
                 .try_reserve(owners.len())
                 .map_err(|_| Error::ResourceExhausted)?;
             for access in &mut guards {
+                if let CopyAccess::Host(host) = access {
+                    if let Some(lock) = host.shared_loan()? {
+                        group
+                            .shared
+                            .try_reserve(1)
+                            .map_err(|_| Error::ResourceExhausted)?;
+                        group.shared.push(lock);
+                    }
+                }
                 if let CopyAccess::Device(allocation) = access {
                     allocation
                         .dma
@@ -260,29 +281,39 @@ impl IpcMapping {
                             continue;
                         }
                         let remote = self.address + copy.remote_offset as u64;
-                        let code = match &copy.memory {
-                            Allocation::Cuda(memory) => {
-                                let local = memory.address + copy.local_offset as u64;
-                                let (destination, source) = if to_remote {
-                                    (remote, local)
-                                } else {
-                                    (local, remote)
-                                };
-                                (driver.copy_device)(destination, source, copy.length, stream)
-                            }
-                            Allocation::Host(memory) => {
-                                let host = (memory.base_address() + copy.local_offset as u64)
-                                    as usize
-                                    as *mut std::ffi::c_void;
-                                if to_remote {
-                                    (driver.to_device)(
-                                        remote,
-                                        host.cast_const(),
-                                        copy.length,
-                                        stream,
-                                    )
-                                } else {
-                                    (driver.to_host)(host, remote, copy.length, stream)
+                        let code = if self.fabric.is_some() {
+                            let local = copy.memory.base_address() + copy.local_offset as u64;
+                            let (dst, src) = if to_remote {
+                                (remote, local)
+                            } else {
+                                (local, remote)
+                            };
+                            (driver.copy_device)(dst, src, copy.length, stream)
+                        } else {
+                            match &copy.memory {
+                                Allocation::Cuda(memory) => {
+                                    let local = memory.address + copy.local_offset as u64;
+                                    let (destination, source) = if to_remote {
+                                        (remote, local)
+                                    } else {
+                                        (local, remote)
+                                    };
+                                    (driver.copy_device)(destination, source, copy.length, stream)
+                                }
+                                Allocation::Host(memory) => {
+                                    let host = (memory.base_address() + copy.local_offset as u64)
+                                        as usize
+                                        as *mut std::ffi::c_void;
+                                    if to_remote {
+                                        (driver.to_device)(
+                                            remote,
+                                            host.cast_const(),
+                                            copy.length,
+                                            stream,
+                                        )
+                                    } else {
+                                        (driver.to_host)(host, remote, copy.length, stream)
+                                    }
                                 }
                             }
                         };

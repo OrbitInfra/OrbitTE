@@ -70,6 +70,8 @@ struct HostAccess {
     cuda_uncertain: bool,
     #[cfg(feature = "cuda")]
     cuda_inflight: bool,
+    #[cfg(feature = "cuda")]
+    fabric_pin: std::sync::Weak<crate::cuda::fabric::HostPin>,
     #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
     dma: Vec<Range<usize>>,
 }
@@ -81,15 +83,23 @@ pub(crate) struct CudaHostAccess<'a> {
 
 #[cfg(feature = "cuda")]
 impl CudaHostAccess<'_> {
-    pub(crate) fn allocation(&self) -> Result<&crate::cuda::PinnedAllocation> {
-        match &self.backing.bytes {
-            HostBacking::CudaPinned(allocation) => Ok(allocation),
-            _ => Err(Error::Unavailable(
-                "NVLink host requester requires allocate_pinned_host",
-            )),
+    pub(crate) fn context(&self) -> Result<Arc<crate::cuda::Context>> {
+        if let HostBacking::CudaPinned(a) = &self.backing.bytes {
+            return Ok(a.context.clone());
         }
+        self.backing
+            .fabric_pin
+            .upgrade()
+            .map(|pin| pin.context.clone())
+            .ok_or(Error::Unavailable("host memory has no CUDA registration"))
     }
-
+    pub(crate) fn shared_loan(&self) -> Result<Option<crate::transport::shm::RangeLock>> {
+        self.backing
+            .bytes
+            .shared()
+            .map(|mapping| mapping.access(&(0..mapping.size()), true))
+            .transpose()
+    }
     pub(crate) fn begin_ipc(&mut self) {
         self.backing.cuda_inflight = true;
     }
@@ -220,6 +230,57 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
+    pub(crate) fn owned_pin(&self) -> Option<Arc<crate::cuda::PinnedAllocation>> {
+        let lock = self.backing.lock().unwrap_or_else(|p| p.into_inner());
+        match &lock.bytes {
+            HostBacking::CudaPinned(a) => Some(a.clone()),
+            _ => None,
+        }
+    }
+    #[cfg(feature = "cuda")]
+    pub(crate) fn retire_mnnvl_pin(&self, pin: Arc<crate::cuda::fabric::HostPin>) -> Result<()> {
+        let mut lock = self.backing.lock().unwrap_or_else(|p| p.into_inner());
+        if let Ok(mut last) = Arc::try_unwrap(pin) {
+            lock.fabric_pin = Default::default();
+            if let Err(e) = last.close() {
+                lock.cuda_uncertain = true;
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+    #[cfg(feature = "cuda")]
+    pub(crate) fn mnnvl_pin(
+        self: &Arc<Self>,
+        context: &Arc<crate::cuda::Context>,
+        native: bool,
+        create: impl FnOnce(&Arc<Self>) -> Result<Arc<crate::cuda::fabric::HostPin>>,
+    ) -> Result<Arc<crate::cuda::fabric::HostPin>> {
+        let mut lock = self
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("host memory lock"))?;
+        lock.prepare_access(&(0..self.length))?;
+        if let Some(pin) = lock.fabric_pin.upgrade() {
+            if !pin.compatible(context, native) {
+                return Err(Error::Unavailable("incompatible MNNVL host registration"));
+            }
+            return Ok(pin);
+        }
+        match create(self) {
+            Ok(pin) => {
+                lock.fabric_pin = Arc::downgrade(&pin);
+                Ok(pin)
+            }
+            Err(e @ Error::Unquiesced { .. }) => {
+                lock.cuda_uncertain = true;
+                std::mem::forget(self.clone());
+                Err(e)
+            }
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(feature = "cuda")]
     pub(crate) fn from_cuda_pinned(allocation: Arc<crate::cuda::PinnedAllocation>) -> Self {
         Self {
             address: allocation.address.as_ptr() as usize as u64,
@@ -233,6 +294,8 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
+                #[cfg(feature = "cuda")]
+                fabric_pin: Default::default(),
                 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
@@ -277,6 +340,7 @@ impl HostMemory {
     }
 
     #[cfg(feature = "cuda")]
+    #[cfg(test)]
     pub(crate) fn cuda_pinned(
         &self,
         deadline: Instant,
@@ -321,7 +385,7 @@ impl HostMemory {
         let backing = self.lock_ipc(deadline)?;
         backing.prepare_access(&(0..self.length))?;
         let access = CudaHostAccess { backing };
-        access.allocation()?;
+        access.context()?;
         Ok(access)
     }
 
@@ -388,6 +452,8 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
+                #[cfg(feature = "cuda")]
+                fabric_pin: Default::default(),
                 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
@@ -430,6 +496,8 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
+                #[cfg(feature = "cuda")]
+                fabric_pin: Default::default(),
                 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
@@ -477,6 +545,8 @@ impl HostMemory {
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
                 cuda_inflight: false,
+                #[cfg(feature = "cuda")]
+                fabric_pin: Default::default(),
                 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
                 dma: Vec::new(),
             }),
@@ -825,7 +895,7 @@ impl Allocation {
         }
     }
 
-    fn base_address(&self) -> u64 {
+    pub(crate) fn base_address(&self) -> u64 {
         match self {
             Self::Host(memory) => memory.base_address(),
             #[cfg(feature = "cuda")]
@@ -881,9 +951,11 @@ impl AllocationRef {
 
 pub(crate) struct Registration {
     #[cfg(feature = "metrics")]
-    pub(crate) metric_transports: std::sync::atomic::AtomicU8,
+    pub(crate) metric_transports: std::sync::atomic::AtomicU16,
     #[cfg(feature = "gds")]
     pub(crate) gds: Mutex<crate::transport::gds::BufferSlot>,
+    #[cfg(feature = "cuda")]
+    pub(crate) fabric: std::sync::OnceLock<crate::cuda::fabric::Registration>,
     pub(crate) descriptor: RemoteRegion,
     allocation: Allocation,
     allocation_offset: usize,
@@ -894,6 +966,14 @@ pub(crate) struct Registration {
 
 impl Drop for Registration {
     fn drop(&mut self) {
+        #[cfg(feature = "cuda")]
+        if let Some(r) = self.fabric.get_mut() {
+            if let Err(e) = r.retire() {
+                log::error!("retaining MNNVL registration: {e}");
+                std::mem::forget(self.allocation.clone());
+                return;
+            }
+        }
         #[cfg(feature = "gds")]
         if self
             .gds
@@ -1139,6 +1219,8 @@ impl MemoryRegistry {
                     metric_transports: Default::default(),
                     #[cfg(feature = "gds")]
                     gds: Mutex::default(),
+                    #[cfg(feature = "cuda")]
+                    fabric: Default::default(),
                     descriptor: RemoteRegion {
                         epoch: self.epoch,
                         id: plan.id,
@@ -1147,6 +1229,7 @@ impl MemoryRegistry {
                         permission,
                         memory_type: allocation.memory_type(),
                         ipc_exportable: allocation.ipc_exportable(),
+                        fabric: None,
                         hp_registered: false,
                     },
                     allocation: allocation.clone(),
@@ -1247,6 +1330,16 @@ impl MemoryRegistry {
             .filter(|entry| entry.memory.permission() != Permission::LocalOnly)
             .map(|entry| {
                 let mut descriptor = entry.memory.0.descriptor;
+                #[cfg(feature = "cuda")]
+                {
+                    descriptor.fabric = entry
+                        .memory
+                        .0
+                        .fabric
+                        .get()
+                        .and_then(|r| r.share.as_ref())
+                        .map(|s| s.location);
+                }
                 descriptor.hp_registered = hp_enabled
                     && crate::transport::hp_tcp::host(&entry.memory)
                     && matches!(

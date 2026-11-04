@@ -126,7 +126,7 @@ fn device_at(address: u64) -> Arc<Device> {
         .upgrade()
         .unwrap()
 }
-fn current() -> &'static Device {
+pub(super) fn current() -> &'static Device {
     let pointer = STACK.with(|stack| *stack.borrow().last().unwrap());
     // The Context retains its actual owner until a successful pop, or forever
     // on an unproven restore. The test shim never exposes this reference publicly.
@@ -623,6 +623,7 @@ unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> 
 pub(super) fn driver() -> Arc<Driver> {
     Arc::new(Driver {
         _library: None,
+        vmm: None,
         init,
         device_get: get,
         #[cfg(feature = "rdma")]

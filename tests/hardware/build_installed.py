@@ -25,6 +25,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         "hp-tcp": ([], "orbitte-hp-tcp", "orbitte-installed-hp-tcp", "tests/hardware/hp_tcp.rs"),
         "host": (["rdma"], "orbitte-rdma-host", "orbitte-installed-host-v4", "tests/hardware/rdma_host.rs"),
         "gpu": (["rdma", "cuda"], "orbitte-hardware-peer", "orbitte-hardware-peer-v1", "examples/hardware_peer.rs"),
+        "mnnvl": (["cuda"], "orbitte-mnnvl", "orbitte-installed-mnnvl", "tests/hardware/mnnvl.rs"),
         "nvlink": (["cuda"], "orbitte-nvlink", "orbitte-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
         "gds": (["gds"], "orbitte-gds", "orbitte-installed-gds-v1", "tests/hardware/gds.rs"),
         "storage-cuda": (["cuda", "io-uring"], "orbitte-storage-cuda", "orbitte-installed-storage-cuda-v1", "tests/hardware/storage_cuda.rs"),
@@ -87,8 +88,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        if storage or consumer_kind in ('hp-tcp', 'shm'):
-            drivers = [{'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
+        if storage or consumer_kind in ('hp-tcp', 'shm', 'mnnvl'):
+            drivers = [{'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
             if consumer_kind == 'gds':
                 drivers.append('gds_run.py')
             for name in drivers:
@@ -210,6 +211,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

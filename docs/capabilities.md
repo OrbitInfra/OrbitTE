@@ -29,7 +29,7 @@ behind every hardware result.
 | GDS / cuFile | Implemented, installed native gate unrun | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
 | [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Real loopback sockets and multiple local IPv4 rails. Physical rail gate unrun |
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
-| MNNVL / EGM | Planned (P5) | |
+| [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
 | MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
 
 ## Memory and batches

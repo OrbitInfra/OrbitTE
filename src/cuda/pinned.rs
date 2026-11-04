@@ -8,11 +8,12 @@ use crate::platform::numa::{MappedMemory, Numa};
 
 enum Backing {
     Driver,
+    Fabric(ManuallyDrop<Box<super::fabric::Mapping>>),
     Mapped(ManuallyDrop<MappedMemory>),
 }
 
 pub(crate) struct PinnedAllocation {
-    pub(super) context: Arc<Context>,
+    pub(crate) context: Arc<Context>,
     pub(crate) address: NonNull<u8>,
     pub(crate) length: usize,
     pub(crate) numa_node: Option<u32>,
@@ -31,6 +32,26 @@ unsafe impl Send for PinnedAllocation {}
 unsafe impl Sync for PinnedAllocation {}
 
 impl PinnedAllocation {
+    pub(crate) fn fabric(&self) -> Option<&super::fabric::Mapping> {
+        match &self.backing {
+            Backing::Fabric(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub(super) fn from_fabric(v: super::fabric::Mapping, length: usize, node: u32) -> Result<Self> {
+        Ok(Self {
+            context: v.context.clone(),
+            address: NonNull::new(v.address as usize as *mut u8).ok_or(Error::InvalidRange)?,
+            length,
+            numa_node: Some(node),
+            backing: Backing::Fabric(ManuallyDrop::new(Box::new(v))),
+            copy_stream: Mutex::new(None),
+            producer: OnceLock::new(),
+            cleanup_attempted: false,
+            released: false,
+            native_freed: false,
+        })
+    }
     pub(crate) fn prepare_access(&self) -> Result<()> {
         let stream = self.copy_stream.lock().map_err(|_| Error::Unquiesced {
             operation: "CUDA pinned copy stream",
@@ -226,6 +247,7 @@ impl PinnedAllocation {
                 self.context.current(|| {
                     // Record native release before restoring the caller context.
                     let (operation, status) = match &self.backing {
+                        Backing::Fabric(_) => return Ok(()),
                         // SAFETY: Driver backing owns this cuMemHostAlloc pointer through the
                         // single release attempt.
                         Backing::Driver => ("cuMemFreeHost", unsafe {
@@ -245,6 +267,12 @@ impl PinnedAllocation {
         let result = result.and_then(|()| match &mut self.backing {
             Backing::Driver => Ok(()),
             Backing::Mapped(mapping) => mapping.close(),
+            Backing::Fabric(v) => {
+                v.close()?;
+                // SAFETY: native teardown and restoration succeeded, and release is one-shot.
+                unsafe { ManuallyDrop::drop(v) };
+                Ok(())
+            }
         });
         if result.is_ok() {
             self.released = true;
