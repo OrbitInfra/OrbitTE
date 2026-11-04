@@ -1237,3 +1237,54 @@ fn r1c_freed_file_batch_keeps_its_slot_until_the_consumed_cqe() -> Result<()> {
     assert_eq!(got, [0x9a, b'2', b'3', b'4', b'5', 0x9a]);
     Ok(())
 }
+
+#[test]
+fn r1c_storage_environment_overrides_only_the_enabled_file_pool() -> Result<()> {
+    const CHILD: &str = "ORBITTE_TEST_FILE_POOL_ENV";
+    if std::env::var_os(CHILD).is_some() {
+        let e = TransferEngine::new(EngineConfig::default())?;
+        if kernel() {
+            let s = e.stats()?.io_uring.unwrap();
+            assert_eq!(
+                (s.slot_bytes, s.slots, s.active_slots, s.slot_acquisitions),
+                (8192, 3, 0, 0)
+            );
+        }
+        return Ok(());
+    }
+    let enabled = IoUringConfig {
+        pinned_staging: true,
+        ..Default::default()
+    };
+    for val in ["On", "YES", "true", "1", "unknown"] {
+        assert!(
+            enabled
+                .resolve(|k| (k == "MC_IOURING_PINNED_STAGING").then(|| val.into()))?
+                .pinned_staging
+        );
+    }
+    for val in ["OFF", "no", "FALSE", "0"] {
+        assert!(
+            !enabled
+                .resolve(|k| Some(
+                    if k == "MC_IOURING_PINNED_STAGING" {
+                        val
+                    } else {
+                        "invalid"
+                    }
+                    .into()
+                ))?
+                .pinned_staging
+        );
+    }
+    for key in ["MC_IOURING_STAGING_SLOT_KB", "MC_IOURING_STAGING_SLOTS"] {
+        assert!(
+            matches!(enabled.resolve(|k|(k==key).then(||"-7".into())),Err(Error::InvalidConfig(k)) if k==key)
+        );
+    }
+    let status=std::process::Command::new(std::env::current_exe()?)
+        .args(["--exact","transport::io_uring::tests::r1c_storage_environment_overrides_only_the_enabled_file_pool"])
+        .env(CHILD,"1").env("MC_IOURING_PINNED_STAGING","1").env("MC_IOURING_STAGING_SLOT_KB","5").env("MC_IOURING_STAGING_SLOTS","3").status()?;
+    assert!(status.success());
+    Ok(())
+}

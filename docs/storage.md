@@ -114,6 +114,11 @@ leases page-aligned pinned chunks from its `ProxyManager`, bounded by
 `EngineConfig.io_uring.pinned_staging` to enable TENT's optional file pool.
 `staging_slot_kb` defaults to 4096 and rounds up to a 4 KiB boundary.
 `staging_slots` defaults to 32. The checked total is at most 1 GiB.
+At engine creation, `MC_IOURING_PINNED_STAGING`, `MC_IOURING_STAGING_SLOT_KB`
+and `MC_IOURING_STAGING_SLOTS` override the corresponding typed settings.
+The size overrides apply only when enabled. Invalid boolean values preserve
+the configured switch, as in TENT. Invalid enabled sizes return a configuration
+error before allocating a slab.
 The first eligible request creates one slab. Its slots can serve an entire
 GPU request or an unaligned DRAM request. CUDA uses portable pinned memory.
 The CPU platform uses ordinary page-aligned memory.

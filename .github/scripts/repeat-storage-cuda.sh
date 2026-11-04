@@ -14,7 +14,7 @@ filters=(r1c_ pipeline_failed_query_is_sticky_but_every_other_slot_is_drained
   worker_wakes_are_bounded_coalesced_and_stop_joins fallback_tick_runs_only_while_the_queue_owns_work)
 
 count=$("$binary" "${filters[@]}" --list | awk '/: test$/ {n++} END {print n+0}')
-test "$count" -ge 20
+test "$count" -ge 21
 for i in $(seq 1 50); do
   "$binary" "${filters[@]}" > "$output/controls-$i.log" || { cat "$output/controls-$i.log"; exit 1; }
   grep -F "test result: ok. $count passed; 0 failed;" "$output/controls-$i.log"

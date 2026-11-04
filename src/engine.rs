@@ -283,6 +283,11 @@ pub struct TransferEngine {
 
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
+        #[cfg(feature = "io-uring")]
+        let config = EngineConfig {
+            io_uring: config.io_uring.with_environment()?,
+            ..config
+        };
         config.validate()?;
         #[cfg(feature = "metrics")]
         let metrics_config = config.metrics.load(config.metrics_config_file.as_deref())?;

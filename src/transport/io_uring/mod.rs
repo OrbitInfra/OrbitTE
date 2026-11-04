@@ -1,6 +1,8 @@
 //! TENT's single-issuer file sub-batch. The caller or existing Batch worker owns the ring.
+mod config;
 pub(crate) mod pool;
-pub use pool::{IoUringConfig, IoUringStats};
+pub use config::IoUringConfig;
+pub use pool::IoUringStats;
 mod ring;
 #[cfg(feature = "cuda")]
 mod staging;
