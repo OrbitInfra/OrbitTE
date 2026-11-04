@@ -13,6 +13,9 @@ tent diagnostics version --json
 Both formats report the crate version, source commit, build profile, Rust
 compiler and compiled features. The commit comes from the checkout or Cargo’s
 packaged VCS metadata. Source archives without either report `unknown`.
+When comparing two unreleased packages with the same crate version, use a
+fresh Cargo target directory for each extraction. Cargo can reuse binaries
+from the earlier package because archive file timestamps are normalized.
 Feature flags describe what the binary contains. Installed devices and network
 reachability require separate qualification.
 
