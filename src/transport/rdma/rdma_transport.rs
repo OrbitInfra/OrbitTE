@@ -42,6 +42,7 @@ pub(crate) struct RdmaTransport {
 struct ParentAdmission {
     grants: Arc<GrantCredits>,
     receive: ReceiveCredits,
+    reusable_source: bool,
 }
 
 impl ParentAdmission {
@@ -56,7 +57,11 @@ impl ParentAdmission {
             transport.config.max_cqes,
             count,
         )?;
-        Ok(Self { grants, receive })
+        Ok(Self {
+            grants,
+            receive,
+            reusable_source: false,
+        })
     }
 }
 
@@ -550,14 +555,14 @@ impl RdmaTransport {
             request.operation,
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
-        let qp_width = if self.direct(memory) && !memory.is_cuda() {
-            self.qp_width()
-        } else {
-            0
-        };
+        let reusable_source = self.direct(memory)
+            && (!memory.is_cuda()
+                || (length <= 1 << 31
+                    && self.registrations.gpu_source_reusable(memory, &paths)?));
+        let qp_width = if reusable_source { self.qp_width() } else { 0 };
         let plan = if multi {
             path::write_paths(channel, epoch, &paths, qp_width)?;
-            let grants = if self.direct(memory) && !memory.is_cuda() {
+            let grants = if reusable_source {
                 self.config.max_grants
             } else {
                 self.config.max_grants.min(self.config.max_endpoints)
@@ -577,6 +582,7 @@ impl RdmaTransport {
         } else {
             path::write_paths(channel, epoch, &paths, qp_width)?;
         }
+        admission.reusable_source = reusable_source;
         let mut slices = Vec::new();
         let result = (|| {
             if multi {

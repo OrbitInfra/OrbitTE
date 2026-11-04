@@ -54,9 +54,7 @@ impl GrantConstruction {
             };
             let is_direct = direct.is_some();
             if reuse.is_some() && !is_direct {
-                return Err(Error::Protocol(
-                    "RDMA reuse requires host Direct on both peers",
-                ));
+                return Err(Error::Protocol("RDMA reuse requires Direct on both peers"));
             }
             if is_direct != grant_lease.is_direct {
                 return Err(Error::Internal("RDMA grant memory admission mismatch"));
@@ -66,6 +64,7 @@ impl GrantConstruction {
                     address: loan.address(),
                     length: loan.len(),
                     loan: Some(loan),
+                    visible: false,
                 },
                 None => Buffer::Staged(Staging::new(length)?),
             };
@@ -117,12 +116,14 @@ impl GrantConstruction {
                 None
             };
 
-            let remote_mr = is_direct && memory.is_cuda() && permission != 0;
+            let gpu_source = is_direct && memory.is_cuda() && permission != 0;
+            let remote_mr = gpu_source && matches!(connection, Connection::Fresh(None));
             let grant = GrantResources {
                 _worker: worker_lease,
                 device,
                 handles: sys::MemoryHandles {
                     remote_mr,
+                    gpu_parent: gpu_source && !remote_mr,
                     ..Default::default()
                 },
                 cached_mr: None,
@@ -167,12 +168,18 @@ impl GrantConstruction {
             let Some(registration) = transport.registrations.poll_acquire(
                 Arc::clone(&grant.device),
                 &self.memory,
-                grant.permission != 0,
+                grant.permission != 0 && !grant.handles.gpu_parent,
                 deadline,
             )?
             else {
                 return Ok(None);
             };
+            if grant.handles.gpu_parent && registration.gpu_domain() != Some(grant.device.domain()?)
+            {
+                return Err(Error::Unavailable(
+                    "GPU parent registration has no revocable key on this PD",
+                ));
+            }
             grant.cached_mr = Some(registration);
             grant.handles.mr = grant
                 .cached_mr

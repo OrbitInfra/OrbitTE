@@ -84,7 +84,8 @@ storage and CUDA, and R1d covers HP-TCP, ordinary TCP and observability.
 The [release delta](tent-parity.md#v0314-delta) names the controls for each change.
 Installed GPU and RNIC profiles remain in the verification queue.
 
-S15 then closes the remaining P5 staging and GPU Direct work. S15b adds an
+S15 implements capability-gated GPU source QP/MR reuse. The ProxyManager
+resource boundaries and mixed-batch reconciliation remain open. S15b adds an
 OrbitTE local CUDA copy engine for OrbitKV, with event-completed copies on
 the caller's stream, strided and batched descriptors, and a kernel for
 fragmented batches. Its interface awaits the OrbitKV consumer specification.
@@ -268,7 +269,8 @@ Done:
 
 Open:
 
-- [ ] GPU source QP/MR reuse for GPUDirect; legacy IPC remote host exports; exporter-crash
+- [x] GPU source QP/MR reuse with per-grant hardware revocation (B04). Implemented; installed profile unqualified.
+- [ ] Legacy IPC remote host exports; exporter-crash
   safety (currently unqualified).
 - [ ] Reconcile the remaining ProxyManager resource and control boundaries with
   TENT before claiming full ProxyManager parity.

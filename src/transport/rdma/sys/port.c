@@ -25,3 +25,22 @@ int orbitte_query_port(void *context, uint8_t port,
     };
     return 0;
 }
+
+#ifdef ORBITTE_GPU_KEYS
+#include <errno.h>
+#if __has_include(<infiniband/mlx5dv.h>)
+#include <infiniband/mlx5dv.h>
+int orbitte_mlx5_pdn(int (*init)(struct mlx5dv_obj *, uint64_t), void *pd, uint32_t *pdn) {
+    struct mlx5dv_pd result = {0};
+    struct mlx5dv_obj object = {.pd = {.in = pd, .out = &result}};
+    int code = init(&object, MLX5DV_OBJ_PD);
+    if (!code) *pdn = result.pdn;
+    return code;
+}
+#else
+int orbitte_mlx5_pdn(int (*init)(void *, uint64_t), void *pd, uint32_t *pdn) {
+    (void)init; (void)pd; (void)pdn;
+    return EOPNOTSUPP;
+}
+#endif
+#endif

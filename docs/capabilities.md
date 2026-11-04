@@ -20,7 +20,7 @@ identifies the release changes still awaiting a port.
 | --- | --- | --- |
 | CPU DRAM over TCP | Implemented | Loopback and multi-process byte, restart and lifetime controls; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
 | Host DRAM over RDMA | Accepted (RoCE) | Two-host RoCEv2 READ/WRITE with restart, cleanup and in-flight DMA faults. InfiniBand and physical link or device loss are unqualified. See [RDMA and CUDA](rdma-cuda.md) |
-| GPUDirect RDMA | Accepted (H20/RoCE, with limits) | Host/GPU READ/WRITE and two-rail slices. Host-wide context non-growth is unqualified; GPU source MRs and QPs are per grant |
+| GPUDirect RDMA | Accepted (H20/RoCE, with limits) | Host/GPU READ/WRITE and two-rail slices. The H20 evidence covers private GPU source grants. Opt-in GPU source QP/MR reuse is implemented; installed profile unqualified. Host-wide context non-growth is unqualified |
 | CUDA IPC / NVLink on one host | Accepted (H20, cooperative profiles) | GPU/GPU, pinned host/GPU, subbatch reuse and a fixed-working-set import cache. Grouped completion, stream pool, native batch copy, cache reclamation and the single-task synchronous path await installed verification. See [CUDA IPC](cuda-ipc.md) |
 | Local CUDA staging over TCP/RDMA | Accepted (H20, healthy) | Shared pinned chunks; physical CUDA faults are unqualified. See [staging](staging.md) |
 | Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Later nonblocking progress work is implemented only; full ProxyManager parity is open. See [remote pipeline](staging.md#bounded-remote-pipeline) |

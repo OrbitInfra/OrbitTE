@@ -171,8 +171,8 @@ impl RdmaTransport {
         if expected.is_some_and(|domain| domain != hello.expected_domain) {
             return Err(Error::Protocol("RDMA slice rendezvous changed planned PD"));
         }
-        let remote_mr = self.direct(memory) && memory.is_cuda();
-        let cacheable = hello.direct && self.direct(memory) && !remote_mr;
+        let cacheable = hello.direct && admission.reusable_source;
+        let remote_mr = self.direct(memory) && memory.is_cuda() && !cacheable;
         if cacheable != (hello.qp_width != 0) || hello.qp_width > self.qp_width() {
             return Err(Error::Protocol("RDMA bootstrap QP width/profile mismatch"));
         }

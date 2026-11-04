@@ -258,7 +258,14 @@ pub(super) unsafe extern "C" fn open_device(
             let device = *devices.add(index as usize);
             let device_name = ffi::ibv_get_device_name(device);
             if !device_name.is_null() && CStr::from_ptr(name) == CStr::from_ptr(device_name) {
-                h.context = ffi::ibv_open_device(device).cast();
+                #[cfg(feature = "cuda")]
+                if h.request_gpu_keys {
+                    h.context = super::gpu_key::open(device);
+                }
+                if h.context.is_null() {
+                    h.context = ffi::ibv_open_device(device).cast();
+                    h.request_gpu_keys = false;
+                }
                 error = if h.context.is_null() { failure() } else { 0 };
                 break;
             }
@@ -288,6 +295,10 @@ pub(super) unsafe extern "C" fn open_device(
         h.pd = ffi::ibv_alloc_pd(h.context.cast()).cast();
         if h.pd.is_null() {
             return failure();
+        }
+        #[cfg(feature = "cuda")]
+        if h.request_gpu_keys && attr.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B != 0 {
+            h.gpu_keys = super::gpu_key::caps(h);
         }
         0
     }

@@ -469,6 +469,7 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
                 mw: (&mut mw as *mut ffi::ibv_mw).cast(),
                 remote_mr: false,
                 window_key: 0x123456ff,
+                ..Default::default()
             };
             let mut result = PostResult::default();
             assert_eq!(

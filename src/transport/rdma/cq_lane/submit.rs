@@ -91,6 +91,17 @@ impl CqLane {
                 .resources
                 .as_mut()
                 .ok_or(Error::Internal("missing MW owner"))?;
+            if resources.grant()?.handles.gpu_parent {
+                let connection = Arc::clone(&resources.connection);
+                let connection = connection.lock()?;
+                let grant = resources.grant_mut()?;
+                if operation != slice::Operation::Bind || grant.window_used {
+                    return Err(Error::Protocol("invalid GPU grant bind"));
+                }
+                return connection
+                    .device
+                    .bind_gpu_grant(grant, connection.local.qpn);
+            }
             if resources.grant_mut()?.handles.mw.is_null() {
                 return Err(Error::Unavailable("source MW is unavailable"));
             }

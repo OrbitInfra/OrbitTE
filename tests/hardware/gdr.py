@@ -7,7 +7,7 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def validate_profile(profile):
+def validate_profile(profile, require_reuse=False):
     nodes, cases = profile.get('nodes'), profile.get('cases')
     require(isinstance(nodes, dict) and isinstance(cases, list) and cases,
             'GPU gate requires a nonempty inventoried two-host profile')
@@ -17,6 +17,11 @@ def validate_profile(profile):
         require(case.get('transport') == 'rdma' and case.get('cuda_memory') == 'direct'
                 and all(kind in ('cpu', 'cuda:0') for kind in kinds) and 'cuda:0' in kinds
                 and case.get('source') != case.get('requester'), 'invalid GPU direct gate scope')
+        reuse = case.get('gpu_source_reuse', False)
+        require(not require_reuse or reuse is True, 'GPU source reuse required in every case')
+        require(type(reuse) is bool and (not reuse or (kinds[0] == 'cuda:0' and all(
+                case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
+                for r in ('source', 'requester')))), 'invalid GPU source key reuse case')
         identities = []
         for role in ('source', 'requester'):
             node = nodes.get(case.get(role))
@@ -69,6 +74,7 @@ def verify(profile, case, evidence):
                 and qp[0]['opened_private_pds'] == qp[0]['closed_private_pds'],
                 role + ': private PD drain failed')
 
+    reuse = case.get('gpu_source_reuse', False)
     requester = native['requester']
     posts = [row for row in requester if row['kind'] == 'gdr_post' and row['opcode'] in (0, 4)]
     length = case.get('slice_bytes', case['payload'] // 4 - 23)
@@ -87,7 +93,7 @@ def verify(profile, case, evidence):
                        and mr['address'] <= post['local']
                        and post['local'] + post['length'] <= mr['address'] + mr['length']]
             require(matches, 'payload SGE is not inside an actual GPU MR on its QP PD')
-        if memory['source']['cuda']:
+        if memory['source']['cuda'] and not reuse:
             permission = 2 if post['opcode'] == 0 else 4
             matches = [mr for mr in native['source'] if mr['kind'] == 'gdr_mr'
                        and mr['cuda_status'] == 0 and mr['memory_type'] == 2
@@ -98,9 +104,31 @@ def verify(profile, case, evidence):
             require(any(qp['kind'] == 'gdr_qp' and qp['context'] == mr['context'] and qp['pd'] == mr['pd'] and qp['qpn']
                         for mr in matches for qp in native['source']), 'GPU MR and source QP do not share private PD')
     sends = [row for row in requester if row['kind'] == 'gdr_post' and row['opcode'] in (2, 9)]
-    expected = 2 if memory['source']['cuda'] else 9
+    expected = 2 if memory['source']['cuda'] and not reuse else 9
     require(sends and all(row['opcode'] == expected and row['code'] == 0 for row in sends),
             'wrong completion SEND authority profile')
+    if reuse:
+        source = native['source']
+        stats, = records(evidence['source'], 'ORBITTE_GPU_MR_STATS ')
+        count = case.get('expected_grants', 6)
+        require(stats['opened_private_pds'] == 0 and stats.get('opened_keys') == count
+                and stats.get('invalidated_keys') == count and stats.get('reused_connections', 0) > 0,
+                'GPU source did not revoke every key on reusable connections')
+        gpu = [mr for mr in source if mr['kind'] == 'gdr_mr' and mr['cuda_status'] == 0 and mr['memory_type'] == 2]
+        require(all(mr['access'] == 1 for mr in gpu), 'persistent GPU parent has remote rights')
+        parents = {(mr['context'], mr['pd']) for mr in gpu}
+        qps = {(row['context'], row['qpn']) for row in source if row['kind'] == 'gdr_qp'
+               and (row['context'], row['pd']) in parents}
+        revoked = [row for row in source if row['kind'] == 'gdr_invalidation']
+        require(all((row['context'], row['qpn']) in qps for row in revoked),
+                'GPU key invalidation on unrelated QP or PD')
+        used = {(contexts['requester'][p['context']], p['rkey']) for p in posts}
+        keys = {(contexts['source'][r['context']], r['rkey']) for r in revoked}
+        require(len(revoked) == len(keys) == count and keys == used,
+                'GPU payload keys must be fresh and match the source receive CQEs')
+        require(all(memory['source']['base'] <= post['remote'] and
+                    post['remote'] + post['length'] <= memory['source']['base'] + memory['source']['length']
+                    for post in posts), 'remote WR outside GPU allocation')
     if memory['source']['cuda']:
         require(not any(row['kind'] == 'gdr_post' and row['opcode'] in (7, 8)
                         for row in native['source']), 'GPU source posted a window operation')

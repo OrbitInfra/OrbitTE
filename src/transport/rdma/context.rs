@@ -8,6 +8,7 @@ use super::{
 };
 use crate::{Error, RegisteredMemory, Result};
 
+mod gpu_keys;
 mod key_domain;
 use key_domain::ExhaustedWindow;
 
@@ -40,6 +41,8 @@ struct Resources {
     domain: [u8; 16],
     next_connection: u64,
     next_grant: u64,
+    next_gpu_key: u64,
+    gpu_index_limit: usize,
     keys: keys::Keys,
     exhausted_windows: Vec<ExhaustedWindow>,
     address: RdmaAddress,
@@ -102,12 +105,19 @@ impl RdmaContext {
             .active_devices += 1;
         let owner = Arc::new(Self {
             state: Mutex::new(State::Open(Box::new(Resources {
-                handles: sys::DeviceHandles::default(),
+                handles: sys::DeviceHandles {
+                    request_gpu_keys: config.gpu_source_reuse
+                        && cfg!(feature = "cuda")
+                        && config.cuda_memory == super::RdmaCudaMemory::Direct,
+                    ..Default::default()
+                },
                 events: None,
                 usage,
                 domain,
                 next_connection: 1,
                 next_grant: 1,
+                next_gpu_key: 0,
+                gpu_index_limit: config.max_window_key_indices,
                 keys: keys::Keys::new(config.max_window_key_indices),
                 exhausted_windows: Vec::new(),
                 address,
@@ -387,6 +397,7 @@ impl RdmaContext {
             async_fd: resources.handles.async_fd,
             read_limits: resources.handles.read_limits,
             supports_atomics: resources.handles.supports_atomics,
+            ..Default::default()
         };
         // The send grant or physical RQ owns these bytes through native teardown.
         // SAFETY: The message owner keeps its buffer live through deregistration; the locked
@@ -556,7 +567,7 @@ impl RdmaContext {
         check("ibverbs grant/endpoint construction", code)?;
         if permission != 0 && private_pd {
             local.rkey = grant.handles.window_key;
-        } else if permission != 0 {
+        } else if permission != 0 && !grant.handles.gpu_parent {
             if grant.handles.mw.is_null() {
                 return Err(Error::Internal("source endpoint has no MW"));
             }

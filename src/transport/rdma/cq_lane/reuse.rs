@@ -114,14 +114,13 @@ impl CqLane {
             || binding[COMPLETION_MESSAGE_SIZE - 1] != 1
         {
             return Err(Error::Protocol(
-                "only negotiated host Direct grants can retain a QP",
+                "only negotiated revocable Direct grants can retain a QP",
             ));
         }
-        let work = request
-            .work
-            .as_ref()
-            .ok_or(Error::Internal("missing RDMA completion work"))?;
-        if !work.queue.finished() || work.queue.pending() || grant.window_bound {
+        // A GPU key is installed by a synchronous device command. Host BIND
+        // and requester SEND require their actual SQ completion.
+        let work = request.work.as_ref();
+        if grant.window_bound || work.is_some_and(|w| !w.queue.finished() || w.queue.pending()) {
             return Err(Error::Internal("RDMA operation lacks completion drain"));
         }
         let connection = resources
@@ -157,7 +156,7 @@ impl CqLane {
                 && request
                     .payload_operation
                     .is_some_and(|op| binding[10] == if op == TransferOp::Read { 4 } else { 5 })
-                && work.operation == slice::Operation::Send
+                && work.is_some_and(|w| w.operation == slice::Operation::Send)
                 && request.receive.is_none()
                 && grant
                     .message
@@ -166,7 +165,11 @@ impl CqLane {
         } else {
             done.is_some()
                 && !request.message_sent
-                && work.operation == slice::Operation::Bind
+                && if grant.handles.gpu_parent {
+                    work.is_none() && grant.window_used && !grant.handles.gpu_key.is_null()
+                } else {
+                    work.is_some_and(|w| w.operation == slice::Operation::Bind)
+                }
                 && request.receive.as_ref().is_some_and(|r| {
                     r.completed() && r.expected == *binding && r.rkey == grant.rkey
                 })

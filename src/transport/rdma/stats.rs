@@ -28,6 +28,10 @@ pub struct RdmaStats {
     pub retained_devices: usize,
     /// Successful context/PD constructions during this runtime lifetime.
     pub opened_devices: u64,
+    /// Hardware-verified, exact-range device keys created over persistent GPU MRs.
+    pub opened_gpu_grant_keys: u64,
+    /// GPU keys invalidated on the matching QP by a confirmed completion SEND.
+    pub invalidated_gpu_grant_keys: u64,
     pub active_windows: usize,
     pub opened_windows: u64,
     /// Never-bound MWs parked in their PD to prevent an exhausted index reappearing.

@@ -475,15 +475,25 @@ GPU MR per context under the owning CUDA context, and requester slices borrow
 these persistent MRs. Allocation-wide `DmaLease` ranges reject overlapping copies
 or grants and never expose GPU pointers as CPU slices.
 
-[PeerDirect does not support memory windows](https://docs.nvidia.com/networking/display/mlnxofedv23102131201lts/optimized%2Bmemory%2Baccess),
-so each GPU source grant owns a fresh PD, an exact-range MR with only the
-requested permission and a fresh QP, and completes with an ordinary fenced SEND.
-Source ACK follows RQ completion, QP and MR teardown, PD deallocation and GPU write
-visibility (hardware ordering, or `cuFlushGPUDirectRDMAWrites`). Uncertain
-cleanup or flush keeps the allocation, range loan and admission. TENT publishes
-native MR keys directly; OrbitTE's exact per-request authorization needs private
-PDs for GPU source grants, which are therefore not cached. See
-[qualification](qualification.md#gpudirect-rdma).
+A GPU source can reuse a connected QP and its local-only GPU MR when every
+advertised rail can create a hardware-revocable key over that MR.
+Set `RdmaConfig::gpu_source_reuse` to `true` to opt in. The default uses the
+private grant path qualified on H20. Changing that default requires the
+[installed reuse gate](qualification.md#verification-queue) to pass. On mlx5, OrbitTE probes the
+actual parent using DevX, indirect KLM translation and named key indices. Each
+grant binds a fresh key to its QPN, exact byte range and READ or WRITE right.
+The source verifies the device's key context and KLM before publishing it.
+Firmware that requires the wildcard QPN fails the registration probe. A full key
+is never reused on that PD. Key history shares the bounded window-key budget.
+
+The source releases the range after the matching receive-with-invalidate CQE,
+bound DONE, key destruction and CUDA write visibility. Uncertain revocation,
+destruction or visibility retains the owners and admission. With reuse
+disabled or an unsupported parent/provider, a grant has a private PD, exact MR
+and QP. Its ordinary fenced SEND is followed by QP/MR/PD teardown before ACK.
+Both paths avoid binding ordinary memory windows to GPU MRs.
+[Provider memory window limits](https://docs.nvidia.com/networking/display/mlnxofedv23102131201lts/optimized%2Bmemory%2Baccess),
+[mlx5 programming reference](https://network.nvidia.com/files/doc-2020/ethernet-adapters-programming-manual.pdf).
 
 The `hardware_peer` gate accepts `ORBITTE_RDMA_CUDA_MEMORY=direct` and optional
 `ORBITTE_RDMA_SLICE_BYTES` (1, 17, 32 or 64). Its passive observer records MR
@@ -505,7 +515,10 @@ declares `cuda_memory: "direct"`, `transport: "rdma"` and `cpu`/`cuda:0` memory
 kinds with at least one GPU. Small cases use `payload: 4096`; the two-rail
 folded-tail case adds `rails`, both NIC locks, `payload: 8388768`,
 `rdma_block_size: 1048576` and `expected_grants: 12`. Run both directions and
-both `rdma_events` values, and keep failed runs.
+both `rdma_events` values, and keep failed runs. Set `gpu_source_reuse: true`
+on GPU-source cases to require key and QP reuse. The verifier matches each
+payload rkey to its source receive CQE on the parent PD and checks both peers'
+full buffers and guards. See the [verification queue](qualification.md#verification-queue).
 
 ## Run a native profile
 

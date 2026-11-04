@@ -122,6 +122,9 @@ fn finish(
     let gpu_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Cuda(_))
         && env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() == Ok("direct");
+    let gpu_key_reuse = gpu_direct
+        && role == "source"
+        && env::var("ORBITTE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
     let host_direct = transport == Transport::Rdma
         && matches!(&backing, Memory::Host(_))
         && env::var("ORBITTE_RDMA_HOST_MEMORY").as_deref() != Ok("staged");
@@ -144,7 +147,7 @@ fn finish(
     let private_mrs = if remote_rdma { 6 * stage_width } else { 0 };
     let reused_mrs = if remote_rdma {
         grants - private_mrs
-    } else if host_direct || (gpu_direct && role == "requester") {
+    } else if host_direct || gpu_key_reuse || (gpu_direct && role == "requester") {
         grants
     } else {
         0
@@ -172,7 +175,17 @@ fn finish(
         0
     };
     let windows = if gpu_direct { 0 } else { receives };
-    let private_pds = if gpu_direct { receives } else { 0 };
+    let private_pds = if gpu_direct && !gpu_key_reuse {
+        receives
+    } else {
+        0
+    };
+    let keys = if gpu_key_reuse { receives } else { 0 };
+    if idle.opened_gpu_grant_keys != keys || idle.invalidated_gpu_grant_keys != keys {
+        return Err(Error::Internal(
+            "GPU grant key creation or revocation receipt missing",
+        ));
+    }
     if idle.active_grant_pds != 0
         || idle.opened_grant_pds != private_pds
         || idle.closed_grant_pds != private_pds
@@ -234,7 +247,8 @@ fn finish(
         || idle.completed_window_invalidations != windows
         || idle.burned_window_keys != windows
         || idle.window_key_exhaustions != 0
-        || (windows == 0 && idle.window_key_indices != 0)
+        || (windows == 0 && !gpu_key_reuse && idle.window_key_indices != 0)
+        || (gpu_key_reuse && idle.window_key_indices == 0)
         || (windows != 0 && !(1..=windows as usize).contains(&idle.window_key_indices))
     {
         return Err(Error::Internal("source MW lifecycle counters differ"));
@@ -422,8 +436,14 @@ fn finish(
         return Err(Error::Internal("receive/message resources were retained"));
     }
     println!(
-        "ORBITTE_GPU_MR_STATS {{\"direct\":{},\"opened_private_pds\":{},\"closed_private_pds\":{},\"active_private_pds\":{}}}",
-        gpu_direct, rdma.opened_grant_pds, rdma.closed_grant_pds, rdma.active_grant_pds
+        "ORBITTE_GPU_MR_STATS {{\"direct\":{},\"opened_private_pds\":{},\"closed_private_pds\":{},\"active_private_pds\":{},\"opened_keys\":{},\"invalidated_keys\":{},\"reused_connections\":{}}}",
+        gpu_direct,
+        rdma.opened_grant_pds,
+        rdma.closed_grant_pds,
+        rdma.active_grant_pds,
+        rdma.opened_gpu_grant_keys,
+        rdma.invalidated_gpu_grant_keys,
+        rdma.reused_connections
     );
     println!(
         "ORBITTE_RECEIVE_STATS {{\"completed_sends\":{},\"completed_receives\":{},\"receive_post_calls\":{},\"peak_receive_work_requests\":{},\"receive_work_requests\":{},\"retained_receive_work_requests\":{},\"message_mrs\":{},\"retained_message_mrs\":{},\"message_bytes\":{},\"retained_message_bytes\":{}}}",
@@ -568,6 +588,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Ok("direct") | Err(env::VarError::NotPresent) => RdmaHostMemory::Direct,
         _ => return Err("ORBITTE_RDMA_HOST_MEMORY must be direct or staged".into()),
     };
+    // Archived installed profiles require private-PD witnesses. Reuse profiles
+    // opt in explicitly so they cannot pass on an unsupported RNIC.
+    rdma.gpu_source_reuse = env::var("ORBITTE_EXPECT_GPU_KEY_REUSE").as_deref() == Ok("1");
     rdma.cuda_memory = match env::var("ORBITTE_RDMA_CUDA_MEMORY").as_deref() {
         Ok("direct") => RdmaCudaMemory::Direct,
         Ok("staged") | Err(env::VarError::NotPresent) => RdmaCudaMemory::Staged,

@@ -49,6 +49,23 @@ pub(super) unsafe extern "C" fn prepare_grant(
         {
             return libc::EINVAL;
         }
+        if memory.gpu_parent {
+            // The local GPU MR was registered once on this PD. Authority is
+            // created only after the peer accepts the connection and generation.
+            if memory.mr.is_null() || permission == 0 || memory.remote_mr {
+                return libc::EINVAL;
+            }
+            let parent = &*memory.mr.cast::<ffi::ibv_mr>();
+            if parent.pd != device.pd.cast()
+                || (buffer as usize)
+                    .checked_sub(parent.addr as usize)
+                    .and_then(|n| n.checked_add(length))
+                    .is_none_or(|end| end > parent.length)
+            {
+                return libc::EINVAL;
+            }
+            return 0;
+        }
         if memory.remote_mr {
             if permission == 0 || !(*handles).qp.is_null() || !memory.mr.is_null() {
                 return libc::EINVAL;

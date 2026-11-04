@@ -127,7 +127,11 @@ impl ProgressState {
             receipt.mark_completed();
             let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.completed_receives += 1;
-            usage.completed_window_invalidations += u64::from(!grant.handles.remote_mr);
+            if grant.handles.gpu_parent {
+                usage.invalidated_gpu_grant_keys += 1;
+            } else {
+                usage.completed_window_invalidations += u64::from(!grant.handles.remote_mr);
+            }
             drop(usage);
             drop(request);
             record.changed.notify_all();
