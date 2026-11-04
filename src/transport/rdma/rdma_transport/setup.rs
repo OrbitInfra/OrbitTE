@@ -360,6 +360,13 @@ impl RdmaSetup {
                     Error::Unavailable(reason) => self.request.selection.rejected(reason),
                     e => e,
                 })?;
+            if transport.config.log_slice_affinity {
+                log::debug!(
+                    "RDMA slice affinity local={} peer={} length={length}",
+                    local.name,
+                    remote.name
+                );
+            }
             self.plan.push_back(PlannedSlice {
                 rail: Some(rail),
                 range: SliceRequest {

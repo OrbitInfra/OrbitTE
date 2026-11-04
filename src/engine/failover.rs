@@ -124,6 +124,24 @@ impl TransferEngine {
                     remote_effect,
                 })
         };
+        // CROSS children submit the actual payload attempts. Pin, Delegate and
+        // Unpin are orchestration and must not add a second transport start.
+        #[cfg(feature = "cuda")]
+        if request.remote_staging
+            && matches!(
+                request.selection.transport,
+                Transport::Tcp | Transport::Rdma
+            )
+        {
+            return single(self.source.proxy.transfer_remote(
+                (operation, owner_deadline),
+                credit,
+                peer,
+                request,
+                &self.source,
+                posted,
+            ));
+        }
         #[cfg(feature = "metrics")]
         if let Some(m) = &owners[0].metrics {
             m.begin(request.selection.transport);
@@ -133,17 +151,6 @@ impl TransferEngine {
                 Error::Internal("unresolved transport"),
                 RemoteEffect::None,
             ))),
-            #[cfg(feature = "cuda")]
-            Transport::Tcp | Transport::Rdma if request.remote_staging => {
-                single(self.source.proxy.transfer_remote(
-                    (operation, owner_deadline),
-                    credit,
-                    peer,
-                    request,
-                    &self.source,
-                    posted,
-                ))
-            }
             Transport::Shm => {
                 #[cfg(target_os = "linux")]
                 {
@@ -447,7 +454,6 @@ impl TransferEngine {
             #[cfg(feature = "metrics")]
             if let Some(m) = &owner.metrics {
                 m.retry(request.selection.transport);
-                m.begin(request.selection.transport);
             }
             owner.reroute(&request.selection, {
                 #[cfg(feature = "cuda")]

@@ -78,12 +78,11 @@ selected profiles while other rows stay open.
 ## Current focus
 
 S14 MNNVL/EGM is merged. P3, P6 and P7 completed their original source steps.
-R1a pinned Mooncake v0.3.14 and its CPU oracle. R1b implements the six RDMA
-deltas at source level. R1c implements the storage and CUDA release deltas.
-R1d covers
-HP-TCP, TCP, diagnostics and metrics. Each PR starts on main after the
-preceding one merges. The [release delta](tent-parity.md#v0314-delta) lists
-the open ports and the controls already present.
+All 19 Port rows in the Mooncake v0.3.14 alignment are implemented at source
+level. R1a pinned the reference and CPU oracle. R1b covers RDMA, R1c covers
+storage and CUDA, and R1d covers HP-TCP, ordinary TCP and observability.
+The [release delta](tent-parity.md#v0314-delta) names the controls for each change.
+Installed GPU and RNIC profiles remain in the verification queue.
 
 S15 then closes the remaining P5 staging and GPU Direct work. S15b adds an
 OrbitTE local CUDA copy engine for OrbitKV, with event-completed copies on

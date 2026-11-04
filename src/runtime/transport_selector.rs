@@ -55,7 +55,11 @@ impl SelectionContext<'_> {
                         .zip(self.remote_segment.shm.as_ref())
                         .is_some_and(|(a, b)| a.cxl == b.cxl && b.get(self.remote.id()).is_some())
             }
-            Transport::Tcp => !self.local_segment.tcp_disabled && !self.remote_segment.tcp_disabled,
+            Transport::Tcp => {
+                (self.local_memory == MemoryType::Cpu || cfg!(feature = "cuda"))
+                    && !self.local_segment.tcp_disabled
+                    && !self.remote_segment.tcp_disabled
+            }
             Transport::HpTcp => {
                 self.local_memory == MemoryType::Cpu
                     && self.remote.hp_registered

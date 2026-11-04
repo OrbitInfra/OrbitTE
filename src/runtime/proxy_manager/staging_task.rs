@@ -163,6 +163,10 @@ impl<'a> StagingTask<'a> {
             if let Some(transfer) = cross.rdma {
                 result = transfer.close(result);
             }
+            #[cfg(feature = "metrics")]
+            if let Some(m) = cross.metrics {
+                m.finish(result.as_ref().err(), true);
+            }
             drop(cross.local);
         }
         result
@@ -282,6 +286,10 @@ impl<'a> StagingTask<'a> {
                             #[cfg(feature = "rdma")]
                             if let Some(transfer) = cross.rdma {
                                 transfer.close(Ok(()))?;
+                            }
+                            #[cfg(feature = "metrics")]
+                            if let Some(m) = cross.metrics {
+                                m.finish(None, true);
                             }
                             drop(cross.local);
                             finished = Some(offset);
@@ -468,6 +476,48 @@ impl<'a> StagingTask<'a> {
     }
 
     fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
+        #[cfg(feature = "metrics")]
+        let metrics = self
+            .source
+            .registry
+            .metrics
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|r| {
+                let m = crate::metrics::Observation::new(
+                    &r,
+                    self.operation,
+                    self.request.selection.transport,
+                    length,
+                    None,
+                    None,
+                );
+                m.begin(self.request.selection.transport);
+                m
+            });
+        let result = self.prepare_cross(local, offset, length);
+        #[cfg(feature = "metrics")]
+        let result = match result {
+            Ok(mut cross) => {
+                cross.metrics = metrics;
+                Ok(cross)
+            }
+            Err(e) => {
+                if let Some(m) = metrics {
+                    m.finish(Some(&e), false);
+                }
+                Err(e)
+            }
+        };
+        result
+    }
+
+    fn prepare_cross(
+        &mut self,
+        local: RegisteredMemory,
+        offset: usize,
+        length: usize,
+    ) -> Result<Cross> {
         let cross = PreparedTransfer {
             #[cfg(target_os = "linux")]
             shm: None,
@@ -514,6 +564,8 @@ impl<'a> StagingTask<'a> {
             }
             .encode();
             return Ok(Cross {
+                #[cfg(feature = "metrics")]
+                metrics: None,
                 local: cross.local,
                 offset,
                 ready: false,
@@ -550,6 +602,8 @@ impl<'a> StagingTask<'a> {
                 self.cross_width,
             )?;
             Ok(Cross {
+                #[cfg(feature = "metrics")]
+                metrics: None,
                 local: cross.local,
                 offset,
                 ready: false,
@@ -562,6 +616,8 @@ impl<'a> StagingTask<'a> {
 }
 
 struct Cross {
+    #[cfg(feature = "metrics")]
+    metrics: Option<crate::metrics::Observation>,
     local: RegisteredMemory,
     offset: usize,
     ready: bool,

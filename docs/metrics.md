@@ -1,11 +1,12 @@
 # Metrics
 
-Build with `--features metrics` to expose engine metrics over HTTP. A requester
-counts one logical result per physical owner, including when several public
-tasks merge. A retry records a second transport attempt. A successful READ
-after an RDMA failure can therefore add bytes on TCP and an attempt failure
-on RDMA. R1d covers the release’s public request and attempt outcome counters,
-and metrics self-observation. See the [v0.3.14 delta](tent-parity.md#v0314-delta).
+Build with `--features metrics` to expose engine metrics over HTTP. Each
+accepted public request counts once, including each alias of a merged owner.
+The legacy READ/WRITE counters still count merged owners on the final route.
+Physical attempts count each transport submission, including retries and
+remote-staging CROSS children. A two-alias READ recovered from RDMA to TCP
+records two successful public requests, one failed RDMA attempt and one
+successful TCP attempt.
 
 ## Configure the endpoint
 
@@ -68,6 +69,9 @@ reasons are `submit`, `poll`, `timeout` and `canceled`.
 | `tent_{read,write}_failures_total` | Counter | `transport`. Failed requests, including short file I/O. |
 | `tent_transport_failover_total` | Counter | `from,to`. Each recovery decision that advances an owner. |
 | `tent_transport_attempts_total`, `tent_transport_attempt_failures_total` | Counter | `transport,operation`. Physical attempts and failed attempts. |
+| `tent_logical_requests_started_total`, `tent_logical_requests_inflight` | Counter, gauge | `operation`. Accepted public requests and those awaiting a terminal outcome. |
+| `tent_logical_request_outcomes_total` | Counter | `operation,outcome`. Terminal public requests. |
+| `tent_transport_attempt_outcomes_total` | Counter | `transport,operation,outcome`. Terminal physical attempts. |
 | `tent_task_failures_total` | Counter | `transport,reason`. Terminal task failures. TENT exposes this breakdown in Prometheus only. |
 | `tent_deadline_infeasible_total` | Counter | `transport`. An expired request deadline at submission or an S8 infeasibility drop. |
 | `tent_quarantined_batches_total` | Counter | Unlabelled. Abandoned batches entering quarantine. |
@@ -120,10 +124,28 @@ counts rejected queue dispatches. `orbitte_rdma_open_rails` is a gauge, while
 `orbitte_rdma_rail_errors_total`, `orbitte_rdma_rail_probes_total` and
 `orbitte_rdma_rail_recoveries_total` are cumulative.
 
-On an initialized handle, `set_enabled(false)` pauses counter and histogram
-sampling. Gauge pairs continue across the toggle, so unregistering a buffer or
-finishing an attempt while paused cannot leave a stale value behind.
+On an initialized handle, `set_enabled(false)` pauses new starts. A start
+recorded before the toggle still closes its outcome, latency and gauge.
+A start while paused adds neither half of a pair. Outcomes are `success`,
+`failed`, `timeout` and `canceled`. An accepted but unexecuted suffix after
+a failed predecessor counts as failed, unless its owner was canceled.
+Rejected submissions leave both public and attempt starts untouched. Legacy
+byte counters and registered-buffer gauges retain their original semantics.
 
-After sampling resumes, a completion can add known bytes. A timing sample
-requires both timestamps. An attempt started while sampling was paused supplies
-no latency observation.
+## Exporter health
+
+These families appear before the first transfer and remain visible while
+sampling is paused. `engine.metrics_status()` also reads them on an engine
+configured off at startup, without creating a listener or recorder.
+
+| Family | Type | Labels and meaning |
+| --- | --- | --- |
+| `tent_metrics_build_info` | Gauge | `version,commit`. Constant 1 for this build. |
+| `tent_metrics_runtime_enabled`, `tent_metrics_http_server_up` | Gauges | Sampling enabled and endpoint listening. |
+| `tent_metrics_http_start_failures_total` | Counter | Failed server starts on this engine. |
+| `tent_metrics_serialization_attempts_total`, `tent_metrics_serialization_failures_total` | Counters | `format` is `prometheus` or `json`. Attempts include the current scrape. |
+| `tent_metrics_last_success_timestamp_seconds` | Gauge | Unix seconds per format. Zero until the first successful serialization. |
+
+A serialization error returns HTTP 500. The next successful scrape includes
+the failure. `/health` reports HTTP liveness independently of serialization
+and transport state.

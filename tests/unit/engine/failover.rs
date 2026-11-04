@@ -408,6 +408,14 @@ mod native {
                 let m = p.engine.metrics().unwrap();
                 let j = m.json();
                 let text = m.prometheus();
+                assert_eq!(j["tent_logical_requests_started_total"], 2);
+                assert_eq!(j["tent_logical_request_outcomes_total"], 2);
+                assert_eq!(j["tent_logical_requests_inflight"], 0);
+                assert_eq!(j["tent_transport_attempt_outcomes_total"], 1 + budget);
+                assert_eq!(j["tent_inflight_attempts"], 0);
+                let outcome = if budget == 0 { "failed" } else { "success" };
+                assert!(text.contains(&format!(r#"tent_logical_request_outcomes_total{{operation="read",outcome="{outcome}"}} 2"#)));
+                assert!(text.contains(r#"tent_transport_attempt_outcomes_total{transport="rdma",operation="read",outcome="failed"} 1"#));
                 assert_eq!(j["tent_transport_attempts_total"], 1 + budget);
                 assert_eq!(j["tent_transport_attempt_failures_total"], 1);
                 assert_eq!(j["tent_transport_attempt_latency_us"]["count"], 1 + budget);

@@ -39,6 +39,8 @@
 #[cfg(unsupported_native_target)]
 compile_error!("OrbitTE's `cuda`, `rdma`, `io-uring` and `gds` features require a Linux target");
 
+pub mod diagnostics;
+
 #[cfg(not(unsupported_native_target))]
 mod batch;
 #[cfg(not(unsupported_native_target))]

@@ -415,6 +415,9 @@ fn peer_frame_limit_keeps_adjacent_aliases_separate_before_payload() {
 }
 
 impl HpTcpTransport {
+    pub(crate) fn outstanding_on_lanes(&self) -> usize {
+        self.client.outstanding()
+    }
     pub(crate) fn fail_worker_for_test(&self) {
         self.workers.execute(0, async {
             panic!("injected worker failure after terminal status")

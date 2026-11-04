@@ -8,6 +8,11 @@ impl TransferEngine {
         self.metrics.as_ref()
     }
 
+    /// Exporter state, including a disabled-at-construction engine. Reading it does not count as a scrape.
+    pub fn metrics_status(&self) -> serde_json::Value {
+        crate::metrics::pipeline_status(self.metrics())
+    }
+
     pub(super) fn record_registration_routes(&self, memory: &[RegisteredMemory]) {
         use crate::metrics::transport_bit;
         for m in memory {

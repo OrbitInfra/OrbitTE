@@ -113,6 +113,15 @@ fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
                 }
                 let chunk = source_chunk.min(local_chunk);
                 let chunks = length.div_ceil(chunk);
+                #[cfg(feature = "metrics")]
+                {
+                    let metrics = requester.metrics().unwrap().json();
+                    assert_eq!(metrics["tent_logical_requests_started_total"], 2);
+                    assert_eq!(metrics["tent_logical_request_outcomes_total"], 2);
+                    assert_eq!(metrics["tent_transport_attempts_total"], 2 * chunks);
+                    assert_eq!(metrics["tent_transport_attempt_outcomes_total"], 2 * chunks);
+                    assert_eq!(metrics["tent_inflight_attempts"], 0);
+                }
                 let source_width = 3.min(chunks);
                 let local_width = 3.min(length.div_ceil(local_chunk));
                 let stats = requester.stats().unwrap().staging;

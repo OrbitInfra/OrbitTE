@@ -234,6 +234,23 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
     batch.seal().unwrap();
     batch.cancel_all().unwrap();
     assert_eq!(batch.wait(TIMEOUT).unwrap().state, BatchState::Cancelled);
+    #[cfg(feature = "metrics")]
+    {
+        let m = requester.metrics().unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                batch.task_status(0).unwrap().state,
+                crate::TaskState::Cancelled
+            );
+            let s = m.json();
+            assert_eq!(s["tent_logical_requests_started_total"], 2);
+            assert_eq!(s["tent_logical_request_outcomes_total"], 2);
+            assert_eq!(s["tent_transport_attempts_total"], 0);
+            assert!(m.prometheus().contains(
+                r#"tent_logical_request_outcomes_total{operation="write",outcome="canceled"} 2"#
+            ));
+        }
+    }
     batch.free().unwrap();
     let mut expired = requester
         .submit_async(

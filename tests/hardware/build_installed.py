@@ -21,6 +21,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "peer-gpu-source": (["cuda"], "orbitte-peer-gpu-source", "orbitte-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
+        "peer-gpu-requester": ([], "orbitte-peer-gpu-requester", "orbitte-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
         "shm": ([], "orbitte-shm", "orbitte-installed-shm", "tests/hardware/shm.rs"),
         "hp-tcp": ([], "orbitte-hp-tcp", "orbitte-installed-hp-tcp", "tests/hardware/hp_tcp.rs"),
         "host": (["rdma"], "orbitte-rdma-host", "orbitte-installed-host-v4", "tests/hardware/rdma_host.rs"),
@@ -88,8 +90,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        if storage or consumer_kind in ('hp-tcp', 'shm', 'mnnvl'):
-            drivers = [{'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
+        if storage or consumer_kind in ('hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester'):
+            drivers = [{'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
             if consumer_kind == 'gds':
                 drivers.append('gds_run.py')
             for name in drivers:
@@ -212,6 +214,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

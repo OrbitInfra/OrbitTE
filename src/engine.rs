@@ -288,6 +288,13 @@ impl TransferEngine {
             io_uring: config.io_uring.with_environment()?,
             ..config
         };
+        #[cfg(feature = "rdma")]
+        let config = EngineConfig {
+            rdma: config
+                .rdma
+                .map(|r| r.resolve_switches(|key| std::env::var_os(key))),
+            ..config
+        };
         config.validate()?;
         #[cfg(feature = "metrics")]
         let metrics_config = config.metrics.load(config.metrics_config_file.as_deref())?;
@@ -1449,6 +1456,8 @@ impl TransferEngine {
         timeout: Duration,
     ) -> Result<BatchReport> {
         let prepared = self.prepare(operation, peer, requests, notification, timeout, None)?;
+        #[cfg(feature = "metrics")]
+        prepared.accept_metrics();
         let report = self.execute(&prepared, None);
         if !report.locally_drained {
             // Preserve actual registrations and admission, not a pointer surrogate.
@@ -1501,6 +1510,12 @@ impl TransferEngine {
         let report = self.execute_payload(submission, progress);
         #[cfg(feature = "gds")]
         let report = submission.finish_gds_report(report, progress);
+        #[cfg(feature = "metrics")]
+        for (i, o) in submission.owners.iter().enumerate() {
+            if let Some(m) = &o.metrics {
+                m.settle_skipped(|| progress.is_some_and(|(p, base)| p.cancel_requested(base + i)));
+            }
+        }
         report
     }
 

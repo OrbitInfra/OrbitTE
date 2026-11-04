@@ -1384,6 +1384,7 @@ fn hp_worker_failure_preserves_an_already_completed_batch() -> Result<()> {
         crate::test_support::EVENTUAL_PROGRESS,
     )?;
     batch.wait(crate::test_support::EVENTUAL_PROGRESS)?;
+    assert_eq!(dst.hp_tcp.as_ref().unwrap().outstanding_on_lanes(), 0);
     dst.hp_tcp.as_ref().unwrap().fail_worker_for_test();
     let task = batch.task_status(0)?;
     assert_eq!(task.state, crate::TaskState::Completed);
@@ -1419,4 +1420,52 @@ impl TransferEngine {
             .retired_sessions
             .load(std::sync::atomic::Ordering::Acquire)
     }
+}
+
+#[test]
+fn rejected_hp_submissions_leave_no_lane_load() -> Result<()> {
+    let config = EngineConfig {
+        tcp: false,
+        hp_tcp: crate::HpTcpConfig {
+            enable: true,
+            worker_count: 1,
+            connections_per_peer: 2,
+            max_outstanding_bytes: 4,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let src = TransferEngine::new(config.clone())?;
+    let dst = TransferEngine::new(config)?;
+    let remote = src.register_memory(vec![0x5a; 16].into(), Permission::RemoteReadWrite)?;
+    let local = dst.register_memory(vec![0xee; 16].into(), Permission::LocalOnly)?;
+    let wait = crate::test_support::EVENTUAL_PROGRESS;
+    let peer = dst.open_segment(src.endpoint(), src.source_epoch(), wait)?;
+    let req = |i| {
+        TransferRequest::new(
+            Transport::HpTcp,
+            local.base_address() + i,
+            remote.base_address() + i,
+            4,
+        )
+    };
+    let load = || dst.hp_tcp.as_ref().unwrap().outstanding_on_lanes();
+    for other in [9, 100] {
+        assert!(
+            dst.submit_and_wait(TransferOp::Read, &peer, &[req(1), req(other)], wait)
+                .is_err()
+        );
+        assert_eq!(load(), 0);
+    }
+    assert!(
+        dst.submit_and_wait(TransferOp::Read, &peer, &[req(1)], wait)?
+            .is_complete()
+    );
+    assert_eq!(load(), 0);
+    let mut got = [0; 16];
+    local.read(0, &mut got)?;
+    let mut want = [0xee; 16];
+    want[1..5].fill(0x5a);
+    assert_eq!(got, want);
+    Ok(())
 }

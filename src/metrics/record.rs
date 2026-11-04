@@ -41,6 +41,14 @@ impl Failure {
             .find(|r| r.code() == code)
     }
 }
+fn outcome(reason: Option<Failure>) -> usize {
+    match reason {
+        None => 0,
+        Some(Failure::Submit | Failure::Poll) => 1,
+        Some(Failure::Timeout) => 2,
+        Some(Failure::Canceled) => 3,
+    }
+}
 const UNTIMED_ATTEMPT: u64 = u64::MAX;
 
 pub(crate) struct Observation {
@@ -53,6 +61,7 @@ pub(crate) struct Observation {
     dispatch: AtomicU64,
     first_post: AtomicU64,
     attempt: AtomicU64,
+    public: AtomicU64,
     phase: AtomicU8,
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) file_posted: AtomicBool,
@@ -80,11 +89,46 @@ impl Observation {
             dispatch: AtomicU64::default(),
             first_post: AtomicU64::default(),
             attempt: AtomicU64::default(),
+            public: AtomicU64::default(),
             phase: AtomicU8::default(),
             last: AtomicU8::default(),
             terminal: AtomicBool::default(),
         }
     }
+    pub(crate) fn accept_public(&self) {
+        if self.cells.enabled.load(Relaxed) {
+            let op = usize::from(self.op == TransferOp::Write);
+            self.public.fetch_add(1, Relaxed);
+            self.cells.add(M::LogicalStarted, op, 1);
+            self.cells.add(M::LogicalInflight, op, 1);
+        }
+    }
+    fn settle_public(&self, reason: Option<Failure>) {
+        let n = self.public.swap(0, Relaxed);
+        if n != 0 {
+            let op = usize::from(self.op == TransferOp::Write);
+            self.cells
+                .add(M::LogicalOutcomes, op * 4 + outcome(reason), n);
+            self.cells.cells[M::LogicalInflight as usize][op]
+                .value
+                .fetch_sub(n, Relaxed);
+        }
+    }
+    // A submission may stop before invoking a trailing owner. These aliases still
+    // need an outcome but never entered a transport or produced legacy byte samples.
+    pub(crate) fn settle_skipped(&self, canceled: impl FnOnce() -> bool) {
+        if self.public.load(Relaxed) != 0 {
+            self.skipped(canceled());
+        }
+    }
+    fn skipped(&self, canceled: bool) {
+        self.settle_public(Some(if canceled {
+            Failure::Canceled
+        } else {
+            Failure::Submit
+        }));
+    }
+
     // Zero means no event. One represents an event at the submit instant.
     fn stamp(&self) -> u64 {
         let origin = self.submitted.unwrap_or(self.cells.origin);
@@ -132,8 +176,8 @@ impl Observation {
                 1,
             );
         }
-        self.cells.add(M::Inflight, route, 1);
         if enabled {
+            self.cells.add(M::Inflight, route, 1);
             self.cells.add(M::Attempts, attempt_slot(route, self.op), 1);
             let _ = self.first_post.compare_exchange(0, at, Relaxed, Relaxed);
         }
@@ -152,28 +196,28 @@ impl Observation {
             return;
         }
         let t = self.route.load(Relaxed);
-        self.cells.cells[M::Inflight as usize][t]
-            .value
-            .fetch_sub(1, Relaxed);
         let reason = error.map(|e| Failure::of(e, posted));
         self.last.store(reason.map_or(1, Failure::code), Relaxed);
         if let Some(r) = reason {
             let _ = self.phase.compare_exchange(0, r.code(), Relaxed, Relaxed);
         }
-        if !self.cells.enabled.load(Relaxed) {
+        if start == UNTIMED_ATTEMPT {
             return;
         }
         let i = attempt_slot(t, self.op);
+        self.cells
+            .add(M::AttemptOutcomes, i * 4 + outcome(reason), 1);
+        self.cells.cells[M::Inflight as usize][t]
+            .value
+            .fetch_sub(1, Relaxed);
         if reason.is_some_and(Failure::failed) {
             self.cells.add(M::AttemptFailures, i, 1);
         }
-        if start != UNTIMED_ATTEMPT {
-            self.cells.observe(
-                M::AttemptLatency,
-                i,
-                self.stamp().saturating_sub(start) / 1000,
-            );
-        }
+        self.cells.observe(
+            M::AttemptLatency,
+            i,
+            self.stamp().saturating_sub(start) / 1000,
+        );
     }
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn file_terminal(&self, reported: Option<&Error>) {
@@ -193,7 +237,15 @@ impl Observation {
         );
     }
     fn complete(&self, reason: Option<Failure>, dropped: bool) {
-        if self.terminal.swap(true, Relaxed) || !self.cells.enabled.load(Relaxed) {
+        if self.terminal.swap(true, Relaxed) {
+            return;
+        }
+        self.settle_public(if dropped {
+            Some(Failure::Canceled)
+        } else {
+            reason
+        });
+        if !self.cells.enabled.load(Relaxed) {
             return;
         }
         let t = self.route.load(Relaxed);
@@ -293,6 +345,18 @@ impl Observation {
                 t,
                 (u128::from(latency) * 1000 / window.as_nanos()).min(u128::from(u64::MAX)) as u64,
             );
+        }
+    }
+}
+
+impl Drop for Observation {
+    fn drop(&mut self) {
+        // An unwinding worker still owes a terminal outcome for every recorded start.
+        if self.attempt.load(Relaxed) != 0 {
+            self.finish(Some(&Error::Internal("transfer worker exited")), false);
+        }
+        if self.public.load(Relaxed) != 0 {
+            self.skipped(false);
         }
     }
 }

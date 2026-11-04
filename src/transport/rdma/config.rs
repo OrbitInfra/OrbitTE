@@ -93,6 +93,10 @@ pub struct RdmaConfig {
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
     pub cuda_memory: RdmaCudaMemory,
+    /// Disable direct device registration. An explicit Direct policy then fails validation.
+    pub disable_gpu_direct_rdma: bool,
+    /// Log the selected local and peer NIC for each planned slice at debug level.
+    pub log_slice_affinity: bool,
     pub max_direct_bytes: usize,
     /// TENT's base slice size. Large requests adapt to a bounded slice count.
     pub block_size: usize,
@@ -149,6 +153,8 @@ impl Default for RdmaConfig {
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             cuda_memory: RdmaCudaMemory::Staged,
+            disable_gpu_direct_rdma: false,
+            log_slice_affinity: false,
             max_direct_bytes: 64 << 20,
             block_size: 64 << 10,
             max_send_wr: 16,
@@ -174,7 +180,34 @@ impl RdmaConfig {
         }
     }
 
+    pub(crate) fn resolve_switches(
+        mut self,
+        mut get: impl FnMut(&str) -> Option<std::ffi::OsString>,
+    ) -> Self {
+        for (name, flag) in [
+            (
+                "MC_DISABLE_GPU_DIRECT_RDMA",
+                &mut self.disable_gpu_direct_rdma,
+            ),
+            ("MC_LOG_RDMA_SLICE_AFFINITY", &mut self.log_slice_affinity),
+        ] {
+            if let Some(value) = get(name) {
+                match value.to_str().map(str::to_ascii_lowercase).as_deref() {
+                    Some("1" | "true" | "yes" | "on") => *flag = true,
+                    Some("0" | "false" | "no" | "off") => *flag = false,
+                    _ => log::warn!("invalid {name}, retaining configured value"),
+                }
+            }
+        }
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.disable_gpu_direct_rdma && self.cuda_memory == RdmaCudaMemory::Direct {
+            return Err(Error::InvalidConfig(
+                "MC_DISABLE_GPU_DIRECT_RDMA conflicts with direct CUDA memory",
+            ));
+        }
         if self.signal_interval == 0 {
             return Err(Error::InvalidConfig(
                 "RDMA signal_interval must be positive",

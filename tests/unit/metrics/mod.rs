@@ -54,3 +54,5 @@ fn scrape(port: u16, path: &str) -> String {
 mod allocation;
 mod config_tests;
 mod recording;
+
+mod accounting;

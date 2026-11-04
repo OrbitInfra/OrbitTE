@@ -28,7 +28,7 @@ identifies the release changes still awaiting a port.
 | DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 I/O and buffered tmpfs I/O with full READ/WRITE byte checks. See [qualification evidence](qualification.md#local-file-segments) |
 | CUDA ↔ local file (io_uring) | Implemented; installed profile unqualified | CUDA shim and real files exercise bounded proxy chunks and optional whole-request pinned slots. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
 | GDS / cuFile | Implemented, installed native gate unrun | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
-| [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Real loopback sockets and multiple local IPv4 rails. Physical rail gate unrun |
+| [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Least-loaded single-operation lanes and striped READs on multiple loopback IPv4 rails. Physical rail gate unrun |
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
 | MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
@@ -63,7 +63,8 @@ identifies the release changes still awaiting a port.
 | Receiver credits | Implemented | Four named cumulative grants, configured receiver windows and drain-fenced epoch retirement. See [credits](async-batches.md#receiver-credit-gating) |
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
 | RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
-| TENT metrics and HTTP export | Implemented (P6, opt-in) | [Metrics](metrics.md) |
+| Offline version diagnostics | Implemented | Packaged CLI, Rust API and native header. See [diagnostics](diagnostics.md). |
+| TENT metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | [Metrics](metrics.md) |
 
 ## Failure handling
 

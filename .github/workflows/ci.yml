@@ -82,6 +82,18 @@ jobs:
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
         run: cargo test --locked --features "$ORBITTE_FEATURES"
+      - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
+        if: matrix.features == ''
+        run: bash .github/scripts/check-installed-diagnostics.sh "$RUNNER_TEMP/offline-diagnostics"
+      - name: Build the peer GPU TCP gate without running it
+        if: matrix.features == 'cuda'
+        run: |
+          for role in source requester; do
+            python3 tests/hardware/build_installed.py --consumer "peer-gpu-$role" --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-gpu-$role"
+          done
+      - name: Repeat lane, CPU-only requester and accounting controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: bash .github/scripts/repeat-tcp-observability.sh "$RUNNER_TEMP/r1d-iteration.log"
       - name: Run the two-process HP-TCP loopback consumer
         if: matrix.features == ''
         run: |

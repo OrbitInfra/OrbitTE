@@ -31,7 +31,7 @@ Use `Transport::HpTcp`, an `"hp_tcp"` policy candidate, or `Transport::Unspec`. 
 | `enable` | false | Install this payload provider |
 | `bind_address`, `advertise_address` | empty | Listen on IPv4 wildcard and derive the published host from the configured control address |
 | `rail_addresses`, `port` | empty list, 0 | Ordered numeric IPv4 rails and a shared listener port. Zero lets the OS select a port |
-| `worker_count`, `connections_per_peer` | 16, 4 | Socket reactors and rotating lanes per peer |
+| `worker_count`, `connections_per_peer` | 16, 4 | Socket reactors and persistent lanes per peer |
 | `max_outstanding_tasks`, `max_outstanding_bytes` | 4,096, 4 GiB | Transport admission per physical owner |
 | `max_transfer_bytes` | 1 GiB | Maximum frame body. Engine, registration and peer limits also apply |
 | `connect_timeout_ms`, `progress_timeout_ms` | 2,000, 30,000 | Connection setup and stalled I/O limits, also bounded by the submission deadline |
@@ -39,9 +39,19 @@ Use `Transport::HpTcp`, an `"hp_tcp"` policy candidate, or `Transport::Unspec`. 
 
 ## Rails and ownership
 
-Each lane runs on one socket worker. OrbitTE rotates lanes independently per peer.
-R1d tracks v0.3.14’s least-loaded lane selection for a single-slice operation.
-See the [release delta](tent-parity.md#v0314-delta).
+Each lane runs on one socket worker. A single-slice READ or WRITE takes the peer lane with the fewest outstanding single-slice operations. Ties start at the peer’s rotation point. Admission and preflight rejections take no slot. The operation releases its slot before publishing completion, including when a pending socket future is canceled.
+
+The S10 benchmark issues one guarded operation at a time. On a 12-vCPU
+Linux arm64 VM, nine release trials with metrics compiled out gave these
+medians in µs. The delayed-ACK lane control exercises the load imbalance
+that the sequential benchmark cannot create.
+
+| Loopback operation | TCP before → after | HP-TCP before → after |
+| --- | --- | --- |
+| 64 B READ | 47.29 → 52.49 | 75.46 → 76.03 |
+| 64 B WRITE | 49.90 → 50.86 | 75.01 → 75.60 |
+| 4 MiB READ | 2,277.06 → 2,216.44 | 586.79 → 610.91 |
+| 4 MiB WRITE | 2,999.76 → 3,019.08 | 576.49 → 584.34 |
 
 A READ splits evenly across rails when each rail can carry at least 1 MiB. The first rails carry any remainder. Each slice binds the corresponding local IPv4 address and connects to the peer's address at the same index. A WRITE always uses a single lane. Each rail needs at least one lane. With multiple rails, use a wildcard listener. A single rail can also use a matching bind address.
 
