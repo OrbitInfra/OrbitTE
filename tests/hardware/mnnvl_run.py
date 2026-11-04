@@ -168,4 +168,3 @@ if __name__ == '__main__':
     with args.gpu_lock.resolve(strict=True).open('r+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         run(args)
-

@@ -1,7 +1,8 @@
 //! Installed multi-node fabric exercise. The driver supplies a verified fabric domain and GPU.
+use orbit_te::cuda::CudaMemory;
 use orbit_te::{
-    EngineConfig, Error, MnnvlConfig, Permission, RegisteredMemory, Result, SourceEpoch,
-    TransferEngine, TransferOp, TransferRequest, Transport,
+    EngineConfig, Error, HostMemory, MnnvlConfig, Permission, RegisteredMemory, Result,
+    SourceEpoch, TransferEngine, TransferOp, TransferRequest, Transport,
 };
 use std::{
     io::{self, BufRead, Write},
@@ -28,17 +29,36 @@ fn verify(m: &RegisteredMemory, expected: &[u8]) -> Result<()> {
     }
     Ok(())
 }
-fn buffers(
-    e: &TransferEngine,
-    egm: bool,
-    numa: u32,
-    p: Permission,
-) -> Result<Vec<RegisteredMemory>> {
-    let mut v = e.register_cuda_memory_batch(&[(e.allocate_mnnvl(0, SIZE)?, 0, SIZE)], p)?;
-    if egm {
-        v.push(e.register_host_memory(e.allocate_egm(numa, SIZE)?, 0, SIZE, p)?);
+struct Buffers {
+    device: Arc<CudaMemory>,
+    host: Option<Arc<HostMemory>>,
+    regions: Vec<RegisteredMemory>,
+}
+impl Buffers {
+    fn new(e: &TransferEngine, egm: bool, numa: u32, permission: Permission) -> Result<Self> {
+        let device = e.allocate_mnnvl(0, SIZE)?;
+        let mut regions = e.register_cuda_memory_batch(&[(device.clone(), 0, SIZE)], permission)?;
+        let host = egm.then(|| e.allocate_egm(numa, SIZE)).transpose()?;
+        if let Some(memory) = &host {
+            regions.push(e.register_host_memory(memory.clone(), 0, SIZE, permission)?);
+        }
+        Ok(Self {
+            device,
+            host,
+            regions,
+        })
     }
-    Ok(v)
+
+    fn release(self, e: &TransferEngine) -> Result<()> {
+        for region in self.regions {
+            e.unregister_memory(&region)?;
+        }
+        e.free_mnnvl(self.device)?;
+        if let Some(host) = self.host {
+            e.free_egm(host)?;
+        }
+        Ok(())
+    }
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -74,7 +94,8 @@ fn main() -> Result<()> {
     })?);
     match role.as_str() {
         "source" => {
-            let regs = buffers(&engine, egm, numa, Permission::RemoteReadWrite)?;
+            let backing = Buffers::new(&engine, egm, numa, Permission::RemoteReadWrite)?;
+            let regs = &backing.regions;
             for (i, r) in regs.iter().enumerate() {
                 r.write(0, &image(i, 0, 0xa5, 11))?
             }
@@ -92,9 +113,8 @@ fn main() -> Result<()> {
             engine.close_source(WAIT)?;
             for (slot, r) in regs.iter().enumerate() {
                 verify(r, &image(slot, regs.len(), 0xa5, 11))?;
-                engine.unregister_memory(r)?;
             }
-            drop(regs);
+            backing.release(&engine)?;
             engine.close(WAIT)?;
             println!("PASS source {} {N}", if egm { 4 } else { 1 });
         }
@@ -109,7 +129,8 @@ fn main() -> Result<()> {
                 epoch.parse()?,
                 WAIT,
             )?;
-            let local = buffers(&engine, egm, numa, Permission::LocalOnly)?;
+            let backing = Buffers::new(&engine, egm, numa, Permission::LocalOnly)?;
+            let local = &backing.regions;
             if addresses.len() != local.len() {
                 return Err(Error::Protocol("wrong fabric directions"));
             }
@@ -152,11 +173,8 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            for l in &local {
-                engine.unregister_memory(l)?
-            }
-            drop(local);
             engine.close(WAIT)?;
+            backing.release(&engine)?;
             println!("PASS requester {} {N}", if egm { 4 } else { 1 });
         }
         _ => return Err(Error::InvalidConfig("unknown fabric role")),

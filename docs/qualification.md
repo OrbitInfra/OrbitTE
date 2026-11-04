@@ -89,7 +89,8 @@ The driver compares the packaged archive and commit, distinct host boots and
 GPUs, completed fabric-manager probes, cluster UUID and clique. It saves
 per-link TX/RX payload counters before and after each profile and requires
 enough traffic in both directions to cover the guarded READs and WRITEs.
-The EGM variant exercises all four local/remote GPU and host-NUMA pairs.
+Both peers require successful unregister and explicit VMM free receipts before
+publishing success. The EGM variant exercises all four local/remote GPU and host-NUMA pairs.
 See [NVIDIA fabric verification](https://docs.nvidia.com/multi-node-nvlink-systems/mnnvl-user-guide/verifying.html)
 and the [NVLink counter definitions](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
 
