@@ -43,6 +43,17 @@ unregister and same-port restart exercise the return and lifetime contracts.
 The io_uring builds also move file bytes. These runs cover the Linux CPU
 profile. See the [C API](c-api.md).
 
+## C++ source adapters
+
+The installed C++20 client runs in the Linux feature matrix on stable and
+Rust 1.85. Native and classic source/requester pairs exchange guarded TCP bytes
+and notifications in both directions. A held HP-TCP response exercises timed
+scatter waits, moving the operation and callback order. The native-reference
+job also compiles the same declaration checks against frozen Mooncake headers.
+The CUDA/verbs shims check direct GPU registration, staged-route rejection and
+the pinned retry budget. These controls qualify the installed CPU loopback
+profile. The RNIC and GPU Direct C++ profiles await an installed run.
+
 ## Verification queue
 
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below
@@ -52,6 +63,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| C++ classic scatter on RDMA and GPU Direct | Implemented; installed profile unqualified | [Packaged C++ scatter requester and Rust source](#native-c-scatter) | CPU loopback HP-TCP plus CUDA/verbs shim controls |
 | C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |
 | Caller-stream local CUDA copy | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
 | CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbitte-peer-gpu-source" --requester "$ART/requester/installed/bin/orbitte-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
@@ -80,6 +92,37 @@ external output directory; failed runs are kept.
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
+
+### Native C++ scatter
+
+Build the following artifacts on the source and requester respectively.
+Use a routed RNIC, a free control endpoint and a requester `MC_TENT_CONF`
+whose memory policy selects RDMA. The requester must use registered host
+memory. Keep `ORBITTE_RDMA_SLICE_BYTES` unset for the default three slices.
+
+```bash
+python3 tests/hardware/build_installed.py --consumer gpu --toolchain stable --output "$SOURCE_ART"
+python3 tests/hardware/build_installed.py --consumer cpp-abi --toolchain stable --output "$REQUESTER_ART"
+```
+
+On the source, then the requester, use the address printed by the source.
+
+```bash
+"$SOURCE_ART/installed/bin/orbitte-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cpu 4096 37 rdma
+"$REQUESTER_ART/installed/bin/orbitte-cpp-hardware" "$SOURCE_ENDPOINT" cpu
+```
+
+For a directly registered GPU source run:
+
+```bash
+MLX5_SCATTER_TO_CQE=0 ORBITTE_RDMA_CUDA_MEMORY=direct "$SOURCE_ART/installed/bin/orbitte-hardware-peer" source "$BIND" "$RNIC" "$GID_INDEX" cuda:0 4096 37 rdma
+"$REQUESTER_ART/installed/bin/orbitte-cpp-hardware" "$SOURCE_ENDPOINT" cuda
+```
+
+The clients check every payload byte and guard on each host. The requester
+counts each fragment callback, and the source records the native RDMA path
+and teardown. Keep both logs and package manifests. Repeat with 1.85.0 and
+new artifact directories.
 
 ### Native C transfer engine
 

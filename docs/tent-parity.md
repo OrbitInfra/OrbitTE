@@ -105,7 +105,7 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | Functional behavior | Reproduce implemented operations, routing, status/error semantics, notifications, resource behavior and backend combinations in the selected CPU/NVIDIA scope |
 | Rust API | Provide native Rust interfaces for the selected implemented TENT capability set, including features absent from its C API |
 | TENT C ABI | All 33 functions and the LP64 transfer-engine layouts have installed [C API](c-api.md) controls. The fork's negative native return codes preserve dispatch uncertainty. Excluded transports return unavailable |
-| TENT C++ API | Supply source-level adapters for native TENT and the TENT-backed classic-TE surface; rebuild callers against those adapters |
+| TENT C++ API | The installed [native TENT and TENT-backed classic TE adapters](cpp-api.md) cover both S16 C++ binding rows. Rebuild callers against their headers and link the adapter archive to libtent |
 | Python API | Cover the frozen TENT binding's classes, fields, overloads, errors and context managers through thin native bindings |
 | Wire interoperability | Qualify OrbitTE-to-OrbitTE, TENT-to-OrbitTE and OrbitTE-to-TENT for each applicable backend/control protocol; API parity alone does not establish this |
 | Configuration and operations | Match effective defaults, precedence, environment mappings, topology formats, metrics and explicit unavailable-backend behavior |

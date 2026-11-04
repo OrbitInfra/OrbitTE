@@ -208,6 +208,7 @@ pub(crate) fn rdma_fixture_with_config(
             .unwrap()
         }),
         metadata: SegmentMetadata {
+            rdma_direct_gpu: runtime.direct_gpu_ranges(),
             tcp_disabled: !config.tcp,
             shm: config.shm.enable.then(|| {
                 Arc::new(crate::transport::shm::wire::Manifest {

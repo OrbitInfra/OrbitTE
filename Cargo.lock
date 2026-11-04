@@ -234,6 +234,7 @@ dependencies = [
  "libc",
  "log",
  "orbit-te",
+ "serde_json",
 ]
 
 [[package]]

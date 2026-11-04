@@ -235,6 +235,7 @@ pub(super) fn stale(
             let stale = crate::RemoteSegment {
                 metadata: crate::segment::SegmentMetadata {
                     rdma: true,
+                    rdma_direct_gpu: false,
                     ..Default::default()
                 },
                 endpoint,

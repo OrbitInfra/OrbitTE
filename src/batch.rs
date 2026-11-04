@@ -519,6 +519,11 @@ impl Batch {
         }
     }
 
+    /// Inspect the retirement receipt without polling a pending transport attempt.
+    pub fn locally_drained(&self) -> Result<bool> {
+        Ok(self.progress()?.lock().status().locally_drained)
+    }
+
     pub fn submissions(&self) -> Result<Vec<SubmissionStatus>> {
         Ok(self
             .progress()?

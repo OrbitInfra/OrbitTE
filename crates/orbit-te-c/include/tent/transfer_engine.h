@@ -233,4 +233,7 @@ int tent_get_nic_load_stats(tent_engine_t engine, tent_nic_load_stat_t* stats,
 #endif  // __cplusplus
 
 #include "tent/orbit_extensions.h"
+#ifdef __cplusplus
+#include "tent/cpp_engine.h"
+#endif
 #endif

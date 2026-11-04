@@ -47,7 +47,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
-| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI and configuration implemented. C++ and Python remain open |
+| P9 | C/C++/Python and operational compatibility | P0/P2/P6 | C ABI, C++ source adapters and configuration implemented. Python remains open |
 | P10 | Cross-backend fault, lifetime and interoperability acceptance | Relevant P3–P9 deliveries | Planned; evidence accumulates per stage |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Planned |
 
@@ -93,9 +93,11 @@ and the P5 hardware verification queue remain open.
 S16 freezes the reference acceptance inventory and native wire fixtures. S17
 implements F01 against its configuration, environment and precedence cases.
 S19 implements the [installed C ABI](c-api.md) against the S16 declarations and
-LP64 fixtures. S20 covers the native C++ adapters and classic-TE surface.
+LP64 fixtures. S20 implements the [native and classic C++ source adapters](cpp-api.md),
+including versioned requests, explicit progress and physically drained waits.
+S21 covers Python.
 S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
-OrbitKV uses the existing P2P control plane. S20–S26 retain their order.
+OrbitKV uses the existing P2P control plane. S21–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -389,8 +391,9 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [x] F21 C ABI. Both installed libraries export 33 functions with the frozen LP64
   layout and paired output frees. The C consumer exercises real loopback TCP,
   configuration and negative native statuses. GPU/RNIC C profiles await hardware.
-- [ ] Native C++ source adapters and the classic-TE surface, including explicit
-  progress and sync/wait helpers, without calling the old TE backend.
+- [x] F21 native C++ and TENT-backed classic TE source adapters. The installed
+  clients exercise both binding rows, including progress, sync/wait, scatter
+  callbacks, named policies, deadlines and intent. Native hardware profiles remain queued.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
 - [ ] Optional S18 for a non-OrbitKV consumer: etcd, Redis and HTTP metadata stores with auth and failure behavior.

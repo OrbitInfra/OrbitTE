@@ -13,6 +13,8 @@ mod segments;
 
 // Only the ABI entry points and raw-storage adapters admit unsafe operations.
 #[allow(unsafe_code)]
+mod cpp_v1;
+#[allow(unsafe_code)]
 mod exports;
 
 #[cfg(test)]

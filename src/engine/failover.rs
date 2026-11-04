@@ -310,7 +310,8 @@ impl TransferEngine {
         let staged = r.remote_staging;
         #[cfg(not(feature = "cuda"))]
         let staged = false;
-        if self.config.max_failover_attempts <= r.selection.initial_attempts
+        if r.selection.cancellable_only
+            || self.config.max_failover_attempts <= r.selection.initial_attempts
             || (!r.selection.has_fallback()
                 && !staged
                 && !matches!(failure.error, Error::RegionNotFound))

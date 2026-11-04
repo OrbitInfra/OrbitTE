@@ -80,3 +80,21 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
         Err(Error::InvalidRange)
     ));
 }
+
+#[test]
+fn direct_gpu_describe_requires_an_installed_rdma_source() {
+    let metadata = SegmentMetadata {
+        rdma: true,
+        rdma_direct_gpu: true,
+        ..Default::default()
+    };
+    let mut bytes = [0; SegmentMetadata::WIRE_SIZE];
+    metadata.encode(&mut bytes);
+    assert_eq!(bytes[0], 0x81);
+    assert!(SegmentMetadata::decode(&bytes).unwrap().rdma_direct_gpu);
+    bytes[0] = 0x80;
+    assert!(matches!(
+        SegmentMetadata::decode(&bytes),
+        Err(Error::Protocol(_))
+    ));
+}

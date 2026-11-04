@@ -164,6 +164,7 @@ pub struct TransferRequest {
     pub transport: Transport,
     pub local_address: u64,
     pub(crate) file_ranges: Option<Arc<[FileIoElement]>>,
+    pub(crate) require_cancellation: bool,
     pub remote_address: u64,
     pub length: usize,
 }
@@ -180,6 +181,7 @@ impl TransferRequest {
             transport,
             local_address,
             file_ranges: None,
+            require_cancellation: false,
             remote_address,
             length,
             deadline: None,
@@ -189,6 +191,13 @@ impl TransferRequest {
             priority: Priority::default(),
             remote_staging: false,
         }
+    }
+
+    /// Require a direct route that can cancel unposted native work after submission.
+    /// A classic scatter interval owns its dispatch and disables transport retries.
+    pub fn requiring_post_submit_cancellation(mut self) -> Self {
+        self.require_cancellation = true;
+        self
     }
 
     /// Gather on WRITE or scatter on READ, in list order, starting at a file byte offset.
@@ -470,6 +479,7 @@ impl TransferEngine {
         #[cfg(feature = "rdma")]
         {
             metadata.rdma = rdma.is_some();
+            metadata.rdma_direct_gpu = rdma.as_ref().is_some_and(|r| r.direct_gpu_ranges());
         }
         #[cfg(feature = "cuda")]
         {
@@ -787,6 +797,19 @@ impl TransferEngine {
         self.source.epoch
     }
 
+    /// Memory-bearing NUMA nodes permitted to this process. A platform that
+    /// cannot establish placement returns an empty inventory.
+    pub fn local_numa_nodes(&self) -> Vec<u32> {
+        #[cfg(target_os = "linux")]
+        {
+            (crate::platform::numa::NATIVE.nodes)().unwrap_or_default()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Vec::new()
+        }
+    }
+
     /// Snapshot of the selected RDMA topology; None before lazy RDMA initialization.
     /// This never probes devices or refreshes an existing context's route.
     #[cfg(feature = "rdma")]
@@ -1080,6 +1103,14 @@ impl TransferEngine {
         }
     }
 
+    /// Borrow the engine's compiled policy identity for a dynamically supplied request.
+    pub fn resolve_policy_name(&self, name: &str) -> Result<crate::PolicyName> {
+        self.selector
+            .as_ref()
+            .and_then(|s| s.interned_name(name))
+            .ok_or(Error::InvalidConfig("unknown request policy name"))
+    }
+
     /// Whether this engine installed the named transport. File library and
     /// ring probes remain lazy until the first eligible file request.
     pub fn transport_installed(&self, route: Transport) -> bool {
@@ -1324,6 +1355,15 @@ impl TransferEngine {
             .as_ref()
             .and_then(crate::metrics::Metrics::timestamp);
         let target = peer.into();
+        let scatter = requests.first().is_some_and(|r| r.require_cancellation);
+        if requests.iter().any(|r| r.require_cancellation != scatter) {
+            return Err(Error::InvalidConfig("mixed scatter admission modes"));
+        }
+        if scatter && matches!(target, TransferTarget::File(_)) {
+            return Err(Error::Unavailable(
+                "scatter requires cancellable direct memory",
+            ));
+        }
         let mut descriptors = 0usize;
         for r in requests {
             let count = if let Some(parts) = &r.file_ranges {
@@ -1492,6 +1532,31 @@ impl TransferEngine {
             };
             let selection = context.select_bound(self.selector.as_ref(), request, bound)?;
             let mut selected = selection;
+            if request.require_cancellation {
+                if !matches!(selected.transport, Transport::Rdma | Transport::HpTcp)
+                    || request.remote_staging
+                {
+                    return Err(Error::Unavailable(
+                        "scatter requires a direct cancellable route",
+                    ));
+                }
+                if selected.transport == Transport::Rdma {
+                    if remote.memory_type() == crate::MemoryType::Cuda
+                        && !peer.metadata.rdma_direct_gpu
+                    {
+                        return Err(Error::Unavailable("scatter peer requires CUDA staging"));
+                    }
+                    #[cfg(feature = "rdma")]
+                    if local.memory_type() == crate::MemoryType::Cuda
+                        && !self.source.rdma.as_ref().is_some_and(|r| r.direct(&local))
+                    {
+                        return Err(Error::Unavailable(
+                            "scatter requester requires CUDA staging",
+                        ));
+                    }
+                }
+                selected.pin_cancellable();
+            }
             let mut used = 0;
             loop {
                 match self.validate_memory_route(

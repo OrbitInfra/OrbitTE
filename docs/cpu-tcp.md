@@ -149,6 +149,10 @@ operation or status and one zero reserved byte.
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
 
+Segment capability bit 7 requires the RDMA capability and identifies a source
+whose immutable RDMA policy directly registers published GPU ranges. Classic
+scatter checks it before admitting a remote GPU fragment.
+
 In each region's HP-TCP flag byte, bit 0 marks HP-TCP registration. Bit 7
 marks a registration with a scoped transport or known device/NUMA ordinal.
 All fixed records precede the optional five-byte entries, in flagged record

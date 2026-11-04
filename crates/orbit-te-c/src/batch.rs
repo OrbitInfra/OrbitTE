@@ -3,6 +3,14 @@ use orbit_te::{Error, Notification, Priority, TaskState, TaskStatus, TransferOp,
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+#[derive(Default)]
+pub(crate) struct Fields {
+    pub cancellable: bool,
+    pub intent: orbit_te::IntentType,
+    pub policy: Option<orbit_te::PolicyName>,
+    pub deadline: Option<std::time::Instant>,
+}
+
 impl Engine {
     pub fn alloc_batch(&self, n: usize) -> Result<u64> {
         let batch = self.core.allocate_batch(n)?;
@@ -22,6 +30,15 @@ impl Engine {
         raw: &[abi::Request],
         notify: Option<Notification>,
     ) -> Result<()> {
+        self.submit_rows(id, raw, notify, |r| Ok((r, Default::default())))
+    }
+    pub fn submit_rows<'a, T>(
+        &self,
+        id: u64,
+        raw: &'a [T],
+        notify: Option<Notification>,
+        decode: impl Fn(&'a T) -> Result<(&'a abi::Request, Fields)>,
+    ) -> Result<()> {
         let batch = self.batch(id)?;
         let mut batch = lock(&batch)?;
         if raw.len()
@@ -34,7 +51,8 @@ impl Engine {
         let mut targets = HashMap::<u64, Target>::new();
         let mut requests = Vec::with_capacity(raw.len());
         let mut runs = Vec::new();
-        for r in raw {
+        for row in raw {
+            let (r, fields) = decode(row)?;
             let op = match r.opcode {
                 0 => TransferOp::Read,
                 1 => TransferOp::Write,
@@ -65,10 +83,15 @@ impl Engine {
             {
                 runs.push((op, r.target_id, requests.len()));
             }
-            requests.push(
-                TransferRequest::new(hint, source as u64, r.target_offset, n)
-                    .with_priority(priority),
-            );
+            let mut request = TransferRequest::new(hint, source as u64, r.target_offset, n)
+                .with_priority(priority);
+            if fields.cancellable {
+                request = request.requiring_post_submit_cancellation();
+            }
+            request.intent = fields.intent;
+            request.policy_name = fields.policy;
+            request.deadline = fields.deadline;
+            requests.push(request);
         }
         let mut groups = Vec::with_capacity(runs.len());
         for (i, &(op, id, start)) in runs.iter().enumerate() {

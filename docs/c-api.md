@@ -5,6 +5,8 @@ OrbitTE provides the 33 C functions in Mooncake v0.3.14's
 `libtent.a`. Linux LP64 clients can use either library. The CPU/TCP
 qualification uses separate source and requester processes on loopback.
 
+For the native TENT C++ and classic TE source interfaces, see the [C++ API](cpp-api.md).
+
 ## Install and link
 
 ```bash

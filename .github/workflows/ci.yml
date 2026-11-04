@@ -28,6 +28,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+      - name: Install C++ source adapter headers
+        run: test -f /usr/include/nlohmann/json.hpp || .github/scripts/install-native-deps.sh g++ nlohmann-json3-dev
       - name: Install RDMA binding prerequisites
         if: contains(matrix.features, 'rdma')
         timeout-minutes: 10

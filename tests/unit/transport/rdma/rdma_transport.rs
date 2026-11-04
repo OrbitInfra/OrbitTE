@@ -266,6 +266,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
         let peer = RemoteSegment {
             metadata: crate::segment::SegmentMetadata {
                 rdma: true,
+                rdma_direct_gpu: false,
                 ..Default::default()
             },
             endpoint: listener.local_addr().unwrap(),

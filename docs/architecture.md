@@ -27,6 +27,24 @@ on its original port, withhold a READ during bulk unregister, and cut a
 notification reply after enqueue. The [C API](c-api.md) describes the release
 receipts and the fork's negative status codes.
 
+The [C++ adapters](cpp-api.md) link to the same Rust owners through libtent.
+Their versioned request bridge borrows policy bytes for the duration of the
+call and resolves them against compiled names. All records in an interval use
+the same monotonic clock sample. Native C++ constructors pass an explicit
+configuration source, independent of C thread-local settings. The fork's
+terminal-result query reads published tasks under the batch lock without
+voting on a retry. Dropping a TCP WRITE acknowledgement in the installed C
+control returns an unknown effect after the source has committed the bytes.
+
+Classic scatter pins only a cancellable direct route before publication and
+bypasses runtime-queue dispatch. The Rust batch owns each range and its permits.
+The C++ operation retains private segment handles, callbacks and a shared
+engine through native drain. A held HP-TCP response exercises a timed wait
+and moving the operation. The RDMA shim rejects a staged GPU peer and a
+rejected RDMA owner never falls back to TCP. An opt-in process watcher invokes
+Rust close outside the signal handler. It holds at most one weak reference per
+engine and joins on normal exit.
+
 ## Configuration ownership
 
 `EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve
