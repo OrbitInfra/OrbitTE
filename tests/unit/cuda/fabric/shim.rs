@@ -134,6 +134,7 @@ pub(super) fn install(
         driver.primary_retain = primary;
         driver.primary_release = release_primary;
         driver.memset = zero;
+        driver.address_range = address_range;
         driver.vmm = (!r.missing).then_some(VmmApi {
             count,
             attribute: attr,
@@ -369,6 +370,22 @@ unsafe extern "C" fn free(addr: u64, len: usize) -> Status {
     s.reservations.remove(&addr);
     SUCCESS
 }
+unsafe extern "C" fn address_range(base: *mut u64, size: *mut usize, addr: u64) -> Status {
+    let mismatch = call("range-mismatch");
+    let s = state();
+    match s
+        .reservations
+        .iter()
+        .find(|(b, (n, _))| addr >= **b && addr - **b < *n as u64)
+    {
+        Some((b, (n, _))) => {
+            put(base, *b);
+            put(size, if mismatch { *n + 4096 } else { *n });
+            SUCCESS
+        }
+        None => BAD,
+    }
+}
 unsafe extern "C" fn retain(out: *mut u64, ptr: *mut std::ffi::c_void) -> Status {
     let mut s = state();
     let p = s.reservations[&(ptr as u64)].1.as_ref().unwrap().clone();
@@ -378,10 +395,14 @@ unsafe extern "C" fn retain(out: *mut u64, ptr: *mut std::ffi::c_void) -> Status
     SUCCESS
 }
 unsafe extern "C" fn properties(out: *mut sys::CUmemAllocationProp, handle: u64) -> Status {
+    let mismatch = call("numa-mismatch");
     let s = state();
     let p = &s.physical[&handle];
     let mut props = read(out);
     props.location = p.location;
+    if mismatch {
+        props.location.id += 1;
+    }
     props.requestedHandleTypes = p.kind;
     put(out, props);
     SUCCESS
@@ -427,11 +448,8 @@ unsafe extern "C" fn import(out: *mut u64, src: *mut std::ffi::c_void, kind: Han
         use std::os::unix::fs::MetadataExt;
         let fd = i32::try_from(src as usize).unwrap();
         // SAFETY: the import call borrows the duplicated POSIX fd through this call.
-        let file = File::from(
-            unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
-                .try_clone_to_owned()
-                .unwrap(),
-        );
+        let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+        let file = File::from(borrowed.try_clone_to_owned().unwrap());
         let ino = file.metadata().unwrap().ino();
         // The fd value is live during import, independently of the exporter's descriptor.
         Arc::new(Physical {
@@ -462,6 +480,9 @@ unsafe extern "C" fn host_reg(p: *mut std::ffi::c_void, n: usize, flags: u32) ->
     SUCCESS
 }
 unsafe extern "C" fn host_unreg(p: *mut std::ffi::c_void) -> Status {
+    if call("host-unregister") {
+        return BAD;
+    }
     assert!(
         super::super::shim::current()
             .host_registrations

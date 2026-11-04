@@ -140,15 +140,21 @@ impl VmmApi {
 
 impl Driver {
     pub(super) fn load() -> Result<Arc<Self>> {
+        Self::open(false)
+    }
+    pub(super) fn load_fabric() -> Result<Arc<Self>> {
+        Self::open(true)
+    }
+    fn open(fabric: bool) -> Result<Arc<Self>> {
         // SAFETY: load only the system Driver API. The library is retained by
         // every allocation/context, including resources whose cleanup failed.
         let library = unsafe { Library::new("libcuda.so.1") }
             .map_err(|_| Error::Unavailable("CUDA driver libcuda.so.1"))?;
-        Self::from_library(library)
+        Self::from_library(library, fabric)
     }
 
-    fn from_library(library: Library) -> Result<Arc<Self>> {
-        let vmm = VmmApi::load(&library).ok();
+    fn from_library(library: Library, fabric: bool) -> Result<Arc<Self>> {
+        let vmm = fabric.then(|| VmmApi::load(&library)).transpose()?;
         let driver = Self {
             vmm,
             init: symbol!(&library, cuInit),

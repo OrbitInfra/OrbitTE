@@ -4,15 +4,23 @@ use crate::memory::Allocation;
 
 pub(crate) struct Registration {
     pub(crate) share: Option<Arc<Share>>,
-    pin: Option<Arc<HostPin>>,
+    pin: Mutex<Option<Arc<HostPin>>>,
+    retirement: std::sync::OnceLock<Result<()>>,
     pub(crate) local: bool,
 }
 impl Registration {
-    pub(crate) fn retire(&mut self) -> Result<()> {
-        if let Some(pin) = self.pin.take() {
-            pin.host.clone().retire_mnnvl_pin(pin)?;
-        }
-        Ok(())
+    pub(crate) fn retire(&self) -> Result<()> {
+        self.retirement
+            .get_or_init(|| {
+                let pin = self.pin.lock().unwrap_or_else(|p| p.into_inner()).take();
+                if let Some(pin) = pin {
+                    pin.host.clone().retire_mnnvl_pin(pin)?
+                }
+                Ok(())
+            })
+            .as_ref()
+            .map(|_| ())
+            .map_err(Error::for_report)
     }
 }
 
@@ -58,7 +66,8 @@ impl Platform {
         let (owner, _) = reg.allocation_range(0, reg.len())?;
         let mut slot = Registration {
             share: None,
-            pin: None,
+            pin: Mutex::default(),
+            retirement: Default::default(),
             local: false,
         };
         match owner {
@@ -118,7 +127,7 @@ impl Platform {
                             native: self.config.host_register,
                         }))
                     })?;
-                    slot.pin = Some(pin);
+                    slot.pin = Mutex::new(Some(pin));
                     slot.local = true;
                 }
             }
@@ -131,6 +140,47 @@ impl Platform {
     }
 }
 impl Mapping {
+    pub(super) fn with_allocation<T>(
+        &self,
+        operation: impl FnOnce(u64, &sys::CUmemAllocationProp) -> Result<T>,
+    ) -> Result<T> {
+        let context = &self.context;
+        let result = context.current(|| {
+            let mut handle = 0;
+            // SAFETY: the source VMM owner retains the complete allocation and its base.
+            let acquired = check("cuMemRetainAllocationHandle", unsafe {
+                (self.api.retain)(&mut handle, self.address as usize as *mut c_void)
+            });
+            let result = acquired.and_then(|()| {
+                if handle == 0 {
+                    return Err(Error::Protocol("CUDA returned a null retained handle"));
+                }
+                let mut actual = prop(self.kind, location(self.loc, context.device), false);
+                // SAFETY: the temporary reference and typed output are live through this probe.
+                check("cuMemGetAllocationPropertiesFromHandle", unsafe {
+                    (self.api.properties)(&mut actual, handle)
+                })?;
+                if actual.type_ != sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED
+                    || actual.location != location(self.loc, context.device)
+                    || actual.requestedHandleTypes as u32 & native_kind(self.kind) as u32 == 0
+                {
+                    return Err(Error::Unavailable("CUDA VMM allocation property mismatch"));
+                }
+                operation(handle, &actual)
+            });
+            if handle != 0 {
+                // SAFETY: release the one temporary reference, including a partial retain output.
+                check("cuMemRelease", unsafe { (self.api.release)(handle) })
+                    .map_err(|e| uncertain(e, "CUDA fabric probe release"))?;
+            }
+            result
+        });
+        if matches!(result, Err(Error::Unquiesced { .. })) {
+            context.poisoned.store(true, Ordering::Release);
+            std::mem::forget(context.clone());
+        }
+        result
+    }
     fn export(&self) -> Result<Arc<Share>> {
         let mut cached = self
             .share
@@ -141,72 +191,49 @@ impl Mapping {
         }
         let mut bytes = [0; 64];
         let mut fd = None;
-        let context = &self.context;
-        let result = context.current(|| {
-            let mut handle = 0;
-            // SAFETY: the owned VMM mapping is live through the probe and export.
-            check("cuMemRetainAllocationHandle", unsafe {
-                (self.api.retain)(&mut handle, self.address as usize as *mut c_void)
-            })?;
-            let export = (|| {
-                let mut actual = prop(self.kind, location(self.loc, context.device), false);
-                // SAFETY: the retained physical handle and typed property output are live.
-                check("cuMemGetAllocationPropertiesFromHandle", unsafe {
-                    (self.api.properties)(&mut actual, handle)
-                })?;
-                if actual.location != location(self.loc, context.device)
-                    || actual.requestedHandleTypes as u32 & native_kind(self.kind) as u32 == 0
-                {
-                    return Err(Error::Unavailable("CUDA VMM allocation property mismatch"));
+        let result = self.with_allocation(|handle, _| {
+            match self.kind {
+                MnnvlHandleType::Fabric => {
+                    let mut fabric = sys::CUmemFabricHandle { data: [0; 64] };
+                    // SAFETY: the fabric ABI writes exactly one CUmemFabricHandle.
+                    check("cuMemExportToShareableHandle", unsafe {
+                        (self.api.export)(
+                            std::ptr::from_mut(&mut fabric).cast(),
+                            handle,
+                            native_kind(self.kind),
+                            0,
+                        )
+                    })?;
+                    bytes = fabric.data;
                 }
-                match self.kind {
-                    MnnvlHandleType::Fabric => {
-                        let mut fabric = sys::CUmemFabricHandle { data: [0; 64] };
-                        // SAFETY: the fabric ABI writes exactly one CUmemFabricHandle.
-                        check("cuMemExportToShareableHandle", unsafe {
-                            (self.api.export)(
-                                std::ptr::from_mut(&mut fabric).cast(),
-                                handle,
-                                native_kind(self.kind),
-                                0,
-                            )
-                        })?;
-                        bytes = fabric.data;
+                MnnvlHandleType::PosixFd => {
+                    let mut raw = -1;
+                    // SAFETY: the POSIX export ABI writes one newly owned fd.
+                    let rc = unsafe {
+                        (self.api.export)(
+                            std::ptr::from_mut(&mut raw).cast(),
+                            handle,
+                            native_kind(self.kind),
+                            0,
+                        )
+                    };
+                    if raw >= 0 {
+                        // SAFETY: every returned fd is closed once, including partial export failures.
+                        fd = Some(unsafe { OwnedFd::from_raw_fd(raw) });
                     }
-                    MnnvlHandleType::PosixFd => {
-                        let mut raw = -1;
-                        // SAFETY: the POSIX export ABI writes one newly owned fd.
-                        let rc = unsafe {
-                            (self.api.export)(
-                                std::ptr::from_mut(&mut raw).cast(),
-                                handle,
-                                native_kind(self.kind),
-                                0,
-                            )
-                        };
-                        if raw >= 0 {
-                            // SAFETY: every returned fd is closed once, including partial export failures.
-                            fd = Some(unsafe { OwnedFd::from_raw_fd(raw) });
-                        }
-                        check("cuMemExportToShareableHandle", rc)?;
-                        if raw < 0 {
-                            return Err(Error::Protocol("CUDA exported invalid fd"));
-                        }
-                        bytes[..4].copy_from_slice(&std::process::id().to_be_bytes());
-                        bytes[4..8].copy_from_slice(&raw.to_be_bytes());
-                        bytes[8..24].copy_from_slice(&pid_identity(std::process::id() as i32)?);
+                    check("cuMemExportToShareableHandle", rc)?;
+                    if raw < 0 {
+                        return Err(Error::Protocol("CUDA exported invalid fd"));
                     }
-                };
-                Ok(())
-            })();
-            // SAFETY: release exactly the temporary reference obtained for this export.
-            check("cuMemRelease", unsafe { (self.api.release)(handle) })
-                .map_err(|e| uncertain(e, "CUDA fabric export release"))?;
-            export
+                    bytes[..4].copy_from_slice(&std::process::id().to_be_bytes());
+                    bytes[4..8].copy_from_slice(&raw.to_be_bytes());
+                    bytes[8..24].copy_from_slice(&pid_identity(std::process::id() as i32)?);
+                }
+            };
+            Ok(())
         });
         if matches!(result, Err(Error::Unquiesced { .. })) {
-            context.poisoned.store(true, Ordering::Release);
-            std::mem::forget((context.clone(), fd.take()));
+            std::mem::forget(fd.take());
         }
         result?;
         let share = Arc::new(Share {

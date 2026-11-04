@@ -14,7 +14,7 @@ With `--features cuda`, select `EngineConfig::mnnvl = Some(MnnvlConfig { .. })`
 on both engines. The default is off. As in the frozen loader, the **presence**
 of `MC_ENABLE_MNNVL` opts the default configuration into MNNVL. An explicit
 `None` disables it. Legacy `nvlink` and MNNVL are mutually exclusive.
-Use `Transport::Mnnvl` or the policy name `"mnnvl"`.
+Use `Transport::Mnnvl` or the policy candidate `"mnnvl"`. Fabric symbols are resolved only when this profile is requested. A missing symbol leaves other transports available.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -30,6 +30,13 @@ owner with the usual CUDA or host registration API. CUDA rounds the physical
 extent to its reported granularity. Logical lengths, permissions and offsets
 still apply to each registration. Explicit VMM allocation returns a typed
 error when CUDA cannot supply the requested storage.
+
+For existing VMM storage, the unsafe `wrap_mnnvl` and `wrap_egm` constructors
+require the actual whole-allocation owner, initialized padding, exact mapped
+extent and explicit sharing consent. The driver checks the handle properties,
+granularity and any available address-range result. The external owner
+controls final unmap. The ordinary raw-pointer registration API grants no
+fabric export permission.
 
 A requester can READ or WRITE a remote device allocation from host or GPU
 memory. A remote host range must have an EGM export and both peers must opt

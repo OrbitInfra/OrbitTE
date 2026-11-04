@@ -169,7 +169,7 @@ one for a GPU export, or the high bit plus a host NUMA ID for EGM.
 
 The control service sends opaque handles only in an authorized transfer grant.
 MNNVL reuses the NVLink request, grant and close-receipt layouts with
-`MNFG` and `MNFC` hello markers and a `MNFG` grant marker. Identity binds
+`MNFG` and `MNFC` hello markers for fabric or `MNPG` and `MNPC` for POSIX. Grants use the corresponding non-cache marker. Identity binds
 the fabric domain and requester process. The 64-byte share field holds
 CUDA fabric bytes or a big-endian PID and fd (4 bytes each), PID namespace
 inode and process start ticks (8 bytes each), followed by zero padding.

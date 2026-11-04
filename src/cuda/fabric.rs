@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, Mutex, Weak, atomic::Ordering},
 };
 
+mod external;
 mod registration;
 pub(crate) use registration::{HostPin, Registration};
 
@@ -113,7 +114,14 @@ impl Platform {
         if let Some(p) = super::tests::fabric::install(config, boot, count, bytes) {
             return p;
         }
-        Self::discover(Driver::load()?, config, boot, count, bytes, duplicate_fd)
+        Self::discover(
+            Driver::load_fabric()?,
+            config,
+            boot,
+            count,
+            bytes,
+            duplicate_fd,
+        )
     }
     pub(super) fn discover(
         driver: Arc<Driver>,
@@ -461,6 +469,7 @@ pub(crate) struct Mapping {
     mapped: bool,
     uncertain: bool,
     charge: Option<Charge>,
+    external: Option<Arc<dyn Send + Sync>>,
     share: Mutex<Weak<Share>>,
 }
 impl Mapping {
@@ -482,6 +491,7 @@ impl Mapping {
             mapped: false,
             uncertain: false,
             charge: None,
+            external: None,
             share: Mutex::default(),
         }
     }
@@ -536,7 +546,11 @@ impl Mapping {
         if !self.uncertain {
             self.uncertain = true;
             RETAINED_IPC.fetch_add(1, Ordering::Relaxed);
-            std::mem::forget((self.context.clone(), self.charge.take()));
+            std::mem::forget((
+                self.context.clone(),
+                self.charge.take(),
+                self.external.take(),
+            ));
         }
     }
     pub(crate) fn close(&mut self) -> Result<()> {
@@ -545,6 +559,19 @@ impl Mapping {
                 operation: "CUDA VMM retirement",
                 code: -1,
             });
+        }
+        if self.external.is_some() {
+            if self.context.poisoned.load(Ordering::Acquire) {
+                self.quarantine();
+                return Err(Error::Unquiesced {
+                    operation: "MNNVL external context",
+                    code: -1,
+                });
+            }
+            self.external.take();
+            self.charge.take();
+            self.address = 0;
+            return Ok(());
         }
         if self.address == 0 && self.handle == 0 {
             return Ok(());

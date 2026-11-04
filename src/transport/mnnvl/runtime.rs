@@ -1,7 +1,7 @@
 use crate::cuda::{fabric::Platform, ipc::IpcExport};
 use crate::segment::ProcessIdentity;
 use crate::transport::nvlink::NVLinkTransport;
-use crate::{EngineConfig, Error, MnnvlConfig, RegisteredMemory, Result};
+use crate::{EngineConfig, Error, MnnvlConfig, MnnvlHandleType, RegisteredMemory, Result};
 use std::time::Instant;
 
 impl NVLinkTransport {
@@ -32,23 +32,26 @@ impl NVLinkTransport {
         if self.fabric.is_none() {
             return self.identity.validate_peer(peer);
         }
+        if peer.process.0 == [0; 16] {
+            return Err(Error::Protocol("missing MNNVL requester process"));
+        }
         if peer.machine != self.wire_identity().machine {
             return Err(Error::Unavailable("different MNNVL fabric domains"));
         }
         Ok(())
     }
     pub(crate) fn grant_magic(&self) -> &'static [u8; 4] {
-        if self.fabric.is_some() {
-            b"MNFG"
-        } else {
-            b"NVL1"
+        match self.fabric.as_ref().map(|f| f.caps.kind) {
+            Some(MnnvlHandleType::Fabric) => b"MNFG",
+            Some(MnnvlHandleType::PosixFd) => b"MNPG",
+            None => b"NVL1",
         }
     }
     pub(crate) fn cache_magic(&self) -> &'static [u8; 4] {
-        if self.fabric.is_some() {
-            b"MNFC"
-        } else {
-            b"NVL2"
+        match self.fabric.as_ref().map(|f| f.caps.kind) {
+            Some(MnnvlHandleType::Fabric) => b"MNFC",
+            Some(MnnvlHandleType::PosixFd) => b"MNPC",
+            None => b"NVL2",
         }
     }
     pub(crate) fn export(

@@ -11,7 +11,7 @@ fn missing_cuda_entry_point_returns_unavailable_without_eager_loader_panic() {
     ));
     assert!(batch_copy(&library).is_none());
     assert!(matches!(
-        Driver::from_library(library),
+        Driver::from_library(library, false),
         Err(Error::Unavailable("CUDA driver symbol cuInit"))
     ));
 }

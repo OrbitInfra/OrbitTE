@@ -2,7 +2,9 @@ use super::*;
 use crate::cuda::fabric::Platform;
 use crate::test_support::EVENTUAL_PROGRESS as WAIT;
 use crate::{Error, MnnvlConfig, MnnvlHandleType, RegisteredMemory, RemoteEffect, SourceEpoch};
+mod authority;
 mod cache;
+mod external;
 mod shim;
 use shim::Rig;
 pub(in crate::cuda) fn install(
@@ -29,6 +31,14 @@ fn gpu(e: &TransferEngine, n: usize, p: Permission) -> Result<(Arc<CudaMemory>, 
         .register_cuda_memory_batch(&[(m.clone(), 0, n)], p)?
         .remove(0);
     Ok((m, r))
+}
+fn drained(e: &TransferEngine) -> Result<()> {
+    let end = std::time::Instant::now() + WAIT;
+    while e.stats()?.active_source_operations != 0 {
+        assert!(std::time::Instant::now() < end);
+        std::thread::yield_now();
+    }
+    Ok(())
 }
 fn read(m: &RegisteredMemory) -> Vec<u8> {
     let mut got = vec![0; m.len()];
@@ -218,6 +228,7 @@ fn egm_directions_are_owned_by_the_local_numa_gpu_and_plain_host_is_requester_on
     assert_eq!(&all[37..], &[0; 3]);
     src.unregister_memory(&remote)?;
     drop(remote);
+    drained(&src)?;
     src.free_egm(host)?;
     dst.unregister_memory(&egm)?;
     drop(egm);

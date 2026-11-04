@@ -5,6 +5,8 @@ pub(crate) mod file_attempt;
 mod hp_tcp;
 #[cfg(feature = "metrics")]
 mod metrics;
+#[cfg(feature = "cuda")]
+mod mnnvl;
 #[cfg(target_os = "linux")]
 mod shm;
 use admission::OwnerAdmission;
@@ -741,40 +743,6 @@ impl TransferEngine {
         })
     }
 
-    #[cfg(feature = "cuda")]
-    pub(crate) fn mnnvl_platform(&self) -> Result<&crate::cuda::fabric::Platform> {
-        self.source
-            .nvlink
-            .as_ref()
-            .and_then(|t| t.fabric.as_deref())
-            .ok_or(Error::Unavailable("MNNVL is unavailable"))
-    }
-    /// Allocate initialized CUDA VMM storage exportable over the configured fabric.
-    #[cfg(feature = "cuda")]
-    pub fn allocate_mnnvl(
-        &self,
-        device: i32,
-        length: usize,
-    ) -> Result<Arc<crate::cuda::CudaMemory>> {
-        let _permit = self.source.admit()?;
-        self.mnnvl_platform()?.allocate_device(device, length)
-    }
-    /// Allocate host-NUMA VMM storage on a socket with an attached, visible GPU.
-    #[cfg(feature = "cuda")]
-    pub fn allocate_egm(&self, numa_node: u32, length: usize) -> Result<Arc<HostMemory>> {
-        let _permit = self.source.admit()?;
-        self.mnnvl_platform()?.allocate_egm(numa_node, length)
-    }
-    /// Release the last MNNVL device allocation handle with a checked native receipt.
-    #[cfg(feature = "cuda")]
-    pub fn free_mnnvl(&self, memory: Arc<crate::cuda::CudaMemory>) -> Result<()> {
-        self.mnnvl_platform()?.free_device(memory)
-    }
-    /// Release the last EGM host allocation handle, including the rounded VA range.
-    #[cfg(feature = "cuda")]
-    pub fn free_egm(&self, memory: Arc<HostMemory>) -> Result<()> {
-        self.mnnvl_platform()?.free_host(memory)
-    }
     /// Allocate named shared host storage. Register one or more ranges with register_host_memory.
     pub fn allocate_shm_memory(&self, length: usize) -> Result<Arc<HostMemory>> {
         let _admission = self.source.admit()?;
@@ -992,6 +960,12 @@ impl TransferEngine {
         } else {
             Ok(())
         };
+        #[cfg(feature = "cuda")]
+        let fabric_result = if _last && Arc::strong_count(&memory.0) == 1 {
+            memory.0.fabric.get().map_or(Ok(()), |slot| slot.retire())
+        } else {
+            Ok(())
+        };
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
             runtime.registrations.retire(memory)?;
@@ -1000,6 +974,8 @@ impl TransferEngine {
         gds_result?;
         #[cfg(target_os = "linux")]
         shm_result?;
+        #[cfg(feature = "cuda")]
+        fabric_result?;
         Ok(())
     }
 
