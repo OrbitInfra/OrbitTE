@@ -87,7 +87,7 @@ pub struct SelectionPolicy {
     pub service_level: Option<u8>,
     #[serde(default, deserialize_with = "tc")]
     pub traffic_class: Option<u8>,
-    /// Candidate order. Empty uses eligible NVLink -> RDMA -> TCP.
+    /// Candidate order. Empty uses the registered routes for this segment type.
     #[serde(default, deserialize_with = "transports")]
     pub transports: Vec<Transport>,
 }
@@ -216,7 +216,7 @@ impl TransportSelectorConfig {
             {
                 return Err(invalid(policy, "min_size exceeds max_size"));
             }
-            if policy.transports.len() > 4
+            if policy.transports.len() > 5
                 || policy.transports.iter().enumerate().any(|(i, transport)| {
                     *transport == Transport::Unspec
                         || matches!(transport, Transport::IoUring | Transport::Gds)
@@ -289,6 +289,7 @@ fn transports<'de, D: Deserializer<'de>>(
         .map(|name| match name.as_str() {
             "tcp" => Ok(Transport::Tcp),
             "hp_tcp" => Ok(Transport::HpTcp),
+            "shm" => Ok(Transport::Shm),
             "rdma" => Ok(Transport::Rdma),
             "nvlink" => Ok(Transport::Nvlink),
             "io_uring" => Ok(Transport::IoUring),

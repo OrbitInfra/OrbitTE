@@ -93,6 +93,10 @@ path = "tests/hardware/gds.rs"
 required-features = ["gds"]
 
 [[example]]
+name = "shm"
+path = "tests/hardware/shm.rs"
+
+[[example]]
 name = "hp_tcp"
 path = "tests/hardware/hp_tcp.rs"
 

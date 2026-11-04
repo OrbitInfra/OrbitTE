@@ -41,7 +41,7 @@ artifacts and hardware profiles.
 | P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | P0.1 implemented; complete mapping and oracle open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
-| P3 | HP-TCP and shared-memory paths | P2 | HP-TCP implemented, SHM open |
+| P3 | HP-TCP and shared-memory paths | P2 | Complete at source level |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
@@ -199,13 +199,13 @@ Requirements: B02/B03 with associated F04/F07–F11/F18.
   generation-scoped registration IDs, remote permissions, WRITE ACK and READ
   accounting, IPv4 rail validation, per-peer lane rotation, large-READ
   partitioning and static rail pairing, as in TENT.
-- [ ] SHM: shared mappings and offsets, registration and permissions, alias
-  handling, process lifetime and cleanup, with TENT's opt-in default.
+- [x] [SHM](shm.md) implements shared mappings and offsets, registration permissions,
+  alias handling, process lifetime and cleanup, with TENT’s opt-in default.
 
-Exit: directional Rust/TENT HP-TCP interoperability, fragmented frames,
-backpressure, stale registration after restart, unlink/unregister races and
-same-host shared-byte tests. Multirail qualification needs independently routed
-physical interfaces.
+P3 is complete at source level. Linux CI qualifies loopback HP-TCP and same-host
+DRAM SHM on `/dev/shm`, including fragmented frames, restart fencing and
+unlink/unregister races. Physical HP-TCP rails and CXL need installed runs.
+Directional Rust/TENT interoperability remains in the interoperability profile.
 
 ## P4 — Host RDMA and endpoint ownership
 

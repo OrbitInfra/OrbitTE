@@ -655,6 +655,7 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
     for (name, expected) in [
         ("tcp", Transport::Tcp),
         ("hp_tcp", Transport::HpTcp),
+        ("shm", Transport::Shm),
         ("rdma", Transport::Rdma),
         ("nvlink", Transport::Nvlink),
     ] {
@@ -663,9 +664,7 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
         ))?;
         assert_eq!(config.policy[0].transports, [expected]);
     }
-    for provider in [
-        "ub", "xpu", "mlu", "hylink", "shm", "fabric", "mnnvl", "mpcomm",
-    ] {
+    for provider in ["ub", "xpu", "mlu", "hylink", "fabric", "mnnvl", "mpcomm"] {
         let json = format!(
             r#"{{"policy":[{{"name":"unsupported","segment_type":"memory","transports":["{provider}"]}}]}}"#
         );

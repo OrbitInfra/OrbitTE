@@ -88,6 +88,26 @@ jobs:
           installed="$RUNNER_TEMP/orbitte-installed-hp-tcp"
           python3 tests/hardware/build_installed.py --consumer hp-tcp --toolchain "$RUSTUP_TOOLCHAIN" --output "$installed"
           python3 "$installed/hp_tcp_run.py" --loopback --binary "$installed/installed/bin/orbitte-hp-tcp"
+      - name: Install and exercise same-host SHM with POSIX names and a tmpfs directory
+        if: matrix.features == ''
+        run: |
+          installed="$RUNNER_TEMP/orbitte-installed-shm"
+          python3 tests/hardware/build_installed.py --consumer shm --toolchain "$RUSTUP_TOOLCHAIN" --output "$installed"
+          standin=$(mktemp -d /dev/shm/orbitte-cxl-XXXXXX)
+          trap 'rmdir "$standin"' EXIT
+          python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --posix
+          python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --tmpfs "$standin"
+      - name: Repeat shared mapping lifetime and process controls 50 times
+        if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          count=$("$binary" --list | awk '/^transport::shm::tests::.*: test$/ && !/::shm_child:/ {n++} /::source_close_fences_shm_before_an_unrelated_admission_finishes: test$/ {n++} END {print n+0}')
+          test "$count" -ge 10
+          for i in $(seq 1 50); do
+            RUST_TEST_THREADS=$(nproc) "$binary" transport::shm::tests:: source_close_fences_shm_before_an_unrelated_admission_finishes | tee "$RUNNER_TEMP/shm-lifetime.log"
+            grep -Fq "test result: ok. $count passed; 0 failed; 1 ignored;" "$RUNNER_TEMP/shm-lifetime.log"
+          done
       - name: Repeat HP-TCP socket and ownership controls 50 times
         if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |

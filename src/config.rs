@@ -63,6 +63,7 @@ pub struct EngineConfig {
     /// Enable ordinary TCP payloads. The control service is independent.
     pub tcp: bool,
     pub hp_tcp: crate::HpTcpConfig,
+    pub shm: crate::ShmConfig,
     /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
     #[cfg(feature = "metrics")]
     pub metrics: crate::metrics::MetricsConfig,
@@ -171,6 +172,7 @@ impl Default for EngineConfig {
         Self {
             tcp: true,
             hp_tcp: Default::default(),
+            shm: Default::default(),
             #[cfg(feature = "metrics")]
             metrics: Default::default(),
             #[cfg(feature = "metrics")]
@@ -231,6 +233,18 @@ impl Default for EngineConfig {
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
         self.hp_tcp.validate(self.tcp)?;
+        if self.shm.enable
+            && !self.shm.cxl_mount_path.as_os_str().is_empty()
+            && !self.shm.cxl_mount_path.is_absolute()
+        {
+            return Err(Error::InvalidConfig("SHM cxl_mount_path must be absolute"));
+        }
+        #[cfg(not(target_os = "linux"))]
+        if self.shm.enable {
+            return Err(Error::Unavailable(
+                "SHM requires Linux same-machine identity and OFD locks",
+            ));
+        }
         if let Some(q) = self.runtime_queue {
             if q.staging_owner_reserve > q.max_outstanding_owners
                 || q.staging_byte_reserve > q.max_outstanding_bytes

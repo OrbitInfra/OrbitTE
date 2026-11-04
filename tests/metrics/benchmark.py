@@ -1,4 +1,4 @@
-"""Measure CPU admission/completion and a guarded loopback READ on one idle runner."""
+"""Measure CPU admission and guarded 64-byte and 4-MiB same-host READ/WRITE on one runner."""
 import json
 import os
 from pathlib import Path

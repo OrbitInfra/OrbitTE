@@ -469,6 +469,8 @@ impl<'a> StagingTask<'a> {
 
     fn cross(&mut self, local: RegisteredMemory, offset: usize, length: usize) -> Result<Cross> {
         let cross = PreparedTransfer {
+            #[cfg(target_os = "linux")]
+            shm: None,
             hp_cancel: None,
             #[cfg(feature = "rdma")]
             priority: self.request.priority,

@@ -27,6 +27,42 @@ fn source_close_is_permanent_and_timeout_is_not_a_drain_receipt() {
     assert!(matches!(engine.admit_batch(0), Err(Error::RequesterClosed)));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn source_close_fences_shm_before_an_unrelated_admission_finishes() -> Result<()> {
+    let mut c = EngineConfig::default();
+    c.shm.enable = true;
+    c.tcp = false;
+    let src = TransferEngine::new(c.clone())?;
+    let dst = TransferEngine::new(c)?;
+    let host = src.allocate_shm_memory(8)?;
+    let remote = src.register_host_memory(host.clone(), 0, 8, Permission::RemoteReadWrite)?;
+    let local = dst.register_memory(vec![0xab; 8].into(), Permission::LocalOnly)?;
+    let wait = crate::test_support::EVENTUAL_PROGRESS;
+    let peer = dst.open_segment(src.endpoint(), src.source_epoch(), wait)?;
+    let permit = src.source.admit()?;
+    assert!(matches!(
+        src.close_source(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    let q = TransferRequest::new(
+        Transport::Shm,
+        local.base_address() + 1,
+        remote.base_address() + 2,
+        4,
+    );
+    assert!(matches!(
+        dst.submit_and_wait(TransferOp::Write, &peer, &[q], wait),
+        Err(Error::RegionNotFound)
+    ));
+    let mut actual = [0xff; 8];
+    host.read(0, &mut actual)?;
+    assert_eq!(actual, [0; 8]);
+    drop(permit);
+    src.close_source(wait)?;
+    Ok(())
+}
+
 #[test]
 fn registration_batch_descriptor_limit_precedes_reference_changes() {
     let engine = TransferEngine::new(EngineConfig {
@@ -161,8 +197,28 @@ pub(crate) fn rdma_fixture_with_config(
         .enable
         .then(|| config.hp_tcp.bind(config.bind_addr).unwrap());
     let source = Arc::new(Source {
+        #[cfg(target_os = "linux")]
+        shm: config.shm.enable.then(|| {
+            crate::transport::shm::ShmTransport::new(
+                &config.shm,
+                epoch,
+                config.max_registered_regions,
+                config.max_registered_bytes,
+            )
+            .unwrap()
+        }),
         metadata: SegmentMetadata {
             tcp_disabled: !config.tcp,
+            shm: config.shm.enable.then(|| {
+                Arc::new(crate::transport::shm::wire::Manifest {
+                    cxl: !config.shm.cxl_mount_path.as_os_str().is_empty(),
+                    entries: Vec::new(),
+                })
+            }),
+            boot: config
+                .shm
+                .enable
+                .then(|| crate::segment::ProcessIdentity::boot_id().unwrap()),
             hp: hp_listener
                 .as_ref()
                 .map(|(_, endpoint)| Arc::new(*endpoint)),
@@ -1135,6 +1191,8 @@ pub(crate) fn staging_fixture(
     config.validate().unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
+        #[cfg(target_os = "linux")]
+        shm: None,
         metadata: SegmentMetadata {
             max_transfer_bytes: config.max_transfer_bytes as u64,
             #[cfg(feature = "rdma")]

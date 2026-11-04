@@ -261,7 +261,8 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         || reply.length < DESCRIPTOR_HEADER as u64
         || reply.length
             > (DESCRIPTOR_HEADER
-                + MAX_REGIONS * REGION_SIZE
+                + MAX_REGIONS * (REGION_SIZE + crate::transport::shm::wire::RECORD)
+                + crate::transport::shm::wire::HEADER
                 + crate::transport::hp_tcp::Endpoint::MAX_WIRE) as u64
     {
         return Err(Error::Protocol("descriptor payload length"));
@@ -274,12 +275,18 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
     }
     let mut metadata = SegmentMetadata::decode(&bytes[4..DESCRIPTOR_HEADER])?;
     let end = DESCRIPTOR_HEADER + count * REGION_SIZE;
-    if bytes.len() != end {
+    let mut trailer = &bytes[end..];
+    if metadata.shm.is_some() {
+        let (shm, used) = crate::transport::shm::wire::Manifest::decode(trailer, count)?;
+        metadata.shm = Some(Arc::new(shm));
+        trailer = &trailer[used..];
+    }
+    if !trailer.is_empty() {
         if !metadata.tcp_disabled {
             return Err(Error::Protocol("unexpected HP-TCP descriptor"));
         }
         metadata.hp = Some(Arc::new(crate::transport::hp_tcp::Endpoint::decode(
-            &bytes[end..],
+            trailer,
         )?));
     }
     let mut regions = Vec::new();
@@ -320,6 +327,9 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             hp_registered: entry[27] != 0,
         });
         previous = id;
+    }
+    if let Some(shm) = &metadata.shm {
+        shm.validate(&regions)?;
     }
     Ok(RemoteSegment {
         endpoint,
@@ -667,15 +677,19 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
     let mut proxy_reply = false;
     let prepared = (|| {
         if request.operation == Operation::Describe {
-            let regions = source.registry.descriptors(source.metadata.hp.is_some())?;
+            let (metadata, regions) = source.describe()?;
             let end = DESCRIPTOR_HEADER + regions.len() * REGION_SIZE;
+            let hp_start = end + metadata.shm.as_ref().map_or(0, |s| s.wire_len());
             let mut payload =
-                buffer(end + source.metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
-            if let Some(hp) = &source.metadata.hp {
-                hp.encode(&mut payload[end..]);
+                buffer(hp_start + metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
+            if let Some(shm) = &metadata.shm {
+                shm.encode(&mut payload[end..hp_start]);
+            }
+            if let Some(hp) = &metadata.hp {
+                hp.encode(&mut payload[hp_start..]);
             }
             payload[..4].copy_from_slice(&(regions.len() as u32).to_be_bytes());
-            source.metadata.encode(&mut payload[4..DESCRIPTOR_HEADER]);
+            metadata.encode(&mut payload[4..DESCRIPTOR_HEADER]);
             for (region, entry) in regions
                 .iter()
                 .zip(payload[DESCRIPTOR_HEADER..].chunks_exact_mut(REGION_SIZE))

@@ -11,9 +11,10 @@ use crate::{Error, MemoryType, Priority, RemoteRegion, Result, Transport};
 pub use config::{IntentType, SegmentType, SelectionPolicy, TransportSelectorConfig};
 pub use qp_pools::QpPool;
 
-const DEFAULT_TRANSPORTS: [Transport; 4] = [
+const DEFAULT_TRANSPORTS: [Transport; 5] = [
     Transport::Nvlink,
     Transport::Rdma,
+    Transport::Shm,
     Transport::HpTcp,
     Transport::Tcp,
 ];
@@ -41,6 +42,18 @@ impl SelectionContext<'_> {
         }
         match transport {
             Transport::Unspec | Transport::IoUring | Transport::Gds => false,
+            Transport::Shm => {
+                cfg!(target_os = "linux")
+                    && self.local_memory == MemoryType::Cpu
+                    && self.remote.memory_type == MemoryType::Cpu
+                    && self.local_segment.same_machine(&self.remote_segment)
+                    && self
+                        .local_segment
+                        .shm
+                        .as_ref()
+                        .zip(self.remote_segment.shm.as_ref())
+                        .is_some_and(|(a, b)| a.cxl == b.cxl && b.get(self.remote.id()).is_some())
+            }
             Transport::Tcp => !self.local_segment.tcp_disabled && !self.remote_segment.tcp_disabled,
             Transport::HpTcp => {
                 self.local_memory == MemoryType::Cpu

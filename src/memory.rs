@@ -134,6 +134,8 @@ impl HostAccess {
 }
 
 enum HostBacking {
+    #[cfg(target_os = "linux")]
+    Shared(Arc<crate::transport::shm::Local>),
     #[cfg(feature = "cuda")]
     CudaPinned(Arc<crate::cuda::PinnedAllocation>),
     Owned {
@@ -147,8 +149,25 @@ enum HostBacking {
 }
 
 impl HostBacking {
+    #[cfg(target_os = "linux")]
+    fn shared(&self) -> Option<&Arc<crate::transport::shm::Local>> {
+        match self {
+            Self::Shared(local) => Some(local),
+            _ => None,
+        }
+    }
+    #[cfg(target_os = "linux")]
+    fn shm_lock(
+        &self,
+        range: &Range<usize>,
+        write: bool,
+    ) -> Result<Option<crate::transport::shm::RangeLock>> {
+        self.shared().map(|a| a.access(range, write)).transpose()
+    }
     fn address(&self) -> NonNull<u8> {
         match self {
+            #[cfg(target_os = "linux")]
+            Self::Shared(local) => local.address(),
             Self::Owned { address, .. } | Self::External { address, .. } => *address,
             #[cfg(feature = "cuda")]
             Self::CudaPinned(allocation) => allocation.address,
@@ -353,6 +372,44 @@ impl HostMemory {
         self.ipc_idle.notify_all();
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn from_shm(local: Arc<crate::transport::shm::Local>) -> Self {
+        Self {
+            address: local.address().as_ptr() as usize as u64,
+            length: local.size(),
+            location: MemoryLocation::Cpu(None),
+            #[cfg(feature = "cuda")]
+            cuda_pinned: false,
+            #[cfg(feature = "cuda")]
+            ipc_idle: std::sync::Condvar::new(),
+            backing: Mutex::new(HostAccess {
+                bytes: HostBacking::Shared(local),
+                #[cfg(feature = "cuda")]
+                cuda_uncertain: false,
+                #[cfg(feature = "cuda")]
+                cuda_inflight: false,
+                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+                dma: Vec::new(),
+            }),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn shared(&self) -> Option<Arc<crate::transport::shm::Local>> {
+        self.backing
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .bytes
+            .shared()
+            .cloned()
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn free_shm(self) -> Result<()> {
+        let local = self.shared().ok_or(Error::ForeignRegistration)?;
+        drop(self);
+        Arc::try_unwrap(local)
+            .map_err(|_| Error::Unavailable("SHM mapping still has live owners"))?
+            .retire()
+    }
     pub fn new(bytes: Box<[u8]>) -> Result<Self> {
         if bytes.is_empty() {
             return Err(Error::InvalidRange);
@@ -445,6 +502,8 @@ impl HostMemory {
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
         backing.prepare_access(&range)?;
+        #[cfg(target_os = "linux")]
+        let shared = backing.bytes.shm_lock(&range, false)?;
         // SAFETY: the validated range has no conflicting DMA lease. The shared
         // lock serializes CPU copies and lease acquisition. External access is
         // coordinated by from_raw_parts' caller. No allocation-wide slice exists.
@@ -455,6 +514,8 @@ impl HostMemory {
                 destination.len(),
             );
         }
+        #[cfg(target_os = "linux")]
+        crate::transport::shm::RangeLock::finish(shared)?;
         Ok(())
     }
 
@@ -467,6 +528,8 @@ impl HostMemory {
             .lock()
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
         backing.prepare_access(&range)?;
+        #[cfg(target_os = "linux")]
+        let shared = backing.bytes.shm_lock(&range, true)?;
         // SAFETY: as for read; only this checked range is accessed under the
         // shared lock. Disjoint native leases do not conflict with this copy.
         unsafe {
@@ -476,12 +539,16 @@ impl HostMemory {
                 source.len(),
             );
         }
+        #[cfg(target_os = "linux")]
+        crate::transport::shm::RangeLock::finish(shared)?;
         Ok(())
     }
 }
 
 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
 pub(crate) struct DmaLease {
+    #[cfg(target_os = "linux")]
+    _shared_access: Option<crate::transport::shm::RangeLock>,
     _registration: RegisteredMemory,
     allocation: Allocation,
     range: Range<usize>,
@@ -545,6 +612,40 @@ impl fmt::Debug for RegisteredMemory {
 }
 
 impl RegisteredMemory {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn shared(&self) -> Option<(Arc<crate::transport::shm::Local>, usize)> {
+        match &self.0.allocation {
+            Allocation::Host(host) => host.shared().map(|s| (s, self.0.allocation_offset)),
+            #[cfg(feature = "cuda")]
+            Allocation::Cuda(_) => None,
+        }
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_shm_access<T>(
+        &self,
+        offset: usize,
+        length: usize,
+        copy: impl FnOnce(NonNull<u8>, usize, Option<&crate::transport::shm::Local>) -> Result<T>,
+    ) -> Result<T> {
+        checked_range(offset, length, self.len())?;
+        #[cfg(not(feature = "cuda"))]
+        let Allocation::Host(host) = &self.0.allocation;
+        #[cfg(feature = "cuda")]
+        let Allocation::Host(host) = &self.0.allocation else {
+            return Err(Error::Unavailable("SHM requires host memory"));
+        };
+        let start = self.0.allocation_offset + offset;
+        let guard = host
+            .backing
+            .lock()
+            .map_err(|_| Error::Internal("host backing lock"))?;
+        guard.prepare_access(&checked_range(start, length, host.len())?)?;
+        copy(
+            guard.bytes.address(),
+            start,
+            guard.bytes.shared().map(Arc::as_ref),
+        )
+    }
     #[cfg(all(feature = "io-uring", feature = "cuda"))]
     pub(crate) fn is_cuda_pinned_host(&self) -> bool {
         matches!(&self.0.allocation, Allocation::Host(host) if host.cuda_pinned)
@@ -620,6 +721,8 @@ impl RegisteredMemory {
         let address =
             NonNull::new((self.0.allocation.base_address() + offset as u64) as usize as *mut u8)
                 .ok_or(Error::InvalidRange)?;
+        #[cfg(target_os = "linux")]
+        let shared_access;
         match &self.0.allocation {
             Allocation::Host(memory) => {
                 let mut backing = memory
@@ -627,6 +730,10 @@ impl RegisteredMemory {
                     .lock()
                     .map_err(|_| Error::Internal("memory lock poisoned"))?;
                 backing.prepare_access(&range)?;
+                #[cfg(target_os = "linux")]
+                {
+                    shared_access = backing.bytes.shm_lock(&range, true)?;
+                }
                 backing
                     .dma
                     .try_reserve(1)
@@ -634,11 +741,19 @@ impl RegisteredMemory {
                 backing.dma.push(range.clone());
             }
             #[cfg(all(feature = "cuda", feature = "rdma"))]
-            Allocation::Cuda(memory) => memory.acquire_dma(range.clone())?,
+            Allocation::Cuda(memory) => {
+                memory.acquire_dma(range.clone())?;
+                #[cfg(target_os = "linux")]
+                {
+                    shared_access = None;
+                }
+            }
             #[cfg(all(feature = "cuda", not(feature = "rdma")))]
             Allocation::Cuda(_) => return Err(Error::Unavailable("file I/O requires DRAM")),
         }
         Ok(DmaLease {
+            #[cfg(target_os = "linux")]
+            _shared_access: shared_access,
             _registration: self.clone(),
             allocation: self.0.allocation.clone(),
             range,

@@ -20,6 +20,15 @@ impl TransferEngine {
             if self.hp_tcp.is_some() && crate::transport::hp_tcp::host(m) {
                 mask |= transport_bit(Transport::HpTcp);
             }
+            #[cfg(target_os = "linux")]
+            if self
+                .source
+                .shm
+                .as_ref()
+                .is_some_and(|s| s.exports_memory(m))
+            {
+                mask |= transport_bit(Transport::Shm);
+            }
             #[cfg(feature = "rdma")]
             if self.source.rdma.as_ref().is_some_and(|r| r.direct(m)) {
                 mask |= transport_bit(Transport::Rdma);

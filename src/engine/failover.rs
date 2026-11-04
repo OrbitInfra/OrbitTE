@@ -135,6 +135,44 @@ impl TransferEngine {
                     posted,
                 ))
             }
+            Transport::Shm => {
+                #[cfg(target_os = "linux")]
+                {
+                    single(
+                        (|| {
+                            let lease = match &request.shm {
+                                Some(lease) => lease.clone(),
+                                None => self.shm_lease(peer, request, operation)?,
+                            };
+                            lease.copy(
+                                operation,
+                                &request.local,
+                                request.local_offset,
+                                request.remote_offset,
+                                request.length,
+                                posted,
+                            )
+                        })()
+                        .map_err(|e| {
+                            (
+                                e,
+                                if *posted && operation == TransferOp::Write {
+                                    RemoteEffect::Unknown
+                                } else {
+                                    RemoteEffect::None
+                                },
+                            )
+                        }),
+                    )
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    single(Err((
+                        Error::Unavailable("SHM requires Linux"),
+                        RemoteEffect::None,
+                    )))
+                }
+            }
             Transport::HpTcp => single((|| {
                 let hp = self
                     .hp_tcp
