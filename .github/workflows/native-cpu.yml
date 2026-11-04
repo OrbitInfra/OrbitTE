@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/**'
+      - 'crates/orbit-te-c/**'
       - 'tests/reference/**'
       - 'tests/unit/transport/rdma/slice.rs'
       - 'tests/fixtures/**'

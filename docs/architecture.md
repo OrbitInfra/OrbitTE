@@ -11,6 +11,22 @@ performance parity. See [capabilities](capabilities.md) for support and the
 :class: dark-light
 :::
 
+## C transfer-engine boundary
+
+The `orbit-te-c` package exports the frozen C records and catches unwinding at
+each entry. Bounded, non-reused engine and batch tokens resolve to the Rust
+owners. C requests can mix opcodes and targets in one submit. The batch worker
+prepares every group before publishing the interval and owns its notification.
+The process address index shares backing locks across registrations, including
+registrations on different engines. Final unregister checks for surviving
+borrowers. Failed native retirement fences the backing against reuse.
+
+TENT opens a P2P segment by name. The C handle pins the first responding
+source epoch and checks it thereafter. The installed C tests replace the peer
+on its original port, withhold a READ during bulk unregister, and cut a
+notification reply after enqueue. The [C API](c-api.md) describes the release
+receipts and the fork's negative status codes.
+
 ## Configuration ownership
 
 `EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve

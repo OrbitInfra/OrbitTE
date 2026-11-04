@@ -80,7 +80,8 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | Capability | Status | Limits |
 | --- | --- | --- |
 | Rust API | Implemented | See [Rust API](rust-api.md) |
-| TENT C, C++ and Python APIs | Planned (P9) | |
+| TENT C ABI | Implemented (F21) | Linux LP64, installed shared and static libraries, 33 entry points and real two-process TCP. Native GPU and RDMA C profiles await installed runs. See the [C API](c-api.md) |
+| TENT C++ and Python APIs | Planned (P9) | S20 and S21 |
 | TENT configuration and metadata stores | Configuration implemented (F01), P2P available | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Optional S18 covers etcd, Redis and HTTP |
 | TENT wire interoperability | Planned (P9) | OrbitTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
 

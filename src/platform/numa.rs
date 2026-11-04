@@ -10,6 +10,7 @@ use crate::{Error, Result};
 /// Linux discovery and mapping operations, retained by each mapped owner.
 pub(crate) struct Numa {
     pub(crate) nodes: fn() -> Result<Vec<u32>>,
+    #[cfg(feature = "cuda")]
     pub(crate) gpu_node: fn(&str) -> Option<u32>,
     pub(crate) bind: fn(NonNull<u8>, usize, u32) -> Result<()>,
     pub(crate) unmap: fn(NonNull<u8>, usize) -> Result<()>,
@@ -17,6 +18,7 @@ pub(crate) struct Numa {
 
 pub(crate) const NATIVE: Numa = Numa {
     nodes: allowed_nodes,
+    #[cfg(feature = "cuda")]
     gpu_node: |pci| super::pci::numa_node(Path::new("/sys"), pci),
     bind,
     unmap,

@@ -290,6 +290,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
             memory_type: crate::MemoryType::Cpu,
             fabric: None,
             hp_registered: false,
+            profile: Default::default(),
             ipc_exportable: false,
             epoch,
             id: 1,

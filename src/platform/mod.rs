@@ -1,5 +1,5 @@
 #[cfg(feature = "rdma")]
 pub(crate) mod cpu_probe;
-#[cfg(feature = "cuda")]
 pub(crate) mod numa;
+#[cfg(any(feature = "rdma", feature = "cuda"))]
 pub(crate) mod pci;

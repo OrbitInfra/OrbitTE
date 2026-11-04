@@ -66,6 +66,38 @@ pub enum Transport {
     Unspec,
 }
 
+impl Transport {
+    /// Frozen TENT transport discriminant, independent of the Rust enum layout.
+    pub fn tent_id(self) -> u8 {
+        match self {
+            Self::Unspec => 0,
+            Self::Rdma => 1,
+            Self::Mnnvl => 2,
+            Self::Shm => 3,
+            Self::Nvlink => 4,
+            Self::Gds => 5,
+            Self::IoUring => 6,
+            Self::Tcp => 7,
+            Self::HpTcp => 13,
+        }
+    }
+    /// Return a transport represented by a Rust owner. Installation is checked separately.
+    pub fn from_tent_id(id: u8) -> Option<Self> {
+        Some(match id {
+            0 => Self::Unspec,
+            1 => Self::Rdma,
+            2 => Self::Mnnvl,
+            3 => Self::Shm,
+            4 => Self::Nvlink,
+            5 => Self::Gds,
+            6 => Self::IoUring,
+            7 => Self::Tcp,
+            13 => Self::HpTcp,
+            _ => return None,
+        })
+    }
+}
+
 /// TENT request priority; smaller discriminants are served first by RDMA workers.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -948,12 +980,16 @@ impl TransferEngine {
     fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
         #[cfg(feature = "cuda")]
         if let Some(f) = self.source.nvlink.as_ref().and_then(|t| t.fabric.as_ref()) {
-            for m in memory {
+            for m in memory
+                .iter()
+                .filter(|m| m.0.descriptor.profile.permits(Transport::Mnnvl))
+            {
                 match f.register(m) {
                     Err(e @ Error::Unquiesced { .. }) => {
                         std::mem::forget(m.clone());
                         return Err(e);
                     }
+                    Err(e) if m.0.descriptor.profile.route == Transport::Mnnvl => return Err(e),
                     Err(e) => log::warn!("registration unavailable to MNNVL: {e}"),
                     Ok(()) => (),
                 }
@@ -964,12 +1000,26 @@ impl TransferEngine {
             .source
             .shm
             .as_ref()
+            .filter(|_| {
+                memory
+                    .first()
+                    .is_some_and(|m| m.0.descriptor.profile.permits(Transport::Shm))
+            })
             .map(|s| s.prepare_exports(memory))
             .transpose()?;
         #[cfg(feature = "rdma")]
-        let result = self.source.rdma.as_ref().map_or(Ok(()), |runtime| {
-            runtime.register_memory(memory, deadline(self.config.handler_timeout)?)
-        });
+        let result = self
+            .source
+            .rdma
+            .as_ref()
+            .filter(|_| {
+                memory
+                    .first()
+                    .is_some_and(|m| m.0.descriptor.profile.permits(Transport::Rdma))
+            })
+            .map_or(Ok(()), |runtime| {
+                runtime.register_memory(memory, deadline(self.config.handler_timeout)?)
+            });
         #[cfg(not(feature = "rdma"))]
         let result = Ok(());
         #[cfg(not(feature = "rdma"))]
@@ -1015,6 +1065,69 @@ impl TransferEngine {
         self.source
             .registry
             .register_cuda_batch(ranges, permission, |memory| self.register_native(memory))
+    }
+
+    /// Generated SHM basename of this engine's retained mapping. The caller
+    /// can verify a C-supplied path without granting authority over an arbitrary file.
+    pub fn shm_backing_name(&self, backing: &crate::MemoryBacking) -> Option<String> {
+        match backing {
+            #[cfg(target_os = "linux")]
+            crate::MemoryBacking::Host(h) => {
+                h.shared().and_then(|m| m.basename_for(self.source_epoch()))
+            }
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
+    /// Whether this engine installed the named transport. File library and
+    /// ring probes remain lazy until the first eligible file request.
+    pub fn transport_installed(&self, route: Transport) -> bool {
+        match route {
+            Transport::Unspec => true,
+            Transport::Tcp => self.config.tcp,
+            Transport::HpTcp => self.hp_tcp.is_some(),
+            #[cfg(target_os = "linux")]
+            Transport::Shm => self.source.shm.is_some(),
+            #[cfg(feature = "rdma")]
+            Transport::Rdma => self.source.rdma.is_some(),
+            #[cfg(feature = "cuda")]
+            Transport::Nvlink => self.source.metadata.nvlink.is_some(),
+            #[cfg(feature = "cuda")]
+            Transport::Mnnvl => self.source.metadata.mnnvl.is_some(),
+            #[cfg(feature = "gds")]
+            Transport::Gds => self.gds.is_some(),
+            #[cfg(feature = "io-uring")]
+            Transport::IoUring => self.io_uring.is_some(),
+            #[allow(unreachable_patterns)]
+            _ => false,
+        }
+    }
+
+    /// Atomically publish host and device ranges in one registry transaction.
+    pub fn register_memory_ranges(
+        &self,
+        ranges: &[(crate::MemoryBacking, usize, usize)],
+        permission: Permission,
+        route: Transport,
+        internal: bool,
+    ) -> Result<Vec<RegisteredMemory>> {
+        if !self.transport_installed(route) {
+            return Err(Error::Unavailable("requested registration transport"));
+        }
+        if ranges.len() > self.config.max_batch_requests {
+            return Err(Error::ResourceExhausted);
+        }
+        let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
+        self.source
+            .registry
+            .register_batch(ranges, permission, route, internal, |memory| {
+                self.register_native(memory)
+            })
     }
 
     /// Resolves an absolute local address to an owned registered range and offset.
@@ -1068,6 +1181,21 @@ impl TransferEngine {
         #[cfg(feature = "cuda")]
         fabric_result?;
         Ok(())
+    }
+
+    /// Establish an initial P2P identity for an address-only C segment name.
+    /// The caller must trust the endpoint at first lookup and pin the result
+    /// for the lifetime of the handle. Never call this to refresh a stale handle.
+    pub fn discover_peer_epoch(
+        &self,
+        endpoint: SocketAddr,
+        timeout: Duration,
+    ) -> Result<SourceEpoch> {
+        if endpoint == self.endpoint() {
+            return Ok(self.source_epoch());
+        }
+        let _permit = self.admit_batch(0)?;
+        control_plane::discover_epoch(endpoint, deadline(timeout)?)
     }
 
     /// Open/refresh using an epoch supplied by the authoritative source owner.
@@ -1346,6 +1474,7 @@ impl TransferEngine {
             }
             let context = SelectionContext {
                 local_memory: local.memory_type(),
+                local_route: local.0.descriptor.profile.route,
                 #[cfg(feature = "cuda")]
                 local_ipc: if self.source.metadata.mnnvl.is_some() {
                     local.0.fabric.get().is_some_and(|r| r.local)

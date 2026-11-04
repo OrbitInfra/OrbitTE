@@ -7,6 +7,14 @@ impl TransferEngine {
         transport: Transport,
         _layout: Option<(&FileParts, &FileLease, u64)>,
     ) -> Result<bool> {
+        if _layout.is_some_and(|(parts, _, _)| {
+            parts
+                .iter()
+                .filter_map(|p| p.local.as_ref())
+                .any(|m| !m.0.descriptor.profile.permits(transport))
+        }) {
+            return Ok(false);
+        }
         match transport {
             #[cfg(feature = "io-uring")]
             Transport::IoUring => Ok(self.io_uring.as_ref().is_some_and(|io| io.available())),

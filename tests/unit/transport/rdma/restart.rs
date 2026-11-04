@@ -243,6 +243,7 @@ pub(super) fn stale(
                     memory_type: crate::MemoryType::Cpu,
                     fabric: None,
                     hp_registered: false,
+                    profile: Default::default(),
                     ipc_exportable: false,
                     epoch,
                     id: fields[2].parse().unwrap(),

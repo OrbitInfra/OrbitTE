@@ -257,10 +257,10 @@ impl DeviceAllocation {
     }
 }
 
-impl Drop for DeviceAllocation {
-    fn drop(&mut self) {
+impl DeviceAllocation {
+    fn release(&mut self) -> Result<()> {
         if self.address == 0 {
-            return;
+            return Ok(());
         }
         let released = !self.uncertain
             && self.wait_producer().is_ok()
@@ -287,6 +287,20 @@ impl Drop for DeviceAllocation {
                 std::mem::forget(owner);
             }
         }
+        self.address = 0; // A failed destroy must never be issued a second time.
+        if released {
+            Ok(())
+        } else {
+            Err(Error::Unquiesced {
+                operation: "CUDA allocation retirement",
+                code: -1,
+            })
+        }
+    }
+}
+impl Drop for DeviceAllocation {
+    fn drop(&mut self) {
+        let _ = self.release();
     }
 }
 
@@ -296,7 +310,7 @@ impl Drop for DeviceAllocation {
 pub struct CudaMemory {
     address: u64,
     length: usize,
-    location: crate::MemoryLocation,
+    pub(crate) location: crate::MemoryLocation,
     allocation: Mutex<DeviceAllocation>,
     pub(crate) ipc_requester: bool,
     pub(crate) ipc_exportable: bool,
@@ -379,6 +393,64 @@ impl CudaMemory {
             length,
             location: self.location,
         })
+    }
+
+    /// Retire an exclusively held device allocation and report its native receipt.
+    pub fn release_owned(self: Arc<Self>) -> Result<()> {
+        let mut memory = Arc::try_unwrap(self).map_err(|_| Error::BatchBusy)?;
+        memory
+            .allocation
+            .get_mut()
+            .map_err(|_| Error::Internal("CUDA allocation lock poisoned"))?
+            .release()
+    }
+    /// Identify an externally retained device allocation for the C ABI. The caller
+    /// must supply live host storage if CUDA reports an unrecognized host pointer.
+    ///
+    /// # Safety
+    /// The same ownership, access and producer handoff rules as from_raw_parts
+    /// apply. A CUDA error or unsupported memory kind never authorizes a host copy.
+    #[allow(unsafe_code)]
+    pub unsafe fn from_foreign_address(
+        address: u64,
+        length: usize,
+        owner: Arc<dyn Send + Sync>,
+    ) -> Result<Option<Self>> {
+        let driver = match Driver::load() {
+            Ok(d) => d,
+            Err(
+                Error::Unavailable("CUDA driver libcuda.so.1")
+                | Error::Backend {
+                    operation: "cuInit",
+                    code: 100,
+                },
+            ) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut attrs = [
+            PointerAttribute::CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+            PointerAttribute::CU_POINTER_ATTRIBUTE_IS_MANAGED,
+        ];
+        let mut kind = 0i32;
+        let mut managed = 0u32;
+        let mut values = [
+            (&mut kind as *mut i32).cast(),
+            (&mut managed as *mut u32).cast(),
+        ];
+        // SAFETY: attributes and their matching output integers live through the driver call.
+        check("cuPointerGetAttributes", unsafe {
+            (driver.pointer_attributes)(2, attrs.as_mut_ptr(), values.as_mut_ptr(), address)
+        })?;
+        if managed != 0 {
+            return Err(Error::Unavailable("managed CUDA memory"));
+        }
+        if kind == sys::CUmemorytype::CU_MEMORYTYPE_DEVICE as i32 {
+            return Self::register(address, length, owner, driver).map(Some);
+        }
+        if kind == 0 || kind == sys::CUmemorytype::CU_MEMORYTYPE_HOST as i32 {
+            return Ok(None);
+        }
+        Err(Error::Unavailable("unsupported CUDA pointer type"))
     }
 
     pub fn allocate(device: i32, length: usize) -> Result<Self> {

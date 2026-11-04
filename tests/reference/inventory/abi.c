@@ -2,7 +2,9 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "tent/transfer_engine.h"
+#ifndef ORBITTE_C_API_ONLY
 #include "tent/device_plugin.h"
+#endif
 
 #define RECORD(T) printf("%s\t%zu\t%zu", #T, sizeof(T), _Alignof(T))
 #define FIELD(T, F) \
@@ -55,6 +57,7 @@ int main(void) {
     FIELD(tent_nic_load_stat_t, inflight_bytes);
     FIELD(tent_nic_load_stat_t, ewma_bandwidth_bps);
     END();
+#ifndef ORBITTE_C_API_ONLY
     RECORD(location_t);
     FIELD(location_t, start);
     FIELD(location_t, length);
@@ -71,6 +74,8 @@ int main(void) {
     FIELD(device_plugin_t, get_device_count);
     FIELD(device_plugin_t, get_device_pci_bus_id);
     END();
+
+#endif
     printf("handles\tengine=%zu\tbatch=%zu\tsegment=%zu\tlocal=%llu\n",
            sizeof(tent_engine_t), sizeof(tent_batch_id_t),
            sizeof(tent_segment_id_t), (unsigned long long)LOCAL_SEGMENT_ID);
@@ -84,8 +89,10 @@ int main(void) {
            PERM_LOCAL_READ_WRITE, PERM_GLOBAL_READ_ONLY,
            PERM_GLOBAL_READ_WRITE);
     printf("segment_type\tmemory=%d\tfile=%d\n", TYPE_MEMORY, TYPE_FILE);
+#ifndef ORBITTE_C_API_ONLY
     printf("plugin\tsymbol=%s\thandled_error=%d\tlocation_bytes=%d\n",
            TENT_DEVICE_PLUGIN_REGISTER_SYMBOL, TENT_DEVICE_PLUGIN_ERROR,
            LOCATION_LEN);
+#endif
     return 0;
 }

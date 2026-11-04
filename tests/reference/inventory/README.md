@@ -12,6 +12,10 @@ the Rust owner, downstream step, trigger and evidence to retain. Reference test
 rows carry those fields directly and give the GTest filter in their source.
 Future steps should add their executable evidence to the existing row.
 
+The installed S19 consumer in `tests/c-api/` checks every symbol in `c-api.tsv`
+and links the same calls against both libraries. Its LP64 fixture covers the
+transfer engine. The two device-plugin records belong to S22.
+
 C declarations and semantics resolve to `include/tent/transfer_engine.h` and
 `src/transfer_engine_c.cpp`. RPC numbers, dispatcher and attachment semantics
 resolve to `include/tent/rpc/rpc.h`, `src/rpc/rpc.cpp` and

@@ -76,6 +76,7 @@ impl Relay {
                 memory_type: crate::MemoryType::Cuda,
                 fabric: None,
                 hp_registered: false,
+                profile: Default::default(),
                 ipc_exportable: true,
                 epoch,
                 id: memory.id(),

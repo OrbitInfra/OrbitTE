@@ -41,6 +41,11 @@ impl SourceEpoch {
     pub(crate) fn generate() -> Result<Self> {
         let mut bytes = [0; 16];
         File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        if bytes == [0; 16] {
+            return Err(Error::Internal(
+                "reserved source epoch from entropy provider",
+            ));
+        }
         Ok(Self(bytes))
     }
 }
@@ -81,10 +86,56 @@ pub struct RemoteRegion {
     pub(crate) memory_type: MemoryType,
     pub(crate) ipc_exportable: bool,
     pub(crate) hp_registered: bool,
+    pub(crate) profile: RegionProfile,
     pub(crate) fabric: Option<crate::transport::mnnvl::Location>,
 }
 
+/// Optional per-registration route and location carried by Describe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegionProfile {
+    pub route: crate::Transport,
+    pub node: Option<u32>,
+}
+impl Default for RegionProfile {
+    fn default() -> Self {
+        Self {
+            route: crate::Transport::Unspec,
+            node: None,
+        }
+    }
+}
+impl RegionProfile {
+    pub(crate) fn permits(self, t: crate::Transport) -> bool {
+        self.route == crate::Transport::Unspec || self.route == t
+    }
+    pub(crate) const SIZE: usize = 5;
+    pub(crate) fn encode(self, dst: &mut [u8]) {
+        dst[0] = self.route.tent_id();
+        dst[1..5].copy_from_slice(&self.node.unwrap_or(u32::MAX).to_be_bytes());
+    }
+    pub(crate) fn decode(src: &[u8]) -> Result<Self> {
+        let [route, a, b, c, d] = *src else {
+            return Err(Error::Protocol("invalid registration profile"));
+        };
+        let index = u32::from_be_bytes([a, b, c, d]);
+        Ok(Self {
+            route: crate::Transport::from_tent_id(route)
+                .ok_or(Error::Protocol("unknown registration transport"))?,
+            node: (index != u32::MAX).then_some(index),
+        })
+    }
+}
+
 impl RemoteRegion {
+    /// TENT buffer location as published by its allocation owner.
+    pub fn location_name(&self) -> String {
+        match (self.memory_type, self.profile.node) {
+            (MemoryType::Cpu, None) => "*".into(),
+            (MemoryType::Cpu, Some(n)) => format!("cpu:{n}"),
+            (MemoryType::Cuda, Some(n)) => format!("cuda:{n}"),
+            (MemoryType::Cuda, None) => "cuda".into(),
+        }
+    }
     /// Source-owned backing classification from the descriptor snapshot.
     pub fn memory_type(&self) -> MemoryType {
         self.memory_type

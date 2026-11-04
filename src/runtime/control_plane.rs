@@ -246,6 +246,30 @@ pub(crate) fn open_segment(
     }
 }
 
+pub(crate) fn discover_epoch(endpoint: SocketAddr, deadline: Instant) -> Result<SourceEpoch> {
+    // A Describe with the reserved zero identity can only elicit the normal
+    // epoch-mismatch header. It grants no registration or payload access.
+    let mut channel = ControlChannel::connect(endpoint, deadline)?;
+    channel.write_all(
+        &Request {
+            operation: Operation::Describe,
+            epoch: SourceEpoch([0; 16]),
+            region: 0,
+            offset: 0,
+            length: 0,
+        }
+        .encode(),
+    )?;
+    let mut bytes = [0; REPLY_SIZE];
+    channel.read_exact(&mut bytes)?;
+    validate_prefix(&bytes)?;
+    let epoch = epoch_at(&bytes);
+    if bytes[10] != 1 || u64_at(&bytes, 28) != 0 || epoch.0 == [0; 16] {
+        return Err(Error::Protocol("invalid initial epoch reply"));
+    }
+    Ok(epoch)
+}
+
 fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Result<RemoteSegment> {
     let mut channel = ControlChannel::connect(endpoint, deadline)?;
     channel.write_all(
@@ -263,7 +287,10 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         || reply.length < DESCRIPTOR_HEADER as u64
         || reply.length
             > (DESCRIPTOR_HEADER
-                + MAX_REGIONS * (REGION_SIZE + crate::transport::shm::wire::RECORD)
+                + MAX_REGIONS
+                    * (REGION_SIZE
+                        + crate::segment::RegionProfile::SIZE
+                        + crate::transport::shm::wire::RECORD)
                 + crate::transport::mnnvl::Capability::SIZE
                 + crate::transport::shm::wire::HEADER
                 + crate::transport::hp_tcp::Endpoint::MAX_WIRE) as u64
@@ -278,7 +305,14 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
     }
     let mut metadata = SegmentMetadata::decode(&bytes[4..DESCRIPTOR_HEADER])?;
     let end = DESCRIPTOR_HEADER + count * REGION_SIZE;
-    let mut trailer = &bytes[end..];
+    let nprofiles = bytes[DESCRIPTOR_HEADER..end]
+        .chunks_exact(REGION_SIZE)
+        .filter(|r| r[27] & 0x80 != 0)
+        .count();
+    let (profiles, mut trailer) = bytes[end..]
+        .split_at_checked(nprofiles * crate::segment::RegionProfile::SIZE)
+        .ok_or(Error::Protocol("truncated registration profiles"))?;
+    let mut profiles = profiles.chunks_exact(crate::segment::RegionProfile::SIZE);
     if metadata.shm.is_some() {
         let (shm, used) = crate::transport::shm::wire::Manifest::decode(trailer, count)?;
         metadata.shm = Some(Arc::new(shm));
@@ -313,8 +347,8 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             || entry[25] > 1
             || entry[26] > 1
             || (entry[26] != 0 && entry[25] != 1)
-            || entry[27] > 1
-            || (entry[27] != 0 && (metadata.hp.is_none() || entry[25] != 0))
+            || entry[27] & 0x7f > 1
+            || (entry[27] & 1 != 0 && (metadata.hp.is_none() || entry[25] != 0))
         {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
         }
@@ -330,7 +364,16 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
                 MemoryType::Cuda
             },
             ipc_exportable: entry[26] != 0,
-            hp_registered: entry[27] != 0,
+            hp_registered: entry[27] & 1 != 0,
+            profile: if entry[27] & 0x80 != 0 {
+                crate::segment::RegionProfile::decode(
+                    profiles
+                        .next()
+                        .ok_or(Error::Protocol("missing registration profile"))?,
+                )?
+            } else {
+                Default::default()
+            },
             fabric: crate::transport::mnnvl::Location::decode(
                 u32::from_be_bytes(
                     entry[28..32]
@@ -741,7 +784,13 @@ fn serve(
         if request.operation == Operation::Describe {
             let (metadata, regions) = source.describe()?;
             let end = DESCRIPTOR_HEADER + regions.len() * REGION_SIZE;
-            let fabric_start = end + metadata.shm.as_ref().map_or(0, |s| s.wire_len());
+            let profile_end = end
+                + regions
+                    .iter()
+                    .filter(|r| r.profile != Default::default())
+                    .count()
+                    * crate::segment::RegionProfile::SIZE;
+            let fabric_start = profile_end + metadata.shm.as_ref().map_or(0, |s| s.wire_len());
             let hp_start = fabric_start
                 + metadata
                     .mnnvl
@@ -749,13 +798,22 @@ fn serve(
             let mut payload =
                 buffer(hp_start + metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
             if let Some(shm) = &metadata.shm {
-                shm.encode(&mut payload[end..fabric_start]);
+                shm.encode(&mut payload[profile_end..fabric_start]);
             }
             if let Some(fabric) = metadata.mnnvl {
                 fabric.encode(&mut payload[fabric_start..hp_start]);
             }
             if let Some(hp) = &metadata.hp {
                 hp.encode(&mut payload[hp_start..]);
+            }
+            for (region, record) in regions
+                .iter()
+                .filter(|r| r.profile != Default::default())
+                .zip(
+                    payload[end..profile_end].chunks_exact_mut(crate::segment::RegionProfile::SIZE),
+                )
+            {
+                region.profile.encode(record);
             }
             payload[..4].copy_from_slice(&(regions.len() as u32).to_be_bytes());
             metadata.encode(&mut payload[4..DESCRIPTOR_HEADER]);
@@ -769,7 +827,8 @@ fn serve(
                 entry[24] = region.permission as u8;
                 entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
                 entry[26] = u8::from(region.ipc_exportable);
-                entry[27] = u8::from(region.hp_registered);
+                entry[27] = u8::from(region.hp_registered)
+                    | (u8::from(region.profile != Default::default()) << 7);
                 entry[28..32].copy_from_slice(
                     &crate::transport::mnnvl::Location::wire(region.fabric).to_be_bytes(),
                 );
@@ -889,6 +948,30 @@ fn resolve_payload(
         return Err(Error::ResourceExhausted);
     }
     let memory = source.registry.get(request.region)?;
+    use crate::Transport;
+    let profile = memory.0.descriptor.profile;
+    let permitted = match request.operation {
+        Operation::TcpRead | Operation::TcpWrite => profile.permits(Transport::Tcp),
+        Operation::RdmaRead
+        | Operation::RdmaWrite
+        | Operation::RdmaReadSlices
+        | Operation::RdmaWriteSlices => profile.permits(Transport::Rdma),
+        Operation::NvlinkRead
+        | Operation::NvlinkWrite
+        | Operation::NvlinkReadCached
+        | Operation::NvlinkWriteCached => profile.permits(if source.metadata.mnnvl.is_some() {
+            Transport::Mnnvl
+        } else {
+            Transport::Nvlink
+        }),
+        Operation::PinRead | Operation::PinWrite => {
+            profile.permits(Transport::Tcp) || profile.permits(Transport::Rdma)
+        }
+        _ => false,
+    };
+    if !permitted || memory.0.internal {
+        return Err(Error::PermissionDenied);
+    }
     checked_range(offset, length, memory.len())?;
     if !memory.0.descriptor.permission.allows(matches!(
         request.operation,

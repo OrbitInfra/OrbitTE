@@ -10,6 +10,9 @@ cargo doc --locked --no-deps --open
 Add `--features rdma,cuda` in an environment with the
 [build prerequisites](build.md).
 
+The separate [C API](c-api.md) exports the TENT constructor and its thread-local
+settings. Rust applications can construct a typed `EngineConfig` directly.
+
 ## Transfer requests
 
 `TransferRequest::new(transport, local_address, remote_address, length)` starts

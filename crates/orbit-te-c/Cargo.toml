@@ -1,0 +1,30 @@
+[package]
+name = "orbit-te-c"
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "TENT C transfer-engine ABI backed by OrbitTE"
+repository = "https://github.com/OrbitInfra/OrbitTE"
+include = ["src/**", "include/**", "tests/**", "Cargo.toml", "README.md"]
+
+[lib]
+name = "tent"
+crate-type = ["cdylib", "staticlib"]
+
+[features]
+default = []
+rdma = ["orbit-te/rdma"]
+cuda = ["orbit-te/cuda"]
+io-uring = ["orbit-te/io-uring"]
+gds = ["cuda", "orbit-te/gds"]
+metrics = ["orbit-te/metrics"]
+rdma-adaptive = ["rdma", "orbit-te/rdma-adaptive"]
+
+[dependencies]
+orbit-te = { version = "0.1.0-alpha.1", path = "../.." }
+libc = "0.2.191"
+log = "0.4.34"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

@@ -48,12 +48,14 @@ fn region(kind: MemoryType, ipc_exportable: bool) -> RemoteRegion {
         memory_type: kind,
         fabric: None,
         hp_registered: false,
+        profile: Default::default(),
         ipc_exportable,
     }
 }
 
 fn context(remote: &RemoteRegion) -> SelectionContext<'_> {
     SelectionContext {
+        local_route: crate::Transport::Unspec,
         local_memory: MemoryType::Cpu,
         local_ipc: false,
         remote,

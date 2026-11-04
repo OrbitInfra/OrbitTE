@@ -149,8 +149,17 @@ operation or status and one zero reserved byte.
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
 
+In each region's HP-TCP flag byte, bit 0 marks HP-TCP registration. Bit 7
+marks a registration with a scoped transport or known device/NUMA ordinal.
+All fixed records precede the optional five-byte entries, in flagged record
+order. Each entry contains a TENT transport ID (one byte) and a big-endian
+ordinal (four bytes, all ones for unknown). Internal and local-only regions
+are omitted. A C P2P handle has no supplied epoch. A read-only Describe with
+zero expected epoch first obtains the source's identity from its mismatch
+reply. The handle then issues a normal epoch-checked Describe.
+
 For an engine with SHM enabled, capability bit 5 announces a trailer immediately
-after the region records, before any HP-TCP endpoint trailer. It starts with
+after the optional registration profiles, before any HP-TCP endpoint trailer. It starts with
 a 32-bit count, a one-byte backend (0 for POSIX, 1 for a configured directory)
 and three zero bytes. Each 80-byte record starts with seven ordered 64-bit fields for
 registration ID, allocation offset, mapped size, grant slot, device, inode and
@@ -189,7 +198,8 @@ out-of-bounds ranges and oversized payloads are rejected.
 READ: request → success header and the requested bytes. WRITE: request → ready →
 bytes → final success. Notify: request → ready → body and marker → final success.
 Each side commits only complete bodies, a dropped reply never authorizes replay,
-and describe replies are bounded at 48 + 4,096 × 32 bytes.
+and the descriptor count, per-region metadata and provider trailers are bounded
+before decoding.
 
 ## Verification
 

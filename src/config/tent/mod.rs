@@ -69,6 +69,40 @@ impl EngineConfig {
         })
     }
 
+    /// Construct from the frozen C wrapper's thread-local JSON text and textual
+    /// overrides. A malformed JSON string takes the historical warning/default
+    /// path. A valid document still has to satisfy the normal S17 schema.
+    pub fn from_tent_settings<'a>(
+        text: &str,
+        fields: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<Self> {
+        if text.len() > document::MAX_BYTES {
+            return Err(invalid("constructor", "JSON exceeds 1 MiB"));
+        }
+        let mut root = if text.is_empty() {
+            json!({})
+        } else {
+            match document::parse(text, "constructor") {
+                Ok(value) => value,
+                Err(_) if serde_json::from_str::<serde::de::IgnoredAny>(text).is_err() => {
+                    log::warn!("invalid TENT C constructor JSON, using defaults");
+                    json!({})
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let mut bytes = text.len();
+        for (path, value) in fields {
+            document::check_key(path)?;
+            bytes = bytes.saturating_add(path.len()).saturating_add(value.len());
+            if bytes > document::MAX_BYTES {
+                return Err(invalid("constructor", "settings exceed 1 MiB"));
+            }
+            document::set(&mut root, path, environment::scalar(value))?;
+        }
+        load(root, |key| std::env::var_os(key))
+    }
+
     /// As from_tent_json, reading a bounded UTF-8 regular file.
     pub fn from_tent_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_tent_json(&document::read(path.as_ref(), "constructor")?)

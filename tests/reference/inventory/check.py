@@ -70,6 +70,10 @@ def check_links(tent):
 
 def check_c_api(tent):
     api = (tent / "include/tent/transfer_engine.h").read_text()
+    c_header, cpp = api.split("#ifdef __cplusplus\n#include <array>", 1)
+    installed = REPO / "crates/orbit-te-c/include/tent/transfer_engine.h"
+    if not cpp or installed.read_text() != c_header + "#endif\n":
+        raise ValueError("installed C header differs from the frozen TENT C surface")
     functions = {
         m[1]: " ".join(m[0].split())
         for m in re.finditer(
