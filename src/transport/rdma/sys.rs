@@ -15,6 +15,8 @@ use crate::{Error, Result};
 
 mod cq;
 mod device;
+#[cfg(feature = "cuda")]
+mod gpu_key;
 mod memory;
 mod port;
 mod qp;
@@ -51,6 +53,8 @@ pub(super) struct DeviceHandles {
     pub async_fd: c_int,
     pub read_limits: ReadDepth,
     pub supports_atomics: bool,
+    pub request_gpu_keys: bool,
+    pub gpu_keys: GpuKeyRange,
 }
 
 impl Default for DeviceHandles {
@@ -61,6 +65,8 @@ impl Default for DeviceHandles {
             async_fd: -1,
             read_limits: ReadDepth::default(),
             supports_atomics: false,
+            request_gpu_keys: false,
+            gpu_keys: Default::default(),
         }
     }
 }
@@ -130,12 +136,42 @@ pub(super) struct CqEventVerbs {
     pub close: unsafe extern "C" fn(*mut ChannelHandles) -> c_int,
 }
 
+// General Services QP: never an RC data QP. Nonzero so a provider that
+// clears or ignores the requested QPN cannot pass the readback probe.
+pub(super) const GPU_PROBE_QPN: u32 = 1;
+
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+pub(super) struct GpuKeyRange {
+    pub pdn: u32,
+    pub base: u32,
+    pub count: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct GpuKeyVerbs {
+    pub create: unsafe extern "C" fn(
+        *const DeviceHandles,
+        *mut MemoryHandles,
+        u32,
+        u64,
+        u32,
+        u32,
+        u32,
+        bool,
+    ) -> c_int,
+    pub destroy: unsafe extern "C" fn(*mut c_void) -> c_int,
+}
+
 #[repr(C)]
 pub(super) struct MemoryHandles {
     pub mr: *mut c_void,
     pub mw: *mut c_void,
     pub window_key: u32,
     pub remote_mr: bool,
+    pub gpu_parent: bool,
+    pub gpu_key: *mut c_void,
+    pub gpu_key_failure: c_int,
 }
 
 impl Default for MemoryHandles {
@@ -145,7 +181,39 @@ impl Default for MemoryHandles {
             mw: std::ptr::null_mut(),
             window_key: 0,
             remote_mr: false,
+            gpu_parent: false,
+            gpu_key: std::ptr::null_mut(),
+            gpu_key_failure: 0,
         }
+    }
+}
+
+impl MemoryHandles {
+    pub(super) fn destroy_gpu_key(
+        &mut self,
+        verbs: &Verbs,
+    ) -> std::result::Result<(), (&'static str, i32)> {
+        if self.gpu_key.is_null() {
+            return if self.gpu_key_failure == 0 {
+                Ok(())
+            } else {
+                // CREATE returned no object and no definite rejection. There
+                // is no handle that could give a destruction receipt.
+                Err(("mlx5 DevX GPU key creation", self.gpu_key_failure))
+            };
+        }
+        if self.gpu_key_failure == 0 {
+            let table = verbs
+                .gpu_keys
+                .ok_or(("missing GPU key destroy", libc::ENOSYS))?;
+            // SAFETY: the grant or unpublished probe owns the object and its parent MR.
+            self.gpu_key_failure = unsafe { (table.destroy)(self.gpu_key) };
+        }
+        if self.gpu_key_failure != 0 {
+            return Err(("mlx5dv_devx_obj_destroy GPU grant", self.gpu_key_failure));
+        }
+        self.gpu_key = std::ptr::null_mut();
+        Ok(())
     }
 }
 
@@ -209,6 +277,7 @@ type Discover = fn(&RdmaConfig) -> Result<(Topology, Vec<RdmaAddress>)>;
 type CloseConnection = unsafe extern "C" fn(*mut ConnectionHandles) -> c_int;
 type CloseMemory = unsafe extern "C" fn(*mut MemoryHandles) -> c_int;
 pub(super) struct Verbs {
+    pub gpu_keys: Option<GpuKeyVerbs>,
     pub asynchronous: Option<AsyncVerbs>,
     pub completion: Option<CqEventVerbs>,
     pub discover: Discover,
@@ -350,6 +419,13 @@ destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
+    #[cfg(feature = "cuda")]
+    gpu_keys: Some(GpuKeyVerbs {
+        create: gpu_key::create,
+        destroy: gpu_key::destroy,
+    }),
+    #[cfg(not(feature = "cuda"))]
+    gpu_keys: None,
     query_port_speed: Some(port::query_port_speed),
     discover: discovery::discover,
     query_address,

@@ -164,6 +164,10 @@ static int poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
     pthread_mutex_lock(&lock);
     int kept = 0;
     for (int i = 0; i < count; ++i) {
+        if (gdr_observe() && wc[i].status == IBV_WC_SUCCESS && wc[i].opcode == IBV_WC_RECV
+            && (wc[i].wc_flags & IBV_WC_WITH_INV))
+            receipt("\"kind\":\"gdr_invalidation\",\"context\":%u,\"qpn\":%u,\"rkey\":%u", index,
+                    wc[i].qp_num, wc[i].invalidated_rkey);
         inflight_completion(cq, &wc[i]);
         accounting_complete(cq, &wc[i]);
         unsigned op = 0;
@@ -184,6 +188,12 @@ static int poll(struct ibv_cq *cq, int capacity, struct ibv_wc *wc) {
 
 static void attach(struct ibv_context *context) {
     pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < 8; ++i) {
+        if (contexts[i].owner == context) {
+            pthread_mutex_unlock(&lock);
+            return;
+        }
+    }
     if (log_fd < 0) {
         const char *root = getenv("ORBITTE_RESTART_ROOT");
         const char *generation = getenv("ORBITTE_RESTART_GENERATION");
@@ -210,6 +220,16 @@ static void attach(struct ibv_context *context) {
     context->ops.post_send = post;
     if (context->ops.dealloc_mw) context->ops.dealloc_mw = memory_dealloc_mw;
     pthread_mutex_unlock(&lock);
+}
+
+/* DevX opens its context through libmlx5. The first PD still comes through
+ * verbs and precedes MR registration, QP creation and data posting. */
+struct ibv_pd *ibv_alloc_pd(struct ibv_context *context) {
+    struct ibv_pd *(*native)(struct ibv_context *);
+    *(void **)(&native) = dlsym(RTLD_NEXT, "ibv_alloc_pd");
+    if (!native) fail();
+    if (gdr_observe()) attach(context);
+    return native(context);
 }
 
 struct ibv_context *ibv_open_device(struct ibv_device *device) {

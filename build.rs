@@ -86,6 +86,8 @@ fn build_port_shim() {
     )
     .expect("write port capability probe");
     let mut native = cc::Build::new();
+    #[cfg(feature = "cuda")]
+    native.define("ORBITTE_GPU_KEYS", None);
     let compiler = native.get_compiler();
     let extended = compiler
         .to_command()

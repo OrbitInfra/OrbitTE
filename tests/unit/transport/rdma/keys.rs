@@ -44,3 +44,21 @@ fn index_capacity_preserves_old_history_and_existing_index_capacity() {
     assert_eq!(keys.burn(0x201).unwrap(), 0x203);
     assert_eq!(keys.len(), 2);
 }
+
+#[test]
+fn named_gpu_keys_and_host_windows_share_the_pd_history_and_index_limit() {
+    let mut keys = Keys::new(1);
+    let named = 0x123411;
+    assert!(keys.claim_exact(named).unwrap());
+    assert!(!keys.claim_exact(named).unwrap());
+    assert_eq!(keys.burn(named - 1).unwrap(), named + 1);
+    assert!(!keys.claim_exact(named + 1).unwrap());
+    assert!(matches!(
+        keys.claim_exact(named + 256),
+        Err(Error::ResourceExhausted)
+    ));
+    for tag in 0..=255 {
+        keys.claim_exact((named & !255) | tag).unwrap();
+    }
+    assert!(matches!(keys.burn(named), Err(Error::ResourceExhausted)));
+}

@@ -93,6 +93,9 @@ pub struct RdmaConfig {
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
     pub cuda_memory: RdmaCudaMemory,
+    /// Probe exact-range, revocable provider keys for one-sided GPU source reuse.
+    /// False selects isolated per-grant registrations for every direct GPU source.
+    pub gpu_source_reuse: bool,
     /// Disable direct device registration. An explicit Direct policy then fails validation.
     pub disable_gpu_direct_rdma: bool,
     /// Log the selected local and peer NIC for each planned slice at debug level.
@@ -114,7 +117,7 @@ pub struct RdmaConfig {
     pub max_cached_mrs: usize,
     /// Aggregate full-view bytes of every physical MR copy.
     pub max_cached_mr_bytes: usize,
-    /// Historical MW indices retained without eviction until the PD is destroyed.
+    /// Historical MW and named GPU key indices retained until the PD is destroyed.
     pub max_window_key_indices: usize,
 }
 
@@ -153,6 +156,7 @@ impl Default for RdmaConfig {
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             cuda_memory: RdmaCudaMemory::Staged,
+            gpu_source_reuse: true,
             disable_gpu_direct_rdma: false,
             log_slice_affinity: false,
             max_direct_bytes: 64 << 20,

@@ -44,12 +44,45 @@ class GpuDirectEvidence(unittest.TestCase):
                                                              native_pid=123, fault_library_sha256='abc'))}
         return profile, case, evidence
 
+    def test_reuse_needs_local_only_parents_and_matching_native_invalidations(self):
+        profile, case, evidence = self.evidence()
+        case.update(gpu_source_reuse=True, expected_grants=12)
+        with self.assertRaises(ValueError):
+            gdr.verify(profile, case, evidence)  # historical private-PD evidence
+        source = evidence['source']
+        rows = [json.loads(line) for line in source['cq-fault-0.jsonl'].splitlines()]
+        kept = [r for r in rows if r['kind'] != 'gdr_qp' and
+                (r['kind'] != 'gdr_mr' or r['access'] == 1)]
+        for context in range(2):
+            kept.append(dict(pid=123, kind='gdr_qp', context=context, pd=10+context, qpn=90+context))
+        for mr in (r for r in rows if r['kind'] == 'gdr_mr' and r['access'] != 1):
+            kept.append(dict(pid=123, kind='gdr_invalidation', context=mr['context'],
+                             qpn=90+mr['context'], rkey=mr['rkey']))
+        source['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, kept))
+        source['stdout.log'] = source['stdout.log'].splitlines()[0] + '\nORBITTE_GPU_MR_STATS ' + json.dumps(
+            dict(active_private_pds=0, opened_private_pds=0, closed_private_pds=0,
+                 opened_keys=12, invalidated_keys=12, reused_connections=8))
+        requester = evidence['requester']
+        requester['cq-fault-0.jsonl'] = requester['cq-fault-0.jsonl'].replace('"opcode": 2,', '"opcode": 9,')
+        gdr.verify(profile, case, evidence)
+        for change in [dict(qpn=99), dict(rkey=0), dict(context=0)]:
+            changed = copy.deepcopy(kept)
+            changed[-1].update(change)
+            source['cq-fault-0.jsonl'] = '\n'.join(map(json.dumps, changed))
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                gdr.verify(profile, case, evidence)
+
     def test_profile_requires_two_pinned_hosts_and_explicit_gpu_direct_scope(self):
         profile, case, _ = self.evidence()
         profile.update(nodes={'a': dict(hostname='a', boot_id='boot-a'),
                               'b': dict(hostname='b', boot_id='boot-b')},
                        cases=[dict(case, source='a', requester='b', transport='rdma', cuda_memory='direct')])
         gdr.validate_profile(profile)
+        with self.assertRaises(ValueError):
+            gdr.validate_profile(profile, require_reuse=True)
+        positive = copy.deepcopy(profile)
+        positive['cases'][0]['gpu_source_reuse'] = True
+        gdr.validate_profile(positive, require_reuse=True)
         for changes in [dict(requester='a'), dict(source_kind='cpu', requester_kind='cpu'),
                         dict(cuda_memory='staged'), dict(transport='tcp')]:
             candidate = copy.deepcopy(profile)

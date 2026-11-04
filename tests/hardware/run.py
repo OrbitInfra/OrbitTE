@@ -358,8 +358,10 @@ class Controller:
                 if shared or consumer or case['transport'] != 'rdma':
                     raise ValueError('CUDA direct gate requires the public native peer')
                 environment.update(ORBITTE_RDMA_CUDA_MEMORY='direct', MLX5_SCATTER_TO_CQE='0', ORBITTE_GDR_OBSERVE='1', ORBITTE_SHARED_ROLE=role)
+                reuse = case.get('gpu_source_reuse', False)
+                environment['ORBITTE_EXPECT_GPU_KEY_REUSE'] = str(int(reuse and role == 'source'))
                 environment['ORBITTE_EXPECT_QP_REUSE'] = str(int(
-                    not case['source_kind'].startswith('cuda:') and all(
+                    (reuse or not case['source_kind'].startswith('cuda:')) and all(
                         case.get(r + '_host_memory', case.get('host_memory', 'direct')) == 'direct'
                         for r in ('source', 'requester'))))
             if self.profile.get('rails'):
@@ -543,9 +545,12 @@ def main():
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--installation', type=Path, help='build_installed.py manifest for the public host/GPU consumer')
+    parser.add_argument('--require-gpu-source-reuse', action='store_true', help='require the positive GPU key profile in every case')
     parser.add_argument('--gdr-observer', type=Path, help='pinned passive native GPU MR/WR observer')
     parser.add_argument('--staging-observer', type=Path, help='packaged passive CUDA allocation/copy observer')
     args = parser.parse_args()
+    if args.require_gpu_source_reuse and not args.gdr_observer:
+        parser.error('--require-gpu-source-reuse requires --gdr-observer')
     args.output.mkdir(parents=True, exist_ok=False)
     profile = json.loads(args.profile.read_text())
     controller = Controller(profile, args.binary.resolve(), args.output.resolve())
@@ -563,7 +568,7 @@ def main():
         if args.gdr_observer:
             if profile.get('runner') is not None or not all(case.get('cuda_memory') == 'direct' for case in profile['cases']):
                 raise ValueError('GPU observer requires explicit public direct CUDA cases')
-            gdr.validate_profile(profile)
+            gdr.validate_profile(profile, require_reuse=args.require_gpu_source_reuse)
             controller.fault_library = args.gdr_observer.resolve()
             manifest['gdr_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
         if profile.get('runner') == 'orbitte-installed-host':

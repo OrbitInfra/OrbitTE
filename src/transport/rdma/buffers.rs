@@ -34,6 +34,7 @@ struct Entry {
 struct MemoryRegion {
     context: Weak<RdmaContext>,
     key: Weak<crate::memory::Registration>,
+    gpu_domain: std::sync::OnceLock<[u8; 16]>,
     window_bind: bool,
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
@@ -42,7 +43,7 @@ struct MemoryRegion {
 enum State {
     Open(Box<Resources>),
     Closed,
-    Retained { code: i32 },
+    Retained { operation: &'static str, code: i32 },
 }
 
 struct Resources {
@@ -215,6 +216,7 @@ impl LocalBufferManager {
             let owner = Arc::new(MemoryRegion {
                 context: context.clone(),
                 key: Arc::downgrade(&memory.0),
+                gpu_domain: Default::default(),
                 window_bind,
                 state: Mutex::new(State::Open(Box::new(Resources {
                     handles: sys::MemoryHandles::default(),
@@ -445,6 +447,28 @@ impl LocalBufferManager {
     }
 }
 
+impl LocalBufferManager {
+    pub(super) fn gpu_source_reusable(
+        &self,
+        memory: &RegisteredMemory,
+        paths: &[super::path::NicPath],
+    ) -> Result<bool> {
+        let cache = self
+            .state
+            .lock()
+            .map_err(|_| Error::Internal("MR cache lock poisoned"))?;
+        Ok(!paths.is_empty()
+            && paths.iter().all(|path| {
+                cache.entries.iter().any(|e| {
+                    e.published
+                        && !e.retiring
+                        && e.owner.matches(memory)
+                        && e.owner.gpu_domain.get() == Some(&path.domain)
+                })
+            }))
+    }
+}
+
 impl Drop for LocalBufferManager {
     fn drop(&mut self) {
         let _ = self.close(Instant::now());
@@ -479,6 +503,17 @@ impl MemoryRegion {
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
         usage.opened_persistent_mrs += 1;
         usage.opened_source_mrs += u64::from(self.window_bind);
+        drop(usage);
+        if resources.memory.is_cuda()
+            && resources.memory.permission() != crate::Permission::LocalOnly
+        {
+            if let Some(domain) = resources
+                .device
+                .probe_gpu_parent(&resources.memory, &mut resources.handles)?
+            {
+                let _ = self.gpu_domain.set(domain);
+            }
+        }
         Ok(())
     }
     fn handle(&self) -> Result<*mut std::ffi::c_void> {
@@ -498,17 +533,28 @@ impl MemoryRegion {
             .unwrap_or_else(|poison| poison.into_inner());
         match &mut *state {
             State::Closed => return Ok(()),
-            State::Retained { code } => {
+            State::Retained { operation, code } => {
                 return Err(Error::Unquiesced {
-                    operation: "ibv_dereg_mr",
+                    operation,
                     code: *code,
                 });
             }
             State::Open(resources) => {
                 // SAFETY: no borrower can post through this MR. Successful QP
                 // destruction or no descriptor exposure precedes the last release.
-                let code = unsafe { (self.verbs.deregister)(&mut resources.handles) };
-                if code != 0 {
+                let retired = resources
+                    .handles
+                    .destroy_gpu_key(self.verbs)
+                    .and_then(|()| {
+                        // SAFETY: every grant or probe referencing this parent has retired.
+                        let code = unsafe { (self.verbs.deregister)(&mut resources.handles) };
+                        if code == 0 {
+                            Ok(())
+                        } else {
+                            Err(("ibv_dereg_mr", code))
+                        }
+                    });
+                if let Err((operation, code)) = retired {
                     let mut usage = resources
                         .usage
                         .lock()
@@ -516,12 +562,10 @@ impl MemoryRegion {
                     usage.retained_persistent_mrs += 1;
                     usage.retained_source_mrs += usize::from(self.window_bind);
                     drop(usage);
-                    let previous = std::mem::replace(&mut *state, State::Retained { code });
+                    let previous =
+                        std::mem::replace(&mut *state, State::Retained { operation, code });
                     std::mem::forget(previous);
-                    return Err(Error::Unquiesced {
-                        operation: "ibv_dereg_mr",
-                        code,
-                    });
+                    return Err(Error::Unquiesced { operation, code });
                 }
             }
         }
@@ -535,6 +579,10 @@ impl Drop for MemoryRegion {
     }
 }
 impl MrLease {
+    pub(super) fn gpu_domain(&self) -> Option<[u8; 16]> {
+        self.owner.gpu_domain.get().copied()
+    }
+
     pub(super) fn handle(&self) -> Result<*mut std::ffi::c_void> {
         self.owner.handle()
     }

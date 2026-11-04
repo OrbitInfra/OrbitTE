@@ -29,7 +29,7 @@ impl Keys {
         })
     }
 
-    pub(super) fn burn(&mut self, native_key: u32) -> Result<u32> {
+    fn tags(&mut self, native_key: u32) -> Result<&mut [u64; 4]> {
         let index = native_key & !255;
         if !self.indices.contains_key(&index) {
             if self.indices.len() >= self.limit {
@@ -40,10 +40,23 @@ impl Keys {
                 .map_err(|_| Error::ResourceExhausted)?;
             self.indices.insert(index, [0; 4]);
         }
-        let used = self
-            .indices
+        self.indices
             .get_mut(&index)
-            .ok_or(Error::Internal("missing RDMA key index"))?;
+            .ok_or(Error::Internal("missing RDMA key index"))
+    }
+    /// Reserve a provider-named key before the firmware may make it accessible.
+    pub(super) fn claim_exact(&mut self, key: u32) -> Result<bool> {
+        let used = self.tags(key)?;
+        let tag = key & 255;
+        let word = &mut used[(tag / 64) as usize];
+        let bit = 1u64 << (tag % 64);
+        let fresh = *word & bit == 0;
+        *word |= bit;
+        Ok(fresh)
+    }
+    pub(super) fn burn(&mut self, native_key: u32) -> Result<u32> {
+        let index = native_key & !255;
+        let used = self.tags(native_key)?;
         // ibv_inc_rkey changes only the low eight bits. The provider may hand
         // this same index back after MW destruction, even with a different tag.
         // A BIND always changes the native initial key, even if that tag has

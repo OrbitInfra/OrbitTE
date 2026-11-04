@@ -39,14 +39,18 @@ pub(super) enum Buffer {
     Staged(Staging),
     Direct {
         loan: Option<crate::memory::DmaLease>,
+        visible: bool,
         address: NonNull<u8>,
         length: usize,
     },
 }
 
 impl Buffer {
-    pub(super) fn release(&mut self) -> std::result::Result<(), (&'static str, i32)> {
-        if let Self::Direct { loan, .. } = self {
+    fn confirm_visibility(&mut self) -> std::result::Result<(), (&'static str, i32)> {
+        if let Self::Direct { loan, visible, .. } = self {
+            if *visible {
+                return Ok(());
+            }
             if let Some(owner) = loan.as_ref() {
                 owner.complete().map_err(|error| match error {
                     Error::Unquiesced { operation, code } | Error::Backend { operation, code } => {
@@ -55,6 +59,14 @@ impl Buffer {
                     _ => ("RDMA buffer completion", libc::EIO),
                 })?;
             }
+            *visible = true;
+        }
+        Ok(())
+    }
+
+    pub(super) fn release(&mut self) -> std::result::Result<(), (&'static str, i32)> {
+        self.confirm_visibility()?;
+        if let Self::Direct { loan, .. } = self {
             drop(loan.take());
         }
         Ok(())
@@ -167,6 +179,12 @@ impl GrantResources {
     fn close_native(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
         if let Err(Error::Unquiesced { operation, code }) = self.device.asynchronous.check() {
             return Err((operation, code));
+        }
+        self.handles.destroy_gpu_key(verbs)?;
+        if self.handles.gpu_parent {
+            // Even a retiring registration must keep its parent MR until CUDA
+            // confirms visibility and restores the submitting thread's context.
+            self.buffer.confirm_visibility()?;
         }
         if !self.handles.mw.is_null() {
             // SAFETY: The grant owns this window and its PD throughout teardown, including a

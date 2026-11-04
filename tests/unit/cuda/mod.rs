@@ -15,6 +15,8 @@ mod finish_progress;
 #[cfg(feature = "gds")]
 mod gds;
 #[cfg(feature = "rdma")]
+mod gpu_source_reuse;
+#[cfg(feature = "rdma")]
 mod grant_progress;
 mod ipc;
 mod ipc_batch;

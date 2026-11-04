@@ -37,6 +37,7 @@ pub(crate) struct FakeDevice {
     failed_payload: Mutex<Option<(u32, u64)>>,
     mrs: AtomicUsize,
     windows: AtomicUsize,
+    gpu_key_history: Mutex<Vec<u32>>,
     window_indices: Mutex<std::collections::HashMap<u32, usize>>,
     next_window_index: AtomicU32,
     cqs: AtomicUsize,
@@ -73,11 +74,14 @@ struct Fake {
     mr: AtomicUsize,
 }
 
+mod gpu_keys;
+
 struct FakeGrant {
     mr: usize,
     window: usize,
     address: u64,
     length: usize,
+    permission: u32,
 }
 
 // The lock pins CPU-only native objects while another peer delivers a message.
@@ -160,6 +164,7 @@ pub(super) unsafe extern "C" fn open_device(
         failed_payload: Mutex::new(None),
         mrs: AtomicUsize::new(0),
         windows: AtomicUsize::new(0),
+        gpu_key_history: Mutex::default(),
         window_indices: Mutex::default(),
         next_window_index: AtomicU32::new(1),
         cqs: AtomicUsize::new(0),
@@ -169,6 +174,13 @@ pub(super) unsafe extern "C" fn open_device(
     // device into them.
     unsafe {
         (*h).context = state.cast();
+        if (*h).request_gpu_keys && (*state).mode.starts_with("gpu_key_") {
+            (*h).gpu_keys = sys::GpuKeyRange {
+                pdn: 1,
+                base: 0x10000,
+                count: 16,
+            };
+        }
         if (*state).mode == "copy_read_caps" {
             (*h).read_limits = sys::ReadDepth {
                 initiator: 2,
@@ -393,7 +405,7 @@ unsafe extern "C" fn prepare_grant(
             .cast();
         } else {
             let mr = &*(*memory).mr.cast::<FakeMr>();
-            assert_eq!(mr.window_bind, permission != 0);
+            assert_eq!(mr.window_bind, permission != 0 && !(*memory).gpu_parent);
             assert!(
                 bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
             );
@@ -408,6 +420,7 @@ unsafe extern "C" fn prepare_grant(
                 window: 0,
                 address: bytes as u64,
                 length,
+                permission,
             },
         );
         qp.mr.store((*memory).mr as usize, Ordering::Release);
@@ -420,7 +433,11 @@ unsafe extern "C" fn prepare_grant(
             (*memory).window_key = 0x707;
             device.events.lock().unwrap().push("register_gpu_grant");
         }
-        if permission != 0 && !(*memory).remote_mr && !device.mode.starts_with("open") {
+        if permission != 0
+            && !(*memory).gpu_parent
+            && !(*memory).remote_mr
+            && !device.mode.starts_with("open")
+        {
             let code = allocate_window(memory, handles);
             if code != 0 {
                 return code;
@@ -448,6 +465,7 @@ unsafe extern "C" fn prepare_grant(
             window: unsafe { (*memory).mw } as usize,
             address: bytes as u64,
             length,
+            permission,
         },
     );
     0
@@ -909,6 +927,15 @@ unsafe extern "C" fn post(
             _ => 0,
         };
         assert!(request.offset as usize + request.length as usize <= local_length);
+        if mode.ends_with("copy_check_gpu_keys") {
+            gpu_keys::check_post(
+                state.remote_qpn.load(Ordering::Acquire),
+                rkey,
+                remote + u64::from(request.offset),
+                request.length,
+                write != 0,
+            );
+        }
         if mode.contains("copy") && injected == 0 {
             // CPU mutation under production leases, not a DMA receipt.
             // SAFETY: The admitted slice is within both registered ranges, and their transfer
@@ -955,7 +982,10 @@ unsafe extern "C" fn post(
             ..Default::default()
         });
     }
-    if mode == "pause_copy" || mode == "pause_copy_fault_partial" || mode.starts_with("pause_post")
+    if matches!(
+        mode,
+        "pause_copy" | "pause_copy_check_gpu_keys" | "pause_copy_fault_partial"
+    ) || mode.starts_with("pause_post")
     {
         block(device);
     }
@@ -1612,6 +1642,7 @@ unsafe fn query_address(
 }
 
 pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    gpu_keys: Some(gpu_keys::VERBS),
     query_port_speed: None,
     discover,
     query_address,
@@ -2567,7 +2598,13 @@ pub(super) fn cold_contention() -> (usize, usize) {
 
 #[cfg(feature = "cuda")]
 pub(crate) fn gpu_runtime(mode: &str) -> RdmaTransport {
+    gpu_runtime_with_key_reuse(mode, true)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn gpu_runtime_with_key_reuse(mode: &str, reuse: bool) -> RdmaTransport {
     let mut runtime = runtime(mode);
+    runtime.config.gpu_source_reuse = reuse;
     runtime.config.cuda_memory = RdmaCudaMemory::Direct;
     runtime.config.max_direct_bytes = 128;
     runtime
