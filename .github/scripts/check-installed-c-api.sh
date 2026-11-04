@@ -12,7 +12,7 @@ ffi="$work/orbit-te-c-$version"
 tar -xzf "$target/package/orbit-te-$version.crate" -C "$work"
 core="$work/orbit-te-$version"
 test -f "$core/Cargo.toml"
-patch=$(python3 -c 'import json,sys; print("patch.crates-io.orbit-te.path="+json.dumps(sys.argv[1]))' "$core")
+patch=$(python3 -c 'import json,sys; print("patch.crates-io.orbit-te.path="+json.dumps(sys.argv[1]))' "$PWD")
 cargo publish --dry-run --locked -p orbit-te-c --features "$ORBITTE_FEATURES" --config "$patch"
 cargo package --locked --no-verify -p orbit-te-c --features "$ORBITTE_FEATURES" --config "$patch"
 tar -xzf "$target/package/orbit-te-c-$version.crate" -C "$work"

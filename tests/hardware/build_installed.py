@@ -85,7 +85,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         library = packages[0]
         fixture = library / fixture_relative
         if consumer_kind == 'c-abi':
-            patch = 'patch.crates-io.orbit-te.path=' + json.dumps(str(library))
+            patch = 'patch.crates-io.orbit-te.path=' + json.dumps(str(root))
             run('ffi-package', [*package, '-p', 'orbit-te-c', '--config', patch])
             ffi_archive, = (output / 'target/package').glob('orbit-te-c-*.crate')
             with tarfile.open(ffi_archive) as bundle:
