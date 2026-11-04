@@ -608,3 +608,56 @@ fn r1c_unconfirmed_gpu_copy_retains_the_file_slot_loan_and_admission() -> Result
     assert_eq!(device.pins.lock().unwrap().len(), 1);
     Ok(())
 }
+
+#[test]
+fn r1c_file_slot_respects_gpu_numa_placement_across_devices() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let _serial = super::staging_location::SERIAL.lock().unwrap();
+    super::staging_location::reset();
+    let config = EngineConfig {
+        io_uring: crate::IoUringConfig {
+            pinned_staging: true,
+            staging_slot_kb: 4,
+            staging_slots: 1,
+        },
+        staging_location: crate::StagingLocation::Auto,
+        ..Default::default()
+    };
+    let proxy = super::staging_location::pool(4096, crate::StagingLocation::Auto, 1);
+    let mut engine = crate::engine::tests::staging_fixture(
+        config.clone(),
+        proxy,
+        #[cfg(feature = "rdma")]
+        None,
+    );
+    engine.io_uring = crate::transport::io_uring::IoUringTransport::probe(&config)?;
+    let f = Fixture::new(&std::env::temp_dir(), b"abcdef", engine)?;
+    let mut devices = Vec::new();
+    for id in [130, 2] {
+        let dev = allocation(&[0x55; 8]);
+        dev.ordinal.store(id, Ordering::Release);
+        let (gpu, region) = register(&f, &dev)?;
+        let r = f.run(TransferOp::Read, &[request(&region, 2, 1, 3)])?;
+        assert!(r.is_complete());
+        let mut b = [0; 8];
+        gpu.read(0, &mut b)?;
+        assert_eq!(b, [0x55, 0x55, b'b', b'c', b'd', 0x55, 0x55, 0x55]);
+        assert_eq!(dev.host_registrations.lock().unwrap().len(), 1);
+        devices.push(dev);
+    }
+    let s = f.engine.stats()?;
+    let io = s.io_uring.unwrap();
+    assert_eq!(
+        (io.slot_acquisitions, io.slot_misses, s.staging.copied_bytes),
+        (1, 1, 3)
+    );
+    f.engine.close(WAIT)?;
+    assert!(
+        devices
+            .iter()
+            .all(|d| d.host_registrations.lock().unwrap().is_empty())
+    );
+    Ok(())
+}

@@ -106,7 +106,7 @@ impl Task {
             let bounce = match transport.pool.acquire(
                 request.length,
                 staging_alignment,
-                false,
+                super::pool::Access::Host,
                 super::pool::Slab::host,
             )? {
                 Some(slot) => Scratch::Slot(slot),

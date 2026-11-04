@@ -162,8 +162,16 @@ impl CudaMemory {
 
 impl StagingCopy {
     #[cfg(feature = "io-uring")]
-    pub(crate) fn file_slab(&self, size: usize) -> Result<PinnedAllocation> {
-        PinnedAllocation::new(&self.context, size)
+    pub(crate) fn file_slab(
+        &self,
+        size: usize,
+        proxy: &crate::runtime::proxy_manager::ProxyManager,
+    ) -> Result<PinnedAllocation> {
+        PinnedAllocation::new_at(&self.context, size, self.node, proxy.numa)
+    }
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn file_node(&self) -> Option<u32> {
+        self.node
     }
 
     #[cfg(feature = "io-uring")]

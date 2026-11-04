@@ -1038,43 +1038,81 @@ fn r1c_aligned_slots_and_pageable_fallback_are_bounded_before_ring_creation() ->
         } else {
             Error::ResourceExhausted
         };
-        let r = pool.acquire(4096, 4096, false, |_| Err(err));
+        let r = pool.acquire(4096, 4096, pool::Access::Host, |_| Err(err));
         if uncertain {
             assert!(matches!(r, Err(Error::Unquiesced { .. })));
             assert!(matches!(
-                pool.acquire(1, 4096, false, |_| panic!("retried ambiguous allocation")),
+                pool.acquire(1, 4096, pool::Access::Host, |_| panic!(
+                    "retried ambiguous allocation"
+                )),
                 Err(Error::Unquiesced { .. })
             ));
             assert!(matches!(pool.close(), Err(Error::Unquiesced { .. })));
         } else {
             assert!(r?.is_none());
             assert!(
-                pool.acquire(1, 4096, false, |_| panic!("rebuilt disabled pool"))?
-                    .is_none()
+                pool.acquire(1, 4096, pool::Access::Host, |_| panic!(
+                    "rebuilt disabled pool"
+                ))?
+                .is_none()
             );
         }
     }
+    let initializing = pool::Pool::new(options, 4096)?;
+    assert_eq!(initializing.stats().slot_acquisitions, 0);
+    std::thread::scope(|scope| -> Result<()> {
+        let (entered, building) = mpsc::channel();
+        let (release, go) = mpsc::channel();
+        let first = scope.spawn(|| {
+            initializing
+                .acquire(8, 4096, pool::Access::Host, move |n| {
+                    entered.send(()).unwrap();
+                    go.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+                    Ok(pool::Slab::Host(task::Bounce::new(n, 4096)?))
+                })
+                .map(|s| s.is_some())
+        });
+        building.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        let (done, observed) = mpsc::channel();
+        let pool_ref = &initializing;
+        scope.spawn(move || {
+            done.send(
+                pool_ref
+                    .acquire(8, 4096, pool::Access::Host, |_| panic!("duplicate slab"))
+                    .map(|s| s.is_none()),
+            )
+            .unwrap()
+        });
+        let missed = observed.recv_timeout(EVENTUAL_PROGRESS);
+        release.send(()).unwrap();
+        assert!(first.join().unwrap()? && missed.unwrap()?);
+        Ok(())
+    })?;
     let pool = pool::Pool::new(options, 4096)?;
     let charge = pool.charge(4096)?;
     assert!(matches!(pool.charge(1), Err(Error::ResourceExhausted)));
     drop(charge);
     assert_eq!(pool.stats().pageable_bytes, 0);
-    let first = pool.acquire(4096, 4096, false, pool::Slab::host)?.unwrap();
+    let first = pool
+        .acquire(4096, 4096, pool::Access::Host, pool::Slab::host)?
+        .unwrap();
     assert_eq!(first.ptr.as_ptr() as usize % 4096, 0);
     assert!(
-        pool.acquire(1, 4096, false, |_| panic!())
+        pool.acquire(1, 4096, pool::Access::Host, |_| panic!())
             .unwrap()
             .is_none()
     );
     assert!(
-        pool.acquire(4097, 4096, false, |_| panic!())
+        pool.acquire(4097, 4096, pool::Access::Host, |_| panic!())
             .unwrap()
             .is_none()
     );
     let address = first.ptr;
     drop(first);
     assert_eq!(
-        pool.acquire(1, 4096, false, |_| panic!())?.unwrap().ptr,
+        pool.acquire(1, 4096, pool::Access::Host, |_| panic!())?
+            .unwrap()
+            .ptr,
         address
     );
     if !kernel() {

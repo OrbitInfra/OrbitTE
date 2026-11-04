@@ -239,9 +239,12 @@ impl Submission<'_> {
                     Backing::Host(_, iov) => (None, *iov),
                     Backing::Device(copy) => {
                         let slot = if offset == 0 {
-                            self.pool.acquire(request.length, 4096, true, |size| {
-                                copy.file_slab(size).map(pool::Slab::Pinned)
-                            })?
+                            self.pool.acquire(
+                                request.length,
+                                4096,
+                                pool::Access::Device(copy.file_node()),
+                                |size| copy.file_slab(size, self.proxy).map(pool::Slab::Pinned),
+                            )?
                         } else {
                             None
                         };

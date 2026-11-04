@@ -118,7 +118,8 @@ The first eligible request creates one slab. Its slots can serve an entire
 GPU request or an unaligned DRAM request. CUDA uses portable pinned memory.
 The CPU platform uses ordinary page-aligned memory.
 
-A request that cannot lease a suitable slot immediately uses the existing
+A GPU with an explicit or GPU-local NUMA placement can use the slab only if
+its node matches. A request that cannot lease a suitable slot immediately uses the existing
 GPU chunk pool or an aligned pageable host buffer charged against
 `max_inflight_bytes`. Exhausting both budgets fails before submitting that
 round. `EngineStats.io_uring` exposes slot size, capacity, active slots, hits,

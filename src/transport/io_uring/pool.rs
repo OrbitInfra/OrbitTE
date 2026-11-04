@@ -54,6 +54,11 @@ pub struct IoUringStats {
     pub pageable_bytes: usize,
 }
 
+pub(super) enum Access {
+    Host,
+    #[cfg(feature = "cuda")]
+    Device(Option<u32>),
+}
 pub(super) enum Slab {
     Host(Bounce),
     #[cfg(feature = "cuda")]
@@ -74,6 +79,15 @@ impl Slab {
             Self::Host(b) => b.ptr,
             #[cfg(feature = "cuda")]
             Self::Pinned(p) => p.address,
+        }
+    }
+    fn accepts(&self, access: Access) -> bool {
+        match access {
+            Access::Host => true,
+            #[cfg(feature = "cuda")]
+            Access::Device(node) => {
+                matches!(self, Self::Pinned(buffer) if node.is_none() || node==buffer.numa_node)
+            }
         }
     }
     fn pinned(&self) -> bool {
@@ -130,7 +144,7 @@ impl Pool {
         self: &Arc<Self>,
         length: usize,
         alignment: usize,
-        pinned: bool,
+        access: Access,
         allocate: impl FnOnce(usize) -> Result<Slab>,
     ) -> Result<Option<Slot>> {
         let mut state = self
@@ -186,7 +200,7 @@ impl Pool {
                     .address()
                     .as_ptr()
                     .wrapping_add(index * state.stats.slot_bytes);
-                if (!pinned || slab.pinned()) && address as usize % alignment == 0 {
+                if slab.accepts(access) && address as usize % alignment == 0 {
                     let ptr =
                         NonNull::new(address).ok_or(Error::Internal("null file staging slot"))?;
                     state.free.pop();
