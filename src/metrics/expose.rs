@@ -150,10 +150,6 @@ impl Scrape {
             .pipeline
             .json(self.recorder.enabled.load(Relaxed), Some(now));
         for (i, spec) in SPECS.iter().enumerate() {
-            // Frozen TENT's task-failure reasons are exposed only in Prometheus.
-            if i == Metric::TaskFailures as usize {
-                continue;
-            }
             let cells = &self.recorder.cells[i];
             let value = cells.iter().map(|c| c.value.load(Relaxed)).sum::<u64>();
             let v = if let Kind::Histogram(bounds) = spec.kind {

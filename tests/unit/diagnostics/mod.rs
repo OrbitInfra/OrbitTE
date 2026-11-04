@@ -51,6 +51,16 @@ fn version_schema_renderers_and_exit_precedence() {
     let e = &doc["sections"][0]["evidence"][0];
     assert_eq!(e["available"], false);
     assert!(e.get("observed").is_none());
+    let mut native = doc.clone();
+    native["sections"][0]["evidence"][0]["observed"] = json!("unavailable fact");
+    let round_trip: Snapshot = serde_json::from_value(native).unwrap();
+    assert!(
+        !round_trip
+            .render_json()
+            .unwrap()
+            .contains("unavailable fact")
+    );
+    assert!(!round_trip.render_text().contains("unavailable fact"));
     assert!(text.contains("nic.speed = unavailable [os]"));
     for (i, (id, label)) in [
         ("good", "pass"),

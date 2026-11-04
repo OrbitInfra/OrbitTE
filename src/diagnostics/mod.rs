@@ -21,12 +21,30 @@ pub enum Outcome {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(from = "WireValue")]
 pub struct SanitizedValue {
     available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     redacted: bool,
+}
+#[derive(Deserialize)]
+struct WireValue {
+    available: bool,
+    #[serde(default)]
+    observed: Value,
+    #[serde(default)]
+    redacted: bool,
+}
+impl From<WireValue> for SanitizedValue {
+    fn from(v: WireValue) -> Self {
+        Self {
+            available: v.available,
+            observed: v.available.then_some(v.observed),
+            redacted: v.redacted,
+        }
+    }
 }
 impl SanitizedValue {
     pub fn unavailable() -> Self {

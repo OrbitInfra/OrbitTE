@@ -182,6 +182,20 @@ impl Observation {
             let _ = self.first_post.compare_exchange(0, at, Relaxed, Relaxed);
         }
     }
+    #[cfg(feature = "cuda")]
+    pub(crate) fn proxy_submitted(&self) {
+        if self.cells.enabled.load(Relaxed) {
+            let _ = self
+                .first_post
+                .compare_exchange(0, self.stamp(), Relaxed, Relaxed);
+        }
+    }
+    pub(crate) fn note_failure(&self, error: &Error, posted: bool) {
+        let reason = Failure::of(error, posted);
+        let _ = self
+            .phase
+            .compare_exchange(0, reason.code(), Relaxed, Relaxed);
+    }
     pub(crate) fn retry(&self, t: Transport) {
         let next = slot(t);
         let old = self.route.swap(next, Relaxed);
@@ -198,8 +212,8 @@ impl Observation {
         let t = self.route.load(Relaxed);
         let reason = error.map(|e| Failure::of(e, posted));
         self.last.store(reason.map_or(1, Failure::code), Relaxed);
-        if let Some(r) = reason {
-            let _ = self.phase.compare_exchange(0, r.code(), Relaxed, Relaxed);
+        if let Some(error) = error {
+            self.note_failure(error, posted);
         }
         if start == UNTIMED_ATTEMPT {
             return;

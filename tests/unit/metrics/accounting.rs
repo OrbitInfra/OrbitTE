@@ -181,3 +181,67 @@ fn rejected_preflight_records_no_start_and_a_failed_prefix_settles_its_suffix() 
     remote.read(0, &mut got).unwrap();
     assert_eq!(got, [0x5a; 12]);
 }
+
+#[test]
+fn prometheus_metric_family_contract() {
+    let cells = Arc::new(Recorder::new());
+    // Populate one series in each family. Check the rendered types against the frozen registry.
+    for group in &cells.cells {
+        let s = &group[0];
+        s.seen.store(true, Relaxed);
+        if let Some(bucket) = s.buckets.first() {
+            bucket.store(1, Relaxed);
+        }
+    }
+    let scrape = Scrape {
+        recorder: cells,
+        owners: Box::new(Owners::default),
+    };
+    let text = scrape.prometheus();
+    for (name, kind) in [
+        ("tent_read_bytes_total", "counter"),
+        ("tent_write_bytes_total", "counter"),
+        ("tent_read_requests_total", "counter"),
+        ("tent_write_requests_total", "counter"),
+        ("tent_read_failures_total", "counter"),
+        ("tent_write_failures_total", "counter"),
+        ("tent_transport_failover_total", "counter"),
+        ("tent_transport_attempts_total", "counter"),
+        ("tent_transport_attempt_failures_total", "counter"),
+        ("tent_logical_requests_started_total", "counter"),
+        ("tent_logical_request_outcomes_total", "counter"),
+        ("tent_transport_attempt_outcomes_total", "counter"),
+        ("tent_task_failures_total", "counter"),
+        ("tent_deadline_infeasible_total", "counter"),
+        ("tent_quarantined_batches_total", "counter"),
+        ("tent_inflight_attempts", "gauge"),
+        ("tent_logical_requests_inflight", "gauge"),
+        ("tent_registered_buffer_bytes", "gauge"),
+        ("tent_read_latency_us", "histogram"),
+        ("tent_write_latency_us", "histogram"),
+        ("tent_read_size_bytes", "histogram"),
+        ("tent_write_size_bytes", "histogram"),
+        ("tent_deadline_mlu_permille", "histogram"),
+        ("tent_stage_queue_wait_us", "histogram"),
+        ("tent_stage_dispatch_us", "histogram"),
+        ("tent_stage_transport_us", "histogram"),
+        ("tent_transport_attempt_latency_us", "histogram"),
+        ("tent_metrics_build_info", "gauge"),
+        ("tent_metrics_runtime_enabled", "gauge"),
+        ("tent_metrics_http_server_up", "gauge"),
+        ("tent_metrics_http_start_failures_total", "counter"),
+        ("tent_metrics_serialization_attempts_total", "counter"),
+        ("tent_metrics_serialization_failures_total", "counter"),
+        ("tent_metrics_last_success_timestamp_seconds", "gauge"),
+    ] {
+        let expected = format!("# TYPE {name} {kind}");
+        assert!(text.lines().any(|line| line == expected), "{name}");
+    }
+    assert_eq!(
+        text.lines()
+            .filter(|s| s.starts_with("# TYPE tent_"))
+            .count(),
+        34
+    );
+    assert!(!text.contains("compile_time_enabled"));
+}

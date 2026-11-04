@@ -140,6 +140,8 @@ impl TransferEngine {
                 request,
                 &self.source,
                 posted,
+                #[cfg(feature = "metrics")]
+                owners[0].metrics.as_ref(),
             ));
         }
         #[cfg(feature = "metrics")]

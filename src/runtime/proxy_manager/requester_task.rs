@@ -15,6 +15,7 @@ use crate::runtime::control_plane::buffer;
 use crate::{Error, HostMemory, RemoteEffect, TransferOp};
 
 impl ProxyManager {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn transfer_remote(
         self: &Arc<Self>,
         (operation, deadline): (TransferOp, Instant),
@@ -23,6 +24,7 @@ impl ProxyManager {
         request: &PreparedTransfer,
         source: &Arc<Source>,
         posted: &mut bool,
+        #[cfg(feature = "metrics")] observation: Option<&crate::metrics::Observation>,
     ) -> std::result::Result<(), (Error, RemoteEffect)> {
         let mut effect = RemoteEffect::None;
         let result = (|| {
@@ -59,6 +61,10 @@ impl ProxyManager {
                         })();
                         (result, effect)
                     })?;
+                #[cfg(feature = "metrics")]
+                if let Some(m) = observation {
+                    m.proxy_submitted();
+                }
                 let session = Session {
                     send,
                     completed,
@@ -125,6 +131,10 @@ impl ProxyManager {
                 }
             }
         })();
+        #[cfg(feature = "metrics")]
+        if let (Some(m), Err(e)) = (observation, &result) {
+            m.note_failure(e, *posted);
+        }
         result.map_err(|error| (error, effect))
     }
 }

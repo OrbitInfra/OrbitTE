@@ -357,5 +357,5 @@ fn http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats() {
     assert_eq!(hist["count"], 6);
     assert_eq!(hist["sum"], 0);
     assert_eq!(hist["buckets"]["10"], 6);
-    assert!(j.get("tent_task_failures_total").is_none());
+    assert_eq!(j["tent_task_failures_total"], 0);
 }

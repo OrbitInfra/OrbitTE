@@ -72,7 +72,7 @@ reasons are `submit`, `poll`, `timeout` and `canceled`.
 | `tent_logical_requests_started_total`, `tent_logical_requests_inflight` | Counter, gauge | `operation`. Accepted public requests and those awaiting a terminal outcome. |
 | `tent_logical_request_outcomes_total` | Counter | `operation,outcome`. Terminal public requests. |
 | `tent_transport_attempt_outcomes_total` | Counter | `transport,operation,outcome`. Terminal physical attempts. |
-| `tent_task_failures_total` | Counter | `transport,reason`. Terminal task failures. TENT exposes this breakdown in Prometheus only. |
+| `tent_task_failures_total` | Counter | `transport,reason`. Terminal task failures by transport and reason. JSON reports the aggregate. |
 | `tent_deadline_infeasible_total` | Counter | `transport`. An expired request deadline at submission or an S8 infeasibility drop. |
 | `tent_quarantined_batches_total` | Counter | Unlabelled. Abandoned batches entering quarantine. |
 | `tent_inflight_attempts`, `tent_registered_buffer_bytes` | Gauge | `transport`. Live attempts and bytes registered with each transport. |
