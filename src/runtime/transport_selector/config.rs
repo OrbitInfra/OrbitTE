@@ -87,7 +87,7 @@ pub struct SelectionPolicy {
     pub service_level: Option<u8>,
     #[serde(default, deserialize_with = "tc")]
     pub traffic_class: Option<u8>,
-    /// Candidate order. Empty uses eligible NVLink -> RDMA -> TCP.
+    /// Candidate order. Empty uses the registered routes for this segment type.
     #[serde(default, deserialize_with = "transports")]
     pub transports: Vec<Transport>,
 }

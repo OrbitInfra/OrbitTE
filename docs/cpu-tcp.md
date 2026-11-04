@@ -144,7 +144,7 @@ operation or status and one zero reserved byte.
 | --- | --- |
 | Request, 52 bytes | Expected epoch (16), registration ID (8), offset (8), length (8) |
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
-| Descriptor payload | Region count (4), segment capabilities (44, including an eight-byte big-endian maximum transfer length), then entries sorted by unique ID: ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), zero reserved bytes (5) |
+| Descriptor payload | Region count (4), segment capabilities (44, including the eight-byte maximum transfer length), then records ordered by registration ID. Each contains ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), HP-TCP registration flag (1) and four reserved zero bytes |
 
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
@@ -156,7 +156,7 @@ and three zero bytes. Each 80-byte record starts with seven ordered 64-bit field
 registration ID, allocation offset, mapped size, grant slot, device, inode and
 PID namespace inode. A 32-bit creator PID, four zero bytes and a 16-byte name
 nonce follow. The leaf is `orbitte-shm-{namespace:016x}-{pid:08x}-{nonce:032x}`.
-POSIX opens it with a leading slash; the directory backend opens it relative to
+POSIX opens it with a leading slash. The directory backend opens it relative to
 the local mount. Record IDs increase and every range must fit the published
 object. `tests/reference/shm/describe.bin` freezes a sample trailer.
 
