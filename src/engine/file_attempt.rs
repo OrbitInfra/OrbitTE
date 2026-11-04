@@ -147,7 +147,7 @@ impl TransferEngine {
                 )
             }),
             #[cfg(feature = "gds")]
-            Transport::Gds => self.gds.as_ref().map(|gds| {
+            Transport::Gds => self.loaded_gds().map(|gds| {
                 gds.execute(
                     op,
                     group,
@@ -248,7 +248,7 @@ impl TransferEngine {
                     || !report.locally_drained
                     || Instant::now() >= deadline
                     || !retryable_file(e)
-                    || (op == TransferOp::Write && task.posted)
+                    || (op == TransferOp::Write && (task.posted || r.parts.vectored()))
                     || task.effect == Some(RemoteEffect::Unknown)
                 {
                     break;

@@ -63,6 +63,27 @@ impl DirectFile {
 }
 
 impl FileLease {
+    /// Linux validates DIO alignment for each vector element independently.
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn file_for_iovecs(&self, offset: u64, iovecs: &[libc::iovec]) -> Result<Arc<File>> {
+        let entry = &self.permit.0;
+        let mut state = entry.lock()?;
+        let direct = state
+            .direct
+            .get_or_insert_with(|| DirectFile::open(self.file(), entry.permission));
+        if let Some(file) = &direct.file {
+            if offset % direct.offset_alignment == 0
+                && iovecs.iter().all(|iov| {
+                    iov.iov_base as usize % direct.memory_alignment == 0
+                        && iov.iov_len as u64 % direct.offset_alignment == 0
+                })
+            {
+                return Ok(Arc::clone(file));
+            }
+        }
+        Ok(Arc::clone(&self.file))
+    }
+
     #[cfg(all(feature = "cuda", feature = "io-uring"))]
     pub(crate) fn file_for_buffer(
         &self,
@@ -99,6 +120,31 @@ impl FileLease {
 
 #[cfg(feature = "gds")]
 impl FileLease {
+    pub(crate) fn gds_vector_aligned(&self, offset: u64, parts: &FileParts) -> Result<bool> {
+        // cuFile imposes a page boundary even on filesystems with smaller DIO units.
+        if offset % 4096 != 0
+            || parts.iter().any(|part| {
+                (part.local.base_address() + part.local_offset as u64) % 4096 != 0
+                    || part.length % 4096 != 0
+            })
+        {
+            return Ok(false);
+        }
+        let entry = &self.permit.0;
+        let mut state = entry.lock()?;
+        let direct = state
+            .direct
+            .get_or_insert_with(|| DirectFile::open(self.file(), entry.permission));
+        Ok(direct.file.is_some()
+            && offset % direct.offset_alignment == 0
+            && parts.iter().all(|part| {
+                (part.local.base_address() + part.local_offset as u64)
+                    % direct.memory_alignment as u64
+                    == 0
+                    && part.length as u64 % direct.offset_alignment == 0
+            }))
+    }
+
     pub(crate) fn gds_handle(
         &self,
         driver: &Arc<crate::transport::gds::Driver>,

@@ -55,9 +55,17 @@ impl Scratch {
     }
 }
 
+enum HostMemory {
+    One(DmaLease),
+    Vector {
+        _loans: Vec<DmaLease>,
+        iovecs: Box<[libc::iovec]>,
+    },
+}
+
 pub(super) struct Task {
     file: Arc<File>,
-    memory: Option<DmaLease>,
+    memory: Option<HostMemory>,
     length: usize,
     bounce: Option<Scratch>,
     offset: u64,
@@ -72,13 +80,48 @@ impl Task {
         request: &FileRequest,
         transport: &super::IoUringTransport,
     ) -> Result<(Self, libc::iovec)> {
-        let memory = request
-            .local
-            .dma_lease(request.local_offset, request.length)?;
+        if request.parts.vectored() {
+            let (loans, spans) = request.parts.borrow_ranges(|m, o, n| m.dma_lease(o, n))?;
+            let iovecs: Box<[_]> = spans
+                .iter()
+                .zip(request.parts.iter())
+                .map(|(span, part)| libc::iovec {
+                    iov_base: loans[span.loan]
+                        .address()
+                        .as_ptr()
+                        .wrapping_add(span.offset)
+                        .cast(),
+                    iov_len: part.length,
+                })
+                .collect();
+            let file = request.lease.file_for_iovecs(request.offset, &iovecs)?;
+            // Round planning needs one length per SQE. entry() supplies the actual iovec array.
+            let span = libc::iovec {
+                iov_base: std::ptr::null_mut(),
+                iov_len: request.length,
+            };
+            return Ok((
+                Self {
+                    file,
+                    memory: Some(HostMemory::Vector {
+                        _loans: loans,
+                        iovecs,
+                    }),
+                    length: request.length,
+                    bounce: None,
+                    offset: request.offset,
+                    result: None,
+                    late: false,
+                },
+                span,
+            ));
+        }
+        let part = &request.parts[0];
+        let memory = part.local.dma_lease(part.local_offset, part.length)?;
         // CUDA-owned host memory is directly accessible after dma_lease consumes
         // its producer event. Use buffered I/O for an unaligned view, without a copy.
         #[cfg(feature = "cuda")]
-        let direct_host = if request.local.is_cuda_pinned_host() {
+        let direct_host = if part.local.is_cuda_pinned_host() {
             Some((
                 request.lease.file_for_buffer(
                     request.offset,
@@ -144,7 +187,7 @@ impl Task {
         Ok((
             Self {
                 file,
-                memory: Some(memory),
+                memory: Some(HostMemory::One(memory)),
                 length: request.length,
                 bounce,
                 offset: request.offset,
@@ -169,20 +212,24 @@ impl Task {
         iov: &libc::iovec,
         index: usize,
     ) -> squeue::Entry {
-        entry(&self.file, self.offset, operation, iov, index)
+        let iovecs = match &self.memory {
+            Some(HostMemory::Vector { iovecs, .. }) => &**iovecs,
+            _ => std::slice::from_ref(iov),
+        };
+        entry(&self.file, self.offset, operation, iovecs, index)
     }
     #[allow(unsafe_code)]
     pub(super) fn complete(&mut self, operation: TransferOp, result: i32, late: bool) -> bool {
         let Some(memory) = &self.memory else {
             return false;
         };
-        if result > 0 && result as usize > memory.len() {
+        if result > 0 && result as usize > self.length {
             return false;
         }
         self.result = Some(result);
         self.late = late;
         if operation == TransferOp::Read && result > 0 {
-            if let Some(bounce) = &self.bounce {
+            if let (Some(bounce), HostMemory::One(memory)) = (&self.bounce, memory) {
                 // SAFETY: this CQE proves the kernel wrote this prefix and stopped using
                 // the iovec. The bound above and the exclusive loan protect both ranges.
                 unsafe {
@@ -206,13 +253,17 @@ pub(super) fn entry(
     file: &File,
     offset: u64,
     operation: TransferOp,
-    iov: &libc::iovec,
+    iov: &[libc::iovec],
     index: usize,
 ) -> squeue::Entry {
     let fd = types::Fd(file.as_raw_fd());
     let entry = match operation {
-        TransferOp::Read => opcode::Readv::new(fd, iov, 1).offset(offset).build(),
-        TransferOp::Write => opcode::Writev::new(fd, iov, 1).offset(offset).build(),
+        TransferOp::Read => opcode::Readv::new(fd, iov.as_ptr(), iov.len() as u32)
+            .offset(offset)
+            .build(),
+        TransferOp::Write => opcode::Writev::new(fd, iov.as_ptr(), iov.len() as u32)
+            .offset(offset)
+            .build(),
     };
     entry.user_data(index as u64)
 }

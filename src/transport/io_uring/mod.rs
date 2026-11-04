@@ -30,6 +30,7 @@ use crate::segment::file::FileRequest;
 
 #[derive(Clone)]
 pub(crate) struct IoUringTransport {
+    available: Arc<std::sync::OnceLock<bool>>,
     pool: Arc<pool::Pool>,
     allocate: fn(usize, usize) -> Result<task::Bounce>,
     create: Arc<dyn Fn(u32) -> io::Result<Box<dyn Ring>> + Send + Sync>,
@@ -37,14 +38,15 @@ pub(crate) struct IoUringTransport {
 
 impl IoUringTransport {
     pub(crate) fn probe(config: &crate::EngineConfig) -> Result<Option<Self>> {
-        if ring::create(2).is_err() {
-            return Ok(None);
-        }
         Ok(Some(Self {
+            available: Arc::default(),
             pool: pool::Pool::new(config.io_uring, config.max_inflight_bytes)?,
             create: Arc::new(ring::create),
             allocate: task::Bounce::new,
         }))
+    }
+    pub(crate) fn available(&self) -> bool {
+        *self.available.get_or_init(|| (self.create)(2).is_ok())
     }
     pub(crate) fn stats(&self) -> IoUringStats {
         self.pool.stats()
@@ -74,9 +76,11 @@ impl IoUringTransport {
         let mut run = || -> Result<()> {
             remaining(deadline)?;
             #[cfg(feature = "cuda")]
-            let staged = requests[..count]
-                .iter()
-                .any(|r| r.local.memory_type() == crate::MemoryType::Cuda);
+            let staged = requests[..count].iter().any(|r| {
+                r.parts
+                    .iter()
+                    .any(|p| p.local.memory_type() == crate::MemoryType::Cuda)
+            });
             #[cfg(not(feature = "cuda"))]
             let staged = false;
             #[cfg(feature = "cuda")]

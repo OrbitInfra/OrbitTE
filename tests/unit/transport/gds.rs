@@ -81,10 +81,14 @@ impl Mock {
     }
     pub(crate) fn install(self: &Arc<Self>, engine: &mut TransferEngine, config: &EngineConfig) {
         let driver = Driver::new(self.clone());
-        engine.gds = driver
-            .mode()
-            .ok()
-            .map(|_| Arc::new(GdsTransport::new(driver, config)));
+        engine.gds = config.gds_enabled.then(|| {
+            Provider::new(move |config| {
+                driver
+                    .mode()
+                    .ok()
+                    .map(|_| GdsTransport::new(driver.clone(), config))
+            })
+        });
     }
 }
 fn failed(op: &'static str) -> Error {
@@ -172,8 +176,11 @@ impl Api for Mock {
         self.params.lock().unwrap().extend_from_slice(params);
         for (i, p) in params.iter().enumerate() {
             assert_eq!(p.mode, 1);
-            assert_eq!(p.cookie, i + 1);
-            let (status, length) = script.get(i).copied().unwrap_or((COMPLETE, p.size));
+            assert_eq!(p.cookie, params[0].cookie + i);
+            let (status, length) = script
+                .get(p.cookie - 1)
+                .copied()
+                .unwrap_or((COMPLETE, p.size));
             let mut bytes = length;
             if status == COMPLETE && length <= p.size {
                 let files = self.files.lock().unwrap();
@@ -679,6 +686,20 @@ fn a_forked_child_reopens_the_process_driver_before_use() {
 fn runtime_soname_symbols_properties_and_batch_abi() -> Result<()> {
     if let Ok(mode) = std::env::var("ORBITTE_CUFILE_SHIM") {
         let engine = TransferEngine::new(EngineConfig::default())?;
+        assert_eq!(engine.stats()?.gds, GdsStats::default());
+        // Empty file submission probes eligibility without presenting a user buffer.
+        let probe_path = std::env::temp_dir().join(format!(
+            "orbitte-gds-probe-{}",
+            crate::SourceEpoch::generate()?
+        ));
+        fs::write(&probe_path, [])?;
+        let probe_file = engine.open_file_segment(
+            &format!("file://{}", probe_path.display()),
+            Permission::RemoteRead,
+        )?;
+        let _ = engine.submit_and_wait(TransferOp::Read, &probe_file, &[], WAIT);
+        engine.close_file_segment(&probe_file, WAIT)?;
+        fs::remove_file(probe_path)?;
         let stats = engine.stats()?.gds;
         match mode.as_str() {
             "open-error" => assert!(!stats.available),
@@ -848,7 +869,7 @@ fn file_selection_follows_named_order_and_only_selection_can_choose_io_uring() -
             },
             16,
         )?;
-        if f.engine.io_uring.is_none() {
+        if !f.engine.io_uring.as_ref().is_some_and(|io| io.available()) {
             assert_ne!(
                 std::env::var("ORBITTE_REQUIRE_IO_URING").as_deref(),
                 Ok("1")
@@ -1064,3 +1085,6 @@ fn a_drained_file_read_can_switch_but_a_posted_write_and_a_short_read_cannot() -
     }
     Ok(())
 }
+
+#[path = "gds/vectored.rs"]
+mod vectored;

@@ -170,6 +170,10 @@ impl StagingCopy {
         PinnedAllocation::new_at(&self.context, size, self.node, proxy.numa)
     }
     #[cfg(feature = "io-uring")]
+    pub(crate) fn file_context(&self) -> usize {
+        self.context.raw.as_ptr() as usize
+    }
+    #[cfg(feature = "io-uring")]
     pub(crate) fn file_node(&self) -> Option<u32> {
         self.node
     }
@@ -178,12 +182,13 @@ impl StagingCopy {
     pub(crate) fn copy_file_slot(
         &mut self,
         slot: &mut crate::transport::io_uring::pool::Slot,
+        slot_offset: usize,
         offset: usize,
         length: usize,
         to_device: bool,
     ) -> Result<()> {
         checked_range(offset, length, self.length)?;
-        checked_range(0, length, slot.length)?;
+        checked_range(slot_offset, length, slot.length)?;
         let mut allocation = self
             .memory
             .allocation
@@ -204,8 +209,14 @@ impl StagingCopy {
             .ok_or(Error::Internal("CUDA file copy stream missing"))?;
         // SAFETY: the request retains its exclusive GPU range and its unique portable
         // pinned slot through event completion, context restoration or quarantine.
-        let result =
-            unsafe { stream.copy(self.address + offset as u64, slot.ptr, length, to_device) };
+        let result = unsafe {
+            stream.copy(
+                self.address + offset as u64,
+                slot.ptr.add(slot_offset),
+                length,
+                to_device,
+            )
+        };
         if !stream.quiescent() || self.context.poisoned.load(Ordering::Acquire) {
             self.failed = true;
             allocation.uncertain = true;
@@ -282,9 +293,20 @@ impl StagingCopy {
         length: usize,
         to_device: bool,
     ) -> Result<()> {
+        self.begin_at(stage, 0, offset, length, to_device)
+    }
+
+    pub(crate) fn begin_at(
+        &mut self,
+        stage: &mut crate::runtime::proxy_manager::StageBufferLease,
+        slot_offset: usize,
+        offset: usize,
+        length: usize,
+        to_device: bool,
+    ) -> Result<()> {
         checked_range(offset, length, self.length)?;
         let host = stage.buffer()?;
-        checked_range(0, length, host.length)?;
+        checked_range(slot_offset, length, host.length)?;
         host.prepare_access()?;
         stage.submitting();
         let result = (|| {
@@ -305,7 +327,7 @@ impl StagingCopy {
             let result = unsafe {
                 stream.begin_copy(
                     self.address + offset as u64,
-                    host.address,
+                    host.address.add(slot_offset),
                     length,
                     to_device,
                 )

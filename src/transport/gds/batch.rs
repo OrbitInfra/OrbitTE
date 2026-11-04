@@ -16,7 +16,7 @@ enum Loan {
 }
 struct Task {
     range: Range<usize>,
-    _loan: Loan,
+    _loans: Vec<Loan>,
 }
 #[derive(Clone, Copy)]
 struct Receipt {
@@ -44,6 +44,10 @@ pub(crate) struct LiveBatch {
     events: Vec<Event>,
     receipts: Vec<Receipt>,
     submitted: bool,
+    active: Range<usize>,
+    wave_size: usize,
+    // (first entry, current context) for each vector context transition.
+    contexts: Vec<(usize, usize, Arc<crate::cuda::CudaMemory>)>,
     canceled: bool,
     pub(super) permanent: bool,
     reclaim_failures: u32,
@@ -60,10 +64,11 @@ impl LiveBatch {
         let mode = gds.mode()?;
         let count = requests
             .iter()
-            .map(|r| r.length.div_ceil(SLICE))
+            .flat_map(|r| r.parts.iter().map(|p| p.length.div_ceil(SLICE)))
             .try_fold(0usize, |n, k| n.checked_add(k))
             .ok_or(Error::ResourceExhausted)?;
-        if count > gds.depth as usize {
+        let vector = requests.len() == 1 && requests[0].parts.vectored();
+        if !vector && count > gds.depth as usize {
             return Err(Error::ResourceExhausted);
         }
         let mut batch = Self {
@@ -73,71 +78,114 @@ impl LiveBatch {
             handle: None,
             tasks: Vec::with_capacity(requests.len()),
             params: Vec::with_capacity(count),
-            events: vec![Event::default(); count],
+            events: vec![Event::default(); count.min(gds.depth as usize)],
             receipts: Vec::with_capacity(count),
             submitted: false,
+            active: 0..0,
+            contexts: Vec::new(),
+            // A later direct READ must never write a destination past a short prefix.
+            wave_size: if vector && op == TransferOp::Read {
+                1
+            } else {
+                gds.depth as usize
+            },
             canceled: false,
             permanent: false,
             reclaim_failures: 0,
         };
         for r in requests {
-            // cuFile documents a compatibility route for oversized batch slices
-            // and for certain unaligned writes, even on a direct-capable mount.
-            if gds.require_native
-                && (r.length.min(SLICE) > gds.driver.max_native_slice.load(Ordering::Acquire)
-                    || (r.local.base_address() + r.local_offset as u64) % 4096 != 0
-                    || r.offset % 4096 != 0
-                    || r.length % 4096 != 0)
-            {
-                return Err(Error::Unavailable(
-                    "GDS native batch requires aligned IO within the cuFile per-buffer cache limit",
-                ));
-            }
-            let file = r.lease.gds_handle(&gds.driver, mode)?;
-            let (base, buffer_offset, loan) = if r.local.memory_type() == MemoryType::Cuda {
-                let (gpu, offset) = r.local.cuda_range(r.local_offset, r.length)?;
-                let loan = gpu.gds_loan(offset, r.length)?;
-                batch.context.get_or_insert(gpu);
-                (
-                    r.local.base_address() as usize,
-                    r.local_offset,
-                    Loan::Device { _lease: loan },
-                )
-            } else {
-                let loan = r.local.dma_lease(r.local_offset, r.length)?;
-                (
-                    loan.address().as_ptr() as usize,
-                    0,
-                    Loan::Host { _lease: loan },
-                )
-            };
             let first = batch.params.len();
-            for offset in (0..r.length).step_by(SLICE) {
-                let file_offset = libc::off_t::try_from(r.offset + offset as u64)
-                    .map_err(|_| Error::InvalidRange)?;
-                let buffer_offset = libc::off_t::try_from(buffer_offset + offset)
-                    .map_err(|_| Error::InvalidRange)?;
-                let size = SLICE.min(r.length - offset);
-                batch.receipts.push(Receipt {
-                    length: size,
-                    status: WAITING,
-                    bytes: 0,
-                    late: false,
-                });
-                batch.params.push(Param {
-                    mode: 1,
-                    base,
-                    file_offset,
-                    buffer_offset,
-                    size,
-                    handle: file,
-                    opcode: u32::from(op == TransferOp::Write),
-                    cookie: batch.params.len() + 1,
-                });
+            let mut file_start = r.offset;
+            let (loans, spans) = r.parts.borrow_ranges(|memory, offset, length| {
+                if memory.memory_type() == MemoryType::Cuda {
+                    let (gpu, offset) = memory.cuda_range(offset, length)?;
+                    Ok(Loan::Device {
+                        _lease: gpu.gds_loan(offset, length)?,
+                    })
+                } else {
+                    Ok(Loan::Host {
+                        _lease: memory.dma_lease(offset, length)?,
+                    })
+                }
+            })?;
+            let mut handle = None;
+            for (part, span) in r.parts.iter().zip(spans) {
+                // cuFile documents a compatibility route for oversized batch slices
+                // and for certain unaligned writes, even on a direct-capable mount.
+                if gds.require_native
+                    && (part.length.min(SLICE)
+                        > gds.driver.max_native_slice.load(Ordering::Acquire)
+                        || (part.local.base_address() + part.local_offset as u64) % 4096 != 0
+                        || file_start % 4096 != 0
+                        || part.length % 4096 != 0)
+                {
+                    return Err(Error::Unavailable(
+                        "GDS native batch requires aligned IO within the cuFile per-buffer cache limit",
+                    ));
+                }
+                let file = match handle {
+                    Some(file) => file,
+                    None => *handle.insert(r.lease.gds_handle(&gds.driver, mode)?),
+                };
+                let (base, buffer_offset) = if part.local.memory_type() == MemoryType::Cuda {
+                    let (gpu, _) = part.local.cuda_range(part.local_offset, part.length)?;
+                    if vector {
+                        let crate::MemoryLocation::Cuda { context, .. } =
+                            part.local.location()?.location
+                        else {
+                            return Err(Error::Internal("GDS device context missing"));
+                        };
+                        if batch
+                            .contexts
+                            .last()
+                            .is_none_or(|(_, id, _)| *id != context)
+                        {
+                            let start = if batch.contexts.is_empty() {
+                                0
+                            } else {
+                                batch.params.len()
+                            };
+                            batch.contexts.push((start, context, gpu.clone()));
+                        }
+                    }
+                    batch.context.get_or_insert(gpu);
+                    (part.local.base_address() as usize, part.local_offset)
+                } else if let Loan::Host { _lease: loan } = &loans[span.loan] {
+                    (
+                        loan.address().as_ptr().wrapping_add(span.offset) as usize,
+                        0,
+                    )
+                } else {
+                    return Err(Error::Internal("cuFile host range lost its loan"));
+                };
+                for offset in (0..part.length).step_by(SLICE) {
+                    let file_offset = libc::off_t::try_from(file_start + offset as u64)
+                        .map_err(|_| Error::InvalidRange)?;
+                    let buffer_offset = libc::off_t::try_from(buffer_offset + offset)
+                        .map_err(|_| Error::InvalidRange)?;
+                    let size = SLICE.min(part.length - offset);
+                    batch.receipts.push(Receipt {
+                        length: size,
+                        status: WAITING,
+                        bytes: 0,
+                        late: false,
+                    });
+                    batch.params.push(Param {
+                        mode: 1,
+                        base,
+                        file_offset,
+                        buffer_offset,
+                        size,
+                        handle: file,
+                        opcode: u32::from(op == TransferOp::Write),
+                        cookie: batch.params.len() + 1,
+                    });
+                }
+                file_start += part.length as u64;
             }
             batch.tasks.push(Task {
                 range: first..batch.params.len(),
-                _loan: loan,
+                _loans: loans,
             });
         }
         Ok(batch)
@@ -168,7 +216,7 @@ impl LiveBatch {
             let i = e
                 .cookie
                 .checked_sub(1)
-                .filter(|i| *i < self.receipts.len())
+                .filter(|i| self.active.contains(i))
                 .ok_or(Error::Protocol("cuFile event cookie"))?;
             if !matches!(
                 e.status,
@@ -216,7 +264,9 @@ impl LiveBatch {
         }
     }
     fn terminal(&self) -> bool {
-        !self.submitted || self.receipts.iter().all(|r| r.terminal())
+        self.receipts[self.active.clone()]
+            .iter()
+            .all(|r| r.terminal())
     }
 
     fn destroy(&mut self) -> Result<()> {
@@ -261,6 +311,43 @@ impl LiveBatch {
         let until = deadline
             .checked_add(crate::transport::DESTRUCTION_TIMEOUT)
             .ok_or(Error::InvalidConfig("GDS destruction deadline overflow"))?;
+        let mut start = 0;
+        while start < self.params.len() {
+            let mut end = (start + self.wave_size).min(self.params.len());
+            let next = self
+                .contexts
+                .partition_point(|(first, _, _)| *first <= start);
+            if next != 0 {
+                self.context = Some(self.contexts[next - 1].2.clone());
+                if let Some((boundary, _, _)) = self.contexts.get(next) {
+                    end = end.min(*boundary);
+                }
+            }
+            self.wave(gds, start..end, deadline, until, progress)?;
+            if self.receipts[start..end]
+                .iter()
+                .any(|r| r.status != COMPLETE || r.bytes != r.length || r.late)
+            {
+                break;
+            }
+            start = end;
+            if start < self.params.len()
+                && (self.canceled || progress.is_some_and(|(p, base)| p.cancel_requested(base)))
+            {
+                return Err(Error::Cancelled);
+            }
+        }
+        Ok(())
+    }
+
+    fn wave(
+        &mut self,
+        gds: &GdsTransport,
+        range: Range<usize>,
+        deadline: Instant,
+        until: Instant,
+        progress: Option<(&FileAttempts<'_>, usize)>,
+    ) -> Result<()> {
         crate::engine::remaining(deadline)?;
         Self::current(&self.context, || {
             self.handle = Some(self.driver.api.setup(gds.depth)?);
@@ -274,16 +361,19 @@ impl LiveBatch {
         // cuFile returns one status, not an accepted count. Include every cookie
         // until a terminal receipt proves what happened, even on submit error.
         let submit = Self::current(&self.context, || {
+            self.active = range.clone();
             self.submitted = true;
             gds.submitted.fetch_add(1, Ordering::Relaxed);
-            self.driver.api.submit(handle, &mut self.params)
+            self.driver
+                .api
+                .submit(handle, &mut self.params[range.clone()])
         });
         if let Err(e) = submit {
             if matches!(e, Error::Unquiesced { .. }) {
                 self.permanent = true;
                 return Err(e);
             }
-            if !self.submitted {
+            if self.active != range {
                 self.destroy()?;
                 return Err(e);
             }
@@ -498,13 +588,11 @@ impl GdsTransport {
                 let mut deregister_failure = None;
                 if !matches!(stop, Some(Error::Unquiesced { .. })) {
                     for (i, r) in requests[..count].iter().enumerate() {
-                        if let Some(buffer) = &r.buffer {
-                            if let Err(e) = buffer.release() {
-                                batch.permanent = true;
-                                stop = Some(e);
-                                deregister_failure = Some(i);
-                                break;
-                            }
+                        if let Err(e) = r.parts.release_buffers() {
+                            batch.permanent = true;
+                            stop = Some(e);
+                            deregister_failure = Some(i);
+                            break;
                         }
                     }
                 }

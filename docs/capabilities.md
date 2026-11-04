@@ -25,9 +25,9 @@ identifies the release changes still awaiting a port.
 | Local CUDA staging over TCP/RDMA | Accepted (H20, healthy) | Shared pinned chunks; physical CUDA faults are unqualified. See [staging](staging.md) |
 | Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Source control isolation and later nonblocking progress are implemented; their installed profiles are unqualified. See [remote pipeline](staging.md#bounded-remote-pipeline) |
 | Mixed GPU Direct and staged batches | Implemented | Per-request remote staging next to GPU Direct in one ordered batch. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
-| DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 I/O and buffered tmpfs I/O with full READ/WRITE byte checks. See [qualification evidence](qualification.md#local-file-segments) |
-| CUDA ↔ local file (io_uring) | Implemented; installed profile unqualified | CUDA shim and real files exercise bounded proxy chunks and optional whole-request pinned slots. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
-| GDS / cuFile | Implemented, installed native gate unrun | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
+| DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 and buffered tmpfs I/O, including ordered host gather/scatter. See [qualification evidence](qualification.md#local-file-segments) |
+| CUDA ↔ local file (io_uring) | Implemented; installed profile unqualified | CUDA shim and real files exercise multi-registration gather/scatter, bounded proxy chunks and optional pinned slots. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
+| GDS / cuFile | Implemented, installed native gate unrun | Lazy, runtime-disablable cuFile, aligned vector I/O, terminal cookies and quarantine. See [GDS](storage.md#gds-with-cufile) |
 | [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Least-loaded single-operation lanes and striped READs on multiple loopback IPv4 rails. Physical rail gate unrun |
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |

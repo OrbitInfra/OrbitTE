@@ -111,12 +111,94 @@ pub(crate) struct FileLease {
 }
 
 #[cfg(any(feature = "io-uring", feature = "gds"))]
-pub(crate) struct FileRequest {
+pub(crate) struct FilePart {
     pub(crate) local: crate::RegisteredMemory,
-    pub(crate) selection: crate::runtime::transport_selector::SelectionResult,
+    pub(crate) local_offset: usize,
+    pub(crate) length: usize,
     #[cfg(feature = "gds")]
     pub(crate) buffer: Option<crate::transport::gds::BufferLease>,
-    pub(crate) local_offset: usize,
+}
+
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+pub(crate) struct LoanSpan {
+    pub(crate) loan: usize,
+    pub(crate) offset: usize,
+}
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+pub(crate) enum FileParts {
+    One(FilePart),
+    Vector(Vec<FilePart>),
+}
+
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+impl FileParts {
+    /// Alias spans within a registration share one exclusive native loan. Keep the
+    /// caller's vector order and never borrow a gap or cross a registration boundary.
+    pub(crate) fn borrow_ranges<T>(
+        &self,
+        mut acquire: impl FnMut(&crate::RegisteredMemory, usize, usize) -> Result<T>,
+    ) -> Result<(Vec<T>, Vec<LoanSpan>)> {
+        let mut order: Vec<_> = (0..self.len()).collect();
+        order.sort_unstable_by_key(|&i| (self[i].local.id(), self[i].local_offset));
+        let mut loans = Vec::new();
+        let mut refs: Vec<_> = (0..order.len())
+            .map(|_| LoanSpan { loan: 0, offset: 0 })
+            .collect();
+        let mut next = 0;
+        while let Some(&first) = order.get(next) {
+            let part = &self[first];
+            let start = part.local_offset;
+            let mut end = start + part.length;
+            while let Some(&index) = order.get(next) {
+                let p = &self[index];
+                if p.local.id() != part.local.id() || p.local_offset > end {
+                    break;
+                }
+                end = end.max(p.local_offset + p.length);
+                refs[index] = LoanSpan {
+                    loan: loans.len(),
+                    offset: p.local_offset - start,
+                };
+                next += 1;
+            }
+            loans.push(acquire(&part.local, start, end - start)?);
+        }
+        Ok((loans, refs))
+    }
+
+    pub(crate) fn vectored(&self) -> bool {
+        matches!(self, Self::Vector(_))
+    }
+
+    #[cfg(feature = "gds")]
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [FilePart] {
+        match self {
+            Self::One(part) => std::slice::from_mut(part),
+            Self::Vector(parts) => parts,
+        }
+    }
+    #[cfg(feature = "gds")]
+    pub(crate) fn release_buffers(&self) -> Result<()> {
+        self.iter()
+            .filter_map(|p| p.buffer.as_ref())
+            .try_for_each(|b| b.release())
+    }
+}
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+impl std::ops::Deref for FileParts {
+    type Target = [FilePart];
+    fn deref(&self) -> &[FilePart] {
+        match self {
+            Self::One(part) => std::slice::from_ref(part),
+            Self::Vector(parts) => parts,
+        }
+    }
+}
+
+#[cfg(any(feature = "io-uring", feature = "gds"))]
+pub(crate) struct FileRequest {
+    pub(crate) parts: FileParts,
+    pub(crate) selection: crate::runtime::transport_selector::SelectionResult,
     pub(crate) lease: FileLease,
     pub(crate) offset: u64,
     pub(crate) length: usize,

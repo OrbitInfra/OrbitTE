@@ -75,13 +75,15 @@ fn clean_gds_registration_failure_publishes_the_region_and_rejects_an_explicit_h
             .id(),
         v.id()
     );
-    assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 1);
+    assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 0);
+    assert_eq!(mock.opens.load(Ordering::Acquire), 0);
     v.write(0, b"available")?;
     assert!(matches!(
         f.engine
             .submit_and_wait(TransferOp::Read, &f.segment, &[request(&v, 0, 0, 8)], WAIT),
         Err(Error::Unavailable(_))
     ));
+    assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 1);
     assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 1);
     assert_eq!(mock.file_registers.load(Ordering::Acquire), 0);
     assert_eq!(mock.submits.load(Ordering::Acquire), 0);
@@ -92,23 +94,37 @@ fn clean_gds_registration_failure_publishes_the_region_and_rejects_an_explicit_h
 }
 
 #[test]
-fn uncertain_gds_registration_fences_and_keeps_the_unpublished_region() -> Result<()> {
+fn uncertain_first_gds_use_fences_and_retains_the_registered_region() -> Result<()> {
     let mock = Mock::new(GdsMode::NativeOnly);
     mock.register_uncertain.store(true, Ordering::Release);
     let f = Fixture::new(&mock, EngineConfig::default(), 16)?;
     let dev = allocation(&[0; 16]);
     let owner = Arc::downgrade(&dev);
     let gpu = memory(&dev);
-    assert!(matches!(
-        f.engine
-            .register_cuda_memory_batch(&[(gpu.clone(), 0, 16)], Permission::LocalOnly),
-        Err(Error::Unquiesced { .. })
-    ));
+    let view = f
+        .engine
+        .register_cuda_memory_batch(&[(gpu.clone(), 0, 16)], Permission::LocalOnly)?
+        .remove(0);
     assert!(
         f.engine
             .resolve_local_address(gpu.base_address(), 1)
-            .is_err()
+            .is_ok()
     );
+    assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 0);
+    assert!(matches!(
+        f.engine.submit_and_wait(
+            TransferOp::Read,
+            &f.segment,
+            &[request(&view, 0, 0, 8)],
+            WAIT
+        ),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(matches!(
+        f.engine.unregister_memory(&view),
+        Err(Error::Unquiesced { .. })
+    ));
+    drop(view);
     assert!(gpu.write(0, &[1]).is_err());
     assert_eq!(f.engine.stats()?.gds.buffer_registration_failures, 0);
     assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 0);
@@ -256,6 +272,11 @@ fn gds_idle_deregister_error_keeps_the_backing_and_registration_budget() -> Resu
         .engine
         .register_cuda_memory_batch(&[(gpu, 0, 16)], Permission::LocalOnly)?
         .remove(0);
+    assert!(
+        f.engine
+            .submit_and_wait(TransferOp::Read, &f.segment, &[request(&v, 0, 0, 8)], WAIT)?
+            .is_complete()
+    );
     mock.deregister_error.store(true, Ordering::Release);
     assert!(matches!(
         f.engine.unregister_memory(&v),
@@ -323,5 +344,66 @@ fn queued_cancel_with_failed_last_deregister_keeps_admission_without_submitting(
     assert_eq!(running.wait(EVENTUAL_PROGRESS)?.completed_tasks, 1);
     assert_eq!(f.engine.stats()?.inflight_bytes, 8);
     assert_eq!(&std::fs::read(&f.path)?[8..16], &[0; 8]);
+    Ok(())
+}
+
+#[test]
+fn vectored_gds_cuda_registrations_and_reordered_ranges_share_a_receipt() -> Result<()> {
+    let mock = Mock::new(GdsMode::NativeOnly);
+    let f = Fixture::new(
+        &mock,
+        EngineConfig {
+            gds_require_native: true,
+            ..Default::default()
+        },
+        5 * 4096,
+    )?;
+    let make = |value| -> Result<_> {
+        let dev = allocation(&vec![value; 4 * 4096]);
+        let gpu = memory(&dev);
+        let view = f
+            .engine
+            .register_cuda_memory_batch(&[(gpu, 0, 4 * 4096)], Permission::LocalOnly)?
+            .remove(0);
+        let start = view.base_address().div_ceil(4096) * 4096;
+        Ok((dev, view, start))
+    };
+    let (_da, a, pa) = make(0xab)?;
+    let (_db, b, pb) = make(0xcd)?;
+    let parts = [(pa + 4096, 4096), (pb, 4096), (pa, 4096)];
+    let r = TransferRequest::file_vectored(Transport::Gds, 4096, &parts)?;
+    let mut expected = vec![0; 5 * 4096];
+    expected[4096..8192].fill(0xab);
+    expected[8192..12288].fill(0xcd);
+    expected[12288..16384].fill(0xab);
+    assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 0);
+    let report = f.engine.submit_and_wait(
+        TransferOp::Write,
+        &f.segment,
+        std::slice::from_ref(&r),
+        WAIT,
+    )?;
+    assert!(report.is_complete(), "{report:?}");
+    assert_eq!(std::fs::read(&f.path)?, expected);
+    a.write(0, &vec![1; a.len()])?;
+    b.write(0, &vec![2; b.len()])?;
+    let report = f
+        .engine
+        .submit_and_wait(TransferOp::Read, &f.segment, &[r], WAIT)?;
+    assert_eq!(
+        (report.completed_requests, report.transferred_bytes),
+        (1, 3 * 4096)
+    );
+    for (view, base, fill, guard, n) in [(&a, pa, 0xab, 1, 8192), (&b, pb, 0xcd, 2, 4096)] {
+        let mut want = vec![guard; view.len()];
+        let off = (base - view.base_address()) as usize;
+        want[off..off + n].fill(fill);
+        let mut got = vec![0; view.len()];
+        view.read(0, &mut got)?;
+        assert_eq!(got, want);
+        f.engine.unregister_memory(view)?;
+    }
+    assert_eq!(mock.buffer_registers.load(Ordering::Acquire), 2);
+    assert_eq!(mock.buffer_deregisters.load(Ordering::Acquire), 2);
     Ok(())
 }

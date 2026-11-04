@@ -84,6 +84,10 @@ pub struct EngineConfig {
     /// Exclude GDS from selection if cuFile permits or forces compatibility I/O.
     #[cfg(feature = "gds")]
     pub gds_require_native: bool,
+    /// Allow lazy cuFile discovery when a file policy first considers GDS.
+    /// Disabling this prevents loading libcufile or registering buffers with it.
+    #[cfg(feature = "gds")]
+    pub gds_enabled: bool,
     /// Cooperative same-host CUDA IPC. Both processes must opt in and keep the
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
@@ -193,6 +197,8 @@ impl Default for EngineConfig {
             gds_batch_depth: 32,
             #[cfg(feature = "gds")]
             gds_require_native: false,
+            #[cfg(feature = "gds")]
+            gds_enabled: true,
             #[cfg(feature = "cuda")]
             nvlink: false,
             #[cfg(feature = "cuda")]

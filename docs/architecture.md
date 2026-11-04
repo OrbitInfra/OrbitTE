@@ -68,6 +68,10 @@ fallback. Unlike TENT’s eager allocation, the slab is created on first use.
 checks capacity and preflight rollback. A mapped-CQ poll can recover a
 failed wait, while the destruction deadline still quarantines missing receipts.
 The whole GPU range stays loaned through file receipts and CUDA copy events.
+A file vector has one file lease, admission owner and logical receipt. Overlapping
+spans share an exclusive loan within their registration. The issuer retains
+the original fragment order for kernel iovecs, staged copies and cuFile cookies.
+GDS discovery and CUDA buffer registration start at first eligible file use.
 GDS binds a cuFile handle to the retained file entry and pins the CUDA
 registration across queued and running batches. Its caller owns status polling
 and quarantine. See the [file guide](storage.md) for completion and retention.

@@ -197,6 +197,37 @@ fn exercise(path: &Path) -> Result<()> {
             "installed file slot acquisition or fallback accounting",
         ));
     }
+    let spans = [
+        (device.base_address() + 11, 3),
+        (host.base_address() + 25, 2),
+        (device.base_address() + 7, 2),
+    ];
+    let vector = TransferRequest::file_vectored(Transport::IoUring, 23, &spans)?;
+    device.write(6, b"!ab!!XYZ!")?;
+    host.write(24, b"!00!")?;
+    for op in [TransferOp::Write, TransferOp::Read] {
+        let report = engine.submit_and_wait(op, &file, std::slice::from_ref(&vector), TIMEOUT)?;
+        if !report.is_complete() || report.transferred_bytes != 7 || !report.locally_drained {
+            return Err(Error::Internal("installed vectored CUDA/file receipt"));
+        }
+        if op == TransferOp::Write {
+            image[23..30].copy_from_slice(b"XYZ00ab");
+            if fs::read(path)? != image {
+                return Err(Error::Internal("installed vectored file bytes or guards"));
+            }
+            device.write(6, b"#########")?;
+            host.write(24, b"####")?;
+        }
+    }
+    let mut gpu_bytes = [0; 9];
+    let mut host_bytes = [0; 4];
+    device.read(6, &mut gpu_bytes)?;
+    host.read(24, &mut host_bytes)?;
+    if &gpu_bytes != b"#ab##XYZ#" || &host_bytes != b"#00#" {
+        return Err(Error::Internal(
+            "installed vectored scatter bytes or guards",
+        ));
+    }
     engine.close_file_segment(&file, TIMEOUT)?;
     engine.unregister_memory(&device)?;
     engine.unregister_memory(&host)?;

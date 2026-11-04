@@ -11,9 +11,9 @@ def snapshot(read, write, error=0):
 
 class NativeCounters(unittest.TestCase):
     def test_matching_deltas_in_both_directions(self):
-        self.assertEqual(route_deltas(snapshot(4, 10), snapshot(6, 12))['Writes']['writeMiB'], 2)
+        self.assertEqual(route_deltas(snapshot(4, 10), snapshot(8, 14))['Writes']['writeMiB'], 4)
 
     def test_absent_compat_only_mismatched_or_failed_io_is_rejected(self):
-        for after in ['', snapshot(4, 10), snapshot(6, 11), snapshot(7, 12), snapshot(6, 12, 1)]:
+        for after in ['', snapshot(4, 10), snapshot(8, 13), snapshot(9, 14), snapshot(8, 14, 1)]:
             with self.subTest(after=after), self.assertRaises((ValueError, RuntimeError)):
                 route_deltas(snapshot(4, 10), after)
