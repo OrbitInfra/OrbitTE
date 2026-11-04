@@ -50,6 +50,13 @@ def relay(listener, peer, effects, gate=None, truncate=False):
                 if header[10] == 0:
                     client.sendall(exact(server, int.from_bytes(reply[28:36], "big")))
                     continue
+                if header[10] == 2:
+                    n = int.from_bytes(header[44:52], "big")
+                    assert n == 2 and reply[10] == 9
+                    server.sendall(exact(client, n))
+                    assert exact(server, 36)[10] == 0
+                    effects.append("write committed")
+                    continue  # close the requester socket without forwarding the ACK
                 assert header[10] in (3, 22) and reply[10] == 9
                 name, msg = struct.unpack(">QQ", header[36:52])
                 assert name + msg <= 65536
@@ -154,7 +161,7 @@ def cases(exe, tmp, env, features):
                     env=env,
                 )
                 reader.join(30)
-                assert effects == ["committed"], effects
+                assert effects == ["write committed", "committed"], effects
             source.communicate("v\n", timeout=30)
             assert source.returncode == 0
         finally:
@@ -227,6 +234,7 @@ def main():
         with (INVENTORY / "c-api.tsv").open() as f:
             symbols = {r["symbol"] for r in csv.DictReader(f, delimiter="\t")}
         assert len(symbols) == 33
+        symbols.add("tent_terminal_result")  # fork extension outside the frozen inventory
         exercised = set(
             re.findall(r"\b(tent_\w+)\s*\(", (HERE / "consumer.c").read_text())
         )

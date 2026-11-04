@@ -68,6 +68,7 @@ def main():
     header = args.prefix / HEADER
     header.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(manifest.parent / HEADER, header)
+    shutil.copy2(manifest.parent / HEADER.parent / "orbit_extensions.h", header.parent)
 
     if sys.platform.startswith("linux"):
         features = set(args.features.split(","))

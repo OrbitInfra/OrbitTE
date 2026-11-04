@@ -127,6 +127,19 @@ out-of-band expected epoch. The Rust API accepts a source-issued epoch.
   `tent_free_notifs` releases and resets the pointer and count, so a second free
   is safe. Free a previous list before reusing its output struct.
 
+### Observing terminal evidence
+
+The OrbitInfra fork and OrbitTE add `tent_terminal_result(engine, batch, task,
+&code, &known)` outside frozen v0.3.14. Pass `TENT_ALL_TASKS` for the whole
+batch. The query observes cached task outcomes. It neither advances progress
+nor certifies physical drain or permission to replay. A pending owner returns
+`-2`. On a query error the outputs default to 135 and zero. A terminal query
+returns zero and writes a positive native code (zero on success) and an effect
+certainty bit. Cancellation, timeout and missing evidence yield 135 and zero.
+Aliases observe their physical owner. Batch certainty requires every task to
+be terminal and certain. Code 135 takes precedence over the first other error.
+A successful sibling may already have changed its destination.
+
 ### Compatibility with native error codes
 
 Integer operations return zero on success and the negative native status code

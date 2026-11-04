@@ -507,6 +507,18 @@ impl Batch {
         p.observe_retry(&mut s, None);
         (0..s.public.len()).map(|id| s.public_status(id)).collect()
     }
+    /// Snapshot one public task or the entire batch without voting on a retry,
+    /// waking a worker, or waiting for native retirement.
+    pub fn observe_tasks(&self, task: Option<usize>) -> Result<Vec<TaskStatus>> {
+        let state = self.progress()?.lock();
+        match task {
+            Some(id) => Ok(vec![state.public_status(id)?]),
+            None => (0..state.public.len())
+                .map(|id| state.public_status(id))
+                .collect(),
+        }
+    }
+
     pub fn submissions(&self) -> Result<Vec<SubmissionStatus>> {
         Ok(self
             .progress()?

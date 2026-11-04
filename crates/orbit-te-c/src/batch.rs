@@ -83,6 +83,47 @@ impl Engine {
         Ok(())
     }
 }
+pub(crate) fn terminal(tasks: &[TaskStatus]) -> Result<(i32, i32)> {
+    let mut first = Code(0);
+    let mut known = true;
+    for task in tasks {
+        let (code, certain) = match (task.state, task.failure.as_deref()) {
+            (TaskState::Waiting | TaskState::Running, _) => return Err(FULL),
+            (TaskState::Completed, _) => (Code(0), true),
+            (TaskState::Failed, Some(f))
+                if !matches!(
+                    f.error,
+                    Error::Timeout | Error::Cancelled | Error::DeadlineInfeasible
+                ) =>
+            {
+                let certain = f.remote_effect == orbit_te::RemoteEffect::None;
+                let code = match &f.error {
+                    Error::Io(_) | Error::Protocol(_) if !certain => UNKNOWN,
+                    Error::Io(io)
+                        if matches!(
+                            io.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::NetworkUnreachable
+                                | std::io::ErrorKind::HostUnreachable
+                                | std::io::ErrorKind::AddrNotAvailable
+                        ) =>
+                    {
+                        UNSENT
+                    }
+                    e => Code::from(e),
+                };
+                (code, certain && code != UNKNOWN)
+            }
+            _ => (UNKNOWN, false),
+        };
+        if first.0 == 0 || code == UNKNOWN {
+            first = code;
+        }
+        known &= certain;
+    }
+    Ok((first.0, i32::from(known)))
+}
+
 pub(crate) fn status(t: &TaskStatus) -> abi::Status {
     let state = match t.state {
         TaskState::Waiting => 0,

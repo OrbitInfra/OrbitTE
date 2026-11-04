@@ -17,6 +17,11 @@ pub(crate) const UNSUPPORTED: Code = Code(200);
 
 impl From<Error> for Code {
     fn from(e: Error) -> Self {
+        Self::from(&e)
+    }
+}
+impl From<&Error> for Code {
+    fn from(e: &Error) -> Self {
         match e {
             Error::ResourceExhausted | Error::BatchBusy | Error::BatchOpen => FULL,
             Error::RegionNotFound | Error::ForeignRegistration => ADDRESS,
