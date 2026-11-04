@@ -267,6 +267,19 @@ pub(super) unsafe extern "C" fn open_device(
         if error != 0 {
             return error;
         }
+        let mut attr = ffi::ibv_device_attr::default();
+        let code = ffi::ibv_query_device(h.context.cast(), &mut attr);
+        if code != 0 {
+            return code;
+        }
+        h.read_limits = ReadDepth {
+            initiator: attr.max_qp_init_rd_atom.clamp(0, 255) as u8,
+            responder: attr.max_qp_rd_atom.clamp(0, 255) as u8,
+        };
+        h.supports_atomics = attr.atomic_cap != ffi::IBV_ATOMIC_NONE;
+        if !h.supports_atomics {
+            log::debug!("RDMA HCA has no remote atomics; data QPs use READ/WRITE grants");
+        }
         h.async_fd = (*h.context.cast::<ffi::ibv_context>()).async_fd;
         let flags = libc::fcntl(h.async_fd, libc::F_GETFL);
         if flags == -1 || libc::fcntl(h.async_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {

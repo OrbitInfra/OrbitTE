@@ -78,8 +78,8 @@ selected profiles while other rows stay open.
 ## Current focus
 
 S14 MNNVL/EGM is merged. P3, P6 and P7 completed their original source steps.
-The next work is R1 alignment with Mooncake v0.3.14. R1a updates the reference
-and CPU oracle. R1b covers RDMA, R1c covers storage and CUDA, and R1d covers
+R1a pinned Mooncake v0.3.14 and its CPU oracle. R1b implements the six RDMA
+deltas at source level. R1c covers storage and CUDA, and R1d covers
 HP-TCP, TCP, diagnostics and metrics. Each PR starts on main after the
 preceding one merges. The [release delta](tent-parity.md#v0314-delta) lists
 the open ports and the controls already present.
@@ -309,7 +309,8 @@ Source-level exit complete. The following contracts have CPU controls.
   reserves four named resources. Fixed receiver windows and remote Pin
   staging/consumer charges retire only on confirmed drain. TENT receiver credits
   use fixed windows and have no cluster byte allocator or dead-sender reaper.
-  R1b covers the separate v0.3.14 RDMA congestion windows.
+  The opt-in v0.3.14 congestion core exposes device and route windows to callers.
+  The released TENT RDMA workers have no call site for it.
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.

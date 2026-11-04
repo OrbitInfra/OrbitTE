@@ -21,6 +21,7 @@ cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
 gds = ["cuda"]
 metrics = []
+rdma-adaptive = ["rdma"]
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"

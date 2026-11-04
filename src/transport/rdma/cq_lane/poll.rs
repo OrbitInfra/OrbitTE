@@ -341,6 +341,14 @@ impl ProgressState {
     }
 
     fn abort(&self, records: &[Arc<Record>], fault: Fault) {
+        // The record that received a failed WC already owns its root error.
+        // Draining its shared lane is not a second fault on a sibling rail.
+        let fault = match fault {
+            Fault::Backend("RDMA work completion", _) => {
+                Fault::Unavailable("RDMA lane retired after a work completion")
+            }
+            other => other,
+        };
         // Fence accepted constructors under the same lock as native QP creation.
         // No other thread polls or submits native WRs.
         for record in records {

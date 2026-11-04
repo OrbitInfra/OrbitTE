@@ -15,7 +15,7 @@ fn info() -> Arc<DeviceInfo> {
 fn completed_work(info: &Arc<DeviceInfo>, start: Instant, end: Instant, length: usize) {
     let sq = SendQueue::new(2, Arc::default(), Some(Arc::clone(info))).unwrap();
     let mut work = SendWork::new(length, length / 2, 2, sq, 1).unwrap();
-    let wrs = work.reserve(2).unwrap().to_vec();
+    let wrs = work.reserve(2, 1).unwrap().to_vec();
     work.posted(
         0,
         sys::PostResult {
@@ -76,7 +76,7 @@ fn actual_payload_completions_learn_selection_and_exclude_idle_time_from_transmi
     );
     let sq = SendQueue::new(1, Arc::default(), Some(Arc::clone(&info))).unwrap();
     let mut bind = SendWork::control(sq, 200).unwrap();
-    bind.reserve(1).unwrap();
+    bind.reserve(1, 1).unwrap();
     bind.posted(
         0,
         sys::PostResult {
@@ -118,7 +118,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
         let t = Instant::now();
         let sq = SendQueue::new(2, Arc::default(), Some(Arc::clone(&info))).unwrap();
         let mut work = SendWork::new(16_000_000, 8_000_000, 2, Arc::clone(&sq), 1).unwrap();
-        let first = work.reserve(2).unwrap()[0];
+        let first = work.reserve(2, 1).unwrap()[0];
         assert_eq!(
             work.posted(
                 code,
@@ -165,7 +165,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
         let t = Instant::now();
         let sq = SendQueue::new(2, Arc::default(), Some(Arc::clone(&info))).unwrap();
         let mut payload = SendWork::new(16, 16, 1, Arc::clone(&sq), 1).unwrap();
-        payload.reserve(1).unwrap();
+        payload.reserve(1, 1).unwrap();
         payload
             .posted(
                 0,
@@ -177,7 +177,7 @@ fn partial_uncertain_and_failed_payloads_keep_debt_until_drain_and_never_teach_r
             )
             .unwrap();
         let mut control = SendWork::control(Arc::clone(&sq), 200).unwrap();
-        control.reserve(2).unwrap();
+        control.reserve(2, 1).unwrap();
         if fail_on_post {
             assert!(
                 control

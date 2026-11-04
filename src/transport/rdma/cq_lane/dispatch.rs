@@ -152,7 +152,10 @@ impl ProgressState {
             record.changed.notify_all();
             return false;
         }
-        let requests = match work.queue.reserve(self.config.max_cqes) {
+        let requests = match work
+            .queue
+            .reserve(self.config.max_cqes, self.config.signal_interval)
+        {
             Ok(requests) => requests,
             Err(Error::ResourceExhausted) => {
                 if record.send_queue.outstanding() < self.config.max_send_wr {

@@ -55,6 +55,7 @@ fn number(name: &str) -> Result<usize> {
 
 struct Case {
     selector: bool,
+    selective: bool,
     source: bool,
     read: bool,
     parents: usize,
@@ -69,6 +70,7 @@ struct Case {
 impl Case {
     fn load() -> Result<Self> {
         let case = Self {
+            selective: env::var("ORBITTE_HOST_MODE")? == "installed-selective",
             selector: env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-selector",
             source: match env::var("ORBITTE_SHARED_ROLE")?.as_str() {
                 "source" => true,
@@ -115,6 +117,14 @@ impl Case {
             })
         {
             return Err("unsupported installed-host profile".into());
+        }
+        if case.selective
+            && (case.parents != 1
+                || case.lanes != 1
+                || !matches!(case.mask, 1 | 2)
+                || case.payload != 8 * case.block + 17)
+        {
+            return Err("selective gate requires eight WRs on one requester QP".into());
         }
         if case.length() > 256 << 20 {
             return Err("installed-host backing exceeds 256 MiB".into());
@@ -344,6 +354,53 @@ fn rounds(
         if let Some(index) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
             return Err(format!("byte/sentinel mismatch at round {round}, byte {index}").into());
         }
+        if case.selective {
+            let expected = &case.rails[usize::from(case.mask == 2)];
+            let nics = engine.nic_load_stats()?;
+            let selected = nics
+                .iter()
+                .find(|n| n.device_name == *expected)
+                .ok_or("missing mapped NIC")?;
+            let other = nics
+                .iter()
+                .find(|n| n.device_name != *expected)
+                .ok_or("missing alternate NIC")?;
+            let rank = if case.source {
+                let topology = engine.topology()?.ok_or("missing source topology")?;
+                let wildcard = topology
+                    .mem_list
+                    .iter()
+                    .find(|m| m.name == "*")
+                    .ok_or("missing wildcard memory entry")?;
+                if !wildcard.device_list[0].contains(&other.device_id)
+                    || !wildcard.device_list[1].contains(&selected.device_id)
+                {
+                    return Err("mapped peer must be in the lower wildcard tier".into());
+                }
+                1
+            } else {
+                0
+            };
+            println!(
+                "ORBITTE_MAPPED_RAIL {{\"round\":{round},\"nic\":{:?},\"allocated\":{},\"alternate_allocated\":{},\"peer_rank\":{rank}}}",
+                selected.device_name, selected.allocated_bytes, other.allocated_bytes
+            );
+            let caps = stats
+                .last_connected_qp
+                .ok_or("missing connected QP depth evidence")?;
+            let wrs = stats.completed_reads + stats.completed_writes
+                - baseline.completed_reads
+                - baseline.completed_writes;
+            let cqes = stats.payload_send_cqes - baseline.payload_send_cqes;
+            println!(
+                "ORBITTE_SELECTIVE {{\"round\":{round},\"wrs\":{wrs},\"cqes\":{cqes},\"atomics\":{},\"init_limit\":{},\"resp_limit\":{},\"init\":{},\"resp\":{}}}",
+                caps.supports_atomics,
+                caps.initiator_limit,
+                caps.responder_limit,
+                caps.initiator,
+                caps.responder
+            );
+        }
         if case.selector {
             selector::evidence(case, engine, round)?;
         }
@@ -433,6 +490,7 @@ fn main() -> Result<()> {
         "installed-memory-cleanup" => memory::run(&case),
         mode @ ("installed-host"
         | "installed-rail-accounting"
+        | "installed-selective"
         | "installed-selector"
         | "installed-rail-health") => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;

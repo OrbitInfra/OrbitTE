@@ -109,10 +109,32 @@ fn clean(engine: &TransferEngine) -> Result<()> {
 
 pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
     let automatic = env::var("ORBITTE_HOST_DISCOVERY").as_deref() == Ok("auto");
+    let mut rail_topology = None;
+    let mut priority_matrix = None;
+    if env::var("ORBITTE_HOST_MODE")? == "installed-rail-health" {
+        rail_topology = Some(format!(
+            r#"{{"all":[{{"local":"{0}","remote":"{0}"}},{{"local":"{1}","remote":"{1}"}}]}}"#,
+            case.rails[0], case.rails[1]
+        ));
+    } else if case.selective {
+        let index = usize::from(case.mask == 2);
+        let (direct, other) = (&case.rails[index], &case.rails[1 - index]);
+        if case.source {
+            priority_matrix = Some(format!(r#"{{"*":[["{other}"],["{direct}"]]}}"#));
+        } else {
+            rail_topology = Some(format!(
+                r#"{{"all":[{{"local":"{direct}","remote":"{other}"}},{{"local":"{direct}","remote":"{direct}"}}],"direct":[{{"local":"{direct}","remote":"{direct}"}}]}}"#
+            ));
+        }
+    }
     let config = EngineConfig {
-        selector: if env::var("ORBITTE_HOST_MODE")?.as_str()=="installed-rail-health" {
+        selector: if env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-rail-health" {
             Some(super::rail_health::policy(case)?)
-        } else {case.selector.then(||super::selector::config(case)).transpose()?},
+        } else {
+            case.selector
+                .then(|| super::selector::config(case))
+                .transpose()?
+        },
         runtime_queue: case.selector.then_some(orbit_te::RuntimeQueueConfig {
             max_outstanding_owners: 1,
             max_dispatch_owners: 1,
@@ -138,8 +160,10 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             TIMEOUT
         },
         rdma: Some(RdmaConfig {
-            rail_cooldown:Duration::from_secs(2),rail_probe_interval:Duration::from_secs(1),
-            rail_topology: (env::var("ORBITTE_HOST_MODE")?.as_str()=="installed-rail-health").then(||format!(r#"{{"all":[{{"local":"{0}","remote":"{0}"}},{{"local":"{1}","remote":"{1}"}}]}}"#,case.rails[0],case.rails[1])),
+            rail_cooldown: Duration::from_secs(2),
+            rail_probe_interval: Duration::from_secs(1),
+            rail_topology,
+            priority_matrix,
             rdma_whitelist: case.rails.clone(),
             rdma_blacklist: if automatic {
                 case.rails.clone()
@@ -152,7 +176,11 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             } else {
                 Some(env::var("ORBITTE_SHARED_GID")?.parse()?)
             },
-            device_mask: case.mask,
+            device_mask: if case.selective && case.source {
+                3
+            } else {
+                case.mask
+            },
             hop_limit: 64,
             num_lanes: case.lanes,
             block_size: case.block,
@@ -160,6 +188,9 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             max_grants: 2048,
             max_cqes: 2048,
             max_send_wr: 8,
+            signal_interval: if case.selective { 3 } else { 1 },
+            max_rd_atomic: if case.selective { u8::MAX } else { 16 },
+            max_dest_rd_atomic: if case.selective { u8::MAX } else { 16 },
             max_direct_bytes: case.parents * case.payload,
             max_cached_mrs: 4,
             max_cached_mr_bytes: 4 * case.length(),

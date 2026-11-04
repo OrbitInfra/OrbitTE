@@ -169,6 +169,13 @@ pub(super) unsafe extern "C" fn open_device(
     // device into them.
     unsafe {
         (*h).context = state.cast();
+        if (*state).mode == "copy_read_caps" {
+            (*h).read_limits = sys::ReadDepth {
+                initiator: 2,
+                responder: 3,
+            };
+            (*h).supports_atomics = true;
+        }
         if let Some((read, _)) = &(*state).asynchronous {
             use std::os::fd::AsRawFd;
             (*h).async_fd = read.lock().unwrap().as_raw_fd();
@@ -894,9 +901,15 @@ unsafe extern "C" fn post(
     } else {
         None
     };
-    for request in &requests[..accepted] {
+    for (i, request) in requests[..accepted].iter().enumerate() {
+        let injected = match mode {
+            "copy_selective_error" if i == 2 => 7,
+            "copy_selective_error" if i > 2 => sys::FLUSHED,
+            "copy_selective_flush" | "copy_selective_orphan" => sys::FLUSHED,
+            _ => 0,
+        };
         assert!(request.offset as usize + request.length as usize <= local_length);
-        if mode.contains("copy") {
+        if mode.contains("copy") && injected == 0 {
             // CPU mutation under production leases, not a DMA receipt.
             // SAFETY: The admitted slice is within both registered ranges, and their transfer
             // leases exclude competing access.
@@ -910,6 +923,22 @@ unsafe extern "C" fn post(
                 }
             }
         }
+        let status = injected.max(u32::from(
+            mode == "wc"
+                || mode.ends_with("copy_fault_partial")
+                || mode == "wc_close0"
+                || (mode == "copy_second_error_close0" && ordinal == 2)
+                || (failed == Some((state.qpn, request.id)))
+                || (mode.starts_with("copy_cross_hold_first_error")
+                    && device
+                        .held_payload
+                        .lock()
+                        .unwrap()
+                        .contains(&(state.qpn, request.id))),
+        ));
+        if !request.signaled && status == 0 {
+            continue;
+        }
         cq.completions.lock().unwrap().push_back(sys::Completion {
             id: if mode == "identity" {
                 u64::MAX
@@ -921,19 +950,7 @@ unsafe extern "C" fn post(
             qpn: state.qpn + u32::from(mode == "wrong_qpn"),
             opcode: if write == 1 { 1 } else { 2 },
             length: request.length - u32::from(mode == "length"),
-            status: u32::from(
-                mode == "wc"
-                    || mode.ends_with("copy_fault_partial")
-                    || mode == "wc_close0"
-                    || (mode == "copy_second_error_close0" && ordinal == 2)
-                    || (failed == Some((state.qpn, request.id)))
-                    || (mode.starts_with("copy_cross_hold_first_error")
-                        && device
-                            .held_payload
-                            .lock()
-                            .unwrap()
-                            .contains(&(state.qpn, request.id))),
-            ),
+            status,
             vendor_error: 0,
             ..Default::default()
         });
@@ -1188,6 +1205,16 @@ unsafe extern "C" fn poll(
         return -1;
     }
     let mut queue = state.completions.lock().unwrap();
+    if device.mode == "copy_selective_orphan"
+        && queue.front().is_some_and(|wc| matches!(wc.opcode, 1 | 2))
+    {
+        let mut paused = device.pause.0.lock().unwrap();
+        if !paused.1 {
+            paused.0 = true;
+            device.pause.1.notify_all();
+            return 0;
+        }
+    }
     let value = if device.mode.starts_with("copy_cross_hold") && !device.pause.0.lock().unwrap().1 {
         let held = device.held_payload.lock().unwrap();
         let failed = *device.failed_payload.lock().unwrap();

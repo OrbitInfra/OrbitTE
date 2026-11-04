@@ -26,7 +26,7 @@ def validate_nodes(profile):
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-rail-health', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-selective', 'installed-rail-health', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -67,6 +67,10 @@ def validate(case):
     if case['mode'] == 'installed-rail-health' and (not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}', case.get('fault_netdev', ''))
             or case['operation'] != 'read' or case['mask'] != 3 or case['parents'] != 1 or not case['rdma_events']):
         raise ValueError('rail health requires two locked RNICs, an explicit requester data netdev and RDMA events')
+    if case['mode'] == 'installed-selective' and (
+            case['parents'] != 1 or case['num_lanes'] != 1 or case['mask'] not in (1, 2)
+            or case['payload'] != 8 * case['block'] + 17 or type(case.get('non_atomic')) is not bool):
+        raise ValueError('selective gate requires one pinned QP, eight payload WRs and an explicit HCA profile')
     if case['mode'] == 'installed-selector' and (case['mask'] != 3 or case['parents'] != 1 or case['num_lanes'] != 1 or case['payload'] <= case['block']):
         raise ValueError('selector requires two globally enabled NICs, one CQ lane and a sliced request')
     if case['mode'] == 'installed-rail-accounting' and (case['parents'], case['payload'], case['block'], case['num_lanes'], case['mask']) != (16, (4 << 20) + 1, 1 << 20, 1, 3):
@@ -169,6 +173,23 @@ def verify(profile, case, evidence):
                 value = expected if role == 'requester' and case['operation'] == operation else 0
                 if row[operation + '_bytes'] != value:
                     raise ValueError('installed native byte ledger disagrees with requested bytes')
+        if case['mode'] == 'installed-selective':
+            mapped = profile['rails'][int(case['mask'] == 2)]
+            expected = [dict(round=r, nic=mapped, allocated=(r + 1) * case['payload'], alternate_allocated=0,
+                             peer_rank=int(role == 'source')) for r in range(3)]
+            if records('ORBITTE_MAPPED_RAIL ') != expected:
+                raise ValueError('wildcard selection did not preserve the mapped physical peer')
+            rows = records('ORBITTE_SELECTIVE ')
+            if [r.get('round') for r in rows] != [0, 1, 2]:
+                raise ValueError('missing selective signaling round')
+            for i, r in enumerate(rows, 1):
+                factor = i if role == 'requester' else 0
+                if ((r.get('wrs'), r.get('cqes')) != (8 * factor, 3 * factor)
+                        or type(r.get('atomics')) is not bool or (case['non_atomic'] and r['atomics'])
+                        or any(type(r.get(k)) is not int or not 0 <= r[k] <= 255
+                               for k in ('init_limit', 'resp_limit', 'init', 'resp'))
+                        or any(r[k] != max(r[k + '_limit'], 1) for k in ('init', 'resp'))):
+                    raise ValueError('native payload WR/CQE counts, HCA capability or QP depth mismatch')
         if case['mode'] == 'installed-selector':
             index = int(case['operation'] == 'write')
             expected = [dict(round=r, nic=name, indices=1 << index,

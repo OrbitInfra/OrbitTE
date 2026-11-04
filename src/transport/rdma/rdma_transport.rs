@@ -400,7 +400,7 @@ impl RdmaTransport {
                 channel.write_all(&wire.encode())?;
                 let (mut remote_paths, remote_width) = path::read_paths(&mut channel, peer.epoch)?;
                 let width = self.peer_width(remote_width)?;
-                let mut paths = local_paths.clone();
+                let mut paths = self.request_paths(location, &request.selection)?;
                 if let Some((local, remote)) = pinned {
                     paths.retain(|path| path.domain == local);
                     remote_paths.retain(|path| path.domain == remote);

@@ -82,6 +82,7 @@ impl SendWork {
             let offset = index * block;
             requests.push(sys::WorkRequest {
                 id: first_id + index as u64,
+                signaled: true,
                 offset: offset as u32,
                 length: (if index + 1 == count {
                     length - offset
@@ -112,6 +113,7 @@ impl SendWork {
             .map_err(|_| Error::ResourceExhausted)?;
         requests.push(sys::WorkRequest {
             id,
+            signaled: true,
             offset: 0,
             length: 0,
         });
@@ -127,13 +129,19 @@ impl SendWork {
         })
     }
 
-    pub(super) fn reserve(&mut self, capacity: usize) -> Result<&[sys::WorkRequest]> {
+    pub(super) fn reserve(
+        &mut self,
+        capacity: usize,
+        signal_interval: usize,
+    ) -> Result<&[sys::WorkRequest]> {
         if self.pending() || self.cursor == self.requests.len() {
             return Err(Error::Internal("RDMA window state"));
         }
-        let count = self
-            .send_queue
-            .reserve(&self.requests[self.cursor..], capacity)?;
+        let count = self.send_queue.reserve(
+            &mut self.requests[self.cursor..],
+            capacity,
+            signal_interval,
+        )?;
         self.window_start = self.cursor;
         self.cursor += count;
         self.pending = if count == 64 {
@@ -211,19 +219,56 @@ impl SendWork {
             Operation::Send => 0,
         };
         if completion.status == 0
-            && (completion.opcode != expected_opcode
+            && (!request.signaled
+                || completion.opcode != expected_opcode
                 || (operation == Operation::Read && completion.length != request.length))
         {
             return Err(Error::Protocol("RDMA completion opcode/length"));
         }
-        self.send_queue
-            .complete(completion.id, completion.status != 0, now)?;
+        // An ordered RC receipt covers the unsignaled WRs immediately before its
+        // tail in this post. Another signaled tail (including another grant's)
+        // always owes its own CQE. A flush proves retirement but no payload bytes.
+        let mut start = index;
+        while start > self.window_start
+            && !self.requests[start - 1].signaled
+            && self.pending & (1u64 << (start - 1 - self.window_start)) != 0
+        {
+            start -= 1;
+        }
+        let prefix = &self.requests[start..=index];
+        let successful = match completion.status {
+            0 => prefix.len(),
+            sys::FLUSHED => 0,
+            _ => prefix.len() - 1,
+        };
+        self.send_queue.complete(prefix, successful, now)?;
+        let bytes: u64 = prefix[..successful]
+            .iter()
+            .map(|wr| u64::from(wr.length))
+            .sum();
+        let mask = (u64::MAX >> (64 - prefix.len())) << (start - self.window_start);
         let mut usage = self
             .send_queue
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        self.pending &= !bit;
+        self.pending &= !mask;
+        usage.payload_send_cqes +=
+            u64::from(matches!(operation, Operation::Read | Operation::Write));
+        match operation {
+            Operation::Read => {
+                usage.completed_reads += successful as u64;
+                usage.completed_read_bytes += bytes;
+            }
+            Operation::Write => {
+                usage.completed_writes += successful as u64;
+                usage.completed_write_bytes += bytes;
+            }
+            Operation::Bind => usage.completed_window_binds += successful as u64,
+            Operation::Send => usage.completed_sends += successful as u64,
+            #[cfg(test)]
+            Operation::Invalidate => usage.completed_window_invalidations += successful as u64,
+        }
         if completion.status != 0 {
             self.sample_valid = false;
             usage.completion_errors += 1;
@@ -231,19 +276,6 @@ impl SendWork {
                 operation: "RDMA work completion",
                 code: completion.status as i32,
             });
-        }
-        if operation == Operation::Read {
-            usage.completed_reads += 1;
-            usage.completed_read_bytes += u64::from(request.length);
-        } else if operation == Operation::Write {
-            usage.completed_writes += 1;
-            usage.completed_write_bytes += u64::from(request.length);
-        } else if operation == Operation::Bind {
-            usage.completed_window_binds += 1;
-        } else if operation == Operation::Send {
-            usage.completed_sends += 1;
-        } else {
-            usage.completed_window_invalidations += 1;
         }
         drop(usage);
         if self.finished()

@@ -86,7 +86,8 @@ fails. This is the same endpoint/context ownership boundary used here.
 In v0.3.14 an explicit endpoint teardown or context disable can be retried.
 The native destructors fail stop if teardown still reports live resources.
 OrbitTE reports `Unquiesced` and quarantines the remaining native owners after
-an ambiguous destroy. R1b will map the terminal teardown controls.
+an ambiguous destroy. The grant and device teardown controls check exact
+retention across explicit close, repeated close and Drop.
 It also preserves unresolved grant loans and quota until a native receipt
 proves cancellation. This gate validates that Rust contract; it does not claim
 identical error policy or native wire compatibility.

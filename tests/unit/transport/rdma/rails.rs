@@ -2282,3 +2282,372 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
     assert_eq!(actual, std::array::from_fn(|i| i as u8));
     Ok(())
 }
+
+#[test]
+fn r1b_selective_payloads_and_clamped_qps_move_full_guarded_bytes() -> Result<()> {
+    let default = RdmaConfig::default();
+    assert_eq!(default.signal_interval, 1);
+    assert!(matches!(
+        RdmaConfig {
+            signal_interval: 0,
+            ..default
+        }
+        .validate(),
+        Err(Error::InvalidConfig(
+            "RDMA signal_interval must be positive"
+        ))
+    ));
+    for (interval, cqes, name, depths) in [
+        (1, 8, "copy", (1, 1)),
+        (3, 3, "copy_read_caps", (2, 2)),
+        (usize::MAX, 2, "copy", (0, 1)),
+    ] {
+        let make = || {
+            rdma_fixture_with_runtime(fixture::runtime_with_config(RdmaConfig {
+                host_memory: RdmaHostMemory::Direct,
+                block_size: 8,
+                max_send_wr: 8,
+                signal_interval: interval,
+                max_rd_atomic: if interval == usize::MAX { 0 } else { 16 },
+                max_dest_rd_atomic: 2,
+                ..RdmaConfig::new(name)
+            }))
+        };
+        let source = make();
+        let requester = make();
+        let src: Vec<u8> = (0..72).collect();
+        let dst: Vec<u8> = (0..72).map(|i| 255 - i).collect();
+        let remote = source.register_memory(src.clone().into(), Permission::RemoteReadWrite)?;
+        let local = requester.register_memory(dst.clone().into(), Permission::LocalOnly)?;
+        let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+        for op in [TransferOp::Read, TransferOp::Write] {
+            local.write(0, &dst)?;
+            remote.write(0, &src)?;
+            let before = requester.stats()?.rdma.unwrap();
+            let req = TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + 4,
+                remote.base_address() + 4,
+                64,
+            );
+            let report = requester.submit_and_wait(op, &peer, &[req], TIMEOUT)?;
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            assert_eq!(report.transferred_bytes, 64);
+            let after = requester.stats()?.rdma.unwrap();
+            assert_eq!(after.payload_send_cqes - before.payload_send_cqes, cqes);
+            assert_eq!(
+                after.completed_reads + after.completed_writes
+                    - before.completed_reads
+                    - before.completed_writes,
+                8
+            );
+            assert_eq!(after.work_requests, 0);
+            for engine in [&source, &requester] {
+                let qp = engine.stats()?.rdma.unwrap().last_connected_qp.unwrap();
+                assert_eq!((qp.initiator, qp.responder), depths);
+                assert_eq!(
+                    (qp.initiator_limit, qp.responder_limit),
+                    if name == "copy" { (0, 0) } else { (2, 3) }
+                );
+                assert_eq!(qp.supports_atomics, name == "copy_read_caps");
+            }
+            let mut expected_local = dst.clone();
+            let mut expected_remote = src.clone();
+            if op == TransferOp::Read {
+                expected_local[4..68].copy_from_slice(&src[4..68]);
+            } else {
+                expected_remote[4..68].copy_from_slice(&dst[4..68]);
+            }
+            let mut bytes = [0; 72];
+            local.read(0, &mut bytes)?;
+            assert_eq!(&bytes[..], expected_local);
+            remote.read(0, &mut bytes)?;
+            assert_eq!(&bytes[..], expected_remote);
+        }
+        requester.close(TIMEOUT)?;
+        source.close(TIMEOUT)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn r1b_refreshes_the_local_snapshot_after_bootstrap_before_planning_slices() -> Result<()> {
+    let make = || single_handler(sliced_runtime(5, 8, 16, RdmaHostMemory::Direct, false));
+    let requester = make();
+    let source = make();
+    let local = requester.register_memory(vec![0xcc; 16].into(), Permission::LocalOnly)?;
+    let remote =
+        source.register_memory((0u8..16).collect::<Vec<_>>().into(), Permission::RemoteRead)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let mut selection = SelectionResult::plain(Transport::Rdma);
+    selection.device_mask = 5;
+    let request = PreparedTransfer {
+        shm: None,
+        hp_cancel: None,
+        priority: crate::Priority::High,
+        rdma_cancel: None,
+        #[cfg(feature = "cuda")]
+        remote_staging: false,
+        local: local.clone(),
+        local_offset: 4,
+        remote: peer.regions()[0],
+        remote_offset: 4,
+        length: 8,
+        selection,
+    };
+    let runtime = source_runtime(&requester);
+    // Both PDs and their registrations stay owned while the test publishes a
+    // different set of available contexts between the two halves of path exchange.
+    let newly_available = runtime.context_set.lock().unwrap().slots[2]
+        .owner
+        .take()
+        .unwrap();
+    let mut setup = RdmaSetup::new(
+        runtime,
+        TransferOp::Read,
+        &peer,
+        &request,
+        requester.source_epoch(),
+        1,
+    )?;
+    let mut channel = ControlChannel::connect(source.endpoint(), deadline(TIMEOUT)?)?;
+    assert!(setup.progress(runtime, &mut channel, &mut false)?.is_none());
+    let retired = {
+        let mut contexts = runtime.context_set.lock().unwrap();
+        contexts.slots[2].owner = Some(newly_available);
+        contexts.slots[0].owner.take().unwrap()
+    };
+    let transfer = loop {
+        if let Some(t) = setup.progress(runtime, &mut channel, &mut false)? {
+            break t;
+        }
+    };
+    assert!(transfer.slices.len() > 1);
+    let new_domain = runtime.device_at(2)?.domain()?;
+    assert!(
+        transfer
+            .slices
+            .iter()
+            .all(|s| s.peer.local.domain == new_domain)
+    );
+    transfer.finish(runtime, &mut channel)?;
+    runtime.context_set.lock().unwrap().slots[0].owner = Some(retired);
+    let mut actual = [0; 16];
+    local.read(0, &mut actual)?;
+    assert_eq!(
+        actual,
+        [
+            0xcc, 0xcc, 0xcc, 0xcc, 4, 5, 6, 7, 8, 9, 10, 11, 0xcc, 0xcc, 0xcc, 0xcc
+        ]
+    );
+    remote.read(0, &mut actual)?;
+    assert_eq!(actual, std::array::from_fn(|i| i as u8));
+    requester.close(TIMEOUT)?;
+    source.close(TIMEOUT)?;
+    Ok(())
+}
+
+#[test]
+fn r1b_failed_selective_write_preserves_guards_root_error_and_remote_uncertainty() -> Result<()> {
+    for (mode, prefix, code, rail_errors) in [
+        ("copy_selective_error", 16, 7, 1),
+        ("copy_selective_flush", 0, sys::FLUSHED, 0),
+    ] {
+        let make = |mode| {
+            rdma_fixture_with_runtime(fixture::runtime_with_config(RdmaConfig {
+                host_memory: RdmaHostMemory::Direct,
+                block_size: 8,
+                max_send_wr: 8,
+                signal_interval: 3,
+                ..RdmaConfig::new(mode)
+            }))
+        };
+        let requester = make(mode);
+        let source = make("copy");
+        let local = requester
+            .register_memory((0u8..72).collect::<Vec<_>>().into(), Permission::LocalOnly)?;
+        let remote = source.register_memory(vec![0xcc; 72].into(), Permission::RemoteReadWrite)?;
+        let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+        let report = requester.submit_and_wait(
+            TransferOp::Write,
+            &peer,
+            &[TransferRequest::new(
+                Transport::Rdma,
+                local.base_address() + 4,
+                remote.base_address() + 4,
+                64,
+            )],
+            TIMEOUT,
+        )?;
+        assert_eq!(
+            (
+                report.completed_requests,
+                report.transferred_bytes,
+                report.locally_drained
+            ),
+            (0, 0, true)
+        );
+        let failure = report.failure.unwrap();
+        assert!(
+            matches!(failure.error, Error::Backend{operation:"RDMA work completion",code:c} if c == code as i32),
+            "{:?}",
+            failure.error
+        );
+        assert_eq!(failure.remote_effect, RemoteEffect::Unknown);
+        let stats = requester.stats()?.rdma.unwrap();
+        assert_eq!(stats.rail_errors, rail_errors);
+        assert_eq!(
+            (stats.completed_write_bytes, stats.work_requests),
+            (prefix as u64, 0)
+        );
+        let mut actual = [0; 72];
+        local.read(0, &mut actual)?;
+        assert_eq!(actual, std::array::from_fn(|i| i as u8));
+        // The source releases its loan after receiving EOF on the failed grant.
+        source.close(TIMEOUT)?;
+        remote.read(0, &mut actual)?;
+        let mut expected = [0xcc; 72];
+        for (i, b) in expected[4..4 + prefix].iter_mut().enumerate() {
+            *b = (4 + i) as u8;
+        }
+        assert_eq!(actual, expected);
+        requester.close(TIMEOUT)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn r1b_freeing_a_batch_with_unreaped_unsignaled_wrs_keeps_its_loan_and_charge() -> Result<()> {
+    let runtime = fixture::runtime_with_config(RdmaConfig {
+        host_memory: RdmaHostMemory::Direct,
+        block_size: 8,
+        max_send_wr: 8,
+        signal_interval: 3,
+        ..RdmaConfig::new("copy_selective_orphan")
+    });
+    let requester = Arc::new(crate::engine::tests::rdma_fixture_with_config(
+        runtime,
+        crate::EngineConfig {
+            enable_progress_worker: true,
+            max_failover_attempts: 0,
+            handler_timeout: TIMEOUT,
+            ..Default::default()
+        },
+    ));
+    let source = rdma_fixture_with_runtime(fixture::runtime_with_config(RdmaConfig {
+        host_memory: RdmaHostMemory::Direct,
+        ..RdmaConfig::new("copy")
+    }));
+    let local = requester.register_memory(vec![0x25; 72].into(), Permission::LocalOnly)?;
+    let remote = source.register_memory(vec![0xbc; 72].into(), Permission::RemoteReadWrite)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let pause = crate::transport::rdma::context::tests::pause(source_runtime(&requester));
+    let mut batch = requester.submit_async(
+        TransferOp::Write,
+        &peer,
+        &[TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 4,
+            remote.base_address() + 4,
+            64,
+        )],
+        None,
+        TIMEOUT,
+    )?;
+    let release = batch.allocation_release_receipt();
+    let (guard, timed) = pause
+        .1
+        .wait_timeout_while(pause.0.lock().unwrap(), EVENTUAL_PROGRESS, |v| !v.0)
+        .unwrap();
+    drop(guard);
+    assert!(!timed.timed_out());
+    let freed = batch.free();
+    let held = requester.stats();
+    let borrowed = local.write(4, &[0]);
+    let premature = release.try_recv().is_ok();
+    pause.0.lock().unwrap().1 = true;
+    pause.1.notify_all();
+    freed?;
+    let held = held?;
+    let native = held.rdma.unwrap();
+    assert_eq!(
+        (
+            held.deferred_batches,
+            held.inflight_bytes,
+            native.work_requests,
+            native.direct_bytes,
+            native.payload_send_cqes
+        ),
+        (1, 64, 8, 64, 0)
+    );
+    assert!(borrowed.is_err() && !premature);
+    release.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    let end = requester.stats()?;
+    assert_eq!(
+        (
+            end.deferred_batches,
+            end.inflight_bytes,
+            end.rdma.unwrap().work_requests
+        ),
+        (0, 0, 0)
+    );
+    source.close(TIMEOUT)?;
+    let mut actual = [0; 72];
+    remote.read(0, &mut actual)?;
+    assert_eq!(actual, [0xbc; 72]);
+    local.read(0, &mut actual)?;
+    assert_eq!(actual, [0x25; 72]);
+    requester.close(TIMEOUT)?;
+    Ok(())
+}
+
+#[test]
+fn r1b_masked_wildcard_moves_bytes_on_the_lower_ranked_mapped_peer() -> Result<()> {
+    for (mask, name, other) in [(1, "rail0", "rail2"), (4, "rail2", "rail0")] {
+        let mut target = runtime(5, 8);
+        target.config.priority_matrix = Some(format!(r#"{{"*":[["{other}"],["{name}"]]}}"#));
+        let mut local_runtime = runtime(mask, 8);
+        local_runtime.config.rail_topology = Some(format!(
+            r#"{{"all":[{{"local":"{name}","remote":"{other}"}},{{"local":"{name}","remote":"{name}"}}],"direct":[{{"local":"{name}","remote":"{name}"}}]}}"#
+        ));
+        let source = rdma_fixture_with_runtime(target);
+        let requester = rdma_fixture_with_runtime(local_runtime);
+        let local = requester.register_memory(vec![0x63; 16].into(), Permission::LocalOnly)?;
+        let remote = source.register_memory(vec![0x29; 16].into(), Permission::RemoteReadWrite)?;
+        let paths = source_runtime(&source).paths(crate::MemoryLocation::Cpu(None))?;
+        assert_eq!(
+            paths.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            [other, name]
+        );
+        for (round, op) in [TransferOp::Read, TransferOp::Write]
+            .into_iter()
+            .enumerate()
+        {
+            local.write(0, &[0x63; 16])?;
+            remote.write(0, &[0x29; 16])?;
+            exchange(&requester, &source, &local, &remote, op);
+            for engine in [&source, &requester] {
+                let stats = engine.nic_load_stats()?;
+                assert_eq!(
+                    stats
+                        .iter()
+                        .find(|n| n.device_name == name)
+                        .unwrap()
+                        .allocated_bytes,
+                    ((round + 1) * 8) as u64
+                );
+                assert_eq!(
+                    stats
+                        .iter()
+                        .find(|n| n.device_name == other)
+                        .unwrap()
+                        .allocated_bytes,
+                    0
+                );
+            }
+        }
+        requester.close(TIMEOUT)?;
+        source.close(TIMEOUT)?;
+    }
+    Ok(())
+}

@@ -302,6 +302,7 @@ impl RdmaContext {
             return Err(Error::Unavailable("RDMA device is closed or retained"));
         };
         self.verify_address(resources)?;
+        handles.read_depth = handles.read_depth.clamped(resources.handles.read_limits);
         // SAFETY: The context lock pins the device while the endpoint owner supplies its live
         // QP and both descriptors.
         check("ibv_modify_qp RTR/RTS", unsafe {
@@ -315,7 +316,20 @@ impl RdmaContext {
                 link_qos.1,
                 hop_limit,
             )
-        })
+        })?;
+        let limits = resources.handles.read_limits;
+        resources
+            .usage
+            .lock()
+            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?
+            .last_connected_qp = Some(super::QpReadDepths {
+            supports_atomics: resources.handles.supports_atomics,
+            initiator_limit: limits.initiator,
+            responder_limit: limits.responder,
+            initiator: handles.read_depth.initiator,
+            responder: handles.read_depth.responder,
+        });
+        Ok(())
     }
 
     pub(super) fn register_memory(
@@ -371,6 +385,8 @@ impl RdmaContext {
                 private_pd
             },
             async_fd: resources.handles.async_fd,
+            read_limits: resources.handles.read_limits,
+            supports_atomics: resources.handles.supports_atomics,
         };
         // The send grant or physical RQ owns these bytes through native teardown.
         // SAFETY: The message owner keeps its buffer live through deregistration; the locked

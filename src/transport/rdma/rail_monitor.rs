@@ -177,17 +177,20 @@ impl RailMonitor {
         remote: &'a [NicPath],
         now: Instant,
     ) -> Option<&'a NicPath> {
-        if c.mapping.is_none() {
-            if let Ok(r) = path::remote_path(l, remote) {
-                if table
-                    .pairs
-                    .get(&Key::new(peer, l, r))
-                    .is_none_or(|s| s.resume.is_none())
-                {
-                    return Some(r);
-                }
-            }
+        if table.ports[l.nic_id].is_some_and(|(_, up)| !up) {
+            return None;
         }
+        // Preserve the mapped peer even when the remote wildcard table advertises
+        // it in a lower rank. In a configured map the last valid direct entry wins.
+        let direct = match c.mapping.as_ref() {
+            Some(m) => m
+                .direct
+                .iter()
+                .rev()
+                .filter(|p| p.local == l.name)
+                .find_map(|p| remote.iter().find(|r| r.name == p.remote)),
+            None => path::remote_path(l, remote).ok(),
+        };
         remote
             .iter()
             .filter(|r| {
@@ -208,11 +211,7 @@ impl RailMonitor {
                         .pairs
                         .get(&Key::new(peer, l, r))
                         .is_some_and(|s| s.resume.is_some()),
-                    !c.mapping.as_ref().is_some_and(|m| {
-                        m.direct
-                            .iter()
-                            .any(|p| p.local == l.name && p.remote == r.name)
-                    }),
+                    direct.is_none_or(|mapped| mapped.domain != r.domain),
                     l.name != r.name,
                 )
             })
@@ -244,7 +243,7 @@ impl RailMonitor {
         }
         if c.mapping.is_none() {
             let preferred = path::local_device_mask(local, remote);
-            if mask & preferred != 0 {
+            if healthy & preferred != 0 || (healthy == 0 && mask & preferred != 0) {
                 mask &= preferred;
             }
         }
@@ -417,13 +416,21 @@ pub(super) struct RailLease {
     done: AtomicBool,
 }
 impl RailLease {
+    fn error_outcome(error: &Error) -> Option<bool> {
+        match error {
+            // Flush is a consequence of QP retirement. Only the matching trial
+            // is cancelled; a flush cannot demote a rail or another trial.
+            Error::Backend {
+                operation: "RDMA work completion",
+                code,
+            } if *code == super::sys::FLUSHED as i32 => None,
+            Error::Backend { .. } | Error::Unquiesced { .. } => Some(false),
+            _ => None,
+        }
+    }
     #[cfg(feature = "cuda")]
     pub(super) fn fault(&self, error: &Error) {
-        let result = if matches!(error, Error::Backend { .. } | Error::Unquiesced { .. }) {
-            Some(false)
-        } else {
-            None
-        };
+        let result = Self::error_outcome(error);
         if !self.done.swap(true, Ordering::AcqRel) {
             self.owner.finish(self, result, self.owner.now());
         }
@@ -440,19 +447,17 @@ impl RailLease {
             .pairs
             .get(&self.key)
             .is_some_and(|s| s.probe == Some(self.id));
-        let result = if !probe && matches!(error, Error::Backend { .. } | Error::Unquiesced { .. })
-        {
-            Some(false)
-        } else {
+        let result = if probe {
             None
+        } else {
+            Self::error_outcome(error)
         };
         self.owner.finish(self, result, self.owner.now());
     }
     pub(super) fn receipt(&self, outcome: &Result<()>) {
         let result = match outcome {
             Ok(()) => Some(true),
-            Err(Error::Backend { .. } | Error::Unquiesced { .. }) => Some(false),
-            _ => None,
+            Err(error) => Self::error_outcome(error),
         };
         if !self.done.swap(true, Ordering::AcqRel) {
             self.owner.finish(self, result, self.owner.now());

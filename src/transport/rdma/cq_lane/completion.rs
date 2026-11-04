@@ -65,7 +65,7 @@ impl ProgressState {
         }
         if let Err(error) = result {
             let fault = Fault::from_error(error);
-            request.failure = Some(fault);
+            request.failure.get_or_insert(fault);
             drop(request);
             self.fail(fault);
         } else {
