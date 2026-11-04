@@ -61,47 +61,60 @@ Requester and whole-engine shutdown also drain file entries.
 
 ## Gather and scatter across registrations
 
-Use one vectored request when the file extent is contiguous but its local
-bytes occupy several registered ranges. The list is in file order. Each
-`(address, length)` names bytes in one host or CUDA registration. WRITE
-gathers them, and READ scatters them in the same order. A vector with any
-CUDA range matches the selector's CUDA local-memory filter.
+Use `TransferRequest::file_vectored` when scattered local bytes map to one
+contiguous file extent. List elements in file order. A
+`FileIoElement::Range { address, length }` names one registered host or CUDA
+range. `FileIoElement::Padding(n)` writes `n` zero bytes on WRITE and
+discards `n` file bytes on READ. Padding needs no local address or
+registration. Tuple-only slices of `(u64, usize)` remain supported.
 
 ```rust
-let ranges = [
-    (layer_1.base_address() + offset_1, layer_bytes),
-    (padding.base_address(), padding_bytes),
-    (layer_2.base_address() + offset_2, layer_bytes),
-];
-let request = TransferRequest::file_vectored(Transport::Unspec, file_offset, &ranges)?;
-let batch = engine.submit_async(TransferOp::Read, &segment, &[request], None, timeout)?;
+use orbit_te::{FileIoElement, TransferOp, TransferRequest, Transport};
+
+let mut elements = vec![FileIoElement::Range {
+    address: layer_1.base_address() + offset_1,
+    length: layer_bytes,
+}];
+if gap_bytes != 0 {
+    elements.push(FileIoElement::Padding(gap_bytes));
+}
+elements.push((layer_2.base_address() + offset_2, layer_bytes).into());
+if tail_bytes != 0 {
+    elements.push(FileIoElement::Padding(tail_bytes));
+}
+let request = TransferRequest::file_vectored(Transport::Unspec, file_offset, &elements)?;
+let batch = engine.submit_async(TransferOp::Write, &segment, &[request], None, timeout)?;
 batch.wait(timeout)?;
 let receipt = batch.task_status(0)?;
 ```
 
-For a padded disk format, register zero-filled host bytes for WRITE gaps and
-writable scratch for READ gaps. Include trailing padding when it belongs to
-the extent. A range may recur. Overlapping spans within a registration share
-a loan. Empty lists and zero-length spans are invalid. The limit is 1024 ranges
-per vector, `max_batch_requests` descriptors per submission and
-`max_transfer_bytes` per logical request.
+Use the same list with `TransferOp::Read` to restore the layers. Leading,
+consecutive and trailing padding and padding-only extents are valid. Omit
+zero-length elements. The limit is 1024 elements per vector and
+`max_batch_requests` descriptors per submission. Padding counts toward those
+limits, `max_transfer_bytes` and in-flight byte admission. Overlapping ranges
+within a registration share a loan. Any CUDA range selects the CUDA
+local-memory filter.
 
 One vector takes one admission charge and produces one task receipt.
-`receipt.transferred_bytes` counts its contiguous prefix, including bytes
-from a short final fragment. READ leaves the rest of the destinations
-untouched. Once a vector READ has exposed any bytes, a later error terminates
-that attempt with its prefix. A failed vector contributes zero bytes to the synchronous batch
-report. A vectored WRITE is never replayed. An unconfirmed drain retains
-the registration and loan for every fragment, the file, staging memory and
-the admission charge.
+`receipt.transferred_bytes` includes the contiguous file prefix, even when
+EOF falls inside padding. READ changes only the range bytes in that prefix.
+A failed vector contributes zero bytes to the synchronous batch report.
+A vectored WRITE is never replayed. An unconfirmed drain retains the file,
+loans, staging memory and admission charge.
 
-Host io_uring submits one `readv` or `writev` for the list. With CUDA, the
-worker packs each charged pinned chunk in file order and confirms each
-device copy. Aligned GDS vectors use a cuFile entry per range or slice.
+Host io_uring submits one `readv` or `writev` and uses one private scratch
+lease for all padding in that vector. It zeroes the lease before each WRITE.
+The lease uses the existing file staging pool or its byte-charged pageable
+fallback. For CUDA, the worker zeroes or discards padding in the pinned
+chunks it already holds and confirms each device copy. Both paths release
+scratch under the same completion rules as data.
+
+Aligned vectors containing only registered ranges can use cuFile directly.
 WRITEs use bounded batches. Direct READ issues the next entry only after a
-full receipt, so a later entry cannot modify memory past EOF. Unaligned
-vectors use io_uring when the file policy permits it. An explicit GDS hint
-on such a vector returns an availability error before payload I/O.
+full receipt. Padding and unaligned vectors use io_uring when the file policy
+permits it. An explicit `Transport::Gds` request with padding returns
+`Error::Unavailable`, even for a page-aligned gap.
 
 ## DRAM transfers with io_uring
 

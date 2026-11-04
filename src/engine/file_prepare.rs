@@ -28,8 +28,9 @@ impl TransferEngine {
                 }
                 if let Some((parts, _, _)) = _layout {
                     for part in parts.iter() {
-                        gds.register(&part.local)?;
-                        if !crate::transport::gds::BufferSlot::supports(&part.local) {
+                        let local = part.registered()?;
+                        gds.register(local)?;
+                        if !crate::transport::gds::BufferSlot::supports(local) {
                             return Ok(false);
                         }
                     }
@@ -53,27 +54,33 @@ impl TransferEngine {
                 "file I/O does not support remote staging",
             ));
         }
-        let resolve = |&(address, length): &(u64, usize)| {
-            let (local, local_offset) = self.source.registry.resolve_address(address, length)?;
+        let resolve = |element: FileIoElement| {
+            let (local, local_offset) = match element {
+                FileIoElement::Range { address, length } => {
+                    let (memory, offset) = self.source.registry.resolve_address(address, length)?;
+                    (Some(memory), offset)
+                }
+                FileIoElement::Padding(_) => (None, 0),
+            };
             Ok(FilePart {
                 local,
                 local_offset,
-                length,
+                length: element.length(),
                 #[cfg(feature = "gds")]
                 buffer: None,
             })
         };
         let parts = match &request.file_ranges {
-            Some(v) => FileParts::Vector(v.iter().map(resolve).collect::<Result<_>>()?),
-            None => FileParts::One(resolve(&(request.local_address, request.length))?),
+            Some(v) => FileParts::Vector(v.iter().copied().map(resolve).collect::<Result<_>>()?),
+            None => FileParts::One(resolve((request.local_address, request.length).into())?),
         };
         let (lease, offset) =
             self.files
                 .admit(segment, operation, request.remote_address, request.length)?;
-        let local = if parts
-            .iter()
-            .any(|p| p.local.memory_type() == crate::MemoryType::Cuda)
-        {
+        if request.transport == Transport::Gds && parts.iter().any(|p| p.local.is_none()) {
+            return Err(Error::Unavailable("cuFile cannot execute file padding"));
+        }
+        let local = if parts.has_cuda() {
             crate::MemoryType::Cuda
         } else {
             crate::MemoryType::Cpu

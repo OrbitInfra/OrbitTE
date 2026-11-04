@@ -11,7 +11,7 @@ fn consecutive_poll_errors_quarantine_once_and_pending_resets_the_streak() -> Re
     let (lease, offset) = f.engine.files.admit(&f.segment, TransferOp::Write, 0, 8)?;
     let request = FileRequest {
         parts: crate::segment::file::FileParts::One(crate::segment::file::FilePart {
-            local: local.clone(),
+            local: Some(local.clone()),
             buffer: None,
             local_offset: 0,
             length: 8,

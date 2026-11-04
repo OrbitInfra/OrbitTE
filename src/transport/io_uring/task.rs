@@ -47,6 +47,26 @@ enum Scratch {
     },
 }
 impl Scratch {
+    fn acquire(
+        transport: &super::IoUringTransport,
+        length: usize,
+        alignment: usize,
+    ) -> Result<Self> {
+        if let Some(slot) = transport.pool.acquire(
+            length,
+            alignment,
+            super::pool::Access::Host,
+            super::pool::Slab::host,
+        )? {
+            return Ok(Self::Slot(slot));
+        }
+        let charge = transport.pool.charge(length)?;
+        Ok(Self::Pageable {
+            buffer: (transport.allocate)(length, alignment)?,
+            _charge: charge,
+        })
+    }
+
     fn address(&self) -> NonNull<u8> {
         match self {
             Self::Slot(slot) => slot.ptr,
@@ -82,18 +102,46 @@ impl Task {
     ) -> Result<(Self, libc::iovec)> {
         if request.parts.vectored() {
             let (loans, spans) = request.parts.borrow_ranges(|m, o, n| m.dma_lease(o, n))?;
-            let iovecs: Box<[_]> = spans
+            let padding_bytes = request
+                .parts
                 .iter()
-                .zip(request.parts.iter())
-                .map(|(span, part)| libc::iovec {
-                    iov_base: loans[span.loan]
+                .filter(|part| part.local.is_none())
+                .map(|part| part.length)
+                .sum::<usize>();
+            let padding = if padding_bytes == 0 {
+                None
+            } else {
+                let scratch = Scratch::acquire(transport, padding_bytes, 4096)?;
+                if operation == TransferOp::Write {
+                    // SAFETY: this exclusive scratch lease covers all padding bytes.
+                    // A reused slot may contain bytes from an earlier READ.
+                    unsafe {
+                        scratch.address().as_ptr().write_bytes(0, padding_bytes);
+                    }
+                }
+                Some(scratch)
+            };
+            let mut scratch_offset = 0;
+            let mut iovecs = Vec::with_capacity(spans.len());
+            for (part, span) in request.parts.iter().zip(spans) {
+                let address = if let Some(span) = span {
+                    loans[span.loan]
                         .address()
                         .as_ptr()
                         .wrapping_add(span.offset)
-                        .cast(),
+                } else {
+                    let scratch = padding
+                        .as_ref()
+                        .ok_or(Error::Internal("missing file padding scratch"))?;
+                    let address = scratch.address().as_ptr().wrapping_add(scratch_offset);
+                    scratch_offset += part.length;
+                    address
+                };
+                iovecs.push(libc::iovec {
+                    iov_base: address.cast(),
                     iov_len: part.length,
-                })
-                .collect();
+                });
+            }
             let file = request.lease.file_for_iovecs(request.offset, &iovecs)?;
             // Round planning needs one length per SQE. entry() supplies the actual iovec array.
             let span = libc::iovec {
@@ -105,10 +153,10 @@ impl Task {
                     file,
                     memory: Some(HostMemory::Vector {
                         _loans: loans,
-                        iovecs,
+                        iovecs: iovecs.into_boxed_slice(),
                     }),
                     length: request.length,
-                    bounce: None,
+                    bounce: padding,
                     offset: request.offset,
                     result: None,
                     late: false,
@@ -117,11 +165,12 @@ impl Task {
             ));
         }
         let part = &request.parts[0];
-        let memory = part.local.dma_lease(part.local_offset, part.length)?;
+        let local = part.registered()?;
+        let memory = local.dma_lease(part.local_offset, part.length)?;
         // CUDA-owned host memory is directly accessible after dma_lease consumes
         // its producer event. Use buffered I/O for an unaligned view, without a copy.
         #[cfg(feature = "cuda")]
-        let direct_host = if part.local.is_cuda_pinned_host() {
+        let direct_host = if local.is_cuda_pinned_host() {
             Some((
                 request.lease.file_for_buffer(
                     request.offset,
@@ -146,21 +195,7 @@ impl Task {
             alignment
         };
         let bounce = if memory.address().as_ptr() as usize % staging_alignment != 0 {
-            let bounce = match transport.pool.acquire(
-                request.length,
-                staging_alignment,
-                super::pool::Access::Host,
-                super::pool::Slab::host,
-            )? {
-                Some(slot) => Scratch::Slot(slot),
-                None => {
-                    let charge = transport.pool.charge(request.length)?;
-                    Scratch::Pageable {
-                        buffer: (transport.allocate)(request.length, staging_alignment)?,
-                        _charge: charge,
-                    }
-                }
-            };
+            let bounce = Scratch::acquire(transport, request.length, staging_alignment)?;
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
                 // The fresh bounce is disjoint and has exactly that capacity.

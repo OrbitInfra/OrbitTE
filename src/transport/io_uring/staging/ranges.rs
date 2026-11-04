@@ -8,8 +8,7 @@ enum Loan {
 struct Fragment {
     start: usize,
     end: usize,
-    owner: usize,
-    offset: usize,
+    span: Option<crate::segment::file::LoanSpan>,
 }
 struct Run {
     context: usize,
@@ -39,10 +38,8 @@ impl StagedRanges {
             }
         })?;
         for (part, span) in request.parts.iter().zip(spans) {
-            let owner = span.loan;
-            let offset = span.offset;
             let end = start + part.length;
-            if let Loan::Gpu(copy) = &loans[owner] {
+            if let Some((owner, Loan::Gpu(copy))) = span.map(|s| (s.loan, &loans[s.loan])) {
                 let context = copy.file_context();
                 if runs.last().is_none_or(|r| r.context != context) {
                     runs.push(Run {
@@ -55,12 +52,7 @@ impl StagedRanges {
             if let Some(run) = runs.last_mut() {
                 run.end = end;
             }
-            fragments.push(Fragment {
-                start,
-                end,
-                owner,
-                offset,
-            });
+            fragments.push(Fragment { start, end, span });
             start = end;
         }
         Ok(Self {
@@ -112,13 +104,15 @@ impl StagedRanges {
         for part in &self.fragments[index..] {
             let local = offset + consumed - part.start;
             let len = (part.end - part.start - local).min(length - consumed);
-            let local = local + part.offset;
-            match &mut self.loans[part.owner] {
-                Loan::Gpu(copy) => {
+            match part
+                .span
+                .map(|s| (&mut self.loans[s.loan], local + s.offset))
+            {
+                Some((Loan::Gpu(copy), local)) => {
                     copy.check_access()?;
                     stage.copy(copy, consumed, local, len, to_device)?;
                 }
-                Loan::Host(loan) => {
+                Some((Loan::Host(loan), local)) => {
                     // SAFETY: the private pinned chunk and exclusive host range are
                     // disjoint and both outlive the copy. The bounds above cover len bytes.
                     unsafe {
@@ -132,6 +126,14 @@ impl StagedRanges {
                         std::ptr::copy_nonoverlapping(src, dst, len);
                     }
                 }
+                None if !to_device => {
+                    // SAFETY: consumed..consumed+len is within the exclusively
+                    // leased host chunk. This WRITE has not been posted yet.
+                    unsafe {
+                        address.as_ptr().add(consumed).write_bytes(0, len);
+                    }
+                }
+                None => {} // READ receipt includes these bytes; there is no destination.
             }
             consumed += len;
             if to_device {

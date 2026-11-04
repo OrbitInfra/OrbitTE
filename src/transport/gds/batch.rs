@@ -110,12 +110,14 @@ impl LiveBatch {
             })?;
             let mut handle = None;
             for (part, span) in r.parts.iter().zip(spans) {
+                let local = part.registered()?;
+                let span = span.ok_or(Error::Internal("GDS range without a loan"))?;
                 // cuFile documents a compatibility route for oversized batch slices
                 // and for certain unaligned writes, even on a direct-capable mount.
                 if gds.require_native
                     && (part.length.min(SLICE)
                         > gds.driver.max_native_slice.load(Ordering::Acquire)
-                        || (part.local.base_address() + part.local_offset as u64) % 4096 != 0
+                        || (local.base_address() + part.local_offset as u64) % 4096 != 0
                         || file_start % 4096 != 0
                         || part.length % 4096 != 0)
                 {
@@ -127,11 +129,11 @@ impl LiveBatch {
                     Some(file) => file,
                     None => *handle.insert(r.lease.gds_handle(&gds.driver, mode)?),
                 };
-                let (base, buffer_offset) = if part.local.memory_type() == MemoryType::Cuda {
-                    let (gpu, _) = part.local.cuda_range(part.local_offset, part.length)?;
+                let (base, buffer_offset) = if local.memory_type() == MemoryType::Cuda {
+                    let (gpu, _) = local.cuda_range(part.local_offset, part.length)?;
                     if vector {
                         let crate::MemoryLocation::Cuda { context, .. } =
-                            part.local.location()?.location
+                            local.location()?.location
                         else {
                             return Err(Error::Internal("GDS device context missing"));
                         };
@@ -149,7 +151,7 @@ impl LiveBatch {
                         }
                     }
                     batch.context.get_or_insert(gpu);
-                    (part.local.base_address() as usize, part.local_offset)
+                    (local.base_address() as usize, part.local_offset)
                 } else if let Loan::Host { _lease: loan } = &loans[span.loan] {
                     (
                         loan.address().as_ptr().wrapping_add(span.offset) as usize,

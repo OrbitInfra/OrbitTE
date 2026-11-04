@@ -91,8 +91,8 @@ pub use {
     batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus},
     config::{EngineConfig, RuntimeQueueConfig, TentSettings},
     engine::{
-        BatchReport, EngineStats, Priority, RemoteEffect, TransferEngine, TransferFailure,
-        TransferOp, TransferRequest, Transport,
+        BatchReport, EngineStats, FileIoElement, Priority, RemoteEffect, TransferEngine,
+        TransferFailure, TransferOp, TransferRequest, Transport,
     },
     error::{Error, Result},
     memory::{HostMemory, MemoryLocation, MemoryType, Permission, RangeLocation, RegisteredMemory},

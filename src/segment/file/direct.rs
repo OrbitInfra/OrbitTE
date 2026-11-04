@@ -121,13 +121,17 @@ impl FileLease {
 #[cfg(feature = "gds")]
 impl FileLease {
     pub(crate) fn gds_vector_aligned(&self, offset: u64, parts: &FileParts) -> Result<bool> {
-        // cuFile imposes a page boundary even on filesystems with smaller DIO units.
-        if offset % 4096 != 0
-            || parts.iter().any(|part| {
-                (part.local.base_address() + part.local_offset as u64) % 4096 != 0
-                    || part.length % 4096 != 0
+        // cuFile needs real buffers even for page-aligned extents. A padding
+        // element selects staging before opening a direct fd or probing cuFile.
+        let aligned = |memory_alignment, offset_alignment| {
+            parts.iter().all(|part| {
+                part.local.as_ref().is_some_and(|m| {
+                    (m.base_address() + part.local_offset as u64) % memory_alignment == 0
+                        && part.length as u64 % offset_alignment == 0
+                })
             })
-        {
+        };
+        if offset % 4096 != 0 || !aligned(4096, 4096) {
             return Ok(false);
         }
         let entry = &self.permit.0;
@@ -137,12 +141,7 @@ impl FileLease {
             .get_or_insert_with(|| DirectFile::open(self.file(), entry.permission));
         Ok(direct.file.is_some()
             && offset % direct.offset_alignment == 0
-            && parts.iter().all(|part| {
-                (part.local.base_address() + part.local_offset as u64)
-                    % direct.memory_alignment as u64
-                    == 0
-                    && part.length as u64 % direct.offset_alignment == 0
-            }))
+            && aligned(direct.memory_alignment as u64, direct.offset_alignment))
     }
 
     pub(crate) fn gds_handle(

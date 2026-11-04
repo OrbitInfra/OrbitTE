@@ -76,11 +76,7 @@ impl IoUringTransport {
         let mut run = || -> Result<()> {
             remaining(deadline)?;
             #[cfg(feature = "cuda")]
-            let staged = requests[..count].iter().any(|r| {
-                r.parts
-                    .iter()
-                    .any(|p| p.local.memory_type() == crate::MemoryType::Cuda)
-            });
+            let staged = requests[..count].iter().any(|r| r.parts.has_cuda());
             #[cfg(not(feature = "cuda"))]
             let staged = false;
             #[cfg(feature = "cuda")]

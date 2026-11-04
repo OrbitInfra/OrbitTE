@@ -198,20 +198,22 @@ fn exercise(path: &Path) -> Result<()> {
         ));
     }
     let spans = [
-        (device.base_address() + 11, 3),
-        (host.base_address() + 25, 2),
-        (device.base_address() + 7, 2),
+        (device.base_address() + 11, 3).into(),
+        orbit_te::FileIoElement::Padding(3),
+        (host.base_address() + 25, 2).into(),
+        (device.base_address() + 7, 2).into(),
+        orbit_te::FileIoElement::Padding(2),
     ];
     let vector = TransferRequest::file_vectored(Transport::IoUring, 23, &spans)?;
     device.write(6, b"!ab!!XYZ!")?;
-    host.write(24, b"!00!")?;
+    host.write(24, b"!HD!")?;
     for op in [TransferOp::Write, TransferOp::Read] {
         let report = engine.submit_and_wait(op, &file, std::slice::from_ref(&vector), TIMEOUT)?;
-        if !report.is_complete() || report.transferred_bytes != 7 || !report.locally_drained {
+        if !report.is_complete() || report.transferred_bytes != 12 || !report.locally_drained {
             return Err(Error::Internal("installed vectored CUDA/file receipt"));
         }
         if op == TransferOp::Write {
-            image[23..30].copy_from_slice(b"XYZ00ab");
+            image[23..35].copy_from_slice(b"XYZ\0\0\0HDab\0\0");
             if fs::read(path)? != image {
                 return Err(Error::Internal("installed vectored file bytes or guards"));
             }
@@ -223,7 +225,7 @@ fn exercise(path: &Path) -> Result<()> {
     let mut host_bytes = [0; 4];
     device.read(6, &mut gpu_bytes)?;
     host.read(24, &mut host_bytes)?;
-    if &gpu_bytes != b"#ab##XYZ#" || &host_bytes != b"#00#" {
+    if &gpu_bytes != b"#ab##XYZ#" || &host_bytes != b"#HD#" {
         return Err(Error::Internal(
             "installed vectored scatter bytes or guards",
         ));
