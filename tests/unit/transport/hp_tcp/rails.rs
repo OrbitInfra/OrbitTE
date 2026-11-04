@@ -278,3 +278,63 @@ fn stale_sliced_read_closes_the_live_sibling_before_returning() {
     assert_eq!(bytes(&local), expected);
     assert_eq!(bytes(&remote), vec![0xa5; n + 2]);
 }
+
+#[test]
+fn least_loaded_lane_bypasses_a_delayed_ack_and_releases_after_completion() {
+    let mut c = cfg();
+    c.hp_tcp.connections_per_peer = 2;
+    let (_src, dst, remote, local, mut peer) = setup(c, 16);
+    let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    sockets::redirect(&mut peer, &[&l]);
+    let req = |i| {
+        TransferRequest::new(
+            Transport::HpTcp,
+            local.base_address() + i,
+            remote.base_address() + i,
+            1,
+        )
+    };
+    let ack = |socket: &mut TcpStream, req: Request| {
+        socket
+            .write_all(
+                &Response {
+                    id: req.id,
+                    status: Status::Ok,
+                    committed: 1,
+                }
+                .encode(),
+            )
+            .unwrap();
+    };
+    let held = dst
+        .submit_async(TransferOp::Write, &peer, &[req(1)], None, WAIT)
+        .unwrap();
+    let (mut slow, _) = accept(&l);
+    let first = request(&mut slow);
+    let mut byte = [0];
+    slow.read_exact(&mut byte).unwrap();
+    assert_eq!(byte, [0xee]);
+    let second = dst
+        .submit_async(TransferOp::Read, &peer, &[req(3)], None, WAIT)
+        .unwrap();
+    let (mut fast, _) = accept(&l);
+    let read = request(&mut fast);
+    ack(&mut fast, read);
+    fast.write_all(&[3]).unwrap();
+    assert_eq!(second.wait(WAIT).unwrap().transferred_bytes, 1);
+    // Rotation now points back at the held WRITE. The next WRITE must use the idle lane.
+    let third = dst
+        .submit_async(TransferOp::Write, &peer, &[req(5)], None, WAIT)
+        .unwrap();
+    let write = request(&mut fast);
+    assert_eq!(write.address, remote.base_address() + 5);
+    fast.read_exact(&mut byte).unwrap();
+    assert_eq!(byte, [0xee]);
+    ack(&mut fast, write);
+    assert_eq!(third.wait(WAIT).unwrap().transferred_bytes, 1);
+    ack(&mut slow, first);
+    assert_eq!(held.wait(WAIT).unwrap().transferred_bytes, 1);
+    let mut expected = [0xee; 16];
+    expected[3] = 3;
+    assert_eq!(bytes(&local), expected);
+}

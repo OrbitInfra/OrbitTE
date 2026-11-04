@@ -2603,3 +2603,79 @@ pub(crate) use super::rdma_transport::connections::tests::{
 
 #[cfg(feature = "cuda")]
 pub(crate) mod retirement_progress;
+
+#[test]
+fn legacy_bool_env_accepts_numeric_values_at_rdma_install() {
+    for (value, expected) in [
+        ("1", true),
+        ("0", false),
+        ("ON", true),
+        ("No", false),
+        ("yEs", true),
+        ("false", false),
+    ] {
+        let config = RdmaConfig::default().resolve_switches(|_| Some(value.into()));
+        assert_eq!(
+            (config.disable_gpu_direct_rdma, config.log_slice_affinity),
+            (expected, expected)
+        );
+    }
+    for (disable, log) in [("1", "0"), ("0", "1")] {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "transport::rdma::tests::legacy_bool_install_child",
+            ])
+            .env("MC_DISABLE_GPU_DIRECT_RDMA", disable)
+            .env("MC_LOG_RDMA_SLICE_AFFINITY", log)
+            .env("MLX5_SCATTER_TO_CQE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+            "{child:?}"
+        );
+    }
+    let supplied = RdmaConfig {
+        disable_gpu_direct_rdma: true,
+        ..Default::default()
+    };
+    let config = supplied.resolve_switches(|_| Some(" 1".into()));
+    assert!(config.disable_gpu_direct_rdma && !config.log_slice_affinity);
+    let denied = RdmaConfig {
+        cuda_memory: RdmaCudaMemory::Direct,
+        ..config
+    };
+    assert!(
+        matches!(denied.validate(),Err(crate::Error::InvalidConfig(reason)) if reason.contains("MC_DISABLE_GPU_DIRECT_RDMA"))
+    );
+}
+
+#[test]
+#[ignore = "spawned with independent environment switches"]
+fn legacy_bool_install_child() {
+    let disable = std::env::var("MC_DISABLE_GPU_DIRECT_RDMA").unwrap() == "1";
+    let rdma = RdmaConfig {
+        cuda_memory: RdmaCudaMemory::Direct,
+        ..Default::default()
+    };
+    let resolved = rdma.clone().resolve_switches(|key| std::env::var_os(key));
+    assert_eq!(
+        (
+            resolved.disable_gpu_direct_rdma,
+            resolved.log_slice_affinity
+        ),
+        (disable, !disable)
+    );
+    let result = crate::TransferEngine::new(crate::EngineConfig {
+        rdma: Some(rdma),
+        ..Default::default()
+    });
+    let field = if disable {
+        "MC_DISABLE_GPU_DIRECT_RDMA"
+    } else {
+        "MLX5_SCATTER_TO_CQE"
+    };
+    assert!(matches!(result,Err(crate::Error::InvalidConfig(reason)) if reason.contains(field)));
+}

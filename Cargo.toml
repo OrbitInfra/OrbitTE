@@ -11,7 +11,7 @@ homepage = "https://github.com/OrbitInfra/OrbitTE"
 readme = "README.md"
 keywords = ["rdma", "transfer", "distributed", "ai", "memory"]
 categories = ["network-programming"]
-include = ["build.rs", "src/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
+include = ["build.rs", "src/**", "include/**", "tests/**", "examples/**", "docs/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
 [features]
@@ -30,6 +30,7 @@ undocumented_unsafe_blocks = "deny"
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "sync", "io-util", "macros"] }
 mio = { version = "1.2.1", default-features = false, features = ["net", "os-poll"] }
 log = "0.4.34"
+regex-lite = "0.1.8"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
@@ -108,3 +109,12 @@ path = "tests/hardware/hp_tcp.rs"
 [[example]]
 name = "metrics_overhead"
 path = "tests/metrics/overhead.rs"
+
+[[example]]
+name = "peer_gpu_source"
+path = "tests/hardware/peer_gpu_source.rs"
+required-features = ["cuda"]
+
+[[example]]
+name = "peer_gpu_requester"
+path = "tests/hardware/peer_gpu_requester.rs"

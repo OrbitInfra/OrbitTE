@@ -52,6 +52,7 @@ fn first_use_retry_and_completion_do_not_allocate() {
         None,
         Some(Instant::now()),
     );
+    o.accept_public();
     o.dispatched();
     o.begin(Transport::Rdma);
     o.finish(Some(&Error::Unavailable("post rejected")), false);

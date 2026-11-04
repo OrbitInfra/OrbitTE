@@ -7,6 +7,7 @@ use super::{
 use crate::{Error, RegisteredMemory, RemoteEffect, Result, SourceEpoch, TransferOp};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use tokio::{
@@ -23,17 +24,28 @@ struct Key {
 struct Lane {
     stream: AsyncMutex<Option<TcpStream>>,
     source: Option<Ipv4Addr>,
+    singles: AtomicUsize,
+    last: Mutex<Instant>,
 }
-struct Entry {
+
+// The future owns its slot even if the worker stops before its first poll.
+struct LaneSlot {
     lane: Arc<Lane>,
-    active: usize,
-    last: Instant,
+    single: bool,
+}
+impl Drop for LaneSlot {
+    fn drop(&mut self) {
+        if self.single {
+            self.lane.singles.fetch_sub(1, Relaxed);
+        }
+        *self.lane.last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
 }
 #[derive(Default)]
 struct State {
     next: u64,
     rotation: HashMap<SourceEpoch, u64>,
-    lanes: HashMap<Key, Entry>,
+    lanes: HashMap<Key, Arc<Lane>>,
 }
 pub(super) struct Client {
     state: Arc<Mutex<State>>,
@@ -52,6 +64,7 @@ fn slices(
     op: TransferOp,
     len: usize,
     connections: usize,
+    lanes: &HashMap<Key, Arc<Lane>>,
 ) -> Vec<Slice> {
     let rails = end.rails();
     let n = if op == TransferOp::Read && len / rails.len() >= STEP {
@@ -59,20 +72,36 @@ fn slices(
     } else {
         1
     };
+    let key = |id: usize| Key {
+        peer,
+        id,
+        remote: SocketAddrV4::new(rails[id % rails.len()], end.port),
+    };
     let mut offset = 0;
     (0..n)
         .map(|i| {
             let lane = if n == 1 {
-                (sequence % connections as u64) as usize
+                let start = (sequence % connections as u64) as usize;
+                let load = |id| lanes.get(&key(id)).map_or(0, |l| l.singles.load(Relaxed));
+                let mut best = start;
+                let mut minimum = load(start);
+                for k in 1..connections {
+                    if minimum == 0 {
+                        break;
+                    }
+                    let id = (start + k) % connections;
+                    let count = load(id);
+                    if count < minimum {
+                        best = id;
+                        minimum = count;
+                    }
+                }
+                best
             } else {
                 let per = 1 + (connections - 1 - i) / n;
                 i + (sequence % per as u64) as usize * n
             };
-            let key = Key {
-                peer,
-                id: lane,
-                remote: SocketAddrV4::new(rails[lane % rails.len()], end.port),
-            };
+            let key = key(lane);
             let length = len / n + usize::from(i < len % n);
             let piece = Slice {
                 key,
@@ -87,6 +116,17 @@ fn slices(
 
 pub(super) type Outcome = std::result::Result<(), (Error, RemoteEffect)>;
 impl Client {
+    #[cfg(test)]
+    pub(super) fn outstanding(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .lanes
+            .values()
+            .map(|lane| lane.singles.load(Relaxed))
+            .sum()
+    }
+
     pub(super) fn new(config: HpTcpConfig) -> Self {
         Self {
             state: Arc::default(),
@@ -126,6 +166,7 @@ impl Client {
             frame.op,
             len,
             self.config.connections_per_peer,
+            &state.lanes,
         );
         let missing = pieces
             .iter()
@@ -150,7 +191,6 @@ impl Client {
             let registry = self.state.clone();
             let idle = Duration::from_millis(self.config.idle_connection_timeout_ms);
             let entry = state.lanes.entry(key).or_insert_with(|| {
-                let registry = registry.clone();
                 workers.execute(worker, async move {
                     loop {
                         tokio::time::sleep(idle).await;
@@ -158,7 +198,14 @@ impl Client {
                         let Some(entry) = state.lanes.get(&key) else {
                             break;
                         };
-                        if entry.active == 0 && entry.last.elapsed() >= idle {
+                        if Arc::strong_count(entry) == 1
+                            && entry
+                                .last
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .elapsed()
+                                >= idle
+                        {
                             state.lanes.remove(&key);
                             if !state.lanes.keys().any(|k| k.peer == key.peer) {
                                 state.rotation.remove(&key.peer);
@@ -172,17 +219,21 @@ impl Client {
                     .rail_addresses
                     .get(key.id % end.rails().len())
                     .copied();
-                Entry {
-                    lane: Arc::new(Lane {
-                        stream: AsyncMutex::default(),
-                        source,
-                    }),
-                    active: 0,
-                    last: Instant::now(),
-                }
+                Arc::new(Lane {
+                    stream: AsyncMutex::default(),
+                    source,
+                    singles: AtomicUsize::new(0),
+                    last: Mutex::new(Instant::now()),
+                })
             });
-            entry.active += 1;
-            let lane = entry.lane.clone();
+            let single = count == 1;
+            if single {
+                entry.singles.fetch_add(1, Relaxed);
+            }
+            let slot = LaneSlot {
+                lane: entry.clone(),
+                single,
+            };
             let frame = Request {
                 id,
                 address: frame.address + piece.offset as u64,
@@ -203,19 +254,13 @@ impl Client {
                     _=cancelled(public)=>Err(Error::Cancelled),
                     _=sibling_cancel.wait_for(|v|*v)=>Err(Error::Cancelled),
                     _=tokio::time::sleep_until(deadline.into())=>Err(Error::Timeout),
-                    res=lane.transfer(key,connect,progress,frame,&memory,base,&mut started)=>res,
+                    res=slot.lane.transfer(key,connect,progress,frame,&memory,base,&mut started)=>res,
                 };
                 if outcome.is_err() {
                     siblings.send_replace(true);
                 }
                 drop(memory);
-                {
-                    let mut state = registry.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some(entry) = state.lanes.get_mut(&key) {
-                        entry.active -= 1;
-                        entry.last = Instant::now();
-                    }
-                }
+                drop(slot);
                 let _ = done.send((outcome, started));
             });
         }

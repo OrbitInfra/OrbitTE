@@ -358,6 +358,8 @@ impl Batch {
                     deadline: prepared.deadline,
                 })
             });
+            #[cfg(feature = "metrics")]
+            prepared.accept_metrics();
             state.queue.push_back(QueuedSubmission {
                 hook,
                 first_task: first_physical,

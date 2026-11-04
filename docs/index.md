@@ -72,6 +72,7 @@ storage
 transport-selection
 async-batches
 metrics
+diagnostics
 rdma-cuda
 cuda-ipc
 staging

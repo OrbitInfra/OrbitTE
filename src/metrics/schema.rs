@@ -6,6 +6,7 @@ pub(super) const TRANSPORTS: [&str; 9] = [
     "unspec", "tcp", "rdma", "nvlink", "io_uring", "gds", "hp_tcp", "shm", "mnnvl",
 ];
 pub(super) const OPS: [&str; 2] = ["read", "write"];
+pub(super) const OUTCOMES: [&str; 4] = ["success", "failed", "timeout", "canceled"];
 pub(super) const REASONS: [&str; 4] = ["submit", "poll", "timeout", "canceled"];
 
 pub(crate) fn slot(t: Transport) -> usize {
@@ -38,6 +39,9 @@ pub(super) enum Labels {
     Attempt,
     Failure,
     Pair,
+    Operation,
+    LogicalOutcome,
+    AttemptOutcome,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -86,8 +90,12 @@ pub(super) enum Metric {
     Dispatch,
     TransportTime,
     AttemptLatency,
+    LogicalStarted,
+    LogicalInflight,
+    LogicalOutcomes,
+    AttemptOutcomes,
 }
-pub(super) const SPECS: [Spec; 23] = [
+pub(super) const SPECS: [Spec; 27] = [
     Spec::new(
         "tent_read_bytes_total",
         "Total bytes read via TENT",
@@ -226,6 +234,30 @@ pub(super) const SPECS: [Spec; 23] = [
         Labels::Attempt,
         Kind::Histogram(LATENCY),
     ),
+    Spec::new(
+        "tent_logical_requests_started_total",
+        "Accepted public requests",
+        Labels::Operation,
+        Kind::Counter,
+    ),
+    Spec::new(
+        "tent_logical_requests_inflight",
+        "Accepted public requests without a terminal outcome",
+        Labels::Operation,
+        Kind::Gauge,
+    ),
+    Spec::new(
+        "tent_logical_request_outcomes_total",
+        "Terminal public request outcomes",
+        Labels::LogicalOutcome,
+        Kind::Counter,
+    ),
+    Spec::new(
+        "tent_transport_attempt_outcomes_total",
+        "Terminal physical transport attempts",
+        Labels::AttemptOutcome,
+        Kind::Counter,
+    ),
 ];
 pub(super) struct Series {
     pub value: AtomicU64,
@@ -233,6 +265,7 @@ pub(super) struct Series {
     pub seen: AtomicBool,
 }
 pub(crate) struct Recorder {
+    pub(super) pipeline: super::pipeline::Pipeline,
     pub(super) origin: std::time::Instant,
     pub(super) cells: [Box<[Series]>; SPECS.len()],
     pub enabled: AtomicBool,
@@ -240,11 +273,15 @@ pub(crate) struct Recorder {
 impl Recorder {
     pub(super) fn new() -> Self {
         Self {
+            pipeline: Default::default(),
             enabled: AtomicBool::new(true),
             origin: std::time::Instant::now(),
             cells: std::array::from_fn(|i| {
                 let spec = &SPECS[i];
                 let n = match spec.labels {
+                    Labels::Operation => OPS.len(),
+                    Labels::LogicalOutcome => OPS.len() * OUTCOMES.len(),
+                    Labels::AttemptOutcome => TRANSPORTS.len() * OPS.len() * OUTCOMES.len(),
                     Labels::None => 1,
                     Labels::Transport => TRANSPORTS.len(),
                     Labels::Attempt => TRANSPORTS.len() * OPS.len(),

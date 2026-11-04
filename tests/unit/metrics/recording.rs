@@ -90,14 +90,14 @@ fn gauges_survive_toggles_failures_keep_the_first_stage_and_quarantine_counts_on
     assert_eq!(scrape.json()["tent_inflight_attempts"], 0);
     obs.retry(Transport::Tcp);
     obs.begin(Transport::Tcp);
-    assert_eq!(scrape.json()["tent_inflight_attempts"], 1);
+    assert_eq!(scrape.json()["tent_inflight_attempts"], 0);
     cells.enabled.store(true, Relaxed);
     obs.finish(Some(&Error::Unavailable("fault")), false);
     obs.terminal(Some(&Error::Unavailable("fault")));
     obs.terminal(None);
     assert_eq!(
         scrape.json()["tent_transport_attempt_latency_us"]["count"],
-        0
+        1
     );
     let resumed = Observation::new(&cells, TransferOp::Read, Transport::Tcp, 1, None, None);
     resumed.dispatched();
@@ -108,7 +108,7 @@ fn gauges_survive_toggles_failures_keep_the_first_stage_and_quarantine_counts_on
     assert_eq!(json["tent_read_bytes_total"], 1);
     assert_eq!(json["tent_read_latency_us"]["count"], 0);
     assert_eq!(json["tent_stage_queue_wait_us"]["count"], 0);
-    assert_eq!(json["tent_transport_attempt_latency_us"]["count"], 1);
+    assert_eq!(json["tent_transport_attempt_latency_us"]["count"], 2);
     cells.quarantine();
     assert_eq!(scrape.json()["tent_quarantined_batches_total"], 1);
     assert_eq!(scrape.json()["tent_deadline_infeasible_total"], 1);
@@ -166,6 +166,10 @@ fn real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats() {
         assert_eq!(j[name], 4);
     }
     assert_eq!(j["tent_read_requests_total"], 1);
+    assert_eq!(j["tent_logical_requests_started_total"], 4);
+    assert_eq!(j["tent_logical_request_outcomes_total"], 4);
+    assert_eq!(j["tent_logical_requests_inflight"], 0);
+    assert_eq!(j["tent_transport_attempt_outcomes_total"], 2);
     assert_eq!(j["tent_transport_attempts_total"], 2);
     for name in [
         "tent_deadline_mlu_permille",
@@ -195,6 +199,11 @@ fn busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers() {
     let port = held.local_addr().unwrap().port();
     let e = TransferEngine::new(config(port)).unwrap();
     assert_eq!(e.metrics().unwrap().http_port(), 0);
+    assert_eq!(
+        e.metrics_status()["tent_metrics_http_start_failures_total"],
+        1
+    );
+    assert_eq!(e.metrics_status()["tent_metrics_http_server_up"], 0);
     drop(e);
     drop(held);
     let engine = TransferEngine::new(config(port)).unwrap();
@@ -348,5 +357,5 @@ fn http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats() {
     assert_eq!(hist["count"], 6);
     assert_eq!(hist["sum"], 0);
     assert_eq!(hist["buckets"]["10"], 6);
-    assert!(j.get("tent_task_failures_total").is_none());
+    assert_eq!(j["tent_task_failures_total"], 0);
 }

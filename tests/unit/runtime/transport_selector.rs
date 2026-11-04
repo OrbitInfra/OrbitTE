@@ -794,3 +794,74 @@ fn a_gds_registration_retiring_after_selection_preserves_an_eligible_file_route(
     );
     assert!(alternate.candidate(1).is_none());
 }
+
+#[test]
+fn cpu_platform_can_select_peer_gpu() {
+    for (local, peer, exports, allowed) in [
+        (MemoryType::Cpu, MemoryType::Cpu, true, true),
+        (MemoryType::Cpu, MemoryType::Cuda, true, true),
+        (MemoryType::Cpu, MemoryType::Cuda, false, false),
+        (
+            MemoryType::Cuda,
+            MemoryType::Cpu,
+            true,
+            cfg!(feature = "cuda"),
+        ),
+        (
+            MemoryType::Cuda,
+            MemoryType::Cuda,
+            true,
+            cfg!(feature = "cuda"),
+        ),
+    ] {
+        let remote = region(peer, false);
+        let mut c = context(&remote);
+        c.local_memory = local;
+        c.remote_segment.tcp_disabled = !exports;
+        assert_eq!(select(None, &c, Transport::Tcp).is_ok(), allowed);
+    }
+}
+
+#[test]
+#[ignore = "spawned with a real TCP endpoint by the CUDA-shim source"]
+fn peer_gpu_tcp_host_child() {
+    let engine = std::sync::Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+    let wait = crate::test_support::EVENTUAL_PROGRESS;
+    let peer = engine
+        .open_segment(
+            std::env::var("ORBITTE_TEST_PEER").unwrap().parse().unwrap(),
+            std::env::var("ORBITTE_TEST_EPOCH")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            wait,
+        )
+        .unwrap();
+    assert_eq!(peer.regions()[0].memory_type(), MemoryType::Cuda);
+    let local = engine
+        .register_memory(vec![0xee; 12].into(), Permission::LocalOnly)
+        .unwrap();
+    let request = TransferRequest::new(
+        Transport::Unspec,
+        local.base_address() + 1,
+        peer.regions()[0].base_address() + 2,
+        8,
+    );
+    let run = |op| {
+        let batch = std::sync::Arc::clone(&engine)
+            .submit_async(op, &peer, std::slice::from_ref(&request), None, wait)
+            .unwrap();
+        assert!(batch.wait(wait).unwrap().locally_drained);
+        let s = &batch.task_statuses().unwrap()[0];
+        assert_eq!(
+            (s.transport, s.state, s.transferred_bytes),
+            (Transport::Tcp, crate::TaskState::Completed, 8)
+        );
+    };
+    run(TransferOp::Read);
+    let mut got = [0; 12];
+    local.read(0, &mut got).unwrap();
+    assert_eq!(got, [0xee, 1, 2, 3, 4, 5, 6, 7, 8, 0xee, 0xee, 0xee]);
+    local.write(1, &[8, 7, 6, 5, 4, 3, 2, 1]).unwrap();
+    run(TransferOp::Write);
+}

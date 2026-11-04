@@ -205,6 +205,16 @@ impl OwnerAdmission {
     }
 }
 impl PreparedSubmission {
+    #[cfg(feature = "metrics")]
+    pub(crate) fn accept_metrics(&self) {
+        if self.owners.first().is_some_and(|o| o.metrics.is_some()) {
+            for alias in &self.mapping.public {
+                if let Some(m) = &self.owners[alias.owner].metrics {
+                    m.accept_public();
+                }
+            }
+        }
+    }
     pub(super) fn retain_window(&self, range: std::ops::Range<usize>) {
         *self.uncertain.lock().unwrap_or_else(|e| e.into_inner()) = Some(range);
     }

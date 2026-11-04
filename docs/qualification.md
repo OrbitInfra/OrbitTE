@@ -29,6 +29,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbitte-peer-gpu-source" --requester "$ART/requester/installed/bin/orbitte-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
 | Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
 | Legacy NVLink single small copy and exact context restoration | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --toolchain stable --output "$ART"`. Run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbitte-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN" --mode sync-healthy --memory device --payload 65536`. Repeat with `--memory host` and a fresh output directory. | Guarded READ/WRITE, native copy, device drain and matching caller bindings. |
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
@@ -56,12 +57,12 @@ qualified in CI and do not wait here.
 ## Metrics
 
 CPU controls scrape a real loopback endpoint with the Prometheus reference
-parser, compare JSON histogram counts, exercise a busy port and check shutdown
+parser, reconcile public and physical outcomes across retries and toggles, compare JSON histogram counts, inject exporter failures, exercise a busy port and check shutdown
 with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
 and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
-off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbitTE/pull/145) includes all three transports and both sizes. Physical
+off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbitTE/pull/145) includes all three transports and both sizes. The [HP-TCP comparison](hp-tcp.md#rails-and-ownership) reports same-host medians for rotating and least-loaded lanes. Physical
 NIC and GPU performance remains unmeasured.
 
 ## Multi-node NVLink fabric

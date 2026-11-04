@@ -125,8 +125,26 @@ fn serve(mut stream: TcpStream, s: &Scrape) -> io::Result<()> {
                 );
             }
             break match path {
-                Some("/metrics") => ("200 OK", "text/plain; version=0.0.4", s.prometheus()),
-                Some("/metrics/json") => ("200 OK", "application/json", s.json().to_string()),
+                Some("/metrics" | "/metrics/json") => {
+                    let (mime, body) = if path == Some("/metrics") {
+                        ("text/plain; version=0.0.4", s.try_prometheus())
+                    } else {
+                        let mut bytes = Vec::new();
+                        (
+                            "application/json",
+                            s.write_json(&mut bytes)
+                                .and_then(|()| String::from_utf8(bytes).map_err(io::Error::other)),
+                        )
+                    };
+                    match body {
+                        Ok(body) => ("200 OK", mime, body),
+                        Err(_) => (
+                            "500 Internal Server Error",
+                            "text/plain",
+                            "serialization failed".into(),
+                        ),
+                    }
+                }
                 Some("/metrics/summary") => ("200 OK", "text/plain", s.summary()),
                 Some("/health") => ("200 OK", "text/plain", "OK".into()),
                 _ => ("404 Not Found", "text/plain", "not found".into()),

@@ -2,6 +2,7 @@
 mod config;
 mod expose;
 mod http;
+mod pipeline;
 mod record;
 mod schema;
 use crate::Result;
@@ -31,8 +32,16 @@ impl Metrics {
             owners: Box::new(owners),
         });
         let (mut workers, port) = match http::Workers::http(cfg, &scrape) {
-            Ok(w) => (w, cfg.http_port),
+            Ok(w) => {
+                scrape.recorder.pipeline.http_up.store(true, Relaxed);
+                (w, cfg.http_port)
+            }
             Err(e) => {
+                scrape
+                    .recorder
+                    .pipeline
+                    .start_failures
+                    .fetch_add(1, Relaxed);
                 log::warn!(
                     "metrics HTTP endpoint unavailable on {}:{} ({e}), continuing with log-only metrics",
                     cfg.http_host,
@@ -65,12 +74,26 @@ impl Metrics {
     pub fn set_enabled(&self, enabled: bool) {
         self.recorder().enabled.store(enabled, Relaxed);
     }
+    /// Export to a fallible sink. A write failure is recorded against this format.
+    pub fn write_prometheus(&self, writer: impl std::io::Write) -> std::io::Result<()> {
+        self.scrape.write_prometheus(writer)
+    }
+    pub fn write_json(&self, writer: impl std::io::Write) -> std::io::Result<()> {
+        self.scrape.write_json(writer)
+    }
     pub fn prometheus(&self) -> String {
         self.scrape.prometheus()
     }
     pub fn json(&self) -> serde_json::Value {
         self.scrape.json()
     }
+}
+pub(crate) fn pipeline_status(metrics: Option<&Metrics>) -> serde_json::Value {
+    match metrics {
+        Some(m) => m.recorder().pipeline.json(m.enabled(), None),
+        None => pipeline::Pipeline::default().json(false, None),
+    }
+    .into()
 }
 pub(crate) fn transport_bit(t: crate::Transport) -> u16 {
     1 << schema::slot(t)

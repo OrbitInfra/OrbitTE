@@ -124,7 +124,7 @@ readiness. Closing or failing a provider does not authorize replay elsewhere.
 
 | Transport | Required eligibility |
 | --- | --- |
-| TCP | Both ends' normal TCP handlers; CUDA endpoints use their existing local host staging. A CPU-only requester can access a CUDA source over ordinary TCP |
+| TCP | Both ends' normal TCP handlers; CUDA endpoints use their existing local host staging. A CPU-only requester can READ and WRITE a peer CUDA range. Only the peer needs a device runtime for its staged copy |
 | HP-TCP | HP-TCP enabled at both ends, matching IPv4 rail counts, and an eligible host registration. The request must fit both endpoint frame limits |
 | SHM | SHM enabled at both ends, matching host boot identity and backing namespace, local host memory and a source-published shared range |
 | RDMA | Both engines configure RDMA. Each side's existing host/CUDA Direct or Staged policy remains authoritative; this capability does not promise GPUDirect or current RNIC health |

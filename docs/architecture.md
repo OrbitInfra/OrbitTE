@@ -165,8 +165,12 @@ deadline and epoch. A replaced registration cannot inherit an admitted WRITE.
 The optional per-engine registry preallocates the frozen transport, operation
 and reason domains, including the failover pairs. Recording uses indexed
 relaxed atomics. The physical admission owner carries timestamps and the first
-failure stage across retries. Its aliases and subsequent status polls add no
-samples. Registration gauges change at publication and final unregistration.
+failure stage across retries. The legacy transfer counters describe physical
+owners. Lossless request counters include every accepted public alias. The
+`metrics_attribute_each_retry_and_one_merged_outcome_to_the_real_transport`
+control checks two aliases, a failed RDMA attempt and one successful TCP
+attempt. Polling again leaves the totals unchanged. Counts have no authority to
+release backing or admission. Registration gauges change at publication and final unregistration.
 The exporter samples existing queue, QoS, receiver-credit and rail owners only
 on a scrape. Benchmark-only QoS reports have no runtime series.
 
@@ -177,7 +181,20 @@ request-header limit and an absolute 500 ms I/O deadline. Dropping the engine
 joins the HTTP workers and the optional periodic logger. A busy port degrades
 to log-only recording. The loader rejects malformed values and caps the pool
 at 64 threads. Tests exercise a busy port, incomplete and oversized headers,
-per-engine isolation and toggle-safe gauges. See [metrics](metrics.md).
+per-engine isolation and toggle-safe gauges. A rejected CROSS and a skipped
+suffix close recorded outcomes without releasing transfer leases. The CPU-only
+TCP requester control checks both explicit peer capabilities and guarded
+device bytes. A GPU Direct disable switch conflicts with an explicit Direct
+request, preserving the registration policy. Invalid boolean spellings preserve
+typed settings, and debug affinity logs omit memory addresses and keys.
+See [metrics](metrics.md) and [RDMA configuration](rdma-cuda.md).
+
+The offline diagnostics module and installed `tent` binary share compile-time
+build identity with the exporter. The CLI uses the standard argument iterator
+and serde_json. Only the free-text redactor needs the small `regex-lite`
+matcher. A packaged header exposes the same Rust renderer and redactor to C
+and C++ through synchronous callbacks. The installed-header control checks the
+document against the CLI and rejects an unsupported format.
 
 ## RDMA resource owners
 

@@ -582,3 +582,33 @@ fn hp_tcp_rejects_device_memory_and_consumes_pinned_host_readiness() -> Result<(
     }
     Ok(())
 }
+
+#[test]
+fn peer_gpu_tcp_stages_both_directions_for_a_host_requester() {
+    let owner = allocation(&[0xa5, 0xa5, 1, 2, 3, 4, 5, 6, 7, 8, 0xa5, 0xa5]);
+    let source = TransferEngine::new(EngineConfig::default()).unwrap();
+    let registered = source
+        .register_cuda_memory_batch(&[(memory(&owner), 0, 12)], Permission::RemoteReadWrite)
+        .unwrap();
+    // CI supplies the no-default-features test executable for an actual CPU-only requester.
+    let binary = std::env::var_os("ORBITTE_TEST_CPU_BINARY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_exe().unwrap());
+    let result = std::process::Command::new(binary)
+        .args([
+            "--exact",
+            "--ignored",
+            "runtime::transport_selector::tests::peer_gpu_tcp_host_child",
+        ])
+        .env("ORBITTE_TEST_PEER", source.endpoint().to_string())
+        .env("ORBITTE_TEST_EPOCH", source.source_epoch().to_string())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success() && String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+        "{result:?}"
+    );
+    let mut got = [0; 12];
+    registered[0].read(0, &mut got).unwrap();
+    assert_eq!(got, [0xa5, 0xa5, 8, 7, 6, 5, 4, 3, 2, 1, 0xa5, 0xa5]);
+}
