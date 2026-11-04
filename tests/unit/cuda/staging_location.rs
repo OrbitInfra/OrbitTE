@@ -432,3 +432,52 @@ fn unmap_failure_preserves_its_errno_and_mapping_after_successful_unregister() {
     assert!(weak.upgrade().is_some());
     reset();
 }
+
+#[test]
+fn proxy_first_pins_and_unpin_on_distinct_locations_share_one_bounded_pool() {
+    use crate::test_support::EVENTUAL_PROGRESS;
+    let _serial = SERIAL.lock().unwrap();
+    reset();
+    let manager = pool(19, StagingLocation::Auto, 2);
+    let a = memory(&allocation(&[1; 32]));
+    let b = memory(&allocation(&[2; 32]));
+    let first = a.allocation.lock().unwrap().context.clone();
+    let second = b.allocation.lock().unwrap().context.clone();
+    let (entered, ready) = std::sync::mpsc::sync_channel(0);
+    let (resume, wait) = std::sync::mpsc::sync_channel(0);
+    std::thread::scope(|scope| {
+        let maker = scope.spawn(|| {
+            manager.pin_stage_buffer(first.raw.as_ptr() as usize, Some(130), None, move |n| {
+                entered.send(()).unwrap();
+                wait.recv_timeout(EVENTUAL_PROGRESS)
+                    .map_err(|_| Error::Timeout)?;
+                PinnedAllocation::new_at(&first, n, Some(130), &NUMA)
+            })
+        });
+        ready.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        let pin = || {
+            manager.pin_stage_buffer(second.raw.as_ptr() as usize, Some(2), None, |n| {
+                PinnedAllocation::new_at(&second, n, Some(2), &NUMA)
+            })
+        };
+        let mut fast = pin().unwrap();
+        fast.buffer_mut().unwrap().bytes_mut()[..19].fill(0x7b);
+        assert!(matches!(pin(), Err(Error::ResourceExhausted)));
+        let address = fast.buffer().unwrap().address;
+        fast.release().unwrap();
+        let mut fast = pin().unwrap();
+        assert_eq!(fast.buffer().unwrap().address, address);
+        assert_eq!(fast.buffer_mut().unwrap().bytes_mut()[..19], [0x7b; 19]);
+        resume.send(()).unwrap();
+        let slow = maker.join().unwrap().unwrap();
+        assert_ne!(slow.buffer().unwrap().address, address);
+        assert_eq!(
+            manager.stats().unwrap().reserved_bytes,
+            2 * page_round(19).unwrap()
+        );
+        slow.release().unwrap();
+        fast.release().unwrap();
+    });
+    manager.close(Instant::now() + EVENTUAL_PROGRESS).unwrap();
+    assert_eq!(UNMAPS.load(Ordering::Acquire), 2);
+}

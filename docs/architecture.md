@@ -100,7 +100,11 @@ drop. The typed `progress_fallback_interval` corresponds to TENT's
 corresponds to `notification/rpc_fallback`. A sweep probes retired owners independently and skips permanently
 quarantined IDs. A source staging session continues to own its chunk and CUDA
 loan after its socket disappears. Only a confirmed event and restored context
-return the chunk. See [batch progress](async-batches.md#explicit-progress).
+return the chunk. Incoming staging uses its own bounded source workers so a
+blocked Delegate leaves Describe and credit traffic serviceable. A retained
+session also keeps its admission slot. The held-Delegate and distinct-location
+Pin controls cover these boundaries.
+[Source staging](staging.md#remote-delegate-progress), [batch progress](async-batches.md#explicit-progress).
 
 Notification routing visits installed channels before the control RPC. TCP and
 self share the bounded control inbox. An async hook retains a charged set of

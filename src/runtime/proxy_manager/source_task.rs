@@ -73,20 +73,28 @@ impl ProxyManager {
         request: &Request,
         memory: &RegisteredMemory,
         hello: &[u8; PIN_HELLO_SIZE],
+        on_drained: impl FnOnce(),
     ) -> Result<()> {
         let mut reply_epoch = source.epoch;
         let result = self.pin_remote(channel, source, request, memory, hello, &mut reply_epoch);
-        if let Err(error) = &result {
-            if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
-                // Preserve the native error if the error receipt itself is lost.
-                let _ = channel.reply(
-                    reply_epoch,
-                    crate::runtime::control_plane::error_status(error),
-                    0,
-                );
+        // A peer can issue its next Pin as soon as it reads the terminal
+        // reply. Publish the recovered capacity before that reply is visible.
+        if !matches!(result, Err(Error::Unquiesced { .. })) {
+            on_drained();
+        }
+        match result {
+            Ok((remote, total)) => remote.respond(channel, Operation::Unpin, total, 0),
+            Err(error) => {
+                if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
+                    let _ = channel.reply(
+                        reply_epoch,
+                        crate::runtime::control_plane::error_status(&error),
+                        0,
+                    );
+                }
+                Err(error)
             }
         }
-        result
     }
 
     fn pin_remote(
@@ -97,7 +105,7 @@ impl ProxyManager {
         memory: &RegisteredMemory,
         hello: &[u8; PIN_HELLO_SIZE],
         reply_epoch: &mut SourceEpoch,
-    ) -> Result<()> {
+    ) -> Result<(RemoteStageOperation, usize)> {
         if !source.remote_staging {
             return Err(Error::Unavailable("remote staging is not enabled"));
         }
@@ -370,6 +378,6 @@ impl ProxyManager {
         }
         result?;
         self.completed_remote(Operation::Unpin);
-        remote.respond(channel, Operation::Unpin, total, 0)
+        Ok((remote, total))
     }
 }

@@ -33,7 +33,8 @@ can be cancelled; a running copy continues through drain.
 
 `close_source` and `close_requester` leave the pool to the other direction. Full
 `TransferEngine::close` drains both, then frees idle chunks; a timeout permits
-another wait and uncertain cleanup stays retained. `EngineStats.staging` reports
+another wait and uncertain cleanup stays retained. Pool close fences new pins
+before waiting for a requester shard, including when that wait times out. `EngineStats.staging` reports
 chunk states and allocation, reuse and byte counters. Byte counters track local
 copy progress, not batch completion.
 
@@ -180,6 +181,23 @@ defers reuse of that slot while other CROSS owners progress. TENT uses
 asynchronous RPC callbacks (`RemoteStageOperation::tryTakeResult`); OrbitTE uses
 scoped query exchanges on its single session connection.
 
+TENT runs Delegate on the RPC blocking executor so unrelated control requests
+can finish. With incoming remote staging enabled, OrbitTE gives each admitted
+Pin connection one source session worker through Unpin or disconnect.
+The control worker reads the full Pin hello, checks the epoch, range and
+permissions, and hands over the original socket, deadline, registration and
+source admission. Describe and credit messages use the ordinary control workers.
+The requester shards are independent, including for a self-peer transfer.
+
+The source has `min(handler_threads, staging_chunk_count)` session slots.
+A full set rejects a further Pin with `ResourceExhausted` before allocating
+staging memory. The session worker performs native allocation, Delegate and
+failure drain synchronously. It returns its slot before replying to a clean
+Unpin or error. An unconfirmed drain keeps the slot, source admission and
+backing charged. Engine destruction stops the sockets and joins both sets of
+workers. The [installed control gate](qualification.md#verification-queue)
+exercises this boundary on a GPU.
+
 ### Socket progress
 
 `TcpTask` owns a TCP request frame, partial reply, bounded payload snapshot,
@@ -265,19 +283,21 @@ native failure only after the lane finishes. TENT's
 
 | OrbitTE owner | Frozen TENT owner |
 | --- | --- |
-| `ProxyManager` chunk pool | `ProxyManager` and per-location `StageBuffers` |
+| `ProxyManager` chunk pool | `allocateStageBuffers`, `pinStageBuffer`, `unpinStageBuffer`, `freeStageBuffers`. OrbitTE claims a slot under the pool lock and runs native calls outside it. Concurrent locations share the engine-wide physical budget. |
 | `cuda/staging.rs`, `cuda/stream.rs` | Local staged copy and stream completion |
-| `remote_stage_operation.rs` | `RemoteStageOperation` (observed result versus unconfirmed operation) |
+| `control_plane/source_sessions.rs`, `source_task.rs` | `ControlService::onPinStageBuffer` / `onUnpinStageBuffer` run inline in TENT, while `onDelegate` is offloaded. OrbitTE moves the scoped connection to a bounded source worker so blocking source work leaves control RPCs serviceable. |
+| `remote_stage_operation.rs` and the source slot drain | `RemoteStageOperation::tryTakeResult`, `abandonForCleanup` and `flushPendingCleanups`. Disconnect ends admission for the session. Only a native completion or confirmed recovery drain can release its bytes. |
 | `source_task.rs`, `requester_task.rs` | `transferEventLoop` rings of up to 16 stage buffers |
 | `staging_task.rs::StagingTask`, `worker_shard.rs` | Eight shared worker shards |
 | `stage_registration.rs::PinnedStage`, `StageBufferCache` | `StageBufferCache` private registrations |
 | `rdma_transport/transfer.rs::RdmaTransfer` | Submitted internal batch and `progressBatch` |
 
-Differences: OrbitTE uses one global pool bound instead of per-location budgets,
-starts its eight shards lazily, and makes control sockets, setup, finish,
-connection acquisition, MR publication waits and QP retirement pollable where
-TENT is synchronous. Pin, native provider calls, copyback, failure drain and
-source handlers stay synchronous, as in TENT.
+Requester shards start lazily. Control socket exchanges, setup and finish,
+connection acquisition, MR publication waits and QP retirement can yield.
+Pin allocation, provider calls, copyback and failure drain stay synchronous on
+their owning worker. Private stage registrations remain outside Describe.
+TENT uses location pools and raw addresses for Pin/Unpin. OrbitTE checks the
+session, range, generation and phase before a slot can be reused.
 
 ## Validation
 

@@ -2,6 +2,8 @@ mod accept;
 #[cfg(feature = "cuda")]
 mod connection;
 #[cfg(feature = "cuda")]
+mod source_sessions;
+#[cfg(feature = "cuda")]
 pub(crate) use connection::Connecting;
 
 use std::io::{self, Read, Write};
@@ -527,6 +529,8 @@ pub(crate) struct ControlService {
     acceptor: Option<JoinHandle<()>>,
     accept_wake: mio::Waker,
     workers: Vec<JoinHandle<()>>,
+    #[cfg(feature = "cuda")]
+    session_workers: Vec<JoinHandle<()>>,
 }
 
 impl ControlService {
@@ -552,8 +556,23 @@ impl ControlService {
             acceptor: None,
             accept_wake,
             workers: Vec::new(),
+            #[cfg(feature = "cuda")]
+            session_workers: Vec::new(),
+        };
+        #[cfg(feature = "cuda")]
+        let sessions = if source.remote_staging {
+            Some(source_sessions::Sessions::start(
+                &source,
+                &service.stopping,
+                config.handler_threads.min(config.staging_chunk_count),
+                &mut service.session_workers,
+            )?)
+        } else {
+            None
         };
         for index in 0..config.handler_threads {
+            #[cfg(feature = "cuda")]
+            let sessions = sessions.clone();
             let receiver = Arc::clone(&receiver);
             let source = Arc::clone(&source);
             let stopping = Arc::clone(&service.stopping);
@@ -577,14 +596,20 @@ impl ControlService {
                         if stopping.load(Ordering::Acquire) {
                             return;
                         }
-                        let mut channel = ControlChannel {
+                        let channel = ControlChannel {
                             stream,
                             deadline,
                             stopping: Some(Stop::Source(&stopping)),
                             nonblocking: false,
                         };
                         // A failed connection is isolated and closed, never replayed.
-                        let _ = serve(&mut channel, &source, max_bytes);
+                        let _ = serve(
+                            channel,
+                            &source,
+                            max_bytes,
+                            #[cfg(feature = "cuda")]
+                            sessions.as_ref(),
+                        );
                     }
                 })?;
             service.workers.push(worker);
@@ -630,10 +655,21 @@ impl Drop for ControlService {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
+        // All Pin senders are gone. Running source sessions observe the same
+        // stop flag and drain their native owners before the last join.
+        #[cfg(feature = "cuda")]
+        for worker in self.session_workers.drain(..) {
+            let _ = worker.join();
+        }
     }
 }
 
-fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usize) -> Result<()> {
+fn serve(
+    mut channel: ControlChannel<'_>,
+    source: &Arc<Source>,
+    max_bytes: usize,
+    #[cfg(feature = "cuda")] sessions: Option<&source_sessions::Sessions>,
+) -> Result<()> {
     let mut bytes = [0; REQUEST_SIZE];
     channel.read_exact(&mut bytes)?;
     let request = match Request::decode(&bytes) {
@@ -658,7 +694,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         Operation::CreditSync | Operation::CreditClose
     ) {
         if let Err(error) = crate::runtime::receiver_credit::protocol::serve(
-            channel,
+            &mut channel,
             source,
             request.operation == Operation::CreditClose,
         ) {
@@ -674,7 +710,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             .nvlink
             .as_ref()
             .ok_or(Error::Unavailable("NVLink is not configured"))?
-            .serve_close(channel, source.epoch, &request);
+            .serve_close(&mut channel, source.epoch, &request);
         #[cfg(not(feature = "cuda"))]
         let result: Result<()> = Err(Error::Unavailable("build with --features cuda"));
         if let Err(error) = result {
@@ -689,9 +725,18 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             return Ok(());
         }
     };
+    #[cfg(feature = "cuda")]
+    if matches!(request.operation, Operation::PinRead | Operation::PinWrite) {
+        if let Some(sessions) = sessions {
+            let memory = match resolve_payload(source, &request, max_bytes) {
+                Ok((memory, _, _)) => memory,
+                Err(error) => return channel.reply(source.epoch, error_status(&error), 0),
+            };
+            return sessions.submit(channel, source.epoch, request, pin_hello, memory, admission);
+        }
+    }
+    let channel = &mut channel;
     let mut retained_memory = None;
-    #[allow(unused_mut)]
-    let mut proxy_reply = false;
     let prepared = (|| {
         if request.operation == Operation::Describe {
             let (metadata, regions) = source.describe()?;
@@ -768,24 +813,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
             channel.reply(source.epoch, 0, 0)?;
             return Ok(());
         }
-        let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
-        let length = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
-        if length > max_bytes {
-            return Err(Error::ResourceExhausted);
-        }
-        let memory = source.registry.get(request.region)?;
-        checked_range(offset, length, memory.len())?;
-        if !memory.0.descriptor.permission.allows(matches!(
-            request.operation,
-            Operation::TcpWrite
-                | Operation::RdmaWrite
-                | Operation::RdmaWriteSlices
-                | Operation::NvlinkWrite
-                | Operation::NvlinkWriteCached
-                | Operation::PinWrite
-        )) {
-            return Err(Error::PermissionDenied);
-        }
+        let (memory, offset, length) = resolve_payload(source, &request, max_bytes)?;
         retained_memory = Some(memory);
         let memory = retained_memory
             .as_ref()
@@ -793,12 +821,7 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         match request.operation {
             Operation::PinRead | Operation::PinWrite => {
                 #[cfg(feature = "cuda")]
-                {
-                    proxy_reply = true;
-                    source
-                        .proxy
-                        .serve_remote(channel, source, &request, memory, &pin_hello)
-                }
+                return Err(Error::Unavailable("remote staging is not enabled"));
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
             }
@@ -845,14 +868,40 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         if matches!(error, Error::Unquiesced { .. }) {
             // A native failure cannot release source admission or its actual
             // registered backing. Source close remains pending, even after EOF.
-            std::mem::forget((retained_memory, Arc::clone(source), admission));
+            std::mem::forget((retained_memory, admission));
         }
         // After an I/O error the connection cannot safely carry another frame.
-        if !proxy_reply && !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
+        if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
             channel.reply(source.epoch, error_status(&error), 0)?;
         }
     }
     Ok(())
+}
+
+fn resolve_payload(
+    source: &Source,
+    request: &Request,
+    max_bytes: usize,
+) -> Result<(crate::RegisteredMemory, usize, usize)> {
+    let offset = usize::try_from(request.offset).map_err(|_| Error::InvalidRange)?;
+    let length = usize::try_from(request.length).map_err(|_| Error::InvalidRange)?;
+    if length > max_bytes {
+        return Err(Error::ResourceExhausted);
+    }
+    let memory = source.registry.get(request.region)?;
+    checked_range(offset, length, memory.len())?;
+    if !memory.0.descriptor.permission.allows(matches!(
+        request.operation,
+        Operation::TcpWrite
+            | Operation::RdmaWrite
+            | Operation::RdmaWriteSlices
+            | Operation::NvlinkWrite
+            | Operation::NvlinkWriteCached
+            | Operation::PinWrite
+    )) {
+        return Err(Error::PermissionDenied);
+    }
+    Ok((memory, offset, length))
 }
 
 #[cfg(test)]

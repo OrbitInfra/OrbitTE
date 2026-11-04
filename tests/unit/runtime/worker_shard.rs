@@ -277,3 +277,38 @@ fn close_and_lazy_admission_have_one_order_and_never_restart_a_closed_pool() {
         assert!(closed.opened_worker_shards <= 1);
     }
 }
+
+#[test]
+fn proxy_close_fences_new_pins_while_a_shard_still_owns_work() {
+    let pool = super::super::ProxyManager::new(8, 1, crate::StagingLocation::Any).unwrap();
+    let (started, running) = mpsc::sync_channel(0);
+    let (resume, wait) = mpsc::sync_channel(0);
+    let handle = pool
+        .workers
+        .submit(
+            TransferOp::Read,
+            Instant::now() + EVENTUAL_PROGRESS,
+            Arc::new(AtomicBool::new(false)),
+            move || {
+                started.send(()).unwrap();
+                wait.recv().unwrap();
+                (Ok(()), RemoteEffect::None)
+            },
+        )
+        .unwrap();
+    running.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    let closing = pool.close(Instant::now());
+    let calls = AtomicUsize::new(0);
+    let late_pin = pool.pin_stage_buffer(1, None, None, |_| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        Err(Error::ResourceExhausted)
+    });
+    resume.send(()).unwrap();
+    handle.finish(false).0.unwrap();
+    assert!(matches!(closing, Err(Error::Timeout)));
+    assert!(matches!(late_pin, Err(Error::RequesterClosed)));
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    pool.close(Instant::now() + EVENTUAL_PROGRESS).unwrap();
+    let stats = pool.stats().unwrap();
+    assert_eq!((stats.worker_shards, stats.reserved_chunks), (0, 0));
+}
