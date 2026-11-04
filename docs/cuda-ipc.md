@@ -236,7 +236,10 @@ authentication. The protocol is OrbitTE's own, not TENT wire compatibility.
 
 TENT optionally registers local host buffers (`transports/nvlink/host_register`)
 but relocates only CUDA buffers remotely; OrbitTE keeps that split, so remote
-grants are GPU-only. Legacy IPC remote host exports and exporter-crash safety remain open. See the
+grants are GPU-only. Remote host-NUMA exports use MNNVL/EGM. The cooperative
+profile requires exporters to keep the allocation alive until every importer
+has closed it. An unconfirmed close retains the export. Recovery after abrupt
+exporter death would need a separate lifetime guarantee. See the
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
 ## Installed qualification

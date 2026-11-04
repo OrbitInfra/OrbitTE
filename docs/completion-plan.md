@@ -43,7 +43,7 @@ artifacts and hardware profiles.
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Complete at source level |
 | P4 | Host RDMA, endpoints and multirail foundation | P2 | Source and bounded RoCE profile accepted; physical and fabric gates unqualified |
-| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Bounded GPU Direct, IPC and staging profiles accepted with limits; full P5 open |
+| P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Complete at source level for the frozen cooperative profile. Current installed GPU/RDMA profiles remain in the verification queue |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | Planned |
@@ -84,8 +84,9 @@ storage and CUDA, and R1d covers HP-TCP, ordinary TCP and observability.
 The [release delta](tent-parity.md#v0314-delta) names the controls for each change.
 Installed GPU and RNIC profiles remain in the verification queue.
 
-S15 implements capability-gated GPU source QP/MR reuse. The ProxyManager
-resource boundaries and mixed-batch reconciliation remain open. S15b adds an
+S15 completes the P5 source work for cooperative peers, including opt-in GPU
+source QP/MR reuse, ProxyManager source-session ownership and ordered mixed
+direct/staged batches. The hardware verification queue remains open. S15b is an
 OrbitTE local CUDA copy engine for OrbitKV, with event-completed copies on
 the caller's stream, strided and batched descriptors, and a kernel for
 fragmented batches. Its interface awaits the OrbitKV consumer specification.
@@ -266,16 +267,18 @@ Done:
 | P5.5a Local staging chunks | Accepted (24 cases) | [local chunks](qualification.md#local-cuda-staging-chunks) |
 | P5.5 Source resource and control boundaries | Implemented; installed profile unqualified. Source session isolation, bounded Pin capacity, drain and quarantine follow the [staging contract](staging.md#remote-delegate-progress). | [Verification queue](qualification.md#verification-queue) |
 | P5.5b Remote staging | Serial (16 cases) and ≤16-slot pipeline (24 cases) accepted; later requester ring, shard, event-loop, concurrent CROSS, Delegate query and pollable setup/finish work source-accepted only | [serial](qualification.md#serial-remote-cuda-staging), [pipeline](qualification.md#bounded-remote-cuda-pipeline) |
-| Mixed direct/staged batches, per-request remote staging, GPU and pinned producer readiness | Implemented | [mixed](qualification.md#mixed-gpu-batches), [remote selection](qualification.md#per-request-remote-staging), [readiness](qualification.md#cuda-producer-readiness) |
+| Mixed direct/staged batches, per-request remote staging, GPU and pinned producer readiness | Implemented; installed profile unqualified | [mixed](qualification.md#mixed-gpu-batches), [remote selection](qualification.md#per-request-remote-staging), [readiness](qualification.md#cuda-producer-readiness) |
 
-Open:
+P5 is complete at source level for the frozen CPU/NVIDIA cooperative profile.
+Mixed CUDA paths preserve ordered handoffs even when the outer ranges abut.
+GPU source QP/MR reuse requires explicit opt-in and hardware key revocation.
+Legacy NVLink IPC covers remote device allocations and requires the exporter
+to remain alive until importers close. Remote host-NUMA exports use MNNVL/EGM.
+Legacy remote host export and recovery after exporter death remain outside
+this source-level claim. See [CUDA IPC scope](cuda-ipc.md#correspondence-to-tent).
 
-- [x] GPU source QP/MR reuse with per-grant hardware revocation (B04). Implemented; installed profile unqualified.
-- [ ] Legacy IPC remote host exports; exporter-crash
-  safety (currently unqualified).
-- [ ] Reconcile mixed direct/staged batches for the P5 source exit.
-- [ ] Installed qualification of the current build for every implemented-only
-  row above, plus native GPU fault injection.
+Installed qualification remains open for every implemented-only row and for
+native GPU fault injection. See the [verification queue](qualification.md#verification-queue).
 
 Exit: full device byte/sentinel assertions, independent producer/consumer
 processes, CUDA/GDR/NVLink/MNNVL profile tests, context and copy failures,

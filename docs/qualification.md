@@ -34,7 +34,7 @@ external output directory; failed runs are kept.
 | Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
 | Legacy NVLink single small copy and exact context restoration | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --toolchain stable --output "$ART"`. Run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbitte-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN" --mode sync-healthy --memory device --payload 65536`. Repeat with `--memory host` and a fresh output directory. | Guarded READ/WRITE, native copy, device drain and matching caller bindings. |
 | CUDA IPC grouped completion, stream pool, event progress, native batch copy and cache reclamation | Implemented | `nvlink_run.py` batch and cache modes ([recipe](cuda-ipc.md#installed-qualification)) | [Cache](#bounded-cross-submission-cuda-ipc-cache), [subbatches](#bounded-cuda-ipc-subbatches) |
-| Mixed GPU batches, per-request remote staging, GPU and pinned producer readiness | Implemented | `hardware_peer` GPU consumer ([RDMA/CUDA](rdma-cuda.md#gpudirect-rdma-ownership)) | [Mixed batches](#mixed-gpu-batches), [readiness](#cuda-producer-readiness) |
+| Mixed GPU Direct and staged batches, producer readiness | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer mixed-gpu --toolchain stable --output "$ART"`. Run `python3 -B tests/hardware/run.py --profile "$MIXED_GPU_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbitte-mixed-gpu" --output "$RUN"`. Repeat with Rust 1.85.0 in a fresh directory. | [Two-host profile and CPU controls](#mixed-gpu-batches), [producer events](#cuda-producer-readiness) |
 | CUDA and custom topology, bandwidth-aware and weighted rails, effective link rate, priority, promotion and shared slots, transport selection, QoS and credits on RDMA | Implemented | Installed host and GPU consumers on multi-RNIC hosts, plus matched performance | [Bandwidth](#rdma-bandwidth-selection), [priority](#rdma-request-priority) |
 | Host-shared priority slots, exact NIC slice accounting and automatic receiver credits | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/quota_run.py --artifact "$ART" --nic "$RNIC" --nic-lock "$RNIC_LOCK" --output "$RUN"` | Two packaged processes on a locked RNIC, guarded READ/WRITE, sender and NIC drain |
 | Named NIC masks, endpoint QP pools, merged owners and deadline drops on two physical RNICs | Implemented, installed profile unqualified | Build with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `python3 tests/hardware/selector_run.py --profile "$TWO_RNIC_HOST_PROFILE" --artifact "$ART" --output "$RUN"` | [Selector controls](#transport-policy-selection) |
@@ -224,6 +224,22 @@ controls establish source behavior, not native DMA or a throughput improvement.
 Current installed v21 execution and full P5 remain unqualified.
 
 ## Mixed GPU batches
+
+The CUDA and verbs shims exercise adjacent GPU Direct ranges on opposite sides
+of a held staging operation. They check both directions, the completed prefix,
+source and destination guards, alias cancellation, notification delivery and
+the physical owners retained after an uncertain event. The producer-event
+control covers explicit remote staging over TCP and RDMA.
+
+The queued installed gate uses the existing SSH supervisor with two inventoried
+hosts, distinct GPU UUIDs and the GPU/RNIC locks. Set the profile's `runner`
+to `orbitte-mixed-gpu`. Each case names its `source` and `requester`, sets both
+`source_kind` and `requester_kind` to `cuda:0` and `transport` to `rdma`.
+Use `tcp-local`, `tcp-pin` and `rdma-pin` as `staged_leg` in separate cases. Each peer checks its entire GPU allocation. Each direction moves
+14 bytes over GPU Direct and 13 through the staged leg. The requester checks
+native completion bytes and the source checks private GPU grant creation and
+close. Both check staging receipts and retained resources. This profile awaits
+installed verification.
 
 Source `5bdf4f2` checks RDMA readiness once per submission, using the transport's
 own retained-resource state rather than a full statistics snapshot. Per-request
