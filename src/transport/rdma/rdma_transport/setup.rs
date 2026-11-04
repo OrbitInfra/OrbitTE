@@ -42,7 +42,6 @@ pub(crate) struct RdmaSetup {
     wire: Request,
     epoch: SourceEpoch,
     concurrency: usize,
-    local_paths: Vec<NicPath>,
     remote_paths: Vec<NicPath>,
     remote_width: usize,
     phase: Phase,
@@ -77,14 +76,13 @@ impl RdmaSetup {
         } else {
             Operation::RdmaWriteSlices
         };
+        transport.request_paths(request.local.location()?.location, &request.selection)?;
         Ok(Self {
             operation,
             request: request.clone(),
             wire,
             epoch,
             concurrency,
-            local_paths: transport
-                .request_paths(request.local.location()?.location, &request.selection)?,
             remote_paths: Vec::new(),
             remote_width: 0,
             phase: Phase::Request,
@@ -309,10 +307,14 @@ impl RdmaSetup {
                     64
                 },
             );
+        // The peer path exchange can span local port recovery. Select against
+        // the current local PD/route and the pinned remote reply, under the original mask.
+        let location = self.request.local.location()?.location;
+        let local_paths = transport.request_paths(location, &self.request.selection)?;
         let rails = &transport.workers.monitor.rails;
         let (ready, healthy) = rails.mask(
             self.wire.epoch,
-            &self.local_paths,
+            &local_paths,
             &self.remote_paths,
             rails.now(),
         )?;
@@ -343,14 +345,12 @@ impl RdmaSetup {
         } else {
             ready
         };
-        let location = self.request.local.location()?.location;
         let allocation =
             transport.allocate_slices(self.request.length, block, count, location, mask)?;
         for (index, selection) in allocation.enumerate() {
             let offset = index * block;
             let length = selection.length();
-            let local = self
-                .local_paths
+            let local = local_paths
                 .iter()
                 .find(|path| path.nic_id == selection.device_id())
                 .ok_or(Error::Internal("RDMA selector returned a masked NIC path"))?;

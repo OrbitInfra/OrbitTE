@@ -4,6 +4,8 @@
 
 use crate::{Error, Result};
 
+#[cfg(feature = "rdma-adaptive")]
+pub mod adaptive_congestion_control;
 mod buffers;
 mod bw_arbitration;
 mod config;
@@ -38,7 +40,7 @@ pub use quota::{NicLoadStats, SchedulingParams};
 pub(crate) use rdma_transport::RdmaTransport;
 #[cfg(feature = "cuda")]
 pub(crate) use rdma_transport::{RdmaSetup, RdmaTransfer};
-pub use stats::RdmaStats;
+pub use stats::{QpReadDepths, RdmaStats};
 
 use context::RdmaContext;
 use grant::{Buffer, GrantResources, RdmaGrant, Staging};

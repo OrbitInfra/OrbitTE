@@ -1,7 +1,18 @@
+/// Capabilities and effective READ depths of the most recently connected local RC QP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QpReadDepths {
+    pub supports_atomics: bool,
+    pub initiator_limit: u8,
+    pub responder_limit: u8,
+    pub initiator: u8,
+    pub responder: u8,
+}
+
 /// A retained endpoint is charged and blocks further RDMA admission. It can
 /// still own pinned pages or RNIC resources after native teardown failed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RdmaStats {
+    pub last_connected_qp: Option<QpReadDepths>,
     /// Pair-level failures, trial admissions and confirmed recoveries.
     pub rail_errors: u64,
     pub rail_probes: u64,
@@ -114,6 +125,8 @@ pub struct RdmaStats {
     /// its parent borrow charged in persistent_source_mrs without a dereg attempt.
     pub retained_source_mrs: usize,
     pub completed_reads: u64,
+    /// Physical SQ completions observed for payload WRs, including error receipts.
+    pub payload_send_cqes: u64,
     pub completed_writes: u64,
     pub completed_read_bytes: u64,
     pub completed_write_bytes: u64,

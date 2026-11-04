@@ -3,6 +3,18 @@
 use super::device::{endpoint_address, query_descriptor};
 use super::*;
 
+// The protocol grants only READ/WRITE authority, including on atomic-capable hardware.
+pub(super) fn grant_access(permission: u32) -> u32 {
+    let mut access = 0;
+    if permission & 1 != 0 {
+        access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+    }
+    if permission & 2 != 0 {
+        access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+    }
+    access
+}
+
 pub(super) unsafe extern "C" fn open(
     handles: *mut ConnectionHandles,
     memory: *mut MemoryHandles,
@@ -31,13 +43,6 @@ pub(super) unsafe extern "C" fn open(
         if h.cq.is_null() || h.receive_cq.is_null() {
             return libc::EINVAL;
         }
-        let mut remote_access = 0;
-        if permission & 1 != 0 {
-            remote_access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
-        }
-        if permission & 2 != 0 {
-            remote_access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
-        }
         let code = prepare_grant(handles, memory, device, buffer, length, permission);
         if code != 0 {
             return code;
@@ -46,7 +51,7 @@ pub(super) unsafe extern "C" fn open(
         init.send_cq = h.cq.cast();
         init.recv_cq = h.receive_cq.cast();
         init.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
-        init.sq_sig_all = 1;
+        init.sq_sig_all = 0;
         init.cap.max_send_wr = max_send_wr;
         init.cap.max_recv_wr = max_recv_wr;
         init.cap.max_send_sge = 1;
@@ -70,7 +75,7 @@ pub(super) unsafe extern "C" fn open(
         let mut qp_attr: ffi::ibv_qp_attr = std::mem::zeroed();
         qp_attr.qp_state = ffi::ibv_qp_state::IBV_QPS_INIT;
         qp_attr.port_num = port;
-        qp_attr.qp_access_flags = remote_access;
+        qp_attr.qp_access_flags = grant_access(permission);
         let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
             | ffi::ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
             | ffi::ibv_qp_attr_mask::IBV_QP_PORT
@@ -115,7 +120,7 @@ pub(super) unsafe extern "C" fn connect(
         attr.path_mtu = u32::from(local.mtu.min(remote.mtu));
         attr.dest_qp_num = remote.qpn;
         attr.rq_psn = remote.psn;
-        attr.max_dest_rd_atomic = 1;
+        attr.max_dest_rd_atomic = h.read_depth.responder;
         attr.min_rnr_timer = 12;
         attr.ah_attr.sl = service_level;
         attr.ah_attr.dlid = remote.lid;
@@ -144,7 +149,7 @@ pub(super) unsafe extern "C" fn connect(
         attr.retry_cnt = 7;
         attr.rnr_retry = 7;
         attr.sq_psn = local.psn;
-        attr.max_rd_atomic = 1;
+        attr.max_rd_atomic = h.read_depth.initiator;
         let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
             | ffi::ibv_qp_attr_mask::IBV_QP_TIMEOUT
             | ffi::ibv_qp_attr_mask::IBV_QP_RETRY_CNT
@@ -227,7 +232,11 @@ pub(super) unsafe extern "C" fn post(
             } else {
                 ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
             };
-            wr.send_flags = ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
+            wr.send_flags = if request.signaled {
+                ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
+            } else {
+                0
+            };
             wr.wr.rdma.remote_addr = remote;
             wr.wr.rdma.rkey = rkey;
             wrs.push(wr);

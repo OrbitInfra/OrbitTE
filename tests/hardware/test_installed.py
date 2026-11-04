@@ -72,6 +72,24 @@ class InstalledHostEvidence(unittest.TestCase):
             with self.subTest(control=name), self.assertRaises(ValueError):
                 installed.verify(self.profile, self.case, evidence)
 
+    def test_selective_gate_rejects_false_cqe_depth_or_capability_evidence(self):
+        self.case.update(mode='installed-selective', parents=1, num_lanes=1, mask=2,
+                         payload=8 * self.case['block'] + 17, non_atomic=True)
+        evidence = self.evidence()
+        for role, result in evidence.items():
+            result['stdout.log'] = result['stdout.log'].replace('"opened_qps": 6', '"opened_qps": 1')
+            for r in range(3):
+                n = r + 1 if role == 'requester' else 0
+                row = dict(round=r, wrs=8*n, cqes=3*n, atomics=False, init_limit=0, resp_limit=32, init=1, resp=32)
+                result['stdout.log'] += '\nORBITTE_SELECTIVE ' + json.dumps(row)
+        installed.verify(self.profile, self.case, evidence)
+        for old, new in [('"cqes": 3', '"cqes": 8'), ('"wrs": 8', '"wrs": 3'), ('"atomics": false', '"atomics": true'),
+                         ('"init": 1', '"init": 0'), ('"resp": 32', '"resp": 16'), ('"round": 1', '"round": 0')]:
+            bad = copy.deepcopy(evidence)
+            bad['requester']['stdout.log'] = bad['requester']['stdout.log'].replace(old, new)
+            with self.subTest(change=new), self.assertRaises(ValueError):
+                installed.verify(self.profile, self.case, bad)
+
     def test_selector_gate_requires_exact_pool_indices_and_per_rail_bytes(self):
         self.case.update(mode='installed-selector', parents=1, num_lanes=1)
         evidence = self.evidence()

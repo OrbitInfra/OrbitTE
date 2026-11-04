@@ -278,3 +278,59 @@ fn concurrent_workers_share_exactly_one_trial_until_its_own_receipt() {
     finish(winner, true, now);
     assert_eq!(spans(&rails), (0, 1, 1, 1));
 }
+
+#[test]
+fn r1b_wildcard_prefers_the_mapped_peer_and_only_a_matching_flush_cancels_a_trial() {
+    let json = r#"{"all":[{"local":"L","remote":"a"},{"local":"L","remote":"b"}],"direct":[{"local":"L","remote":"a"},{"local":"L","remote":"b"}]}"#;
+    let rails = monitor(RdmaConfig {
+        rail_topology: Some(json.into()),
+        rail_error_threshold: 1,
+        rail_probe_interval: Duration::from_secs(1),
+        ..Default::default()
+    });
+    let local = path(0, "L");
+    let remote = [path(1, "a"), path(2, "b")];
+    let t = Instant::now();
+    rails.set_time(t);
+    let flush = || {
+        Err(Error::Backend {
+            operation: "RDMA work completion",
+            code: super::super::sys::FLUSHED as i32,
+        })
+    };
+    let (r, old) = rails.admit(PEER, &local, &remote, t).unwrap();
+    assert_eq!(r.name, "b");
+    let (_, root) = rails.admit(PEER, &local, &remote, t).unwrap();
+    finish(root, false, t);
+    assert_eq!(rails.admit(PEER, &local, &remote, t).unwrap().0.name, "a");
+    let t = t + Duration::from_secs(2);
+    rails.set_time(t);
+    // A healthy alternative continues to outrank a half-open mapped peer.
+    assert_eq!(rails.admit(PEER, &local, &remote, t).unwrap().0.name, "a");
+    let (_, probe) = rails.admit(PEER, &local, &remote[1..], t).unwrap();
+    old.receipt(&flush());
+    assert!(rails.admit(PEER, &local, &remote[1..], t).is_err());
+    probe.receipt(&flush());
+    let t = t + Duration::from_secs(1);
+    rails.set_time(t);
+    let (_, replacement) = rails.admit(PEER, &local, &remote[1..], t).unwrap();
+    replacement.receipt(&Ok(()));
+    assert_eq!(spans(&rails), (0, 1, 2, 1));
+    rails.port(0, 1, false, t);
+    assert_eq!(
+        rails
+            .mask(PEER, std::slice::from_ref(&local), &remote, t)
+            .unwrap(),
+        (0, 0)
+    );
+    assert!(matches!(
+        rails.admit(PEER, &local, &remote, t),
+        Err(Error::Unavailable(_))
+    ));
+    let discovery = monitor(RdmaConfig::default());
+    let reversed = [path(2, "other"), path(1, "L")];
+    assert_eq!(
+        discovery.admit(PEER, &local, &reversed, t).unwrap().0.name,
+        "L"
+    );
+}

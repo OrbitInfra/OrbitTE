@@ -240,12 +240,25 @@ arrays.
 `SendQueue` admits at most `max_send_wr` unresolved WRs across all work on a QP,
 also charging the aggregate CQ budget. Payload, MW bind and completion SEND share
 it. A failed post returns only a proven unaccepted suffix; an unknown post keeps
-the whole possible debt and fences admission, and a validated CQE repays its exact
-WR once. Dropping a work handle never returns SQ credit. CQ lookup resolves the
+the whole possible debt and fences admission. An ordered RC CQE repays its
+tail and the consecutive unsignaled WRs in the same posted group. Each grant
+has its own ID range and each actual post ends in a signaled WR. A non-flush
+error preserves successful earlier WRs. A flush retires the prefix with zero
+successful bytes and cancels only its own rail probe. An uncertain WRITE keeps
+its original effect. The partial-post and guarded WRITE controls exercise these
+boundaries. Dropping a work handle never returns SQ credit. CQ lookup resolves the
 exact record before checking QPN, WR identity and operation, and native access
 follows grant → QP → context lock order. GPU source grants use a private PD and
 exact-range MR because PeerDirect cannot bind MWs; see
 [GPU ownership](rdma-cuda.md#gpudirect-rdma-ownership).
+
+The `rdma-adaptive` Cargo feature exposes the shared v0.3.14 congestion
+core. A device and each route have separate byte windows. A domain-local lock
+serializes reset and tick against concurrent feedback. Admission in enforce mode
+rolls back the device reservation if the route defers. Only an explicit receipt
+returns a permit’s charge. The moved/dropped permit control covers this
+difference from C++ move assignment. The TENT worker has no call site for this
+core and OrbitTE keeps the same integration boundary.
 
 ## QP receive ownership
 

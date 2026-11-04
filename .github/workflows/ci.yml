@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITTE_FEATURES: ${{ matrix.features }}
@@ -42,7 +42,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -97,6 +97,18 @@ jobs:
           trap 'rmdir "$standin"' EXIT
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --posix
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbitte-shm" --tmpfs "$standin"
+      - name: Repeat RDMA release controls with suite parallelism
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          filters=(r1b_ adaptive_congestion_control::tests:: poll_retirement_keeps_native_owners device_teardown_failures_are_retained partial_retirement_distinguishes_closed)
+          count=$("$binary" "${filters[@]}" --list | awk '/: test$/ {n++} END {print n+0}')
+          test "$count" -ge 15
+          for i in $(seq 1 50); do
+            RUST_TEST_THREADS=$(nproc) "$binary" "${filters[@]}" > "$RUNNER_TEMP/r1b.log" || { cat "$RUNNER_TEMP/r1b.log"; exit 1; }
+            grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
+          done
       - name: Repeat MNNVL fabric and EGM shim controls 50 times
         if: matrix.toolchain == 'stable' && (matrix.features == 'cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |

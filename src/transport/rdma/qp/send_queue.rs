@@ -54,8 +54,9 @@ impl SendQueue {
 
     pub(in crate::transport::rdma) fn reserve(
         &self,
-        requests: &[sys::WorkRequest],
+        requests: &mut [sys::WorkRequest],
         capacity: usize,
+        signal_interval: usize,
     ) -> Result<usize> {
         let mut state = self
             .state
@@ -85,6 +86,10 @@ impl SendQueue {
             {
                 return Err(Error::Protocol("RDMA duplicate SQ work identity"));
             }
+        }
+        let interval = signal_interval.clamp(1, (self.limit / 2).max(1));
+        for (i, request) in requests[..count].iter_mut().enumerate() {
+            request.signaled = (i + 1) % interval == 0 || i + 1 == count;
         }
         state
             .entries
@@ -173,32 +178,49 @@ impl SendQueue {
 
     pub(in crate::transport::rdma) fn complete(
         &self,
-        id: u64,
-        failed: bool,
+        prefix: &[sys::WorkRequest],
+        successful: usize,
         now: Instant,
     ) -> Result<()> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA SQ lock poisoned"))?;
-        let index = state
-            .entries
-            .iter()
-            .position(|entry| entry.id == id && entry.posted)
-            .ok_or(Error::Protocol("RDMA completion has no posted SQ owner"))?;
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        let entry = state.entries.swap_remove(index);
+        // One native post contains one grant's consecutive WR IDs. Validate the whole
+        // receipt before returning any SQ slots, including on a shared physical QP.
+        if prefix.is_empty()
+            || successful > prefix.len()
+            || !prefix.iter().all(|wr| {
+                state
+                    .entries
+                    .iter()
+                    .any(|e| e.posted && e.id == wr.id && e.length == u64::from(wr.length))
+            })
+        {
+            return Err(Error::Protocol("RDMA completion has no posted SQ owner"));
+        }
+        let first = prefix[0].id;
+        let last = prefix[prefix.len() - 1].id;
+        state.entries.retain(|e| !(first..=last).contains(&e.id));
+        let failed = successful < prefix.len();
         state.fenced |= failed;
-        usage.work_requests -= 1;
+        let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
+        usage.work_requests -= prefix.len();
         drop(usage);
         if let Some(info) = &self.bandwidth {
-            if failed && entry.length == 0 {
-                info.invalidate();
+            let (ok, errors) = prefix.split_at(successful);
+            let bytes =
+                |entries: &[sys::WorkRequest]| entries.iter().map(|r| u64::from(r.length)).sum();
+            if !ok.is_empty() {
+                info.ended(bytes(ok), true, now);
             }
-            info.ended(entry.length, !failed, now);
+            if failed {
+                let bytes = bytes(errors);
+                if bytes == 0 {
+                    info.invalidate();
+                }
+                info.ended(bytes, false, now);
+            }
         }
         Ok(())
     }

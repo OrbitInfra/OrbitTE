@@ -12,7 +12,10 @@ def main():
     parser.add_argument('--profile', type=Path, required=True, help='two-RNIC installed-host profile')
     parser.add_argument('--artifact', type=Path, required=True, help='build_installed.py host output')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--fault-netdev', help='exercise a real link down/up on this dedicated requester RoCE data interface')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--selective', action='store_true', help='check WR/CQE counts and QP depth clamps on each rail')
+    mode.add_argument('--non-atomic', action='store_true', help='require both hosts to report no HCA atomics')
+    mode.add_argument('--fault-netdev', help='exercise a real link down/up on this dedicated requester RoCE data interface')
     args = parser.parse_args()
     profile = json.loads(args.profile.read_text())
     if profile.get('runner') != 'orbitte-installed-host' or len(profile['rails']) != 2:
@@ -22,6 +25,10 @@ def main():
                              source_kind='cpu', requester_kind='cpu', transport='rdma', operation=op,
                              parents=1, block=65536, payload=262145, mask=3, num_lanes=1,
                              rdma_events=False) for op in ('read', 'write')]
+    if args.selective or args.non_atomic:
+        profile['cases'] = [dict(case, mode='installed-selective', mask=mask,
+                                 payload=8 * case['block'] + 17, non_atomic=args.non_atomic)
+                            for case in profile['cases'] for mask in (1, 2)]
     if args.fault_netdev:
         profile['cases'] = [dict(profile['cases'][0], mode='installed-rail-health',
                                  fault_netdev=args.fault_netdev, rdma_events=True)]

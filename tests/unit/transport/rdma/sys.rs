@@ -91,16 +91,19 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
     };
     let requests = [
         WorkRequest {
+            signaled: true,
             id: 4,
             offset: 0,
             length: 7,
         },
         WorkRequest {
+            signaled: true,
             id: 5,
             offset: 7,
             length: 9,
         },
         WorkRequest {
+            signaled: true,
             id: 6,
             offset: 16,
             length: 16,
@@ -129,78 +132,88 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
     assert_eq!((result.accepted, result.uncertain), (0, false));
     assert!(state.requests.is_empty());
     context.ops.post_send = Some(capture_post);
-    for write in [0, 1] {
-        for (code, bad_index, foreign_bad, bad_byte_offset, expected, uncertain) in [
-            (0, None, false, None, 3, false),
-            (libc::ENOMEM, Some(0), false, None, 0, false),
-            (libc::ENOMEM, Some(1), false, None, 1, false),
-            (libc::ENOMEM, Some(2), false, None, 2, false),
-            (libc::EIO, None, false, None, 0, true),
-            (libc::EIO, None, true, None, 0, true),
-            (
-                libc::EIO,
-                None,
-                false,
-                Some(std::mem::size_of::<ffi::ibv_send_wr>() * requests.len()),
-                0,
-                true,
-            ),
-            (libc::EIO, None, false, Some(1), 0, true),
-        ] {
-            state.result = code;
-            state.bad_index = bad_index;
-            state.foreign_bad = foreign_bad;
-            state.bad_byte_offset = bad_byte_offset;
-            assert_eq!(
-                // SAFETY: The test owns the QP, registration and call buffers and installs a
-                // synchronous capture callback for this verbs operation.
-                unsafe {
-                    post(
-                        &mut handles,
-                        &memory,
-                        requests.as_ptr(),
-                        requests.len(),
-                        bytes.as_ptr() as u64 + 16,
-                        32,
-                        0x123456789,
-                        0xabcdef,
-                        write,
-                        &mut result,
-                    )
-                },
-                code
-            );
-            assert_eq!((result.accepted, result.uncertain), (expected, uncertain));
-            assert_eq!(state.requests.len(), 3);
-            for (request, actual) in requests.iter().zip(&state.requests) {
+    for first_signaled in [true, false] {
+        let mut requests = requests;
+        requests[0].signaled = first_signaled;
+        for write in [0, 1] {
+            for (code, bad_index, foreign_bad, bad_byte_offset, expected, uncertain) in [
+                (0, None, false, None, 3, false),
+                (libc::ENOMEM, Some(0), false, None, 0, false),
+                (libc::ENOMEM, Some(1), false, None, 1, false),
+                (libc::ENOMEM, Some(2), false, None, 2, false),
+                (libc::EIO, None, false, None, 0, true),
+                (libc::EIO, None, true, None, 0, true),
+                (
+                    libc::EIO,
+                    None,
+                    false,
+                    Some(std::mem::size_of::<ffi::ibv_send_wr>() * requests.len()),
+                    0,
+                    true,
+                ),
+                (libc::EIO, None, false, Some(1), 0, true),
+            ] {
+                state.result = code;
+                state.bad_index = bad_index;
+                state.foreign_bad = foreign_bad;
+                state.bad_byte_offset = bad_byte_offset;
                 assert_eq!(
-                    actual,
-                    &SendRequest {
-                        id: request.id,
-                        opcode: if write == 0 {
-                            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
-                        } else {
-                            ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
-                        },
-                        flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
-                        address: bytes.as_ptr() as u64 + 16 + u64::from(request.offset),
-                        length: request.length,
-                        lkey: mr.lkey,
-                        remote_address: 0x123456789 + u64::from(request.offset),
-                        rkey: 0xabcdef
-                    }
+                    // SAFETY: The test owns the QP, registration and call buffers and installs a
+                    // synchronous capture callback for this verbs operation.
+                    unsafe {
+                        post(
+                            &mut handles,
+                            &memory,
+                            requests.as_ptr(),
+                            requests.len(),
+                            bytes.as_ptr() as u64 + 16,
+                            32,
+                            0x123456789,
+                            0xabcdef,
+                            write,
+                            &mut result,
+                        )
+                    },
+                    code
                 );
+                assert_eq!((result.accepted, result.uncertain), (expected, uncertain));
+                assert_eq!(state.requests.len(), 3);
+                for (request, actual) in requests.iter().zip(&state.requests) {
+                    assert_eq!(
+                        actual,
+                        &SendRequest {
+                            id: request.id,
+                            opcode: if write == 0 {
+                                ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
+                            } else {
+                                ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+                            },
+                            flags: if request.signaled {
+                                ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
+                            } else {
+                                0
+                            },
+                            address: bytes.as_ptr() as u64 + 16 + u64::from(request.offset),
+                            length: request.length,
+                            lkey: mr.lkey,
+                            remote_address: 0x123456789 + u64::from(request.offset),
+                            rkey: 0xabcdef
+                        }
+                    );
+                }
             }
         }
     }
     state.requests.clear();
     for invalid in [
         WorkRequest {
+            signaled: true,
             id: 1,
             offset: 31,
             length: 2,
         },
         WorkRequest {
+            signaled: true,
             id: 1,
             offset: 0,
             length: 0,
@@ -910,4 +923,17 @@ fn notification_dispatch_uses_generated_context_ops_and_all_completion_types() {
         libc::ENOMEM
     );
     assert_eq!(calls, 1);
+}
+
+#[test]
+fn r1b_no_qp_grant_authorizes_remote_atomics() {
+    let read = ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+    let write = ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+    for (permission, allowed) in [(0, 0), (1, read), (2, write), (3, read | write)] {
+        assert_eq!(qp::grant_access(permission), allowed);
+        assert_eq!(
+            qp::grant_access(permission) & ffi::ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC.0,
+            0
+        );
+    }
 }

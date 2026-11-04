@@ -199,6 +199,10 @@ impl GrantConstruction {
             Connection::Reuse(endpoint) => (*endpoint, None),
             Connection::Fresh(construction) => {
                 let handles = sys::ConnectionHandles {
+                    read_depth: sys::ReadDepth {
+                        initiator: transport.config.max_rd_atomic,
+                        responder: transport.config.max_dest_rd_atomic,
+                    },
                     cq: self.progress.handle(false)?,
                     receive_cq: self.progress.handle(true)?,
                     ..Default::default()

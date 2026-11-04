@@ -55,6 +55,7 @@ fn number(name: &str) -> Result<usize> {
 
 struct Case {
     selector: bool,
+    selective: bool,
     source: bool,
     read: bool,
     parents: usize,
@@ -69,6 +70,7 @@ struct Case {
 impl Case {
     fn load() -> Result<Self> {
         let case = Self {
+            selective: env::var("ORBITTE_HOST_MODE")? == "installed-selective",
             selector: env::var("ORBITTE_HOST_MODE")?.as_str() == "installed-selector",
             source: match env::var("ORBITTE_SHARED_ROLE")?.as_str() {
                 "source" => true,
@@ -344,6 +346,23 @@ fn rounds(
         if let Some(index) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
             return Err(format!("byte/sentinel mismatch at round {round}, byte {index}").into());
         }
+        if case.selective {
+            let caps = stats
+                .last_connected_qp
+                .ok_or("missing connected QP depth evidence")?;
+            let wrs = stats.completed_reads + stats.completed_writes
+                - baseline.completed_reads
+                - baseline.completed_writes;
+            let cqes = stats.payload_send_cqes - baseline.payload_send_cqes;
+            println!(
+                "ORBITTE_SELECTIVE {{\"round\":{round},\"wrs\":{wrs},\"cqes\":{cqes},\"atomics\":{},\"init_limit\":{},\"resp_limit\":{},\"init\":{},\"resp\":{}}}",
+                caps.supports_atomics,
+                caps.initiator_limit,
+                caps.responder_limit,
+                caps.initiator,
+                caps.responder
+            );
+        }
         if case.selector {
             selector::evidence(case, engine, round)?;
         }
@@ -433,6 +452,7 @@ fn main() -> Result<()> {
         "installed-memory-cleanup" => memory::run(&case),
         mode @ ("installed-host"
         | "installed-rail-accounting"
+        | "installed-selective"
         | "installed-selector"
         | "installed-rail-health") => {
             let bind = env::var("ORBITTE_SHARED_BIND")?.parse()?;

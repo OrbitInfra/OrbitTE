@@ -29,10 +29,28 @@ use memory::{allocate_window, dealloc_window, prepare_grant, register_memory, wi
 use qp::{connect, open, post, post_receive, send_completion};
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ReadDepth {
+    pub initiator: u8,
+    pub responder: u8,
+}
+impl ReadDepth {
+    pub(super) fn clamped(self, limits: Self) -> Self {
+        // TENT preserves a requested zero and uses one when the HCA reports no limit.
+        Self {
+            initiator: self.initiator.min(limits.initiator.max(1)),
+            responder: self.responder.min(limits.responder.max(1)),
+        }
+    }
+}
+
+#[repr(C)]
 pub(super) struct DeviceHandles {
     pub context: *mut c_void,
     pub pd: *mut c_void,
     pub async_fd: c_int,
+    pub read_limits: ReadDepth,
+    pub supports_atomics: bool,
 }
 
 impl Default for DeviceHandles {
@@ -41,6 +59,8 @@ impl Default for DeviceHandles {
             context: std::ptr::null_mut(),
             pd: std::ptr::null_mut(),
             async_fd: -1,
+            read_limits: ReadDepth::default(),
+            supports_atomics: false,
         }
     }
 }
@@ -55,6 +75,7 @@ pub(super) struct ConnectionHandles {
     pub receive_cq: *mut c_void,
     pub qp: *mut c_void,
     pub private_pd: *mut c_void,
+    pub read_depth: ReadDepth,
 }
 
 impl Default for ConnectionHandles {
@@ -64,6 +85,7 @@ impl Default for ConnectionHandles {
             receive_cq: std::ptr::null_mut(),
             qp: std::ptr::null_mut(),
             private_pd: std::ptr::null_mut(),
+            read_depth: ReadDepth::default(),
         }
     }
 }
@@ -140,6 +162,8 @@ pub(super) struct Completion {
     pub invalidated_rkey: u32,
 }
 
+pub(super) const FLUSHED: u32 = ffi::ibv_wc_status::IBV_WC_WR_FLUSH_ERR;
+
 pub(super) const WITH_INVALIDATE: u32 = ffi::ibv_wc_flags::IBV_WC_WITH_INV.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -148,6 +172,7 @@ pub(super) struct WorkRequest {
     pub id: u64,
     pub offset: u32,
     pub length: u32,
+    pub signaled: bool,
 }
 
 #[derive(Default)]

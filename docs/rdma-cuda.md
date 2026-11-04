@@ -265,8 +265,12 @@ publishing the grant; Type-2B support is required. The PD keeps a bounded key
 history so an old key cannot regain authority, parking exhausted MW indices up
 to `max_window_key_indices`.
 
-The requester posts signaled READ/WRITE work and, after every payload CQE
-succeeds, a fenced `SEND_WITH_INV`. The source accepts completion only when its
+The requester posts READ/WRITE work and sends a fenced `SEND_WITH_INV` after
+all payload WRs complete. `signal_interval` defaults to 1. A larger interval
+signals every Nth WR and the actual post tail, capped at half the SQ depth
+(minimum one). Each possible flush still needs one CQ slot per outstanding WR.
+`RdmaStats::payload_send_cqes` counts physical payload receipts, while
+`completed_reads` and `completed_writes` count successful WRs. The source accepts completion only when its
 RQ receives the exact 141-byte binding and invalidated key, then cleans the MW
 and grant, sends ACK and publishes READY. `RdmaQp` tracks exact outstanding WR
 identities, so old or duplicate completions cannot repay current debt. Only an
@@ -285,7 +289,7 @@ device and CQ events and scans contexts each second.
 | --- | --- | --- |
 | `max_endpoints` | 64 | Physical QPs, including retained connections |
 | `max_grants` | 64 | Whole-parent grant reservations |
-| `max_send_wr` | 16 | Unresolved signaled sends per QP |
+| `max_send_wr` | 16 | Unresolved send WRs per QP |
 | `max_cqes` | 1024 | Each CQ's capacity |
 | `max_direct_bytes`, `max_staging_bytes` | 64 MiB each | Active direct loans and private staging |
 | `max_cached_mrs`, `max_cached_mr_bytes` | 64 / 64 MiB | Full-view MR copies across contexts |
@@ -293,6 +297,17 @@ device and CQ events and scans contexts each second.
 
 Creating, closing and retained resources stay charged. These limits govern
 admission; they are not throughput or fairness guarantees.
+
+The HCA supplies initiator and responder READ limits for each new RC QP.
+`max_rd_atomic` and `max_dest_rd_atomic` default to 16. A requested zero
+stays zero. A positive request uses at most the reported limit, or one when
+the HCA reports zero. Data grants authorize only the requested READ/WRITE
+direction. `last_connected_qp` records the local HCA limits, atomic support
+and applied depths after both QP transitions succeed.
+
+For wildcard memory the requester prefers the configured healthy direct peer
+even if the peer lists it after another NIC. Slice planning refreshes local
+paths after reading the peer’s table and preserves the request’s device mask.
 
 ## Failure, drain and resource ownership
 

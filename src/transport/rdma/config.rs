@@ -96,8 +96,13 @@ pub struct RdmaConfig {
     pub max_direct_bytes: usize,
     /// TENT's base slice size. Large requests adapt to a bounded slice count.
     pub block_size: usize,
-    /// Maximum unresolved signaled sends per QP (1..=64). RQ depth uses max_cqes.
+    /// Maximum unresolved sends per QP (1..=64). RQ depth uses max_cqes.
     pub max_send_wr: usize,
+    /// Signal every Nth payload WR and the tail of every post. Capped at half the SQ depth.
+    pub signal_interval: usize,
+    /// Initiator and responder READ depths, clamped to the local HCA at QP creation.
+    pub max_rd_atomic: u8,
+    pub max_dest_rd_atomic: u8,
     /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
     pub max_cqes: usize,
     /// Aggregate physical MR copies, including usable paused contexts/capabilities.
@@ -147,6 +152,9 @@ impl Default for RdmaConfig {
             max_direct_bytes: 64 << 20,
             block_size: 64 << 10,
             max_send_wr: 16,
+            signal_interval: 1,
+            max_rd_atomic: 16,
+            max_dest_rd_atomic: 16,
             max_cqes: 1024,
             max_cached_mrs: 64,
             max_cached_mr_bytes: 64 << 20,
@@ -228,6 +236,7 @@ impl RdmaConfig {
             || self.max_staging_bytes == 0
             || self.max_direct_bytes == 0
             || !(1..=64 << 20).contains(&self.block_size)
+            || self.signal_interval == 0
             || !(1..=64).contains(&self.max_send_wr)
         {
             return Err(Error::InvalidConfig(
