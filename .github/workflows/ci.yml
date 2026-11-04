@@ -32,6 +32,13 @@ jobs:
         if: contains(matrix.features, 'rdma')
         timeout-minutes: 10
         run: .github/scripts/install-native-deps.sh g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
+      - name: Verify the shipped local-copy PTX with the generating compiler
+        if: matrix.toolchain == 'stable' && matrix.features == 'cuda'
+        run: |
+          command -v clang++-19 || .github/scripts/install-native-deps.sh clang-19
+          cd src/cuda/local_copy
+          clang++-19 -x cuda --cuda-device-only --cuda-gpu-arch=sm_52 -nocudainc -nocudalib -O3 -S kernel.cu -o "$RUNNER_TEMP/kernel.ptx"
+          diff -u kernel.ptx "$RUNNER_TEMP/kernel.ptx"
       - name: Format
         run: cargo fmt --check
       - name: Check
@@ -162,8 +169,11 @@ jobs:
           consumer="$RUNNER_TEMP/shared-cudarc"
           cargo new --lib --vcs none "$consumer"
           printf 'orbit-te = { path = "%s", features = ["cuda"] }\n' "${library[0]}" >> "$consumer/Cargo.toml"
-          echo 'cudarc = { version = "=0.19.8", features = ["cuda-13000"] }' >> "$consumer/Cargo.toml"
+          cp tests/reference/raw_stream.rs "$consumer/src/lib.rs"
           cd "$consumer"
+          cp "${library[0]}/Cargo.lock" Cargo.lock
+          cargo check --offline
+          echo 'cudarc = { version = "=0.19.8", features = ["cuda-13000"] }' >> Cargo.toml
           cargo generate-lockfile
           cargo check --locked
           cargo metadata --locked --format-version 1 | jq -e '[.packages[] | select(.name == "cudarc") | .version] == ["0.19.8"]'

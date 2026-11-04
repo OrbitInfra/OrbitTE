@@ -145,6 +145,14 @@ on 1.85 can select it with `cargo update -p cudarc --precise 0.19.0`.
 Consumers using cudarc 0.19.8 share one registry package with OrbitTE on
 Rust 1.88 or newer, as required by that release's libloading dependency.
 
+OrbitKV deliberately passes its `Arc<cudarc::driver::CudaStream>` as the
+lifetime owner for local copies. Code that names that type follows cudarc's
+semver. The underlying `unsafe LocalCopyEngine::bind` accepts a
+`*mut std::ffi::c_void` and an `Arc<dyn Send + Sync>`. A caller with its own
+CUDA binding can supply its raw stream and owner directly. The same contract
+applies to `ProducerEvent::from_raw`, so a future C adapter can retain its
+own handles. [Local copy ownership](local-copy.md)
+
 `transport::rdma::RdmaConfig` selects discovery and pins, host Direct or staged
 memory, progress mode (`Polling` by default, or `EventDriven`) and native budgets.
 The `cuda` module owns device and pinned-host allocations and synchronized copies;
