@@ -32,6 +32,7 @@ fn source_close_is_permanent_and_timeout_is_not_a_drain_receipt() {
 fn source_close_fences_shm_before_an_unrelated_admission_finishes() -> Result<()> {
     let mut c = EngineConfig::default();
     c.shm.enable = true;
+    c.tcp = false;
     let src = TransferEngine::new(c.clone())?;
     let dst = TransferEngine::new(c)?;
     let host = src.allocate_shm_memory(8)?;

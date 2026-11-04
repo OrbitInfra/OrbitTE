@@ -102,10 +102,10 @@ jobs:
         run: |
           binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
-          count=$("$binary" --list | awk '/^transport::shm::tests::.*: test$/ && !/::shm_child:/ {n++} END {print n+0}')
+          count=$("$binary" --list | awk '/^transport::shm::tests::.*: test$/ && !/::shm_child:/ {n++} /::source_close_fences_shm_before_an_unrelated_admission_finishes: test$/ {n++} END {print n+0}')
           test "$count" -ge 10
           for i in $(seq 1 50); do
-            RUST_TEST_THREADS=$(nproc) "$binary" transport::shm::tests:: | tee "$RUNNER_TEMP/shm-lifetime.log"
+            RUST_TEST_THREADS=$(nproc) "$binary" transport::shm::tests:: source_close_fences_shm_before_an_unrelated_admission_finishes | tee "$RUNNER_TEMP/shm-lifetime.log"
             grep -Fq "test result: ok. $count passed; 0 failed; 1 ignored;" "$RUNNER_TEMP/shm-lifetime.log"
           done
       - name: Repeat HP-TCP socket and ownership controls 50 times

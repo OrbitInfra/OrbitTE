@@ -10,10 +10,7 @@ use std::{
     ops::Range,
     os::unix::fs::MetadataExt,
     ptr::NonNull,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 pub(super) struct Budget {
@@ -193,7 +190,7 @@ fn lock_error(e: io::Error) -> Error {
 
 pub(crate) struct Local {
     pub(super) mapping: Mapping,
-    next_gate: AtomicU64,
+    next_gate: Mutex<u64>,
     pub(super) engine: SourceEpoch,
 }
 impl Local {
@@ -253,7 +250,7 @@ impl Local {
             };
             return Ok(Self {
                 mapping,
-                next_gate: AtomicU64::new(1),
+                next_gate: Mutex::new(1),
                 engine,
             });
         }
@@ -280,12 +277,18 @@ impl Local {
         offset: usize,
         permission: crate::Permission,
     ) -> Result<(Descriptor, File)> {
-        let gate = self
-            .next_gate
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                (v < (i64::MAX as u64 - GATES as u64 - 3) / 3).then_some(v + 1)
-            })
-            .map_err(|_| Error::ResourceExhausted)?;
+        let gate = {
+            let mut next = self
+                .next_gate
+                .lock()
+                .map_err(|_| Error::Internal("SHM grant lock"))?;
+            if *next > (i64::MAX as u64 - GATES as u64 - 3) / 3 {
+                return Err(Error::ResourceExhausted);
+            }
+            let gate = *next;
+            *next += 1;
+            gate
+        };
         let m = &self.mapping;
         let d = Descriptor {
             id,

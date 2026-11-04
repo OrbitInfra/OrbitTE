@@ -462,7 +462,7 @@ fn rdma_precedes_shm_unless_a_shared_memory_policy_selects_it() -> Result<()> {
     use crate::transport::rdma::tests::runtime;
     let mut c = config(Path::new(""));
     c.selector = Some(crate::TransportSelectorConfig::from_json(
-        r#"{"policy":[{"name":"shared","segment_type":"memory","intent_type":"migration","transports":["shm","rdma"]}]}"#,
+        r#"{"policy":[{"name":"shared","segment_type":"memory","intent_type":"migration","transports":["shm","rdma"]},{"name":"default","segment_type":"memory"}]}"#,
     )?);
     let src = rdma_fixture_with_config(runtime("copy"), c.clone());
     let dst = Arc::new(rdma_fixture_with_config(runtime("copy"), c));

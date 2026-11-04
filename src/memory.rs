@@ -620,10 +620,11 @@ impl RegisteredMemory {
         copy: impl FnOnce(NonNull<u8>, usize, Option<&crate::transport::shm::Local>) -> Result<T>,
     ) -> Result<T> {
         checked_range(offset, length, self.len())?;
-        let host = match &self.0.allocation {
-            Allocation::Host(host) => host,
-            #[cfg(feature = "cuda")]
-            Allocation::Cuda(_) => return Err(Error::Unavailable("SHM requires host memory")),
+        #[cfg(not(feature = "cuda"))]
+        let Allocation::Host(host) = &self.0.allocation;
+        #[cfg(feature = "cuda")]
+        let Allocation::Host(host) = &self.0.allocation else {
+            return Err(Error::Unavailable("SHM requires host memory"));
         };
         let start = self.0.allocation_offset + offset;
         let guard = host
