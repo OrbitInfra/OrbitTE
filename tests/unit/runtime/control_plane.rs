@@ -288,6 +288,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
         epoch,
         regions: vec![RemoteRegion {
             memory_type: crate::MemoryType::Cpu,
+            fabric: None,
             hp_registered: false,
             ipc_exportable: false,
             epoch,

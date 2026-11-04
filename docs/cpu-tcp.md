@@ -144,7 +144,7 @@ operation or status and one zero reserved byte.
 | --- | --- |
 | Request, 52 bytes | Expected epoch (16), registration ID (8), offset (8), length (8) |
 | Reply, 36 bytes | Actual source epoch (16), payload length (8) |
-| Descriptor payload | Region count (4), segment capabilities (44, including the eight-byte maximum transfer length), then records ordered by registration ID. Each contains ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), HP-TCP registration flag (1) and four reserved zero bytes |
+| Descriptor payload | Region count (4), segment capabilities (44, including the eight-byte maximum transfer length), then records ordered by registration ID. Each contains ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), HP-TCP registration flag (1) and MNNVL export location (4) |
 
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
@@ -159,6 +159,21 @@ nonce follow. The leaf is `orbitte-shm-{namespace:016x}-{pid:08x}-{nonce:032x}`.
 POSIX opens it with a leading slash. The directory backend opens it relative to
 the local mount. Record IDs increase and every range must fit the published
 object. `tests/reference/shm/describe.bin` freezes a sample trailer.
+
+Capability bit 6 announces MNNVL. A 24-byte trailer follows the SHM records
+when present and precedes the HP-TCP endpoint. It contains the domain (16),
+handle kind (1, fabric 0 or POSIX fd 1), EGM enable (1) and six zero bytes.
+The per-region final big-endian word is zero for an ordinary registration,
+one for a GPU export, or the high bit plus a host NUMA ID for EGM.
+`tests/reference/mnnvl/describe.bin` contains a trailer and an EGM location word.
+
+The control service sends opaque handles only in an authorized transfer grant.
+MNNVL reuses the NVLink request, grant and close-receipt layouts with
+`MNFG` and `MNFC` hello markers for fabric or `MNPG` and `MNPC` for POSIX. Grants use the corresponding non-cache marker. Identity binds
+the fabric domain and requester process. The 64-byte share field holds
+CUDA fabric bytes or a big-endian PID and fd (4 bytes each), PID namespace
+inode and process start ticks (8 bytes each), followed by zero padding.
+A POSIX import checks the process identity and duplicates the fd through a pidfd.
 
 Operations: `0` describe, `1` TCP READ, `2` TCP WRITE, `3` notify, `4` RDMA READ,
 `5` RDMA WRITE, `6` sliced RDMA READ and `7` sliced RDMA WRITE (see

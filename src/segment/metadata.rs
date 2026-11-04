@@ -71,6 +71,7 @@ impl ProcessIdentity {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SegmentMetadata {
     pub(crate) tcp_disabled: bool,
+    pub(crate) mnnvl: Option<crate::transport::mnnvl::Capability>,
     pub(crate) shm: Option<std::sync::Arc<crate::transport::shm::wire::Manifest>>,
     pub(crate) hp: Option<std::sync::Arc<crate::transport::hp_tcp::Endpoint>>,
     pub(crate) max_transfer_bytes: u64,
@@ -93,7 +94,8 @@ impl SegmentMetadata {
     pub(crate) fn encode(&self, bytes: &mut [u8]) {
         bytes.fill(0);
         bytes[36..44].copy_from_slice(&self.max_transfer_bytes.to_be_bytes());
-        bytes[0] = (u8::from(self.shm.is_some()) << 5)
+        bytes[0] = (u8::from(self.mnnvl.is_some()) << 6)
+            | (u8::from(self.shm.is_some()) << 5)
             | (u8::from(self.tcp_disabled) << 4)
             | u8::from(self.rdma)
             | (u8::from(self.remote_staging) << 1)
@@ -108,7 +110,8 @@ impl SegmentMetadata {
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::WIRE_SIZE
-            || bytes[0] & !63 != 0
+            || bytes[0] & !127 != 0
+            || (bytes[0] & 64 != 0 && bytes[0] & 12 != 8)
             || bytes[0] & 12 == 12
             || bytes[1..4].iter().any(|b| *b != 0)
             || (bytes[0] & 12 == 0 && bytes[4..20].iter().any(|b| *b != 0))
@@ -125,6 +128,7 @@ impl SegmentMetadata {
             max_transfer_bytes: u64::from_be_bytes(cap),
             tcp_disabled: bytes[0] & 16 != 0,
             hp: None,
+            mnnvl: None,
             shm: (bytes[0] & 32 != 0).then(Default::default),
             boot: (bytes[0] & 12 != 0).then_some(identity.machine),
             rdma: bytes[0] & 1 != 0,

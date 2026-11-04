@@ -8,6 +8,53 @@ as CUDA device/device or pinned host/device copies. Both peers must be different
 cooperating processes on the same physical host, with compatible NVIDIA devices
 and driver.
 
+## Multi-node NVLink and EGM
+
+With `--features cuda`, select `EngineConfig::mnnvl = Some(MnnvlConfig { .. })`
+on both engines. The default is off. As in the frozen loader, the **presence**
+of `MC_ENABLE_MNNVL` opts the default configuration into MNNVL. An explicit
+`None` disables it. Legacy `nvlink` and MNNVL are mutually exclusive.
+Use `Transport::Mnnvl` or the policy candidate `"mnnvl"`. Fabric symbols are resolved only when this profile is requested. A missing symbol leaves other transports available.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `handle_type` | `MnnvlHandleType::Fabric` | CUDA fabric handle. `PosixFd` uses a same-host exporter PID and fd |
+| `fabric_domain` | `None` | Restricts the default to this boot. For cross-host fabric, configure the same nonzero 16-byte domain on peers in the same NVLink partition. Each side advertises it through Describe. The actual CUDA import checks reachability |
+| `host_register` | `true` | Registers ordinary local host backing with CUDA through the last registration owner. Existing CUDA pins are reused. With `false`, the caller and driver must support the local host pointer |
+| `egm` | `false` | Enables HOST_NUMA allocation and remote host grants |
+| `async_memcpy_threshold` | `1024` units of 128 KiB | The frozen code reads this setting and uses the async stream and completion event at every size |
+
+Call `allocate_mnnvl(device, length)` for GPU storage or
+`allocate_egm(numa_node, length)` for host storage. Register the returned
+owner with the usual CUDA or host registration API. CUDA rounds the physical
+extent to its reported granularity. Logical lengths, permissions and offsets
+still apply to each registration. Explicit VMM allocation returns a typed
+error when CUDA cannot supply the requested storage.
+
+For existing VMM storage, the unsafe `wrap_mnnvl` and `wrap_egm` constructors
+require the actual whole-allocation owner, initialized padding, exact mapped
+extent and explicit sharing consent. The driver checks the handle properties,
+granularity and any available address-range result. The external owner
+controls final unmap. The ordinary raw-pointer registration API grants no
+fabric export permission.
+
+A requester can READ or WRITE a remote device allocation from host or GPU
+memory. A remote host range must have an EGM export and both peers must opt
+in. The local EGM mapping grants CPU access and the copy stream runs on a GPU
+attached to its NUMA node. An unknown or incompatible socket placement cannot
+select that owner. Imported mappings grant access to the visible **local**
+GPUs. Peer CUDA ordinals never select a requester context.
+
+The source consumes producer readiness before granting the actual backing.
+The requester consumes its recorded producer event before submitting copies.
+Both use the existing NVLink subbatch, stream pool and completion owner.
+A close receipt follows physical retirement of the import. Failed unmap,
+release or VA cleanup returns `Unquiesced` and retains charges and owners.
+An unposted import rejection can select a later candidate. A WRITE with an
+uncertain effect is terminal. Use `flush_nvlink_cache` or `close_requester`
+to close cached imports and `free_mnnvl` / `free_egm` on the last allocation
+handle for a checked local release. See the [installed verification queue](qualification.md#multi-node-nvlink-fabric).
+
 ## Memory and permission contract
 
 The source opts in with `CudaMemory::allocate_ipc(device, length)`, registers it
@@ -177,8 +224,7 @@ authentication. The protocol is OrbitTE's own, not TENT wire compatibility.
 
 TENT optionally registers local host buffers (`transports/nvlink/host_register`)
 but relocates only CUDA buffers remotely; OrbitTE keeps that split, so remote
-grants are GPU-only. Remote host exports, MNNVL and exporter-crash safety remain
-open. See the
+grants are GPU-only. Legacy IPC remote host exports and exporter-crash safety remain open. See the
 [CUDA IPC lifetime rules](https://docs.nvidia.com/cuda/archive/13.1.0/cuda-driver-api/group__CUDA__MEM.html).
 
 ## Installed qualification

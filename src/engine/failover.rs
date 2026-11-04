@@ -30,7 +30,7 @@ impl TransferEngine {
         if transport == Transport::HpTcp && (staging || !crate::transport::hp_tcp::host(local)) {
             return Err(selection.rejected("HP-TCP requires ordinary host memory"));
         }
-        if staging && transport == Transport::Nvlink {
+        if staging && matches!(transport, Transport::Nvlink | Transport::Mnnvl) {
             return Err(Error::Unavailable("remote staging requires TCP or RDMA"));
         }
         #[cfg(not(feature = "cuda"))]
@@ -71,13 +71,22 @@ impl TransferEngine {
             #[cfg(not(feature = "rdma"))]
             return Err(Error::Unavailable("build with --features rdma"));
         }
-        if transport == Transport::Nvlink {
+        if matches!(transport, Transport::Nvlink | Transport::Mnnvl) {
             #[cfg(feature = "cuda")]
             {
-                self.source
+                let owner = self
+                    .source
                     .nvlink
                     .as_ref()
                     .ok_or(Error::Unavailable("NVLink is not configured"))?;
+                if owner.fabric.is_some() != (transport == Transport::Mnnvl)
+                    || (transport == Transport::Mnnvl
+                        && !local.0.fabric.get().is_some_and(|r| r.local))
+                {
+                    return Err(
+                        selection.rejected("CUDA transport is unavailable on this registration")
+                    );
+                }
                 local
                     .allocation_range(local_offset, length)?
                     .0
@@ -194,7 +203,7 @@ impl TransferEngine {
                 #[cfg(feature = "cuda")]
                 &self.source.proxy,
             )),
-            Transport::Nvlink => {
+            Transport::Nvlink | Transport::Mnnvl => {
                 #[cfg(feature = "cuda")]
                 {
                     match &self.source.nvlink {
@@ -211,7 +220,7 @@ impl TransferEngine {
                                 if allowed {
                                     if let Some(m) = &owners[next].metrics {
                                         m.dispatched();
-                                        m.begin(Transport::Nvlink);
+                                        m.begin(request.selection.transport);
                                     }
                                 }
                                 allowed

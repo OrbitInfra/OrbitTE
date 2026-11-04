@@ -46,6 +46,7 @@ fn region(kind: MemoryType, ipc_exportable: bool) -> RemoteRegion {
         length: 64,
         permission: Permission::RemoteReadWrite,
         memory_type: kind,
+        fabric: None,
         hp_registered: false,
         ipc_exportable,
     }
@@ -658,13 +659,14 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
         ("shm", Transport::Shm),
         ("rdma", Transport::Rdma),
         ("nvlink", Transport::Nvlink),
+        ("mnnvl", Transport::Mnnvl),
     ] {
         let config = TransportSelectorConfig::from_json(&format!(
             r#"{{"policy":[{{"segment_type":"memory","transports":["{name}"]}}]}}"#
         ))?;
         assert_eq!(config.policy[0].transports, [expected]);
     }
-    for provider in ["ub", "xpu", "mlu", "hylink", "fabric", "mnnvl", "mpcomm"] {
+    for provider in ["ub", "xpu", "mlu", "hylink", "fabric", "mpcomm"] {
         let json = format!(
             r#"{{"policy":[{{"name":"unsupported","segment_type":"memory","transports":["{provider}"]}}]}}"#
         );

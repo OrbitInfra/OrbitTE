@@ -41,7 +41,8 @@ external output directory; failed runs are kept.
 | Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITTE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbitte-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
 | SHM | Qualified on same-host Linux CI for POSIX DRAM | [Physical CXL gate](#shared-memory-and-cxl-verification) | CXL unrun |
 | HP-TCP | Qualified for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
-| MNNVL (S14), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| MNNVL fabric and EGM | Implemented; installed profile unqualified | [Two-node fabric gate](#multi-node-nvlink-fabric) | VMM table and stream/event shims |
+| EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -57,6 +58,41 @@ The release control in `tests/metrics/overhead.rs` compares empty CPU submission
 and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
 off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbitTE/pull/145) includes all three transports and both sizes. Physical
 NIC and GPU performance remains unmeasured.
+
+## Multi-node NVLink fabric
+
+The CUDA shim covers the fabric and POSIX handle ABIs, registered offsets,
+NUMA placement, producer handoff, concurrent cache reuse, eviction, safe
+fallback and native retirement failures. The physical profiles are unrun.
+
+Build the installed consumer on each node from the same checkout. Use two
+different hosts in one NVLink clique, a dedicated GPU and an existing exclusive
+GPU lock on each host. Use the host NUMA node attached to each selected GPU.
+Both hosts must see the same fresh run directory. On each host set
+`ART`, `GPU_UUID`, `GPU_LOCK`, `GPU_NUMA` and `BIND` (a concrete control IP
+and port, for example `10.0.0.10:0`).
+
+```bash
+python3 tests/hardware/build_installed.py --consumer mnnvl --toolchain stable --output "$ART"
+```
+
+Run the following on the source and requester, setting `ROLE=source` on the
+first node and `ROLE=requester` on the second. Start the source first. Each
+profile uses its own directory under a shared `RUN`.
+
+```bash
+python3 "$ART/mnnvl_run.py" --role "$ROLE" --profile device --artifact "$ART" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --numa "$GPU_NUMA" --bind "$BIND" --shared-run "$RUN/device"
+python3 "$ART/mnnvl_run.py" --role "$ROLE" --profile egm --artifact "$ART" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --numa "$GPU_NUMA" --bind "$BIND" --shared-run "$RUN/egm"
+```
+
+The driver compares the packaged archive and commit, distinct host boots and
+GPUs, completed fabric-manager probes, cluster UUID and clique. It saves
+per-link TX/RX payload counters before and after each profile and requires
+enough traffic in both directions to cover the guarded READs and WRITEs.
+Both peers require successful unregister and explicit VMM free receipts before
+publishing success. The EGM variant exercises all four local/remote GPU and host-NUMA pairs.
+See [NVIDIA fabric verification](https://docs.nvidia.com/multi-node-nvlink-systems/mnnvl-user-guide/verifying.html)
+and the [NVLink counter definitions](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
 
 ## Shared memory and CXL verification
 

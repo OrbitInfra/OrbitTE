@@ -86,6 +86,8 @@ pub struct EngineConfig {
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
     pub nvlink: bool,
+    #[cfg(feature = "cuda")]
+    pub mnnvl: Option<crate::MnnvlConfig>,
     /// Maximum persistent CUDA IPC imports and exports, independently per side.
     /// At capacity, cold imports reclaim the least recently used idle mapping
     /// after native close and source acknowledgement. Active/uncertain mappings
@@ -184,6 +186,8 @@ impl Default for EngineConfig {
             #[cfg(feature = "cuda")]
             nvlink: false,
             #[cfg(feature = "cuda")]
+            mnnvl: std::env::var_os("MC_ENABLE_MNNVL").map(|_| crate::MnnvlConfig::default()),
+            #[cfg(feature = "cuda")]
             nvlink_cache_entries: 0,
             #[cfg(feature = "cuda")]
             nvlink_stream_count: 8,
@@ -276,7 +280,20 @@ impl EngineConfig {
             return Err(Error::InvalidConfig("NVLink stream count must be 1..=4096"));
         }
         #[cfg(feature = "cuda")]
-        if self.nvlink_cache_entries > 4096 || (self.nvlink_cache_entries != 0 && !self.nvlink) {
+        if let Some(c) = &self.mnnvl {
+            if self.nvlink
+                || c.fabric_domain.is_some_and(|d| d.0 == [0; 16])
+                || c.async_memcpy_threshold.checked_mul(128 * 1024).is_none()
+            {
+                return Err(Error::InvalidConfig(
+                    "MNNVL requires exclusive NVLink mode, a valid domain and bounded threshold",
+                ));
+            }
+        }
+        #[cfg(feature = "cuda")]
+        if self.nvlink_cache_entries > 4096
+            || (self.nvlink_cache_entries != 0 && !self.nvlink && self.mnnvl.is_none())
+        {
             return Err(Error::InvalidConfig(
                 "NVLink cache requires NVLink and at most 4096 entries",
             ));

@@ -18,7 +18,7 @@ use progress::Progress;
 use subbatch::{NVLinkSubBatch, subbatch_len};
 
 use crate::cuda::CUDAStreamPool;
-use crate::cuda::ipc::IpcExport;
+
 use crate::engine::remaining;
 use crate::memory::checked_range;
 use crate::runtime::control_plane::{ControlChannel, Operation, Reply, Request};
@@ -35,6 +35,7 @@ const RECEIPT_SIZE: usize = BINDING_SIZE + 1;
 /// Legacy IPC is cooperative: exported handles authorize a whole allocation
 /// until every participating process has closed it. It is not remote revocation.
 pub(crate) struct NVLinkTransport {
+    pub(crate) fabric: Option<Arc<crate::cuda::fabric::Platform>>,
     pub(crate) identity: ProcessIdentity,
     budget: Arc<MappingBudget>,
     imports: RelocationCache,
@@ -47,6 +48,7 @@ impl NVLinkTransport {
     pub(crate) fn new(max_bytes: usize, cache_entries: usize, stream_count: usize) -> Result<Self> {
         Ok(Self {
             identity: ProcessIdentity::local()?,
+            fabric: None,
             budget: MappingBudget::new(max_bytes),
             imports: RelocationCache::new(cache_entries),
             stream_pool: CUDAStreamPool::new(stream_count)?,
@@ -144,8 +146,8 @@ impl NVLinkTransport {
                     ))?;
                 } else {
                     let mut hello = [0; HELLO_SIZE];
-                    hello[..4].copy_from_slice(b"NVL1");
-                    self.identity.encode(&mut hello[4..36]);
+                    hello[..4].copy_from_slice(self.grant_magic());
+                    self.wire_identity().encode(&mut hello[4..36]);
                     hello[36..].copy_from_slice(&requester.0);
                     channel.write_all(&hello)?;
                 }
@@ -205,12 +207,16 @@ impl NVLinkTransport {
                         batch = Some(OpenedMapping::new(&memory, permit, deadline)?);
                     }
                     let mut batch = batch.ok_or(Error::Internal("missing NVLink mapping"))?;
-                    if operation == TransferOp::Write {
+                    if operation == TransferOp::Write && self.fabric.is_none() {
                         effect = RemoteEffect::Unknown;
                     }
                     let copied_result = (|| {
                         if needs_open {
-                            batch.mapping.open(handle)?;
+                            if let Some(fabric) = &self.fabric {
+                                batch.mapping.open_fabric(fabric, handle, extent)?
+                            } else {
+                                batch.mapping.open(handle)?
+                            }
                         }
                         let subbatch = NVLinkSubBatch::new(requests, start, remote_offset)?;
                         let stream = self.stream_pool.acquire(&memory, deadline)?;
@@ -225,6 +231,9 @@ impl NVLinkTransport {
                                     return Err(Error::Cancelled);
                                 }
                                 remaining(deadline)?;
+                                if operation == TransferOp::Write {
+                                    effect = RemoteEffect::Unknown;
+                                }
                                 *posted = true;
                                 Ok(())
                             },
@@ -327,11 +336,10 @@ impl NVLinkTransport {
         request: &Request,
         requester: SourceEpoch,
     ) -> Result<([u8; BINDING_SIZE], [u8; 64], usize, usize)> {
-        if &grant[..4] != b"NVL1" {
+        if &grant[..4] != self.grant_magic() {
             return Err(Error::Protocol("NVLink grant version"));
         }
-        self.identity
-            .validate_peer(ProcessIdentity::decode(&grant[4..36]))?;
+        self.validate_identity(ProcessIdentity::decode(&grant[4..36]))?;
         let mut binding = [0; BINDING_SIZE];
         binding.copy_from_slice(&grant[36..120]);
         if binding[..52] != request.encode() || binding[52..68] != requester.0 {
@@ -371,17 +379,16 @@ impl NVLinkTransport {
         }
         let mut hello = [0; HELLO_SIZE];
         channel.read_exact(&mut hello)?;
-        if &hello[..4] != b"NVL1" {
+        if &hello[..4] != self.grant_magic() {
             return Err(Error::Protocol("NVLink hello version"));
         }
-        self.identity
-            .validate_peer(ProcessIdentity::decode(&hello[4..36]))?;
-        let (memory, allocation_offset) = memory.cuda_range(offset, length)?;
-        let mut export = IpcExport::new(memory)?;
+        self.validate_identity(ProcessIdentity::decode(&hello[4..36]))?;
+        let (mut export, allocation_offset) =
+            self.export(memory, offset, length, channel.deadline)?;
         let permit = self.budget.reserve(export.extent, true)?;
         let mut grant = [0; GRANT_SIZE];
-        grant[..4].copy_from_slice(b"NVL1");
-        self.identity.encode(&mut grant[4..36]);
+        grant[..4].copy_from_slice(self.grant_magic());
+        self.wire_identity().encode(&mut grant[4..36]);
         grant[36..88].copy_from_slice(&request.encode());
         grant[88..104].copy_from_slice(&hello[36..52]);
         grant[104..120].copy_from_slice(&SourceEpoch::generate()?.0);

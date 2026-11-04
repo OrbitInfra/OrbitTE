@@ -81,6 +81,7 @@ pub struct RemoteRegion {
     pub(crate) memory_type: MemoryType,
     pub(crate) ipc_exportable: bool,
     pub(crate) hp_registered: bool,
+    pub(crate) fabric: Option<crate::transport::mnnvl::Location>,
 }
 
 impl RemoteRegion {

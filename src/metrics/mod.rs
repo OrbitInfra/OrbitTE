@@ -72,7 +72,7 @@ impl Metrics {
         self.scrape.json()
     }
 }
-pub(crate) fn transport_bit(t: crate::Transport) -> u8 {
+pub(crate) fn transport_bit(t: crate::Transport) -> u16 {
     1 << schema::slot(t)
 }
 

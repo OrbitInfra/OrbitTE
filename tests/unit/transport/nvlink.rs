@@ -1,4 +1,5 @@
 use super::*;
+use crate::cuda::ipc::IpcExport;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -239,6 +240,7 @@ pub(crate) fn requester_case(
         epoch,
         regions: vec![RemoteRegion {
             memory_type: crate::MemoryType::Cuda,
+            fabric: None,
             hp_registered: false,
             ipc_exportable: true,
             epoch,

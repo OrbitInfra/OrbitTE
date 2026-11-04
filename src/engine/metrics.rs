@@ -34,8 +34,16 @@ impl TransferEngine {
                 mask |= transport_bit(Transport::Rdma);
             }
             #[cfg(feature = "cuda")]
-            if self.source.nvlink.is_some() && m.0.descriptor.ipc_exportable {
+            if self.source.metadata.nvlink.is_some() && m.0.descriptor.ipc_exportable {
                 mask |= transport_bit(Transport::Nvlink);
+            }
+            #[cfg(feature = "cuda")]
+            if m.0
+                .fabric
+                .get()
+                .is_some_and(|slot| slot.local || slot.share.is_some())
+            {
+                mask |= transport_bit(Transport::Mnnvl);
             }
             #[cfg(feature = "gds")]
             if m.memory_type() == crate::MemoryType::Cuda

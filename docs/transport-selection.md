@@ -42,7 +42,7 @@ let named = request.with_policy_name("small_host")?;
 An explicit transport must appear in the matching policy's candidate list and
 be eligible. A rejected or unavailable hint fails the request. With
 `selector: None`, explicit routing keeps its existing behavior and `Unspec`
-tries NVLink, RDMA, SHM, then the configured socket transport for memory targets.
+tries the configured MNNVL or NVLink profile, RDMA, SHM, then the configured socket transport for memory targets.
 A file target tries eligible GDS, then io_uring.
 
 An unnamed request uses the first matching rule. Within that rule, `Unspec`
@@ -63,7 +63,7 @@ When no custom rules exist the default names are `memory_default` and `file_stor
 | `min_size`, `max_size` | Inclusive byte bounds |
 | `priority` | Exact effective QoS or request priority. Accepts high/medium/low or 0/1/2 |
 | `intent_type` | Case-insensitive `unspec` (also `intent_unspec`), `foreground_get`, `background_prefetch`, `migration`, `checkpoint`, `weight_loading`, `staging_internal`, or the corresponding integer 0–6. Omission matches any intent |
-| `transports` | Ordered unique candidates. Memory accepts `tcp`, `hp_tcp`, `shm`, `rdma` and `nvlink`. Local files accept `gds` and `io_uring` |
+| `transports` | Ordered unique candidates. Memory accepts `tcp`, `hp_tcp`, `shm`, `rdma`, `nvlink` and `mnnvl`. Local files accept `gds` and `io_uring` |
 | `devices` | RDMA NIC names compiled to a 64-bit mask using stable discovered IDs and the custom topology's verified mapping |
 | `qp_pool` | Selects a contiguous endpoint QP range. An omitted, empty or unknown name permits every index |
 | `service_level`, `traffic_class` | Policy values are diagnostic. Only the endpoint pool changes native SL/TC |
@@ -128,6 +128,7 @@ readiness. Closing or failing a provider does not authorize replay elsewhere.
 | HP-TCP | HP-TCP enabled at both ends, matching IPv4 rail counts, and an eligible host registration. The request must fit both endpoint frame limits |
 | SHM | SHM enabled at both ends, matching host boot identity and backing namespace, local host memory and a source-published shared range |
 | RDMA | Both engines configure RDMA. Each side's existing host/CUDA Direct or Staged policy remains authoritative; this capability does not promise GPUDirect or current RNIC health |
+| MNNVL | Matching handle kinds and fabric domains, a source-owned VMM export and a CUDA-capable local registration. POSIX fd also requires matching host boot identity. Both peers enable EGM for a remote host allocation |
 | NVLink | Both engines opt in; equal host boot identity and different process nonces; remote `allocate_ipc` export consent; local owned CUDA or owned CUDA-pinned host backing |
 
 Priority selects matching rules but does not make a transport ineligible.
@@ -162,7 +163,7 @@ The reference is frozen TENT commit
 
 TENT's automatic memory order follows the buffer's registered transport list.
 OrbitTE registrations advertise capabilities without an insertion order, so
-automatic memory selection tries NVLink, RDMA, SHM, then the configured socket payload (TCP or HP-TCP). A policy can reverse
+automatic memory selection tries MNNVL, NVLink, RDMA, SHM, then the configured socket payload (TCP or HP-TCP). A policy can reverse
 that order. TENT documents GDS → io_uring → RDMA for files. Its frozen
 `getDefaultPolicies` lists GDS and io_uring. OrbitTE supports these two local
 owners. RDMA-to-file needs a remote file segment. SHM merges respect the physical registration and segment transfer limits. Overlapping allocation offsets retain their public order. The smaller HP-TCP endpoint frame limit caps merging. The selected rule retains its bounded candidate order. Only the engine’s
@@ -172,7 +173,7 @@ candidates can run only after a safe failure. Caller-supplied fallback indices,
 local recompute and compression remain unsupported. See
 [transport attempts](async-batches.md#transport-attempts).
 
-The selector scans at most 256 compiled rules and five candidates, once per
+The selector scans at most 256 compiled rules and six candidates, once per
 public request. The compiled rule scan allocates no strings, takes no selector lock and calls
 no driver; no selector work is added per slice, WR or CQ completion. Existing
 registration resolution, admission and transport owners keep their own costs.
@@ -184,7 +185,7 @@ Describe replies carry a four-byte region count, 44 bytes of segment
 capabilities, then 32 bytes per region. Bits 0–2 of capability byte zero
 identify RDMA, remote staging and NVLink. Bit 3 denotes a boot-only identity
 when NVLink is disabled. Bit 4 disables ordinary TCP payloads and bit 5
-announces the SHM trailer. Bytes 4–19 hold the boot identity when known and
+announces the SHM trailer. Bit 6 announces MNNVL fabric capabilities. Bytes 4–19 hold the boot identity when known and
 20–35 hold the process nonce only for NVLink. Bytes 36–43 give the maximum
 accepted transfer length as a big-endian unsigned integer. An unknown limit
 prevents folding two requests. Bytes 1–3 are reserved. Region

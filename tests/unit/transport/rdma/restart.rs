@@ -241,6 +241,7 @@ pub(super) fn stale(
                 epoch,
                 regions: vec![crate::RemoteRegion {
                     memory_type: crate::MemoryType::Cpu,
+                    fabric: None,
                     hp_registered: false,
                     ipc_exportable: false,
                     epoch,

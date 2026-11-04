@@ -434,7 +434,8 @@ excludes link speed, so a rate change keeps existing QPs. See
 
 | Owner | Responsibility |
 | --- | --- |
-| `transport/nvlink.rs::NVLinkTransport` | Same-host identity checks, grant and close bindings, mapping quotas, stream pool and completion progress |
+| `transport/mnnvl/` and `cuda/fabric` | Fabric-domain capability and grant binding, CUDA VMM references, VA reservations, access descriptors and EGM socket placement |
+| `transport/nvlink.rs::NVLinkTransport` | Legacy or fabric identity checks, grant and close bindings, mapping quotas, stream pool and completion progress |
 | `cuda/ipc.rs::IpcExport`, `IpcMapping` | Allocation-wide source loan; one imported reference with its context and touched local allocations |
 | `transport/nvlink/mapping.rs::OpenedMapping` | Mapping charge and explicit native close |
 | `transport/nvlink/subbatch.rs::NVLinkSubBatch` | Consecutive same-region, same-context copies |
@@ -447,3 +448,13 @@ control I/O; loans survive event polls without holding allocation mutexes. TENT
 keeps a transport-wide relocation cache and queries the task event in
 `getTransferStatus`; OrbitTE closes imports per subbatch by default and adds
 explicit close receipts. See [CUDA IPC](cuda-ipc.md).
+
+MNNVL shares this completion owner and its bounded import/export cache. The
+creator drops its physical handle reference after mapping. Local free retains
+the handle again, unmaps, releases it and frees the VA. An imported mapping
+keeps its physical reference until the same teardown sequence. Frozen TENT
+clears its relocation table on uninstall. OrbitTE uses explicit native
+receipts, bounds whole mapped extents and preserves the actual owners on
+uncertain cleanup. New device and EGM mappings are zeroed through the rounded
+extent before their first grant. Handle publication requires an admitted
+range in the original epoch. See [MNNVL and EGM](cuda-ipc.md#multi-node-nvlink-and-egm).

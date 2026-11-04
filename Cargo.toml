@@ -83,6 +83,11 @@ path = "tests/hardware/nvlink.rs"
 required-features = ["cuda"]
 
 [[example]]
+name = "mnnvl"
+path = "tests/hardware/mnnvl.rs"
+required-features = ["cuda"]
+
+[[example]]
 name = "storage_cuda"
 path = "tests/hardware/storage_cuda.rs"
 required-features = ["cuda", "io-uring"]

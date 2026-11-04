@@ -11,7 +11,8 @@ use crate::{Error, MemoryType, Priority, RemoteRegion, Result, Transport};
 pub use config::{IntentType, SegmentType, SelectionPolicy, TransportSelectorConfig};
 pub use qp_pools::QpPool;
 
-const DEFAULT_TRANSPORTS: [Transport; 5] = [
+const DEFAULT_TRANSPORTS: [Transport; 6] = [
+    Transport::Mnnvl,
     Transport::Nvlink,
     Transport::Rdma,
     Transport::Shm,
@@ -70,6 +71,21 @@ impl SelectionContext<'_> {
                         })
             }
             Transport::Rdma => self.local_segment.rdma && self.remote_segment.rdma,
+            Transport::Mnnvl => {
+                self.local_ipc
+                    && self
+                        .local_segment
+                        .mnnvl
+                        .zip(self.remote_segment.mnnvl)
+                        .zip(self.remote.fabric)
+                        .is_some_and(|((a, b), loc)| {
+                            a.reaches(
+                                b,
+                                self.local_segment.same_machine(&self.remote_segment),
+                                loc,
+                            )
+                        })
+            }
             Transport::Nvlink => {
                 self.local_ipc
                     && self.remote.ipc_exportable
@@ -109,7 +125,7 @@ pub(crate) struct SelectionResult {
     pub(crate) transport: Transport,
     // Ordered once against the original public request, before merge. Slots
     // past the end contain Unspec. Engine failover alone advances this cursor.
-    ranked: [Transport; 5],
+    ranked: [Transport; 6],
     pub(crate) initial_attempts: usize,
     pub(crate) device_mask: u64,
     pub(crate) qp_pool: Option<QpRange>,
@@ -126,7 +142,7 @@ impl SelectionResult {
     pub(crate) fn plain(transport: Transport) -> Self {
         Self {
             transport,
-            ranked: [Transport::Unspec; 5],
+            ranked: [Transport::Unspec; 6],
             initial_attempts: 0,
             device_mask: u64::MAX,
             qp_pool: None,

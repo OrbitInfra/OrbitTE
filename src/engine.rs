@@ -5,6 +5,8 @@ pub(crate) mod file_attempt;
 mod hp_tcp;
 #[cfg(feature = "metrics")]
 mod metrics;
+#[cfg(feature = "cuda")]
+mod mnnvl;
 #[cfg(target_os = "linux")]
 mod shm;
 use admission::OwnerAdmission;
@@ -53,6 +55,7 @@ pub enum Transport {
     Shm,
     Rdma,
     Nvlink,
+    Mnnvl,
     /// Linux io_uring for local regular files and registered memory.
     IoUring,
     /// Local cuFile batch I/O.
@@ -315,7 +318,7 @@ impl TransferEngine {
             })
             .transpose()?;
         #[cfg(feature = "cuda")]
-        let nvlink = config
+        let mut nvlink = config
             .nvlink
             .then(|| {
                 crate::transport::nvlink::NVLinkTransport::new(
@@ -325,6 +328,16 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
+        #[cfg(feature = "cuda")]
+        if let Some(c) = &config.mnnvl {
+            match crate::transport::nvlink::NVLinkTransport::install_mnnvl(c, &config) {
+                Ok(owner) => nvlink = Some(owner),
+                Err(e @ (Error::Unavailable(_) | Error::Backend { .. })) => {
+                    log::warn!("MNNVL unavailable: {e}")
+                }
+                Err(e) => return Err(e),
+            }
+        }
         #[allow(unused_mut)]
         let hp_listener = config
             .hp_tcp
@@ -349,7 +362,14 @@ impl TransferEngine {
         }
         #[cfg(feature = "cuda")]
         {
-            metadata.nvlink = nvlink.as_ref().map(|transport| transport.identity);
+            metadata.nvlink = nvlink
+                .as_ref()
+                .filter(|t| t.fabric.is_none())
+                .map(|transport| transport.identity);
+            metadata.mnnvl = nvlink
+                .as_ref()
+                .and_then(|t| t.fabric.as_ref())
+                .map(|f| f.caps);
             metadata.remote_staging = config.remote_staging;
         }
         metadata.boot = metadata
@@ -829,6 +849,19 @@ impl TransferEngine {
     }
 
     fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if let Some(f) = self.source.nvlink.as_ref().and_then(|t| t.fabric.as_ref()) {
+            for m in memory {
+                match f.register(m) {
+                    Err(e @ Error::Unquiesced { .. }) => {
+                        std::mem::forget(m.clone());
+                        return Err(e);
+                    }
+                    Err(e) => log::warn!("registration unavailable to MNNVL: {e}"),
+                    Ok(()) => (),
+                }
+            }
+        }
         #[cfg(target_os = "linux")]
         let pending = self
             .source
@@ -927,6 +960,12 @@ impl TransferEngine {
         } else {
             Ok(())
         };
+        #[cfg(feature = "cuda")]
+        let fabric_result = if _last && Arc::strong_count(&memory.0) == 1 {
+            memory.0.fabric.get().map_or(Ok(()), |slot| slot.retire())
+        } else {
+            Ok(())
+        };
         #[cfg(feature = "rdma")]
         if let Some(runtime) = &self.source.rdma {
             runtime.registrations.retire(memory)?;
@@ -935,6 +974,8 @@ impl TransferEngine {
         gds_result?;
         #[cfg(target_os = "linux")]
         shm_result?;
+        #[cfg(feature = "cuda")]
+        fabric_result?;
         Ok(())
     }
 
@@ -1234,7 +1275,11 @@ impl TransferEngine {
             let context = SelectionContext {
                 local_memory: local.memory_type(),
                 #[cfg(feature = "cuda")]
-                local_ipc: local.ipc_requester(),
+                local_ipc: if self.source.metadata.mnnvl.is_some() {
+                    local.0.fabric.get().is_some_and(|r| r.local)
+                } else {
+                    local.ipc_requester()
+                },
                 #[cfg(not(feature = "cuda"))]
                 local_ipc: false,
                 remote: &remote,
@@ -1655,7 +1700,10 @@ impl TransferEngine {
                 }
             }
             #[cfg(feature = "cuda")]
-            let cohort = if request.selection.transport == Transport::Nvlink {
+            let cohort = if matches!(
+                request.selection.transport,
+                Transport::Nvlink | Transport::Mnnvl
+            ) {
                 crate::transport::nvlink::NVLinkTransport::group_len(
                     &requests[index..index + submission.native_group(index)],
                     self.config.max_transfer_bytes,

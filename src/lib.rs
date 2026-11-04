@@ -72,7 +72,11 @@ pub use runtime::topology::{
     DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
 };
 #[cfg(not(unsupported_native_target))]
-pub use transport::{hp_tcp::HpTcpConfig, shm::ShmConfig};
+pub use transport::{
+    hp_tcp::HpTcpConfig,
+    mnnvl::{MnnvlConfig, MnnvlHandleType},
+    shm::ShmConfig,
+};
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub use {
     config::StagingLocation, runtime::proxy_manager::StagingStats, transport::nvlink::NVLinkStats,

@@ -75,8 +75,8 @@ impl NVLinkTransport {
         reuse: bool,
     ) -> [u8; CACHE_HELLO_SIZE] {
         let mut hello = [0; CACHE_HELLO_SIZE];
-        hello[..4].copy_from_slice(b"NVL2");
-        self.identity.encode(&mut hello[4..36]);
+        hello[..4].copy_from_slice(self.cache_magic());
+        self.wire_identity().encode(&mut hello[4..36]);
         hello[36..52].copy_from_slice(&requester.0);
         hello[52..68].copy_from_slice(&token.0);
         hello[68] = u8::from(reuse);
@@ -92,11 +92,11 @@ impl NVLinkTransport {
         }
         let mut hello = [0; CACHE_HELLO_SIZE];
         channel.read_exact(&mut hello)?;
-        if &hello[..4] != b"NVL2" || hello[68] > 1 {
+        if &hello[..4] != self.cache_magic() || hello[68] > 1 {
             return Err(Error::Protocol("NVLink cache hello"));
         }
         let identity = ProcessIdentity::decode(&hello[4..36]);
-        self.identity.validate_peer(identity)?;
+        self.validate_identity(identity)?;
         let mut requester = [0; 16];
         let mut token = [0; 16];
         requester.copy_from_slice(&hello[36..52]);
@@ -119,11 +119,11 @@ impl NVLinkTransport {
         length: usize,
     ) -> Result<()> {
         let (identity, requester, token, reuse) = self.read_cache_hello(channel)?;
-        let (allocation, allocation_offset) = memory.cuda_range(offset, length)?;
+        let (_, allocation_offset) = memory.allocation_range(offset, length)?;
         let nonce = SourceEpoch::generate()?;
         let mut grant = [0; GRANT_SIZE];
-        grant[..4].copy_from_slice(b"NVL1");
-        self.identity.encode(&mut grant[4..36]);
+        grant[..4].copy_from_slice(self.grant_magic());
+        self.wire_identity().encode(&mut grant[4..36]);
         grant[36..88].copy_from_slice(&request.encode());
         grant[88..104].copy_from_slice(&requester.0);
         grant[104..120].copy_from_slice(&nonce.0);
@@ -143,7 +143,7 @@ impl NVLinkTransport {
                 entries
                     .try_reserve(1)
                     .map_err(|_| Error::ResourceExhausted)?;
-                let export = IpcExport::new(allocation)?;
+                let (export, _) = self.export(memory, offset, length, channel.deadline)?;
                 let permit = self.budget.reserve(export.extent, true)?;
                 entries.insert(
                     token,

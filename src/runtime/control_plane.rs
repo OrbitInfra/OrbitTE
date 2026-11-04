@@ -262,6 +262,7 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         || reply.length
             > (DESCRIPTOR_HEADER
                 + MAX_REGIONS * (REGION_SIZE + crate::transport::shm::wire::RECORD)
+                + crate::transport::mnnvl::Capability::SIZE
                 + crate::transport::shm::wire::HEADER
                 + crate::transport::hp_tcp::Endpoint::MAX_WIRE) as u64
     {
@@ -280,6 +281,10 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
         let (shm, used) = crate::transport::shm::wire::Manifest::decode(trailer, count)?;
         metadata.shm = Some(Arc::new(shm));
         trailer = &trailer[used..];
+    }
+    if bytes[4] & 64 != 0 {
+        metadata.mnnvl = Some(crate::transport::mnnvl::Capability::decode(trailer)?);
+        trailer = &trailer[crate::transport::mnnvl::Capability::SIZE..];
     }
     if !trailer.is_empty() {
         if !metadata.tcp_disabled {
@@ -308,7 +313,6 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             || (entry[26] != 0 && entry[25] != 1)
             || entry[27] > 1
             || (entry[27] != 0 && (metadata.hp.is_none() || entry[25] != 0))
-            || entry[28..].iter().any(|b| *b != 0)
         {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
         }
@@ -325,6 +329,19 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             },
             ipc_exportable: entry[26] != 0,
             hp_registered: entry[27] != 0,
+            fabric: crate::transport::mnnvl::Location::decode(
+                u32::from_be_bytes(
+                    entry[28..32]
+                        .try_into()
+                        .map_err(|_| Error::Protocol("MNNVL location"))?,
+                ),
+                if entry[25] == 0 {
+                    MemoryType::Cpu
+                } else {
+                    MemoryType::Cuda
+                },
+                metadata.mnnvl,
+            )?,
         });
         previous = id;
     }
@@ -679,11 +696,18 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
         if request.operation == Operation::Describe {
             let (metadata, regions) = source.describe()?;
             let end = DESCRIPTOR_HEADER + regions.len() * REGION_SIZE;
-            let hp_start = end + metadata.shm.as_ref().map_or(0, |s| s.wire_len());
+            let fabric_start = end + metadata.shm.as_ref().map_or(0, |s| s.wire_len());
+            let hp_start = fabric_start
+                + metadata
+                    .mnnvl
+                    .map_or(0, |_| crate::transport::mnnvl::Capability::SIZE);
             let mut payload =
                 buffer(hp_start + metadata.hp.as_ref().map_or(0, |hp| hp.wire_len()))?;
             if let Some(shm) = &metadata.shm {
-                shm.encode(&mut payload[end..hp_start]);
+                shm.encode(&mut payload[end..fabric_start]);
+            }
+            if let Some(fabric) = metadata.mnnvl {
+                fabric.encode(&mut payload[fabric_start..hp_start]);
             }
             if let Some(hp) = &metadata.hp {
                 hp.encode(&mut payload[hp_start..]);
@@ -701,6 +725,9 @@ fn serve(channel: &mut ControlChannel<'_>, source: &Arc<Source>, max_bytes: usiz
                 entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
                 entry[26] = u8::from(region.ipc_exportable);
                 entry[27] = u8::from(region.hp_registered);
+                entry[28..32].copy_from_slice(
+                    &crate::transport::mnnvl::Location::wire(region.fabric).to_be_bytes(),
+                );
             }
             channel.reply(source.epoch, 0, payload.len() as u64)?;
             channel.write_all(&payload)?;

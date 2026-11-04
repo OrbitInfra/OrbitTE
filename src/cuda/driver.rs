@@ -24,7 +24,35 @@ pub(super) type CopyBatch = unsafe extern "C" fn(
     sys::CUstream,
 ) -> Status;
 
+#[derive(Clone, Copy)]
+pub(super) struct VmmApi {
+    pub count: unsafe extern "C" fn(*mut c_int) -> Status,
+    pub attribute: unsafe extern "C" fn(*mut c_int, sys::CUdevice_attribute, c_int) -> Status,
+    pub can_peer: unsafe extern "C" fn(*mut c_int, c_int, c_int) -> Status,
+    pub enable_peer: unsafe extern "C" fn(Context, c_uint) -> Status,
+    pub granularity: unsafe extern "C" fn(
+        *mut usize,
+        *const sys::CUmemAllocationProp,
+        sys::CUmemAllocationGranularity_flags,
+    ) -> Status,
+    pub create:
+        unsafe extern "C" fn(*mut u64, usize, *const sys::CUmemAllocationProp, u64) -> Status,
+    pub retain: unsafe extern "C" fn(*mut u64, *mut c_void) -> Status,
+    pub properties: unsafe extern "C" fn(*mut sys::CUmemAllocationProp, u64) -> Status,
+    pub release: unsafe extern "C" fn(u64) -> Status,
+    pub reserve: unsafe extern "C" fn(*mut u64, usize, usize, u64, u64) -> Status,
+    pub free: unsafe extern "C" fn(u64, usize) -> Status,
+    pub map: unsafe extern "C" fn(u64, usize, usize, u64, u64) -> Status,
+    pub unmap: unsafe extern "C" fn(u64, usize) -> Status,
+    pub access: unsafe extern "C" fn(u64, usize, *const sys::CUmemAccessDesc, usize) -> Status,
+    pub export:
+        unsafe extern "C" fn(*mut c_void, u64, sys::CUmemAllocationHandleType, u64) -> Status,
+    pub import:
+        unsafe extern "C" fn(*mut u64, *mut c_void, sys::CUmemAllocationHandleType) -> Status,
+}
+
 pub(super) struct Driver {
+    pub(super) vmm: Option<VmmApi>,
     pub(super) _library: Option<Library>,
     pub init: unsafe extern "C" fn(c_uint) -> Status,
     pub device_get: unsafe extern "C" fn(*mut c_int, c_int) -> Status,
@@ -76,69 +104,101 @@ pub(super) struct Driver {
     pub address_range: unsafe extern "C" fn(*mut u64, *mut usize, u64) -> Status,
 }
 
+macro_rules! symbol {
+    ($lib:expr, $field:ident) => {
+        symbol(
+            $lib,
+            concat!(stringify!($field), "\0").as_bytes(),
+            concat!("CUDA driver symbol ", stringify!($field)),
+            |api: &sys::Lib| api.$field,
+        )?
+    };
+}
+
+impl VmmApi {
+    fn load(library: &Library) -> Result<Self> {
+        Ok(Self {
+            count: symbol!(library, cuDeviceGetCount),
+            attribute: symbol!(library, cuDeviceGetAttribute),
+            can_peer: symbol!(library, cuDeviceCanAccessPeer),
+            enable_peer: symbol!(library, cuCtxEnablePeerAccess),
+            granularity: symbol!(library, cuMemGetAllocationGranularity),
+            create: symbol!(library, cuMemCreate),
+            retain: symbol!(library, cuMemRetainAllocationHandle),
+            properties: symbol!(library, cuMemGetAllocationPropertiesFromHandle),
+            release: symbol!(library, cuMemRelease),
+            reserve: symbol!(library, cuMemAddressReserve),
+            free: symbol!(library, cuMemAddressFree),
+            map: symbol!(library, cuMemMap),
+            unmap: symbol!(library, cuMemUnmap),
+            access: symbol!(library, cuMemSetAccess),
+            export: symbol!(library, cuMemExportToShareableHandle),
+            import: symbol!(library, cuMemImportFromShareableHandle),
+        })
+    }
+}
+
 impl Driver {
     pub(super) fn load() -> Result<Arc<Self>> {
+        Self::open(false)
+    }
+    pub(super) fn load_fabric() -> Result<Arc<Self>> {
+        Self::open(true)
+    }
+    fn open(fabric: bool) -> Result<Arc<Self>> {
         // SAFETY: load only the system Driver API. The library is retained by
         // every allocation/context, including resources whose cleanup failed.
         let library = unsafe { Library::new("libcuda.so.1") }
             .map_err(|_| Error::Unavailable("CUDA driver libcuda.so.1"))?;
-        Self::from_library(library)
+        Self::from_library(library, fabric)
     }
 
-    fn from_library(library: Library) -> Result<Arc<Self>> {
-        macro_rules! symbol {
-            ($field:ident) => {
-                symbol(
-                    &library,
-                    concat!(stringify!($field), "\0").as_bytes(),
-                    concat!("CUDA driver symbol ", stringify!($field)),
-                    |api: &sys::Lib| api.$field,
-                )?
-            };
-        }
+    fn from_library(library: Library, fabric: bool) -> Result<Arc<Self>> {
+        let vmm = fabric.then(|| VmmApi::load(&library)).transpose()?;
         let driver = Self {
-            init: symbol!(cuInit),
-            device_get: symbol!(cuDeviceGet),
+            vmm,
+            init: symbol!(&library, cuInit),
+            device_get: symbol!(&library, cuDeviceGet),
             #[cfg(feature = "rdma")]
-            device_count: symbol!(cuDeviceGetCount),
+            device_count: symbol!(&library, cuDeviceGetCount),
             #[cfg(feature = "rdma")]
-            device_attribute: symbol!(cuDeviceGetAttribute),
+            device_attribute: symbol!(&library, cuDeviceGetAttribute),
             #[cfg(feature = "rdma")]
-            set_pointer_attribute: symbol!(cuPointerSetAttribute),
+            set_pointer_attribute: symbol!(&library, cuPointerSetAttribute),
             #[cfg(feature = "rdma")]
-            flush_rdma: symbol!(cuFlushGPUDirectRDMAWrites),
-            primary_retain: symbol!(cuDevicePrimaryCtxRetain),
-            primary_release: symbol!(cuDevicePrimaryCtxRelease_v2),
-            push: symbol!(cuCtxPushCurrent_v2),
-            pop: symbol!(cuCtxPopCurrent_v2),
-            synchronize: symbol!(cuCtxSynchronize),
-            allocate: symbol!(cuMemAlloc_v2),
-            free: symbol!(cuMemFree_v2),
-            memset: symbol!(cuMemsetD8_v2),
-            ipc_export: symbol!(cuIpcGetMemHandle),
-            ipc_open: symbol!(cuIpcOpenMemHandle_v2),
-            ipc_close: symbol!(cuIpcCloseMemHandle),
+            flush_rdma: symbol!(&library, cuFlushGPUDirectRDMAWrites),
+            primary_retain: symbol!(&library, cuDevicePrimaryCtxRetain),
+            primary_release: symbol!(&library, cuDevicePrimaryCtxRelease_v2),
+            push: symbol!(&library, cuCtxPushCurrent_v2),
+            pop: symbol!(&library, cuCtxPopCurrent_v2),
+            synchronize: symbol!(&library, cuCtxSynchronize),
+            allocate: symbol!(&library, cuMemAlloc_v2),
+            free: symbol!(&library, cuMemFree_v2),
+            memset: symbol!(&library, cuMemsetD8_v2),
+            ipc_export: symbol!(&library, cuIpcGetMemHandle),
+            ipc_open: symbol!(&library, cuIpcOpenMemHandle_v2),
+            ipc_close: symbol!(&library, cuIpcCloseMemHandle),
             copy_batch: batch_copy(&library),
-            copy_device: symbol!(cuMemcpyAsync),
-            to_host: symbol!(cuMemcpyDtoHAsync_v2),
-            to_device: symbol!(cuMemcpyHtoDAsync_v2),
-            stream_context: symbol!(cuStreamGetCtx),
-            stream_capture: symbol!(cuStreamIsCapturing),
-            stream_create: symbol!(cuStreamCreate),
-            stream_destroy: symbol!(cuStreamDestroy_v2),
-            stream_synchronize: symbol!(cuStreamSynchronize),
-            event_create: symbol!(cuEventCreate),
-            event_destroy: symbol!(cuEventDestroy_v2),
-            event_record: symbol!(cuEventRecord),
-            event_synchronize: symbol!(cuEventSynchronize),
-            event_query: symbol!(cuEventQuery),
-            host_allocate: symbol!(cuMemHostAlloc),
-            host_free: symbol!(cuMemFreeHost),
-            host_register: symbol!(cuMemHostRegister_v2),
-            host_unregister: symbol!(cuMemHostUnregister),
-            pci_bus_id: symbol!(cuDeviceGetPCIBusId),
-            pointer_attributes: symbol!(cuPointerGetAttributes),
-            address_range: symbol!(cuMemGetAddressRange_v2),
+            copy_device: symbol!(&library, cuMemcpyAsync),
+            to_host: symbol!(&library, cuMemcpyDtoHAsync_v2),
+            to_device: symbol!(&library, cuMemcpyHtoDAsync_v2),
+            stream_context: symbol!(&library, cuStreamGetCtx),
+            stream_capture: symbol!(&library, cuStreamIsCapturing),
+            stream_create: symbol!(&library, cuStreamCreate),
+            stream_destroy: symbol!(&library, cuStreamDestroy_v2),
+            stream_synchronize: symbol!(&library, cuStreamSynchronize),
+            event_create: symbol!(&library, cuEventCreate),
+            event_destroy: symbol!(&library, cuEventDestroy_v2),
+            event_record: symbol!(&library, cuEventRecord),
+            event_synchronize: symbol!(&library, cuEventSynchronize),
+            event_query: symbol!(&library, cuEventQuery),
+            host_allocate: symbol!(&library, cuMemHostAlloc),
+            host_free: symbol!(&library, cuMemFreeHost),
+            host_register: symbol!(&library, cuMemHostRegister_v2),
+            host_unregister: symbol!(&library, cuMemHostUnregister),
+            pci_bus_id: symbol!(&library, cuDeviceGetPCIBusId),
+            pointer_attributes: symbol!(&library, cuPointerGetAttributes),
+            address_range: symbol!(&library, cuMemGetAddressRange_v2),
             _library: Some(library),
         };
         // SAFETY: CUDA driver initialization is thread safe and uses flags zero.
