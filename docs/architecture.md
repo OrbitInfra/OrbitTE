@@ -270,7 +270,7 @@ successful bytes and cancels only its own rail probe. An uncertain WRITE keeps
 its original effect. The partial-post and guarded WRITE controls exercise these
 boundaries. Dropping a work handle never returns SQ credit. CQ lookup resolves the
 exact record before checking QPN, WR identity and operation, and native access
-follows grant → QP → context lock order. GPU sources borrow the published local-only MR on rails that prove exact,
+follows grant → QP → context lock order. GPU sources that opt into reuse borrow the published local-only MR on rails that prove exact,
 revocable indirect keys. A fresh key is bound to one QP and direction. The
 private PD and exact MR remain the path for other providers. Frozen TENT
 publishes a registration-lifetime key. OrbitTE's stale-key, guard-byte and

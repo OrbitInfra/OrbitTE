@@ -94,7 +94,7 @@ pub struct RdmaConfig {
     pub host_memory: RdmaHostMemory,
     pub cuda_memory: RdmaCudaMemory,
     /// Probe exact-range, revocable provider keys for one-sided GPU source reuse.
-    /// False selects isolated per-grant registrations for every direct GPU source.
+    /// Disabled by default. Direct GPU sources use isolated per-grant PDs unless opted in.
     pub gpu_source_reuse: bool,
     /// Disable direct device registration. An explicit Direct policy then fails validation.
     pub disable_gpu_direct_rdma: bool,
@@ -156,7 +156,7 @@ impl Default for RdmaConfig {
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             cuda_memory: RdmaCudaMemory::Staged,
-            gpu_source_reuse: true,
+            gpu_source_reuse: false,
             disable_gpu_direct_rdma: false,
             log_slice_affinity: false,
             max_direct_bytes: 64 << 20,

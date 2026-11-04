@@ -477,7 +477,9 @@ or grants and never expose GPU pointers as CPU slices.
 
 A GPU source can reuse a connected QP and its local-only GPU MR when every
 advertised rail can create a hardware-revocable key over that MR.
-`RdmaConfig.gpu_source_reuse` defaults to true. On mlx5, OrbitTE probes the
+Set `RdmaConfig::gpu_source_reuse` to `true` to opt in. The default uses the
+private grant path qualified on H20. Changing that default requires the
+[installed reuse gate](qualification.md#verification-queue) to pass. On mlx5, OrbitTE probes the
 actual parent using DevX, indirect KLM translation and named key indices. Each
 grant binds a fresh key to its QPN, exact byte range and READ or WRITE right.
 The source verifies the device's key context and KLM before publishing it.

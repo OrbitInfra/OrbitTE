@@ -2598,15 +2598,16 @@ pub(super) fn cold_contention() -> (usize, usize) {
 
 #[cfg(feature = "cuda")]
 pub(crate) fn gpu_runtime(mode: &str) -> RdmaTransport {
-    gpu_runtime_with_key_reuse(mode, true)
+    let mut runtime = runtime(mode);
+    runtime.config.cuda_memory = RdmaCudaMemory::Direct;
+    runtime.config.max_direct_bytes = 128;
+    runtime
 }
 
 #[cfg(feature = "cuda")]
 pub(crate) fn gpu_runtime_with_key_reuse(mode: &str, reuse: bool) -> RdmaTransport {
-    let mut runtime = runtime(mode);
+    let mut runtime = gpu_runtime(mode);
     runtime.config.gpu_source_reuse = reuse;
-    runtime.config.cuda_memory = RdmaCudaMemory::Direct;
-    runtime.config.max_direct_bytes = 128;
     runtime
 }
 

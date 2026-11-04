@@ -11,16 +11,14 @@ fn gpu_source_reuse_confines_each_remote_key_to_its_qp_range_and_direction() {
         "gpu_key_busy",
         "gpu_key_probe_query",
         "disabled",
+        "default",
     ] {
         let capable = mode == "gpu_key_copy";
-        let rdma = gpu_runtime_with_key_reuse(
-            if mode == "disabled" {
-                "gpu_key_copy"
-            } else {
-                mode
-            },
-            mode != "disabled",
-        );
+        let rdma = match mode {
+            "default" => gpu_runtime("gpu_key_copy"),
+            "disabled" => gpu_runtime_with_key_reuse("gpu_key_copy", false),
+            _ => gpu_runtime_with_key_reuse(mode, true),
+        };
         let source = rdma_fixture_with_runtime(rdma);
         let requester = rdma_fixture_with_runtime(runtime(if capable {
             "direct:copy_check_gpu_keys"
@@ -112,7 +110,7 @@ fn gpu_source_reuse_confines_each_remote_key_to_its_qp_range_and_direction() {
 #[test]
 fn gpu_source_reuse_uncertain_destroy_or_visibility_keeps_the_parent_and_loan() {
     for mode in ["gpu_key_destroy", "gpu_key_flush"] {
-        let source = rdma_fixture_with_runtime(gpu_runtime(mode));
+        let source = rdma_fixture_with_runtime(gpu_runtime_with_key_reuse(mode, true));
         let requester = rdma_fixture_with_runtime(runtime("direct:copy_check_gpu_keys"));
         let owner = allocation(&[0x5a; 24]);
         let weak = Arc::downgrade(&owner);
@@ -176,7 +174,7 @@ fn gpu_source_reuse_uncertain_destroy_or_visibility_keeps_the_parent_and_loan() 
 #[test]
 fn gpu_source_reuse_unreleased_probe_retains_unpublished_parent() {
     for mode in ["gpu_key_probe_destroy", "gpu_key_probe_unknown"] {
-        let source = rdma_fixture_with_runtime(gpu_runtime(mode));
+        let source = rdma_fixture_with_runtime(gpu_runtime_with_key_reuse(mode, true));
         let owner = allocation(&[0x5a; 24]);
         let weak = Arc::downgrade(&owner);
         let result =
@@ -207,7 +205,7 @@ fn gpu_source_reuse_unreleased_probe_retains_unpublished_parent() {
 
 #[test]
 fn gpu_source_reuse_unregister_waits_for_the_exact_invalidation() {
-    let source = rdma_fixture_with_runtime(gpu_runtime("gpu_key_copy"));
+    let source = rdma_fixture_with_runtime(gpu_runtime_with_key_reuse("gpu_key_copy", true));
     let requester = rdma_fixture_with_runtime(runtime("direct:pause_copy_check_gpu_keys"));
     let pause = crate::transport::rdma::tests::pause(source_runtime(&requester));
     let owner = allocation(&[0x5a; 24]);
@@ -277,7 +275,7 @@ fn gpu_source_reuse_unregister_waits_for_the_exact_invalidation() {
 
 #[test]
 fn gpu_source_reuse_query_failure_retires_the_unpublished_key_before_payload() {
-    let source = rdma_fixture_with_runtime(gpu_runtime("gpu_key_query"));
+    let source = rdma_fixture_with_runtime(gpu_runtime_with_key_reuse("gpu_key_query", true));
     let requester = rdma_fixture_with_runtime(runtime("direct:copy_check_gpu_keys"));
     let owner = allocation(&[0x5a; 24]);
     let memory = memory(&owner);
