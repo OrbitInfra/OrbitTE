@@ -15,6 +15,7 @@ fn external_vmm_requires_the_whole_extent_and_retains_the_supplied_owner() -> Re
     // SAFETY: the owner retains initialized, offset-zero storage of the supplied exact extent.
     let wrong = unsafe { e.wrap_mnnvl(0, id, 32, 4096, original.clone()) };
     assert!(matches!(wrong, Err(Error::InvalidRange)));
+    rig.fail("combined-handle-mask");
     let weak = Arc::downgrade(&original);
     // SAFETY: this fixture granted all visible GPUs access to the initialized page-rounded extent.
     let wrapped = unsafe { e.wrap_mnnvl(0, id, 64, 4096, original) }?;

@@ -142,7 +142,7 @@ impl Platform {
 impl Mapping {
     pub(super) fn with_allocation<T>(
         &self,
-        operation: impl FnOnce(u64, &sys::CUmemAllocationProp) -> Result<T>,
+        operation: impl FnOnce(u64, *const sys::CUmemAllocationProp) -> Result<T>,
     ) -> Result<T> {
         let context = &self.context;
         let result = context.current(|| {
@@ -155,18 +155,37 @@ impl Mapping {
                 if handle == 0 {
                     return Err(Error::Protocol("CUDA returned a null retained handle"));
                 }
-                let mut actual = prop(self.kind, location(self.loc, context.device), false);
-                // SAFETY: the temporary reference and typed output are live through this probe.
+                let expected = location(self.loc, context.device);
+                let mut storage =
+                    std::mem::MaybeUninit::new(allocation_properties(self.kind, expected));
+                let raw = storage.as_mut_ptr();
+                // SAFETY: storage has the exact generated ABI and outlives the native call.
                 check("cuMemGetAllocationPropertiesFromHandle", unsafe {
-                    (self.api.properties)(&mut actual, handle)
+                    (self.api.properties)(raw, handle)
                 })?;
-                if actual.type_ != sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED
-                    || actual.location != location(self.loc, context.device)
-                    || actual.requestedHandleTypes as u32 & native_kind(self.kind) as u32 == 0
+                // SAFETY: CUDA initialized these C fields. requestedHandleTypes is a bit mask
+                // and can contain a combination with no Rust enum discriminant. Read the raw
+                // integer representation without ever forming a reference to that Rust enum.
+                let (ty, location_type, id, types) = unsafe {
+                    (
+                        std::ptr::addr_of!((*raw).type_).cast::<u32>().read(),
+                        std::ptr::addr_of!((*raw).location.type_)
+                            .cast::<u32>()
+                            .read(),
+                        std::ptr::addr_of!((*raw).location.id).read(),
+                        std::ptr::addr_of!((*raw).requestedHandleTypes)
+                            .cast::<u32>()
+                            .read(),
+                    )
+                };
+                if ty != sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED as u32
+                    || location_type != expected.type_ as u32
+                    || id != expected.id
+                    || types & native_kind(self.kind) as u32 == 0
                 {
                     return Err(Error::Unavailable("CUDA VMM allocation property mismatch"));
                 }
-                operation(handle, &actual)
+                operation(handle, raw)
             });
             if handle != 0 {
                 // SAFETY: release the one temporary reference, including a partial retain output.

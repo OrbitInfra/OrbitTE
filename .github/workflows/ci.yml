@@ -104,7 +104,7 @@ jobs:
           binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           count=$("$binary" --list | awk '/^cuda::tests::fabric::.*: test$/ {n++} END {print n+0}')
-          test "$count" -ge 10
+          test "$count" -ge 17
           for i in $(seq 1 50); do
             RUST_TEST_THREADS=$(nproc) "$binary" cuda::tests::fabric:: > "$RUNNER_TEMP/mnnvl.log" || { cat "$RUNNER_TEMP/mnnvl.log"; exit 1; }
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/mnnvl.log"

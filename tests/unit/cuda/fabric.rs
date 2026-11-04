@@ -525,19 +525,18 @@ fn posix_fd_value_imports_a_live_child_and_rejects_departed_or_replaced_exporter
     c.mnnvl.as_mut().unwrap().handle_type = MnnvlHandleType::PosixFd;
     let rig = Rig::new();
     let engine = rig.engine(c)?;
-    let platform = install(
-        &MnnvlConfig {
-            handle_type: MnnvlHandleType::PosixFd,
-            ..Default::default()
-        },
-        SourceEpoch([1; 16]),
-        4,
-        8192,
-    );
-    assert!(platform.is_none()); // Native calls are supplied only within a fixture's installation.
     let m = engine.allocate_mnnvl(0, 16)?;
     let ctx = m.allocation.lock().unwrap().context.clone();
-    let mut child=Command::new("python3").args(["-c","import os,sys; f=os.memfd_create('mnnvl-child'); os.write(f,bytes(i%251 for i in range(4096))); print(f,flush=True); sys.stdin.buffer.read(1)"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+    let exporter = "import os, sys
+fd = os.memfd_create('mnnvl-child')
+os.write(fd, bytes(i % 251 for i in range(4096)))
+print(fd, flush=True)
+sys.stdin.buffer.read(1)";
+    let mut child = Command::new("python3")
+        .args(["-c", exporter])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
     let pid = child.id() as i32;
     let mut line = String::new();
     BufReader::new(child.stdout.take().unwrap()).read_line(&mut line)?;

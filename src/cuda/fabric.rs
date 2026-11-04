@@ -33,7 +33,18 @@ fn location(kind: Location, device: i32) -> sys::CUmemLocation {
     };
     sys::CUmemLocation { type_, id }
 }
-fn prop(kind: MnnvlHandleType, loc: sys::CUmemLocation, rdma: bool) -> sys::CUmemAllocationProp {
+fn device_attribute(api: &VmmApi, device: i32, attribute: sys::CUdevice_attribute) -> Result<i32> {
+    let mut value = 0;
+    // SAFETY: a retained local device, a Driver API attribute and a writable integer output.
+    check("cuDeviceGetAttribute", unsafe {
+        (api.attribute)(&mut value, attribute, device)
+    })?;
+    Ok(value)
+}
+fn allocation_properties(
+    kind: MnnvlHandleType,
+    loc: sys::CUmemLocation,
+) -> sys::CUmemAllocationProp {
     sys::CUmemAllocationProp {
         type_: sys::CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED,
         requestedHandleTypes: native_kind(kind),
@@ -41,7 +52,7 @@ fn prop(kind: MnnvlHandleType, loc: sys::CUmemLocation, rdma: bool) -> sys::CUme
         win32HandleMetaData: std::ptr::null_mut(),
         allocFlags: sys::CUmemAllocationProp_st__bindgen_ty_1 {
             compressionType: 0,
-            gpuDirectRDMACapable: u8::from(rdma),
+            gpuDirectRDMACapable: 0,
             usage: 0,
             reserved: [0; 4],
         },
@@ -63,13 +74,12 @@ pub(crate) struct Platform {
     devices: Vec<Device>,
     api: Arc<VmmApi>,
     allocations: Arc<Limits>,
-    fd_import: fn(i32, i32, [u8; 16]) -> Result<OwnedFd>,
 }
 struct Device {
     context: Arc<Context>,
     numa: Option<u32>,
-    rdma: bool,
 }
+
 struct Limits {
     max_count: usize,
     max_bytes: usize,
@@ -114,14 +124,7 @@ impl Platform {
         if let Some(p) = super::tests::fabric::install(config, boot, count, bytes) {
             return p;
         }
-        Self::discover(
-            Driver::load_fabric()?,
-            config,
-            boot,
-            count,
-            bytes,
-            duplicate_fd,
-        )
+        Self::discover(Driver::load_fabric()?, config, boot, count, bytes)
     }
     pub(super) fn discover(
         driver: Arc<Driver>,
@@ -129,7 +132,6 @@ impl Platform {
         boot: SourceEpoch,
         count: usize,
         bytes: usize,
-        fd_import: fn(i32, i32, [u8; 16]) -> Result<OwnedFd>,
     ) -> Result<Arc<Self>> {
         use sys::CUdevice_attribute::*;
         let api = driver
@@ -146,15 +148,8 @@ impl Platform {
         let mut devices = Vec::new();
         for ordinal in 0..n {
             let context = Context::primary(driver.clone(), ordinal)?;
-            let attr = |name| -> Result<i32> {
-                let mut value = 0;
-                // SAFETY: the retained device and attribute are valid and value is writable.
-                check("cuDeviceGetAttribute", unsafe {
-                    (api.attribute)(&mut value, name, context.device)
-                })?;
-                Ok(value)
-            };
-            let (numa, rdma) = context.current(|| {
+            let attr = |name| device_attribute(&api, context.device, name);
+            let numa = context.current(|| {
                 if attr(CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED).ok() != Some(1) {
                     return Err(Error::Unavailable(
                         "a visible GPU does not support CUDA fabric handles",
@@ -166,18 +161,11 @@ impl Platform {
                 {
                     return Err(Error::Unavailable("CUDA POSIX shareable handles"));
                 }
-                Ok((
-                    attr(CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID)
-                        .ok()
-                        .and_then(|x| u32::try_from(x).ok()),
-                    attr(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED)? != 0,
-                ))
+                Ok(attr(CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID)
+                    .ok()
+                    .and_then(|x| u32::try_from(x).ok()))
             })?;
-            devices.push(Device {
-                context,
-                numa,
-                rdma,
-            });
+            devices.push(Device { context, numa });
         }
         for d in &devices {
             d.context.current(|| {
@@ -219,7 +207,6 @@ impl Platform {
                 max_bytes: bytes,
                 usage: Mutex::default(),
             }),
-            fd_import,
         }))
     }
     fn device(&self, id: i32) -> Result<&Device> {
@@ -308,18 +295,23 @@ impl Platform {
         if len == 0 || len > isize::MAX as usize {
             return Err(Error::InvalidRange);
         }
-        let prop = prop(
-            self.caps.kind,
-            location(loc, d.context.device),
-            loc == Location::Device && d.rdma,
-        );
+        let mut properties = allocation_properties(self.caps.kind, location(loc, d.context.device));
         let mut gran = 0;
         d.context.current(|| {
+            if loc == Location::Device {
+                use sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED;
+                let supported = device_attribute(
+                    &self.api,
+                    d.context.device,
+                    CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED,
+                )?;
+                properties.allocFlags.gpuDirectRDMACapable = u8::from(supported != 0);
+            }
             // SAFETY: properties match this device/NUMA location and gran is a writable output.
             check("cuMemGetAllocationGranularity", unsafe {
                 (self.api.granularity)(
                     &mut gran,
-                    &prop,
+                    &properties,
                     sys::CUmemAllocationGranularity_flags::CU_MEM_ALLOC_GRANULARITY_MINIMUM,
                 )
             })
@@ -340,7 +332,7 @@ impl Platform {
         let res = d.context.current(|| {
             // SAFETY: storage is charged and m owns the handle output before any later failure.
             check("cuMemCreate", unsafe {
-                (self.api.create)(&mut m.handle, size, &prop, 0)
+                (self.api.create)(&mut m.handle, size, &properties, 0)
             })?;
             m.map(gran, &access)?;
             m.release_handle()?;
@@ -396,7 +388,7 @@ impl Platform {
                 if pid <= 0 || fd < 0 || bytes[24..] != [0; 40] {
                     return Err(Error::Protocol("MNNVL POSIX handle"));
                 }
-                Some((self.fd_import)(
+                Some(duplicate_fd(
                     pid,
                     fd,
                     bytes[8..24]

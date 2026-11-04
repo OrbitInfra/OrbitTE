@@ -107,3 +107,40 @@ fn a_failed_host_unregister_retains_the_host_registration_and_its_charge() -> Re
     ));
     Ok(())
 }
+
+#[test]
+fn egm_grant_waits_for_the_producer_on_its_owning_socket() -> Result<()> {
+    use crate::cuda::tests::pinned_readiness::Producer;
+    let mut c = config();
+    c.mnnvl.as_mut().unwrap().egm = true;
+    let sr = Rig::new();
+    let dr = Rig::new();
+    let src = sr.engine(c.clone())?;
+    let dst = dr.engine(c)?;
+    let host = src.allocate_egm(1, 32)?;
+    host.write(0, &[0x7a; 32])?;
+    let r = src.register_host_memory(host.clone(), 0, 32, Permission::RemoteRead)?;
+    let l = dst.register_memory(vec![0xcc; 24].into(), Permission::LocalOnly)?;
+    let producer = Producer::new(&sr.gpus[1], false);
+    let before = sr.gpus[1].event_waits.load(Ordering::Acquire);
+    producer.enqueue(&host, 5, 11);
+    producer.record(&host)?;
+    let p = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    assert!(
+        dst.submit_and_wait(
+            TransferOp::Read,
+            &p,
+            &[q(Transport::Mnnvl, &l, &r, 3, 5, 11)],
+            WAIT
+        )?
+        .is_complete()
+    );
+    assert_eq!(sr.gpus[1].event_waits.load(Ordering::Acquire), before + 1);
+    let mut want = [0xcc; 24];
+    want[3..14].fill(0);
+    assert_eq!(read(&l), want);
+    let mut want = [0x7a; 32];
+    want[5..16].fill(0);
+    assert_eq!(read(&r), want);
+    Ok(())
+}

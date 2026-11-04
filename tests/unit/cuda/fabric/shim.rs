@@ -6,7 +6,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::File,
-    os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd},
     sync::{OnceLock, Weak},
 };
 type Handle = sys::CUmemAllocationHandleType;
@@ -154,14 +154,7 @@ pub(super) fn install(
             import,
         });
         driver.copy_batch = Some(super::super::shim::copy_batch);
-        Some(Platform::discover(
-            Arc::new(driver),
-            c,
-            boot,
-            n,
-            b,
-            duplicate,
-        ))
+        Some(Platform::discover(Arc::new(driver), c, boot, n, b))
     })
 }
 
@@ -396,6 +389,7 @@ unsafe extern "C" fn retain(out: *mut u64, ptr: *mut std::ffi::c_void) -> Status
 }
 unsafe extern "C" fn properties(out: *mut sys::CUmemAllocationProp, handle: u64) -> Status {
     let mismatch = call("numa-mismatch");
+    let combined = call("combined-handle-mask");
     let s = state();
     let p = &s.physical[&handle];
     let mut props = read(out);
@@ -405,6 +399,18 @@ unsafe extern "C" fn properties(out: *mut sys::CUmemAllocationProp, handle: u64)
     }
     props.requestedHandleTypes = p.kind;
     put(out, props);
+    if combined {
+        // SAFETY: CUDA uses this C field as a mask. Write its integer representation
+        // to the provided raw output, without constructing an invalid Rust discriminant.
+        unsafe {
+            std::ptr::addr_of_mut!((*out).requestedHandleTypes)
+                .cast::<u32>()
+                .write(
+                    Handle::CU_MEM_HANDLE_TYPE_FABRIC as u32
+                        | Handle::CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR as u32,
+                )
+        }
+    }
     SUCCESS
 }
 unsafe extern "C" fn release(handle: u64) -> Status {
@@ -498,15 +504,4 @@ unsafe extern "C" fn zero(addr: u64, value: u8, len: usize) -> Status {
     // SAFETY: the shim just granted writable access to the entire mapped extent.
     unsafe { std::ptr::write_bytes(addr as usize as *mut u8, value, len) };
     SUCCESS
-}
-pub(super) fn duplicate(pid: i32, fd: i32, expected: [u8; 16]) -> Result<OwnedFd> {
-    if crate::cuda::fabric::pid_identity(pid)? != expected {
-        return Err(Error::Unavailable("stale exporter"));
-    }
-    // procfs duplicates the child's real exported inode on seccomp runners that deny pidfd_getfd.
-    Ok(File::options()
-        .read(true)
-        .write(true)
-        .open(format!("/proc/{pid}/fd/{fd}"))?
-        .into())
 }
