@@ -22,18 +22,15 @@ requirement unfinished. This target does not claim every upstream platform.
 
 ## Frozen reference
 
-Audited on 2026-10-21, Asia/Shanghai:
-
 | Reference | Revision | Purpose |
 | --- | --- | --- |
-| `OrbitInfra/Mooncake` main | `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` | Implementation and differential-test baseline |
-| `kvcache-ai/Mooncake` main | Same commit at inspection | Confirms the fork contains the latest upstream TENT inspected for this plan |
-| Latest upstream release | [`v0.3.13.post1`](https://github.com/kvcache-ai/Mooncake/releases/tag/v0.3.13.post1) | Historical comparison, not the full feature target |
+| [Mooncake v0.3.14](https://github.com/kvcache-ai/Mooncake/releases/tag/v0.3.14), released 2026-11-03 | `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c` | CPU/NVIDIA implementation and differential-test baseline, read through [OrbitInfra/Mooncake][reference] |
+| Previous baseline | `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` | Historical reviews, oracle runs and installed profiles retain this revision where recorded |
 | Initial OrbitTE source | [`b7e178fe2ac59e6a3ab19037f068236fb083292a`](https://github.com/OrbitInfra/OrbitTE/commit/b7e178fe2ac59e6a3ab19037f068236fb083292a) | Documents the starting point |
 
 The reference exposes 33 C functions and 18 named selectable transport types.
 There are 19 transport source directories because `bufio` also exists, but it
-is not registered by the frozen runtime loader. The test tree contains 84 C++
+is not registered by the frozen runtime loader. The test tree contains 88 C++
 files ending in `test.cpp`; that is a source inventory, not a count of executed
 or passing tests. Compile guards, SDK availability and missing devices affect
 which tests can run. See [the API][api], [types][types], [loader][loader] and
@@ -56,6 +53,50 @@ Examples already found:
 Baseline updates must be separate reviewed changes: record the new commit,
 diff this inventory and the tests, retain old evidence and qualify affected
 behavior again. Do not silently follow a moving `main` during implementation.
+
+## v0.3.14 delta
+
+The release is 160 commits ahead of the previous baseline. The path-limited
+Git history contains 31 commits affecting 103 files under
+`mooncake-transfer-engine/tent` (14,527 insertions and 1,028 deletions).
+R1a changes the reference and oracle. R1b owns RDMA, R1c owns storage and
+CUDA, and R1d owns HP-TCP, TCP and observability. A Port row can require an
+upstream regression control even where an OrbitTE owner already implements
+the behavior. Hardware qualification stays with the artifact that ran.
+
+| Commit | Upstream change | Status | OrbitTE owner or evidence |
+| --- | --- | --- | --- |
+| [`33f5ea0f`](https://github.com/OrbitInfra/Mooncake/commit/33f5ea0fd9f09b921d2d8585fc398aa703888601) | [Build] Bump yalantinglibs to 45c6463 (#5132) | **N/A** | C++ build and ASIO/YLT API updates. R1a pins the new YLT archive for the native oracle. OrbitTE has no YLT runtime. |
+| [`50896982`](https://github.com/OrbitInfra/Mooncake/commit/508969821645a7b02ebc46b6353c9e2679d772ec) | [TENT] Enable concurrent XPU host-device copies with a queue per copy (#5117) | **N/A** | Per-copy SYCL queues on Intel XPU. OrbitTE has no XPU platform. |
+| [`e544719f`](https://github.com/OrbitInfra/Mooncake/commit/e544719fa61a9f877ffc5508ad91845c77aa6f0b) | [TENT] Add lossless request and transport attempt accounting (#5094) | **Port** | R1d · Count accepted public requests separately from physical attempts. Pair starts with bounded terminal outcomes and in-flight gauges across runtime enable toggles, merges and retries. |
+| [`7d4670b6`](https://github.com/OrbitInfra/Mooncake/commit/7d4670b67152cab643caa9a81e70bca39c782e8e) | [TransferEngine] NVLink: keep the sync memcpy fast path in TENT  (#5165) | **Port** | R1c · Legacy NVLink uses blocking memcpy for one task strictly below the threshold (default 2,048 KiB, zero disables). Larger or grouped work stays async. The MNNVL path is unchanged. |
+| [`4c0c5e5a`](https://github.com/OrbitInfra/Mooncake/commit/4c0c5e5ab1adea65cc13d09d88e10ecaafd6cb69) | [TENT] Parse MC_DISABLE_GPU_DIRECT_RDMA and MC_LOG_RDMA_SLICE_AFFINITY as booleans (#5125) | **Port** | R1d · Parse `MC_DISABLE_GPU_DIRECT_RDMA` and `MC_LOG_RDMA_SLICE_AFFINITY` with the upstream boolean rules, including numeric values. S17 owns the general configuration loader. |
+| [`fec029cc`](https://github.com/OrbitInfra/Mooncake/commit/fec029cc71caba91823892464e4fe8109e576205) | [TENT]Fix MemFabric SDMA memory allocation and NPU transport initialization for Mooncake TENT (#4834) | **N/A** | MemFabric SDMA allocation, native host storage and NPU initialization depend on the excluded Ascend/MemFabric runtime. |
+| [`d0144780`](https://github.com/OrbitInfra/Mooncake/commit/d01447808d10af78011e9203d53796a15a032a03) | [TENT] Hash the batch address when picking a batch lock shard (#5095) | **Already covered** | OrbitTE gives each batch its own progress lock. `independent_batches_progress_while_a_sibling_progress_lock_is_held` exercises independent progress without address-based shard selection. |
+| [`5e50b615`](https://github.com/OrbitInfra/Mooncake/commit/5e50b615b3c1d956f103a0191ec3ef5e7eef7da1) | [TENT] Wait for in-flight io_uring I/O before freeing a sub-batch (#5068) | **Port** | R1c · Map free-sub-batch to the S2 consumed-SQE drain and test the wait-error/poll path. Keep the bounded destruction window and quarantine from `a_missing_cqe_at_the_drain_deadline_quarantines_the_submitted_span`. |
+| [`5805e845`](https://github.com/OrbitInfra/Mooncake/commit/5805e8455200fa9aa93393de26b8a627601afa44) | [TE] hp_tcp: assign each operation to the least-loaded lane (#4935) | **Port** | R1d · Assign single-slice operations to the least-loaded peer lane, break ties from the rotation point and release load on rejection or completion. Striped READs keep their rail mapping. |
+| [`956af65e`](https://github.com/OrbitInfra/Mooncake/commit/956af65e9b094e8adc8b4b9ec9b3105824b6e296) | [TE/TENT] Skip remote atomic QP access when the HCA reports no RDMA atomics. (#5047) | **Port** | R1b · Read HCA atomic capability and responder/initiator read-depth limits. OrbitTE already requests only READ/WRITE QP rights. Check non-atomic HCAs and clamp negotiated read depths to device limits. |
+| [`6692af10`](https://github.com/OrbitInfra/Mooncake/commit/6692af1046c3b2ffb12750ae8cdadd1c80d8ec59) | [TENT][FEAT] Reduce CQE Processing with Selective Signaling (#4632) | **Port** | R1b · The default signals every WR. Larger intervals are capped at half the SQ depth and signal each posted chain tail. Track unsignaled prefixes through partial posts, errors, flushes and rail probes. |
+| [`d3ef7b1c`](https://github.com/OrbitInfra/Mooncake/commit/d3ef7b1c2821d8cdfd5986ee5949e8c17608a36c) | [TENT] Add metrics self-observability contract (#4938) | **Port** | R1d · Expose build identity, runtime enable, HTTP startup and per-format serialization attempts, failures and last success. Keep self-observation available when transfer recording is disabled. |
+| [`5fa91fe1`](https://github.com/OrbitInfra/Mooncake/commit/5fa91fe135aba3255c638acd8fd95ba59a0c76c8) | [TENT] Add an opt-in pinned staging pool to the io_uring transport (#5012) | **Port** | R1c · `pinned_staging` defaults off. TENT leases page-aligned slots without blocking and falls back for oversized/exhausted requests. Map `staging_slot_kb` and `staging_slots` onto bounded owners and test exhaustion without an uncharged allocation. |
+| [`c8fe63e5`](https://github.com/OrbitInfra/Mooncake/commit/c8fe63e52cbb9e1af6c3ed760d6ce1b7262ba0d4) | [TE] TransferEngine support hixl nic topo path (#4558) | **N/A** | The NIC topology path is consumed by Ascend HIXL resource configuration. |
+| [`b730bbae`](https://github.com/OrbitInfra/Mooncake/commit/b730bbae5f8b89ce79f609df9c66b59bea1b3f8b) | [CI] Enable TENT runtime in T-One e2e as a parallel job (#3600) | **N/A** | T-One CI and build portability. The MNNVL change supplies missing pidfd syscall numbers in older C headers. OrbitTE already takes those numbers from Rust libc. |
+| [`1dd37f57`](https://github.com/OrbitInfra/Mooncake/commit/1dd37f57ba944f5190dad30db1267c1c5e4a4a6b) | [Bugfix][TENT] Fail stop on terminal RDMA teardown errors (#4383) | **Port** | R1b · Explicit TENT endpoint/context cleanup can retry, while terminal destructors fail stop on live QPs/MRs. Map the teardown tests to OrbitTE's typed `Unquiesced` and retained owners, including `device_teardown_failures_are_retained_without_retry_from_close_or_drop`. |
+| [`ddda75d3`](https://github.com/OrbitInfra/Mooncake/commit/ddda75d351f25d8da7b3a53e18c119c7533836cd) | [TENT][Bugfix] Refresh Local Rail Topology Before Slice Selection (#4708) | **Port** | R1b · Reload the rail monitor when either pinned local or remote topology snapshot changes before slice selection. |
+| [`8a4d4f68`](https://github.com/OrbitInfra/Mooncake/commit/8a4d4f68ca95de48967487dacbd714c35a663328) | [TENT] Enable GDS on Intel XPU through a cuFile-compatible library (#4904) | **N/A** | Intel xFile and `USE_XPU_GDS` supply the XPU-only device/file route. The NVIDIA GDS capability branch keeps DRAM/file and GPU/file. |
+| [`6b90ea5e`](https://github.com/OrbitInfra/Mooncake/commit/6b90ea5e6c375e70d602d0ecd5e063406797e748) | [TENT] Stage XPU buffers through host memory in io_uring transport (#4902) | **N/A** | Stages XPU memory through a host buffer for file I/O. OrbitTE's accelerator path is CUDA. |
+| [`8bfd2988`](https://github.com/OrbitInfra/Mooncake/commit/8bfd298880d447137378cf383017f49d8cd4a3aa) | [Bugfix][TENT] Submit merged staging requests only once (#4797) | **Port** | R1c · S8 builds the physical owner list before dispatch. Map `MergedStagingRequestsShareOneSubmission` to a staged transfer that counts one backend submission and checks both public aliases. |
+| [`58e243fb`](https://github.com/OrbitInfra/Mooncake/commit/58e243fb299e4beb990524f2f0e5cabe33bd07e7) | [TENT][BUGFIX] Preserve mapped peer rail for wildcard targets (#4923) | **Port** | R1b · An unknown remote NUMA location prefers the configured healthy direct peer rail. Check the unavailable-pair fallback and apply both the device mask and rail health. |
+| [`6a835cbf`](https://github.com/OrbitInfra/Mooncake/commit/6a835cbf934aa50c287261f255c83e6faffecb71) | [TENT] Batch register MemFabric buffers to avoid aligned overlaps (#4870) | **N/A** | Overlapping aligned registrations and rollback are specific to the MemFabric batch API. |
+| [`db4f146e`](https://github.com/OrbitInfra/Mooncake/commit/db4f146ecb5ae3bc432c0262c1cb6650a0a39ba4) | [TENT] Add intra-node PCIe P2P copies between Intel XPUs (#4379) | **N/A** | Intel XPU PCIe peer copies, Level Zero IPC imports and XPU-specific selector capabilities require SYCL. |
+| [`a7496800`](https://github.com/OrbitInfra/Mooncake/commit/a7496800527b93105ac5c4177ce7cdabc5667dbf) | [TENT] Add asynchronous MLU host-device copies (#4720) | **Port** | R1c · Exclude MLU/CNRT copies. The same commit changes shared submit publication, polling, staging-child drain and failed unregister/rollback. Map its vendor-independent tests to the existing batch, staging and registration owners. |
+| [`dae22d47`](https://github.com/OrbitInfra/Mooncake/commit/dae22d472e31f6aac92ee1dfe938dc1441b58850) | [TENT] Do not advance the notify send slot on a failed post (#4434) | **N/A** | The corrected send slot belongs to the RDMA notification QP. OrbitTE notifications use local, TCP and control-RPC delivery. |
+| [`b2c7d0a7`](https://github.com/OrbitInfra/Mooncake/commit/b2c7d0a7b5cec0b04563138f40d4c40937dd63fe) | [Bugfix][TENT] Restore caller CUDA context after plugin copies (#4839) | **Port** | R1c · Exercise exact custom or absent context restoration and terminal copy/restore errors. A handled CUDA plugin failure (`TENT_DEVICE_PLUGIN_ERROR`) cannot fall through to host memcpy. The external plugin ABI remains S22. |
+| [`042ab8a1`](https://github.com/OrbitInfra/Mooncake/commit/042ab8a18b0e6ccfe87782261a5556a3dd4446e4) | [TENT] Add Intel XPU GPUDirect dma-buf RDMA to the Transfer Engine (#4378) | **N/A** | The dma-buf exporter and accelerator-specific range checks serve Intel XPU. OrbitTE's NVIDIA RDMA path uses its CUDA registration owner. |
+| [`3b08b771`](https://github.com/OrbitInfra/Mooncake/commit/3b08b77168870d265e32b6cfeab661f037426b9c) | [TE/TENT] Add adaptive RDMA congestion control core (#4197) | **Port** | R1b · Optional shared RDMA congestion core, default off, with observe/enforce byte windows, device/route permits, generations and error classification. The TENT change builds the core. It does not establish live congestion-control qualification. |
+| [`7540f582`](https://github.com/OrbitInfra/Mooncake/commit/7540f5826ed32cb755b1db027a2c609adb53f024) | [TENT] Add diagnostic core and version CLI (#4154) | **Port** | R1d · The build installs the public `tent diagnostics version [--json]` command, diagnostics library and header. Map `cli_test.py` and `diagnostic_test.cpp` for text/JSON, build features and exit status. |
+| [`7a058556`](https://github.com/OrbitInfra/Mooncake/commit/7a0585567458a4aba6a58115888c54b7fd1a44e1) | fix(tent): allow CPU clients to select peer GPU TCP memory (#4410) | **Port** | R1d · A CPU-only requester can select TCP for a peer GPU range. OrbitTE's TCP selector already admits the route. Map `CpuPlatformCanSelectPeerGpu` and verify both directions with host-side and CUDA-shim owners. |
+| [`e3e9d70e`](https://github.com/OrbitInfra/Mooncake/commit/e3e9d70eea3c8ea9eb236b4c9c92f361fbbe533f) | [Bugfix][TENT] Restore the caller's exact CUDA context after copies (#4643) | **Port** | R1c · Preserve the caller's exact CUDA context, including no current context, after platform copies. Exercise same-device custom contexts and error paths against the existing Driver API push/pop owner. |
 
 ## What parity means
 
@@ -104,7 +145,7 @@ that every branch or provider has already been qualified upstream.
 | F03 | Platform allocation/free, location and pointer probing, synchronous copy and device/context/stream ownership; CUDA device-plugin C ABI | `runtime/platform*`, `memory_prober*`, `platform/*`, `device_plugin.h`, `plugins/*` | P1/P5/P8 |
 | F04 | Single/batch memory allocation and registration; permissions/options; duplicate references, range geometry, warmup/prefault, unregister and partial-failure ownership | `transfer_engine_impl.cpp`, `segment_registry*`, `local_memory_lifecycle_test`, `coalesce_regions_test`, backend buffer tests | P1/P4/P5/P8 |
 | F05 | Memory/file segments, `file://` addressing, open/close/info, descriptor caching/refresh, update subscription/invalidation and retry coalescing | `segment*`, `control_plane*`, `segment_manager_test`, `segment_desc_retry_test` | P2/P7 |
-| F06 | P2P metadata plus etcd, Redis and HTTP stores; Redis username/password/DB behavior; publication and lookup failure handling | `runtime/metastore.cpp`, `metastore/*`, `control_plane*`, `redis_metastore_test` | P2/P9 |
+| F06 | P2P metadata for OrbitKV. Optional S18 adds etcd, Redis (username, password and DB) and HTTP stores for another consumer, including publication and lookup failure handling | `runtime/metastore.cpp`, `metastore/*`, `control_plane*`, `redis_metastore_test` | P2/P9 |
 | F07 | RPC bootstrap, peer probe, data READ/WRITE, notifications, Delegate/Pin/Unpin, update subscriptions; reconnect and owned handler shutdown | `rpc/*`, `control_plane*`, `rpc_reconnect_test`, `rpc_handler_isolation_test`, `delegate_rpc_test` | P2/P5/P10 |
 | F08 | Batch capacity/IDs; READ/WRITE; partial submission; merge eligibility and public alias-to-owner mapping; per-task/list/overall status and transferred bytes | `transfer_engine_impl.cpp`, `request_merge_test`, `request_submit_bench`, `engine_failover_e2e_test` | P1/P2/P6 |
 | F09 | Observational polling option, explicit `progressBatch`, background progress worker, bounded wake/fallback timing, terminal-state stability and deferred batch retirement | `progress_worker*`, `progress_worker_test`, `runtime_queue_dispatch_test`, `poll_backoff_test` | P1/P6 |
@@ -282,20 +323,21 @@ GPU page generation. DeepInfer is a prospective consumer; planning its use does
 not establish a released cache integration. Native engine P/D remains owned by
 the engine until separately integrated and qualified.
 
-[api]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/transfer_engine.h
-[types]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/common/types.h
-[loader]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transport_loader.cpp
-[impl]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp
-[runtime]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime
-[tests]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/tests
-[config]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/common/config.cpp
-[shim]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/src/transfer_engine.cpp
-[python]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/python/pybind.cpp
-[metrics]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/metrics
-[plugin]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/device_plugin.h
-[transports]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport
-[platforms]: https://github.com/OrbitInfra/Mooncake/tree/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/platform
-[rpc]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/include/tent/rpc/rpc.h
-[uring]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp
-[bufio]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/bufio/bufio_transport.cpp
-[gds]: https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/transport/gds/gds_transport.cpp
+[reference]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent
+[api]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/transfer_engine.h
+[types]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/common/types.h
+[loader]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/runtime/transport_loader.cpp
+[impl]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp
+[runtime]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/runtime
+[tests]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/tests
+[config]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/common/config.cpp
+[shim]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/src/transfer_engine.cpp
+[python]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/python/pybind.cpp
+[metrics]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/metrics
+[plugin]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/device_plugin.h
+[transports]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport
+[platforms]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/platform
+[rpc]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/rpc/rpc.h
+[uring]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp
+[bufio]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/bufio/bufio_transport.cpp
+[gds]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/transport/gds/gds_transport.cpp

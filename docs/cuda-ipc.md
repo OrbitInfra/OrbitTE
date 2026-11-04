@@ -22,7 +22,7 @@ Use `Transport::Mnnvl` or the policy candidate `"mnnvl"`. Fabric symbols are res
 | `fabric_domain` | `None` | Restricts the default to this boot. For cross-host fabric, configure the same nonzero 16-byte domain on peers in the same NVLink partition. Each side advertises it through Describe. The actual CUDA import checks reachability |
 | `host_register` | `true` | Registers ordinary local host backing with CUDA through the last registration owner. Existing CUDA pins are reused. With `false`, the caller and driver must support the local host pointer |
 | `egm` | `false` | Enables HOST_NUMA allocation and remote host grants |
-| `async_memcpy_threshold` | `1024` units of 128 KiB | The frozen code reads this setting and uses the async stream and completion event at every size |
+| `async_memcpy_threshold` | `1024` units of 128 KiB | MNNVL uses the async stream and completion event at every size. The v0.3.14 sync fast path applies only to legacy NVLink |
 
 Call `allocate_mnnvl(device, length)` for GPU storage or
 `allocate_egm(numa_node, length)` for host storage. Register the returned

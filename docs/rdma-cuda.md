@@ -514,7 +514,7 @@ runs and failed controls outside the checkout.
 
 ## Reference
 
-The frozen TENT reference is `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`; see the
+The frozen TENT reference is `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`; see the
 [owner mapping](architecture.md#rdma-resource-owners). Exact-range MW
 authorization, source receipts and failed-cleanup retention are OrbitTE
 contracts. The

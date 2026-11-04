@@ -509,7 +509,7 @@ staging plan; OrbitTE keeps that split with ordered batch execution. See
 ## TENT correspondence and limits
 
 TENT's
-[`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e2d6e8e0f2df113d84f9e39379f98c4b67b199ab/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
+[`TransferEngineImpl`](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/src/runtime/transfer_engine_impl.cpp)
 allocates batch capacity, appends tasks and defers freeing pending batches.
 OrbitTE uses one lock per batch and keeps the caller's status reads observational.
 TENT can drive hooks and queue progress while reading status. Here the existing

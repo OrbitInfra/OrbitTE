@@ -311,7 +311,7 @@ def main() -> int:
                 [
                     "cmake",
                     "-S",
-                    str(source / "mooncake-transfer-engine"),
+                    str(source),
                     "-B",
                     str(build),
                     *flags,
@@ -330,7 +330,7 @@ def main() -> int:
                 ],
                 timeout=900,
             )
-            library = build / "tent/src/libtent_shared.so"
+            library = build / "mooncake-transfer-engine/tent/src/libtent_shared.so"
             binary = output / "tent-driver"
             compiler = shlex.split(os.environ.get("CXX", "c++"))
             manifest["cxx"] = run("cxx-version", [*compiler, "--version"]).strip()

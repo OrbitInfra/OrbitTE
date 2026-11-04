@@ -4,7 +4,8 @@ Build with `--features metrics` to expose engine metrics over HTTP. A requester
 counts one logical result per physical owner, including when several public
 tasks merge. A retry records a second transport attempt. A successful READ
 after an RDMA failure can therefore add bytes on TCP and an attempt failure
-on RDMA.
+on RDMA. R1d covers the release’s public request and attempt outcome counters,
+and metrics self-observation. See the [v0.3.14 delta](tent-parity.md#v0314-delta).
 
 ## Configure the endpoint
 

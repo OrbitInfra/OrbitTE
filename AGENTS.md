@@ -20,8 +20,8 @@ do not turn this file into a second status diary.
   changes TENT did not allow.
 - Every end-to-end cache path must run through OrbitTE: CPU DRAM, NVIDIA GPU,
   local SSD, within and across hosts, including GPU↔DRAM and GPU↔SSD.
-- The capability and architecture reference is frozen Mooncake TENT at
-  `OrbitInfra/Mooncake@e2d6e8e0f2df113d84f9e39379f98c4b67b199ab`, directory
+- The capability and architecture reference is Mooncake v0.3.14, frozen at
+  `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, directory
   `mooncake-transfer-engine/tent/`. README, docs site, doc style, module
   boundaries and naming follow Mooncake/TENT. OrbitTE is Rust and must not
   depend on the Mooncake C++ runtime; the C++ build is only a test oracle.
@@ -35,43 +35,18 @@ do not turn this file into a second status diary.
 Read the frozen source directly when a step names it, for example:
 
 ```bash
-gh api "repos/OrbitInfra/Mooncake/contents/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp?ref=e2d6e8e0f2df113d84f9e39379f98c4b67b199ab" -H "Accept: application/vnd.github.raw"
+gh api "repos/OrbitInfra/Mooncake/contents/mooncake-transfer-engine/tent/src/transport/io_uring/io_uring_transport.cpp?ref=e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c" -H "Accept: application/vnd.github.raw"
 ```
 
 `python3 tests/reference/run.py --fetch-reference --output <dir>` also builds
 the frozen reference for the CPU comparison.
 
-## 2. Where the code stands (2026-11-03)
+## 2. Where to start
 
-About 30.5k lines in `src/` (114 files) and 52k lines of tests (456 `#[test]`).
-CI is green on stable and Rust 1.85 for features `''`, `rdma`, `cuda` and
-`rdma,cuda`.
-
-Implemented:
-
-- Engine, owned/external host and CUDA memory, batch registration, async
-  batches with cancel, notifications (P1, P2).
-- TCP transport and the OrbitTE-only versioned control plane (`VERSION` in
-  `src/runtime/control_plane.rs`) (P2).
-- Host RDMA: persistent MRs, QP arrays, CQ lanes, workers, multirail slicing,
-  discovery/topology, monitor and port recovery (P4, bounded RoCE accepted).
-- GPU Direct RDMA, CUDA IPC/NVLink with caches, grouped copies, stream pool,
-  event completion and `cuMemcpyBatchAsync`, local staging, remote
-  Pin/Delegate/Unpin with PRE/CROSS/POST pipelines (most of P5).
-- Part of P6: priority, FIFO/EDF admission queue, dispatch windows, QoS
-  contracts with JSON loading and delay/reject, receiver credits,
-  bandwidth-aware weighted multipath, shared priority slots, NIC load stats.
-
-Missing (this file's queue): HP_TCP, SHM, MNNVL, IOURING, GDS, MPCOMM and
-FABRIC transports; file segments; the full selector; failover/retry;
-explicit progress; metrics endpoints; config and metadata-store
-compatibility; the C ABI, C++ adapters, Python bindings and device-plugin ABI;
-TENT wire interoperability; benchmarks.
-
-Done: S0 (#120), S0b (#122), the first S6 delivery (#118), advisory
-priorities on TCP/NVLink (#123) and S1 file segments (#125). Next: S2. See the
-[selector guide](docs/transport-selection.md) for what S6 still needs. Check
-`gh pr list` for open work before starting a step.
+Read [Current focus](docs/completion-plan.md#current-focus) for the active
+step, [capabilities](docs/capabilities.md) for the existing owners and
+[qualification](docs/qualification.md) for the limits of the evidence.
+Check `gh pr list` before branching from current main. The work order is in §7.
 
 ## 3. Working mode without hardware
 
@@ -472,12 +447,51 @@ Do this first: later steps add request fields and transports.
   `src/cuda/ipc/`.
 - **Done:** shim tests plus a written NVL-fabric installed gate.
 
+### R1 — Align with Mooncake v0.3.14
+
+After S14, complete these PRs in order before starting S15. Base each on
+current main after the preceding PR merges and stop for review after each.
+The [v0.3.14 delta](docs/tent-parity.md#v0314-delta) assigns every TENT change.
+
+- **R1a, reference.** Pin the release, verify the isolated native CPU trace
+  and inventory the release delta. Keep historical evidence on its original
+  revision. R1a changes no transfer behavior.
+- **R1b, RDMA.** Selective signaling, adaptive congestion control core, rail
+  refresh and wildcard mapping, QP access and read-depth limits, terminal teardown.
+- **R1c, storage and CUDA.** io_uring pinned staging and drain, merged staging
+  submission and shared lifetime tests, exact caller context and the legacy
+  NVLink synchronous copy path.
+- **R1d, HP-TCP, TCP and observability.** Least-loaded lanes, CPU requests to
+  peer GPU TCP memory, metrics self-observation, lossless accounting, version
+  diagnostics and the two RDMA boolean environment mappings.
+
+For each port, map the upstream tests, preserve §4 with negative controls,
+repeat timing-sensitive controls 50 times on Linux and use the §6 handoff.
+Queue installed RDMA and GPU gates with exact commands. Those profiles remain
+unqualified pending installed runs.
+
 ### S15 — P5 leftovers [GPU/RDMA]
 
 - GPU source QP/MR reuse for GPU Direct RDMA.
 - Reconcile the remaining ProxyManager resource/source control boundaries with
   TENT (`docs/staging.md`, "Bounded remote pipeline").
 - The mixed direct/staged batch items still open under P5 in the plan.
+
+### S15b — Local CUDA copy engine [GPU]
+
+This is an OrbitTE extension for OrbitKV. The consuming OrbitKV session will
+supply the interface. Keep the public descriptor and API shape open until then.
+
+- Submit in order on the caller's CUDA stream. Complete through a CUDA event
+  and retain backing and descriptor owners until the event proves completion.
+  Leave the caller's stream unsynchronized.
+- Support 1D, 2D strided and batched descriptors with `cuMemcpy2D` semantics
+  on the caller stream and `cuMemcpyBatchAsync`.
+- For highly fragmented batches, follow OrbitKV's
+  `crates/orbitkv-core/src/transfer/{memcpy,kernel}.rs` and `kernel.cu` to
+  coalesce contiguous ranges and equal-width strided rows for kernel copy.
+- Verify byte ranges, event ordering and owner retention with the CUDA shim
+  and write the installed GPU gate for the verification queue.
 
 ### S16 — P0 inventory and wire freeze [CPU, docs + fixtures]
 
@@ -486,7 +500,7 @@ Do this first: later steps add request fields and transports.
   - config keys, defaults and environment precedence;
   - capability bits, metrics and metadata;
   - wire messages;
-  - the 84 reference test sources.
+  - the 88 reference C++ sources ending in `test.cpp`.
 - Freeze, with small fixtures in source:
   - control RPC framing and serialization (`include/tent/rpc/rpc.h`,
     `src/rpc/rpc.cpp`);
@@ -505,12 +519,16 @@ Do this first: later steps add request fields and transports.
   - Immutable per-engine snapshots; never mutate process environment to
     configure engines.
 
-### S18 — F06 metadata stores [CPU, CI services]
+### S18 — Optional F06 metadata stores [CPU, CI services]
+
+Deferred until a non-OrbitKV consumer needs etcd, Redis or HTTP. OrbitKV
+builds Mooncake with `USE_ETCD=OFF`, `USE_REDIS=OFF` and `USE_HTTP=OFF` and
+uses P2P metadata, which the OrbitTE control plane already provides.
 
 - **TENT:** `runtime/metastore.cpp`, `metastore/{etcd,redis,http}.cpp`,
   `redis_metastore_test`.
 - **Implement:**
-  - P2P, etcd, Redis (username, password, DB) and HTTP stores.
+  - Additional etcd, Redis (username, password, DB) and HTTP stores.
   - Publication and lookup failure handling, with a schema compatible with
     TENT.
 - Opt-in features with light dependencies; record the client choice.
@@ -614,7 +632,7 @@ list below shows its scope.
    - S12 physical multi-rail;
    - S13 CXL;
    - S14 MNNVL/EGM;
-   - S15;
+   - R1b/R1c alignment, S15 and the S15b local CUDA copy extension;
    - S24 EFA;
    - S25 MPComm.
 4. **Release work:** the P10 fault matrix, P11 matched performance against
