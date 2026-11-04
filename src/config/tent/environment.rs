@@ -156,7 +156,7 @@ const PRESERVED: &[&str] = &[
     "transports/memfabric/store_te_init",
 ];
 
-fn scalar(s: &str) -> Value {
+pub(super) fn scalar(s: &str) -> Value {
     if s.eq_ignore_ascii_case("true") {
         true.into()
     } else if s.eq_ignore_ascii_case("false") {

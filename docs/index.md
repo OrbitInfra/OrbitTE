@@ -92,6 +92,7 @@ tent-parity
 :maxdepth: 1
 
 rust-api
+c-api
 :::
 
 :::{toctree}

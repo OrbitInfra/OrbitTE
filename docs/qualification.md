@@ -32,6 +32,17 @@ subsystem settings and snapshot isolation in a child process. These CPU
 checks cover configuration loading. Installed transfer profiles are tracked
 separately below.
 
+## Installed C ABI on Linux
+
+The `Install both C libraries and run the independent C consumer` CI step builds both libraries from
+the core and FFI package archives on stable and Rust 1.85. The C11 consumer
+links once per library, compares the exported names and LP64 records to the
+S16 inventory and checks guarded READ and WRITE across two loopback processes.
+Refusal before dispatch, loss of the final notification ACK, deferred
+unregister and same-port restart exercise the return and lifetime contracts.
+The io_uring builds also move file bytes. These runs cover the Linux CPU
+profile. See the [C API](c-api.md).
+
 ## Verification queue
 
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below
@@ -41,6 +52,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| C ABI on GPU and two RNICs | Implemented; installed profile unqualified | Install the packaged libraries on each host, then run the [two-process C hardware gate](#native-c-transfer-engine) with TCP/CUDA or RDMA and two visible NICs. | Installed C loopback CPU controls |
 | Caller-stream local CUDA copy | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
 | CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbitte-peer-gpu-source" --requester "$ART/requester/installed/bin/orbitte-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
 | Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
@@ -68,6 +80,35 @@ external output directory; failed runs are kept.
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
+
+### Native C transfer engine
+
+On each host, build the release libraries and public C client from both archives:
+
+```bash
+python3 tests/hardware/build_installed.py --consumer c-abi --toolchain stable --output "$ART"
+```
+
+Set `MC_TENT_CONF` to the host's tested profile, including a routable RPC
+hostname. For RDMA, expose two RNICs and enable both ordinary TCP and RDMA.
+On the source and requester respectively run:
+
+```bash
+"$ART/installed/bin/orbitte-c-hardware" source rdma '*'
+"$ART/installed/bin/orbitte-c-hardware" requester rdma '*' "$SOURCE_ENDPOINT"
+```
+
+Repeat with `cuda:0` in place of `'*'` for GPU Direct. For CUDA via TCP run:
+
+```bash
+"$ART/installed/bin/orbitte-c-hardware" source tcp cuda:0
+"$ART/installed/bin/orbitte-c-hardware" requester tcp cuda:0 "$SOURCE_ENDPOINT"
+```
+
+Use the endpoint printed by the source. The client checks both guards and
+every payload byte on both hosts. The RDMA run requires at least two NIC
+records and checks short output capacity. Keep both logs, RNIC counters and
+the build manifests. Repeat on Rust 1.85 with a fresh artifact directory.
 
 ## Caller-stream local CUDA copy
 

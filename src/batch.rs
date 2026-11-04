@@ -271,7 +271,7 @@ impl Batch {
             }
             _ => None,
         };
-        let mut prepared = engine.prepare(
+        let prepared = engine.prepare(
             operation,
             peer,
             requests,
@@ -279,35 +279,138 @@ impl Batch {
             timeout,
             Some(self.id()?),
         )?;
-        if self.worker.is_none() {
-            let engine = Arc::clone(&engine);
-            let state = Arc::clone(&progress);
-            let token = progress
-                .reservation
-                .budget
-                .worker()
-                .map_err(|e| prepared.abort_error(e))?;
-            self.worker = Some(
-                thread::Builder::new()
-                    .name("orbitte-batch".into())
-                    .spawn(move || {
-                        let _exit = WorkerExit {
-                            progress: Arc::clone(&state),
-                            _token: token,
-                        };
-                        state.run(&engine);
-                    })
-                    .map_err(|e| prepared.abort_error(e.into()))?,
-            );
+        if let Err(error) = self.start_worker(&progress, &engine) {
+            return Err(prepared.abort_error(error));
         }
-        let range = {
-            let mut state = progress.lock();
-            if state.worker_exited {
-                return Err(prepared.abort_error(Error::BatchClosed));
+        let mut state = progress.lock();
+        if state.worker_exited {
+            return Err(prepared.abort_error(Error::BatchClosed));
+        }
+        let range = Self::publish(&mut state, std::iter::once(prepared), hook);
+        drop(state);
+        progress.kick();
+        Ok(range)
+    }
+
+    /// Submit one C-style interval spanning several targets or opcodes. Prepare
+    /// every group before publishing any task. An attached notification belongs
+    /// to the entire interval and fires once per distinct memory target.
+    pub fn submit_groups(
+        &mut self,
+        groups: &[(TransferOp, TransferTarget<'_>, &[TransferRequest])],
+        notification: Option<&Notification>,
+        timeout: Duration,
+    ) -> Result<Range<usize>> {
+        let progress = Arc::clone(self.progress()?);
+        let engine = Arc::clone(self.engine.as_ref().ok_or(Error::BatchClosed)?);
+        let count = groups.iter().try_fold(0usize, |n, g| {
+            n.checked_add(g.2.len()).ok_or(Error::ResourceExhausted)
+        })?;
+        {
+            let state = progress.lock();
+            if state.sealed || state.worker_exited {
+                return Err(Error::BatchClosed);
             }
+            if count > engine.config().max_batch_requests
+                || count > progress.reservation.capacity - state.public.len()
+                || groups.len() > progress.reservation.capacity - state.submissions.len()
+            {
+                return Err(Error::ResourceExhausted);
+            }
+            if count == 0 {
+                return Ok(state.public.len()..state.public.len());
+            }
+        }
+        if groups.iter().any(|g| g.2.is_empty()) {
+            return Err(Error::InvalidRange);
+        }
+        let hook = if let Some(message) = notification {
+            let mut targets = Vec::with_capacity(groups.len());
+            for g in groups {
+                match g.1 {
+                    TransferTarget::File(_) => {
+                        return Err(Error::Unavailable("file notifications"));
+                    }
+                    TransferTarget::Memory(s) => targets.push(crate::notification::Target::from(s)),
+                }
+            }
+            Some(engine.notification_routes.hook_targets(
+                engine.local_target(),
+                targets.into_iter(),
+                message.byte_len()?,
+            )?)
+        } else {
+            None
+        };
+        let end = deadline(timeout)?;
+        let mut prepared: Vec<PreparedSubmission> = Vec::with_capacity(groups.len());
+        let prepare = (|| {
+            for (i, &(op, target, requests)) in groups.iter().enumerate() {
+                let notify = if i + 1 == groups.len() {
+                    notification
+                } else {
+                    None
+                };
+                prepared.push(engine.prepare(
+                    op,
+                    target,
+                    requests,
+                    notify,
+                    remaining(end)?,
+                    Some(self.id()?),
+                )?);
+            }
+            self.start_worker(&progress, &engine)
+        })();
+        let mut state = progress.lock();
+        if let Err(error) = prepare.and_then(|()| {
+            if state.worker_exited {
+                Err(Error::BatchClosed)
+            } else {
+                Ok(())
+            }
+        }) {
+            drop(state);
+            return Err(prepared.iter().fold(error, |e, p| p.abort_error(e)));
+        }
+        let range = Self::publish(&mut state, prepared, hook);
+        drop(state);
+        progress.kick();
+        Ok(range)
+    }
+
+    fn start_worker(
+        &mut self,
+        progress: &Arc<BatchProgress>,
+        engine: &Arc<TransferEngine>,
+    ) -> Result<()> {
+        if self.worker.is_none() {
+            let engine = Arc::clone(engine);
+            let state = Arc::clone(progress);
+            let token = progress.reservation.budget.worker()?;
+            self.worker = Some(thread::Builder::new().name("orbitte-batch".into()).spawn(
+                move || {
+                    let _exit = WorkerExit {
+                        progress: Arc::clone(&state),
+                        _token: token,
+                    };
+                    state.run(&engine);
+                },
+            )?);
+        }
+        Ok(())
+    }
+    fn publish(
+        state: &mut ProgressState,
+        jobs: impl IntoIterator<Item = PreparedSubmission>,
+        mut hook: Option<NotificationHook>,
+    ) -> Range<usize> {
+        let first_group = state.submissions.len();
+        let start = state.public.len();
+        for mut prepared in jobs {
             let first = state.public.len();
             let first_physical = state.tasks.len();
-            let range = first..first + requests.len();
+            let range = first..first + prepared.mapping.public.len();
             for a in &prepared.mapping.public {
                 state.public.push(Alias {
                     owner: first_physical + a.owner,
@@ -324,7 +427,7 @@ impl Batch {
                     transport: prepared.route(i).transport,
                     failover_count: prepared.route(i).initial_attempts,
                     state: TaskState::Waiting,
-                    operation,
+                    operation: prepared.operation,
                     transferred_bytes: 0,
                     cancel_requested: false,
                     locally_drained: false,
@@ -340,7 +443,7 @@ impl Batch {
                     completed_requests: 0,
                     transferred_bytes: 0,
                     failure: None,
-                    notification: Arc::new(if notification.is_some() {
+                    notification: Arc::new(if prepared.notification.is_some() {
                         NotificationStatus::Skipped
                     } else {
                         NotificationStatus::NotRequested
@@ -349,9 +452,15 @@ impl Batch {
                 },
             });
             state.pending += 1;
-            let hook = hook.and_then(|targets| {
+            let this_hook = if prepared.notification.is_some() {
+                hook.take()
+            } else {
+                None
+            };
+            let hook = this_hook.and_then(|targets| {
                 prepared.notification.take().map(|message| Retry {
                     admission: None,
+                    predecessors: first_group..submission,
                     submission,
                     message,
                     targets,
@@ -366,10 +475,8 @@ impl Batch {
                 submission,
                 prepared,
             });
-            range
-        };
-        progress.kick();
-        Ok(range)
+        }
+        start..state.public.len()
     }
 
     /// Stops appending. A terminal failure can retain unquiesced native work;
@@ -551,6 +658,7 @@ impl Drop for Batch {
 }
 
 struct Retry {
+    predecessors: Range<usize>,
     // Close waits for a pending admitted hook, even after payload loans drop.
     admission: Option<crate::engine::BatchPermit>,
     submission: usize,
@@ -891,7 +999,14 @@ impl BatchProgress {
         let mut notification = None;
         if let Some(mut hook) = hook {
             report.notification = NotificationStatus::Skipped;
-            if report.is_complete() {
+            let earlier_succeeded = hook.predecessors.is_empty()
+                || self.lock().submissions[hook.predecessors.clone()]
+                    .iter()
+                    .all(|g| {
+                        g.status.completed_requests == g.status.tasks.len()
+                            && g.status.failure.is_none()
+                    });
+            if report.is_complete() && earlier_succeeded {
                 notification = Some(hook.targets.attempt(engine, &hook.message, hook.deadline));
                 if hook.targets.pending() {
                     hook.admission = prepared.admission.take();

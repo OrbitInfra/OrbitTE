@@ -134,6 +134,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
                 memory_type: crate::MemoryType::Cuda,
                 fabric: None,
                 hp_registered: false,
+                profile: Default::default(),
                 ipc_exportable: true,
                 epoch,
                 id: 1,

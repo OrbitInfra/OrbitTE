@@ -56,7 +56,7 @@ mod memory;
 pub mod metrics;
 #[cfg(not(unsupported_native_target))]
 mod notification;
-#[cfg(all(target_os = "linux", any(feature = "rdma", feature = "cuda")))]
+#[cfg(target_os = "linux")]
 mod platform;
 #[cfg(not(unsupported_native_target))]
 mod runtime;
@@ -95,7 +95,10 @@ pub use {
         TransferFailure, TransferOp, TransferRequest, Transport,
     },
     error::{Error, Result},
-    memory::{HostMemory, MemoryLocation, MemoryType, Permission, RangeLocation, RegisteredMemory},
+    memory::{
+        Allocation as MemoryBacking, HostMemory, MemoryLocation, MemoryType, Permission,
+        RangeLocation, RegisteredMemory,
+    },
     notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus},
     runtime::{
         admission_queue::RuntimeQueueStats,

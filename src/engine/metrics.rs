@@ -56,6 +56,10 @@ impl TransferEngine {
             {
                 mask |= transport_bit(Transport::Gds);
             }
+            let route = m.0.descriptor.profile.route;
+            if route != Transport::Unspec {
+                mask &= transport_bit(route);
+            }
             m.0.metric_transports
                 .store(mask, std::sync::atomic::Ordering::Relaxed);
         }

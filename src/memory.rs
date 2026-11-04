@@ -150,6 +150,8 @@ impl HostAccess {
 
 enum HostBacking {
     #[cfg(target_os = "linux")]
+    Numa(crate::platform::numa::MappedMemory),
+    #[cfg(target_os = "linux")]
     Shared(Arc<crate::transport::shm::Local>),
     #[cfg(feature = "cuda")]
     CudaPinned(Arc<crate::cuda::PinnedAllocation>),
@@ -185,6 +187,8 @@ impl HostBacking {
         match self {
             #[cfg(target_os = "linux")]
             Self::Shared(local) => local.address(),
+            #[cfg(target_os = "linux")]
+            Self::Numa(mapping) => mapping.address,
             Self::Owned { address, .. } | Self::External { address, .. } => *address,
             #[cfg(feature = "cuda")]
             Self::CudaPinned(allocation) => allocation.address,
@@ -493,16 +497,55 @@ impl HostMemory {
         }
         let length = bytes.len();
         let address = NonNull::new(Box::into_raw(bytes).cast::<u8>()).ok_or(Error::InvalidRange)?;
-        Ok(Self {
-            address: address.as_ptr() as usize as u64,
+        Ok(Self::owned(
+            HostBacking::Owned { address, length },
             length,
-            location: MemoryLocation::Cpu(None),
+            None,
+        ))
+    }
+
+    /// Allocate on an explicit allowed Linux NUMA node. Failure to bind returns
+    /// an error before publishing the pointer.
+    #[cfg(target_os = "linux")]
+    pub fn new_on_node(length: usize, node: u32) -> Result<Self> {
+        use crate::platform::numa::{MappedMemory, NATIVE};
+        if !(NATIVE.nodes)()?.contains(&node) {
+            return Err(Error::Unavailable("NUMA node is not available"));
+        }
+        Ok(Self::owned(
+            HostBacking::Numa(MappedMemory::new(length, node, &NATIVE)?),
+            length,
+            Some(node),
+        ))
+    }
+
+    /// Retire an exclusively held, engine-allocated host mapping.
+    pub fn release_owned(self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        let mut owned = self;
+        #[cfg(target_os = "linux")]
+        if let HostBacking::Numa(mapping) = &mut owned
+            .backing
+            .get_mut()
+            .map_err(|_| Error::Internal("host owner lock poisoned"))?
+            .bytes
+        {
+            mapping.close()?;
+        }
+        Ok(())
+    }
+
+    fn owned(bytes: HostBacking, length: usize, node: Option<u32>) -> Self {
+        Self {
+            address: bytes.address().as_ptr() as usize as u64,
+            length,
+            location: MemoryLocation::Cpu(node),
             #[cfg(feature = "cuda")]
             cuda_pinned: false,
             #[cfg(feature = "cuda")]
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
-                bytes: HostBacking::Owned { address, length },
+                bytes,
                 #[cfg(feature = "cuda")]
                 cuda_uncertain: false,
                 #[cfg(feature = "cuda")]
@@ -512,7 +555,7 @@ impl HostMemory {
                 #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
-        })
+        }
     }
 
     /// Retains an existing allocation without copying, pinning or taking over
@@ -742,6 +785,12 @@ impl RegisteredMemory {
         }
     }
 
+    /// True once this retired registration has no users besides the caller's handle.
+    /// Check after closing registration admission. This never authorizes a retry of failed native retirement.
+    pub fn exclusively_held(&self) -> bool {
+        Arc::strong_count(&self.0) == 1
+    }
+
     /// Classification from the retained backing, without driver calls or locks.
     pub fn memory_type(&self) -> MemoryType {
         self.0.descriptor.memory_type
@@ -885,7 +934,7 @@ impl RegisteredMemory {
 }
 
 #[derive(Clone)]
-pub(crate) enum Allocation {
+pub enum Allocation {
     Host(Arc<HostMemory>),
     #[cfg(feature = "cuda")]
     Cuda(Arc<crate::cuda::CudaMemory>),
@@ -963,6 +1012,7 @@ impl AllocationRef {
 }
 
 pub(crate) struct Registration {
+    pub(crate) internal: bool,
     #[cfg(feature = "metrics")]
     pub(crate) metric_transports: std::sync::atomic::AtomicU16,
     #[cfg(feature = "gds")]
@@ -1080,7 +1130,13 @@ impl MemoryRegistry {
         for (allocation, offset, length) in ranges {
             allocations.push((Allocation::Host(Arc::clone(allocation)), *offset, *length));
         }
-        self.register_batch(&allocations, permission, publish)
+        self.register_batch(
+            &allocations,
+            permission,
+            crate::Transport::Unspec,
+            false,
+            publish,
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -1097,13 +1153,21 @@ impl MemoryRegistry {
         for (allocation, offset, length) in ranges {
             allocations.push((Allocation::Cuda(Arc::clone(allocation)), *offset, *length));
         }
-        self.register_batch(&allocations, permission, publish)
+        self.register_batch(
+            &allocations,
+            permission,
+            crate::Transport::Unspec,
+            false,
+            publish,
+        )
     }
 
-    fn register_batch(
+    pub(crate) fn register_batch(
         &self,
         ranges: &[(Allocation, usize, usize)],
         permission: Permission,
+        route: crate::Transport,
+        internal: bool,
         publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
     ) -> Result<Vec<RegisteredMemory>> {
         let mut plans: Vec<RegistrationPlan> = Vec::new();
@@ -1172,6 +1236,11 @@ impl MemoryRegistry {
                 entry.memory.base_address() == address && entry.memory.len() == *length
             });
             let (id, references) = if let Some(entry) = existing {
+                if entry.memory.0.internal != internal
+                    || entry.memory.0.descriptor.profile.route != route
+                {
+                    return Err(Error::RegistrationConflict);
+                }
                 (
                     entry.memory.id(),
                     entry
@@ -1228,6 +1297,7 @@ impl MemoryRegistry {
             } else {
                 let (allocation, offset, length) = &ranges[plan.input];
                 let memory = RegisteredMemory(Arc::new(Registration {
+                    internal,
                     #[cfg(feature = "metrics")]
                     metric_transports: Default::default(),
                     #[cfg(feature = "gds")]
@@ -1244,6 +1314,22 @@ impl MemoryRegistry {
                         ipc_exportable: allocation.ipc_exportable(),
                         fabric: None,
                         hp_registered: false,
+                        profile: crate::segment::RegionProfile {
+                            route,
+                            node: match allocation {
+                                Allocation::Host(h) => match h.location {
+                                    MemoryLocation::Cpu(n) => n,
+                                    _ => None,
+                                },
+                                #[cfg(feature = "cuda")]
+                                Allocation::Cuda(c) => match c.location {
+                                    MemoryLocation::Cuda { device, .. } => {
+                                        u32::try_from(device).ok()
+                                    }
+                                    _ => None,
+                                },
+                            },
+                        },
                     },
                     allocation: allocation.clone(),
                     allocation_offset: *offset,
@@ -1340,7 +1426,9 @@ impl MemoryRegistry {
         Ok(entries
             .regions
             .values()
-            .filter(|entry| entry.memory.permission() != Permission::LocalOnly)
+            .filter(|entry| {
+                !entry.memory.0.internal && entry.memory.permission() != Permission::LocalOnly
+            })
             .map(|entry| {
                 let mut descriptor = entry.memory.0.descriptor;
                 #[cfg(feature = "cuda")]
@@ -1353,7 +1441,8 @@ impl MemoryRegistry {
                         .and_then(|r| r.share.as_ref())
                         .map(|s| s.location);
                 }
-                descriptor.hp_registered = hp_enabled
+                descriptor.hp_registered = descriptor.profile.permits(crate::Transport::HpTcp)
+                    && hp_enabled
                     && crate::transport::hp_tcp::host(&entry.memory)
                     && matches!(
                         descriptor.permission,

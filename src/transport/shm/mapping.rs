@@ -261,6 +261,10 @@ pub(crate) struct Local {
     pub(super) engine: SourceEpoch,
 }
 impl Local {
+    pub(crate) fn basename_for(&self, engine: SourceEpoch) -> Option<String> {
+        (self.engine == engine).then(|| self.mapping.name.basename())
+    }
+
     pub(super) fn create(
         sys: &'static Sys,
         ns: &Arc<Namespace>,

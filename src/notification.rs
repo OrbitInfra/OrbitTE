@@ -208,7 +208,17 @@ impl NotificationRoutes {
         peers: &[RemoteSegment],
         bytes: usize,
     ) -> Result<NotificationHook> {
-        if peers.is_empty() {
+        self.hook_targets(local, peers.iter().map(Target::from), bytes)
+    }
+
+    pub(crate) fn hook_targets(
+        &self,
+        local: Target,
+        peers: impl ExactSizeIterator<Item = Target>,
+        bytes: usize,
+    ) -> Result<NotificationHook> {
+        let count = peers.len();
+        if count == 0 {
             return Err(Error::InvalidConfig("notification target list is empty"));
         }
         let mut usage = self
@@ -222,11 +232,10 @@ impl NotificationRoutes {
         targets
             .try_reserve_exact(peers.len())
             .map_err(|_| Error::ResourceExhausted)?;
-        targets.extend(peers.iter().map(Target::from));
+        targets.extend(peers);
         targets.sort_unstable_by_key(|t| (*t != local, t.endpoint, t.epoch.0));
         targets.dedup();
         // Charge the allocated slots even if duplicate destinations collapse.
-        let count = peers.len();
         usage.0 += count;
         usage.1 += bytes;
         Ok(NotificationHook {

@@ -40,7 +40,7 @@ jobs:
           clang++-19 -x cuda --cuda-device-only --cuda-gpu-arch=sm_52 -nocudainc -nocudalib -O3 -S kernel.cu -o "$RUNNER_TEMP/kernel.ptx"
           diff -u kernel.ptx "$RUNNER_TEMP/kernel.ptx"
       - name: Format
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: Check
         run: cargo check --locked --features "$ORBITTE_FEATURES"
       - name: Check portable build and Linux-only features
@@ -83,12 +83,12 @@ jobs:
           echo "ORBITTE_TMPFS_DIR=/dev/shm" >> "$GITHUB_ENV"
           if [[ "$ORBITTE_FEATURES" == *io-uring* ]]; then echo "ORBITTE_REQUIRE_IO_URING=1" >> "$GITHUB_ENV"; fi
       - name: Clippy
-        run: cargo clippy --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
+        run: cargo clippy --workspace --locked --features "$ORBITTE_FEATURES" --all-targets -- -D warnings
       - name: Set the same test parallelism for the suite and stability controls
         if: matrix.toolchain == 'stable' && (matrix.features == 'rdma,cuda,io-uring' || matrix.features == 'rdma,cuda,io-uring,gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"
       - name: Test CPU TCP and ownership
-        run: cargo test --locked --features "$ORBITTE_FEATURES"
+        run: cargo test --workspace --locked --features "$ORBITTE_FEATURES"
       - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
         if: matrix.features == ''
         run: |
@@ -259,6 +259,8 @@ jobs:
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
         run: cargo publish --dry-run --locked --features "$ORBITTE_FEATURES"
+      - name: Install both C libraries and run the independent C consumer
+        run: bash .github/scripts/check-installed-c-api.sh "$RUNNER_TEMP/orbitte-c"
       - name: Install public host consumer from packaged crate
         if: matrix.features == 'rdma'
         run: python3 tests/hardware/build_installed.py --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-host-$RUSTUP_TOOLCHAIN"

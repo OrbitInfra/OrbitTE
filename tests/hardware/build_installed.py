@@ -21,6 +21,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "c-abi": (["rdma", "cuda"], "orbitte-c-hardware", "libtent", "tests/hardware/c_abi.c"),
         "local-copy": (["cuda"], "orbitte-local-copy", "orbitte-installed-local-copy", "tests/hardware/local_copy.rs"),
         "peer-gpu-source": (["cuda"], "orbitte-peer-gpu-source", "orbitte-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
         "peer-gpu-requester": ([], "orbitte-peer-gpu-requester", "orbitte-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
@@ -83,6 +84,26 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('expected one package root')
         library = packages[0]
         fixture = library / fixture_relative
+        if consumer_kind == 'c-abi':
+            patch = 'patch.crates-io.orbit-te.path=' + json.dumps(str(root))
+            run('ffi-package', [*package, '-p', 'orbit-te-c', '--config', patch])
+            ffi_archive, = (output / 'target/package').glob('orbit-te-c-*.crate')
+            with tarfile.open(ffi_archive) as bundle:
+                bundle.extractall(unpack, filter='data')
+            ffi, = unpack.glob('orbit-te-c-*')
+            prefix = output / 'installed'
+            run('install-c', ['python3', 'scripts/install-c-api.py', '--prefix', str(prefix),
+                              '--toolchain', toolchain, '--features', ','.join(features),
+                              '--manifest-path', str(ffi / 'Cargo.toml'), '--engine-source', str(library)])
+            exe = prefix / 'bin' / binary_name
+            exe.parent.mkdir()
+            run('build-c', [environment.get('CC', 'cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
+                            '-I' + str(prefix / 'include'), str(fixture), '-L' + str(prefix / 'lib'),
+                            '-Wl,-rpath,$ORIGIN/../lib', '-ltent', '-o', str(exe)])
+            manifest.update(status='built', package_sha256=digest(archive),
+                            ffi_package_sha256=digest(ffi_archive), binary_sha256=digest(exe),
+                            fixture_sha256=digest(fixture))
+            return
         if fixture.read_bytes() != (root / fixture_relative).read_bytes():
             raise ValueError('packaged consumer differs from the qualified source')
         fixture_modules = library / 'tests/hardware/rdma_host'
@@ -221,6 +242,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

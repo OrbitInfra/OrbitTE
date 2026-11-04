@@ -27,7 +27,10 @@ pub(super) fn lease(
     if registration(source.epoch, region.id()) != frame.registration {
         return Err(Status::Stale);
     }
-    if !host(&region) {
+    if region.0.internal
+        || !region.0.descriptor.profile.permits(crate::Transport::HpTcp)
+        || !host(&region)
+    {
         return Err(Status::Range);
     }
     if !matches!(

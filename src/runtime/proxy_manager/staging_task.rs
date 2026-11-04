@@ -541,6 +541,7 @@ impl<'a> StagingTask<'a> {
                 permission: Permission::RemoteReadWrite,
                 memory_type: crate::MemoryType::Cpu,
                 fabric: None,
+                profile: Default::default(),
                 hp_registered: false,
                 ipc_exportable: false,
             },

@@ -242,6 +242,7 @@ pub(crate) fn requester_case(
             memory_type: crate::MemoryType::Cuda,
             fabric: None,
             hp_registered: false,
+            profile: Default::default(),
             ipc_exportable: true,
             epoch,
             id: 7,

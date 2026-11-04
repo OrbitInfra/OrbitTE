@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn scoped_registration_profile_has_a_bounded_frozen_encoding() {
+    let expected = [1, 0, 0, 0, 7];
+    let profile = RegionProfile {
+        route: crate::Transport::Rdma,
+        node: Some(7),
+    };
+    let mut encoded = [0; RegionProfile::SIZE];
+    profile.encode(&mut encoded);
+    assert_eq!(encoded, expected);
+    assert_eq!(RegionProfile::decode(&encoded).unwrap(), profile);
+    assert!(matches!(
+        RegionProfile::decode(&encoded[..4]),
+        Err(Error::Protocol(_))
+    ));
+    assert!(matches!(
+        RegionProfile::decode(&[255; 5]),
+        Err(Error::Protocol(_))
+    ));
+}
+
+#[test]
 fn epoch_roundtrip_rejects_malformed_authority() {
     let epoch = SourceEpoch::generate().unwrap();
     assert_eq!(epoch.to_string().parse::<SourceEpoch>().unwrap(), epoch);
@@ -23,6 +44,7 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
         memory_type: crate::MemoryType::Cpu,
         fabric: None,
         hp_registered: false,
+        profile: Default::default(),
         ipc_exportable: false,
         epoch,
         id,

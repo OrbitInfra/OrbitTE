@@ -22,6 +22,7 @@ const DEFAULT_TRANSPORTS: [Transport; 6] = [
 
 pub(crate) struct SelectionContext<'a> {
     pub(crate) local_memory: MemoryType,
+    pub(crate) local_route: Transport,
     pub(crate) local_ipc: bool,
     pub(crate) remote: &'a RemoteRegion,
     pub(crate) local_segment: SegmentMetadata,
@@ -33,6 +34,11 @@ pub(crate) struct SelectionContext<'a> {
 
 impl SelectionContext<'_> {
     fn available(&self, transport: Transport) -> bool {
+        if (self.local_route != Transport::Unspec && self.local_route != transport)
+            || !self.remote.profile.permits(transport)
+        {
+            return false;
+        }
         if self.remote_staging
             && (!cfg!(feature = "cuda")
                 || !self.remote_segment.remote_staging

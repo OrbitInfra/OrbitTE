@@ -133,6 +133,9 @@ impl ProxyManager {
             }
             _ => return Err(Error::Protocol("Pin transport")),
         };
+        if !memory.0.descriptor.profile.permits(transport) {
+            return Err(Error::PermissionDenied);
+        }
         if !(1..=16).contains(&hello[1]) || !(1..=16).contains(&hello[10]) {
             return Err(Error::Protocol("Pin pipeline depth"));
         }
