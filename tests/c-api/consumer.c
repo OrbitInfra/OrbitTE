@@ -331,7 +331,7 @@ static void transfer(const char *source_name, const char *relay, const char *ref
     OK(tent_close_segment(e, s));
     tent_destroy_engine(e);
 }
-static void held(const char *name, int entered, int resume) {
+static void held(const char *name, int entered, int resume, int cut_read) {
     tent_engine_t e = engine();
     tent_segment_id_t segment;
     OK(tent_open_segment(e, &segment, name));
@@ -361,13 +361,18 @@ static void held(const char *name, int entered, int resume) {
     assert(tent_unregister_memory_batch(e, ptrs, sizes, 2) == -2);
     assert(write(resume, "!", 1) == 1);
     tent_status_t whole = wait_batch(e, id);
-    assert(whole.status == STATUS_CANCELED && whole.transferred_bytes == 6);
+    assert(whole.status == (cut_read ? STATUS_FAILED : STATUS_CANCELED));
+    assert(whole.transferred_bytes == (cut_read ? 0u : 6u));
+    tent_status_t first = {0};
+    OK(tent_task_status(e, id, 0, &first));
+    assert(first.status == (cut_read ? STATUS_FAILED : STATUS_COMPLETED));
+    assert(first.transferred_bytes == whole.transferred_bytes);
     tent_status_t canceled = {0};
     OK(tent_task_status(e, id, 1, &canceled));
     assert(canceled.status == STATUS_CANCELED);
     free_batch(e, id);
     OK(tent_unregister_memory_batch(e, ptrs, sizes, 2));
-    assert(!memcmp(dst, "!!abcdef!!!!", sizeof dst));
+    assert(!memcmp(dst, cut_read ? "!!!!!!!!!!!!" : "!!abcdef!!!!", sizeof dst));
     for (size_t i = 0; i < sizeof idle; i++)
         assert(idle[i] == '?');
     tent_destroy_engine(e);
@@ -447,8 +452,8 @@ int main(int argc, char **argv) {
         local_contracts(argv[2], argv[3]);
     else if (argc == 5 && !strcmp(argv[1], "transfer"))
         transfer(argv[2], argv[3], argv[4]);
-    else if (argc == 5 && !strcmp(argv[1], "held"))
-        held(argv[2], atoi(argv[3]), atoi(argv[4]));
+    else if (argc == 5 && (!strcmp(argv[1], "held") || !strcmp(argv[1], "cut-read")))
+        held(argv[2], atoi(argv[3]), atoi(argv[4]), !strcmp(argv[1], "cut-read"));
     else if (argc == 3 && !strcmp(argv[1], "epoch"))
         epoch(argv[2]);
     else if (argc == 2 && !strcmp(argv[1], "shm"))

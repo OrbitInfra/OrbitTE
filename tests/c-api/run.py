@@ -27,7 +27,7 @@ def exact(stream, count):
     return out
 
 
-def relay(listener, peer, effects, gate=None):
+def relay(listener, peer, effects, gate=None, truncate=False):
     # Test-only relay. It forwards the actual Describe(s), ready reply and body.
     # Seeing the source's final OK proves one enqueue before dropping that reply.
     try:
@@ -43,7 +43,7 @@ def relay(listener, peer, effects, gate=None):
                     body = exact(server, int.from_bytes(reply[28:36], "big"))
                     os.write(gate[0], b"!")
                     assert os.read(gate[1], 1) == b"!"
-                    client.sendall(reply + body)
+                    client.sendall(reply + (body[:2] if truncate else body))
                     effects.append("read")
                     return
                 client.sendall(reply)
@@ -90,38 +90,45 @@ def cases(exe, tmp, env, features):
         try:
             name = source.stdout.readline().strip()
             host, port = name.rsplit(":", 1)
-            with socket.socket() as paused:
-                paused.bind(("127.0.0.1", 0))
-                paused.listen(1)
-                paused.settimeout(30)
-                entered, signal = os.pipe()
-                resume, release = os.pipe()
-                try:
-                    observed = []
-                    thread = Thread(
-                        target=relay,
-                        args=(paused, (host, int(port)), observed, (signal, resume)),
-                        daemon=True,
-                    )
-                    thread.start()
-                    subprocess.run(
-                        [
-                            exe,
-                            "held",
-                            f"127.0.0.1:{paused.getsockname()[1]}",
-                            str(entered),
-                            str(release),
-                        ],
-                        pass_fds=(entered, release),
-                        check=True,
-                        timeout=45,
-                        env=env,
-                    )
-                    thread.join(30)
-                    assert observed == ["read"], observed
-                finally:
-                    for fd in (entered, signal, resume, release):
-                        os.close(fd)
+            for truncate in (False, True):
+                with socket.socket() as paused:
+                    paused.bind(("127.0.0.1", 0))
+                    paused.listen(1)
+                    paused.settimeout(30)
+                    entered, signal = os.pipe()
+                    resume, release = os.pipe()
+                    try:
+                        observed = []
+                        thread = Thread(
+                            target=relay,
+                            args=(
+                                paused,
+                                (host, int(port)),
+                                observed,
+                                (signal, resume),
+                                truncate,
+                            ),
+                            daemon=True,
+                        )
+                        thread.start()
+                        subprocess.run(
+                            [
+                                exe,
+                                "cut-read" if truncate else "held",
+                                f"127.0.0.1:{paused.getsockname()[1]}",
+                                str(entered),
+                                str(release),
+                            ],
+                            pass_fds=(entered, release),
+                            check=True,
+                            timeout=45,
+                            env=env,
+                        )
+                        thread.join(30)
+                        assert observed == ["read"], observed
+                    finally:
+                        for fd in (entered, signal, resume, release):
+                            os.close(fd)
             with socket.socket() as listener, socket.socket() as refused:
                 listener.bind(("127.0.0.1", 0))
                 listener.listen(2)

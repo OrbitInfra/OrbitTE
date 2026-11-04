@@ -107,7 +107,7 @@ pub(crate) fn create() -> Result<Handle> {
         return Err(INTERNAL);
     };
     if let Err(code) = &result {
-        log::warn!("TENT C engine unavailable ({})", code.0);
+        guard((), || log::warn!("TENT C engine unavailable ({})", code.0));
     }
     slot.engine.set(result).map_err(|_| INTERNAL)?;
     Ok(key as Handle)

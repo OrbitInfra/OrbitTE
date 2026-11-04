@@ -280,6 +280,18 @@ impl Memory {
         if (!o.shm_path.is_empty() || o.shm_offset != 0) && o.route != Transport::Shm {
             return Err(UNSUPPORTED);
         }
+        if !self.quarantine.is_empty() {
+            return Err(UNKNOWN);
+        }
+        let mut all = lock(spans())?;
+        all.retain(|_, s| {
+            s.fenced
+                || s.owner.upgrade().is_some()
+                || s.foreign.as_ref().is_some_and(|w| w.strong_count() != 0)
+        });
+        if all.len() >= 65536 {
+            return Err(FULL);
+        }
         let (m, kind) = match o.location {
             Location::Cuda(id) => {
                 #[cfg(feature = "cuda")]
@@ -355,20 +367,22 @@ impl Memory {
             }
         };
         let address = base(&m);
-        let mut all = lock(spans())?;
-        all.retain(|_, s| {
-            s.fenced
-                || s.owner.upgrade().is_some()
-                || s.foreign.as_ref().is_some_and(|w| w.strong_count() != 0)
-        });
-        if all.len() >= 65536 {
-            return Err(FULL);
+        let end = address.checked_add(n).ok_or(INVALID)?;
+        if let Some((_, prior)) = all.range_mut(..end).next_back() {
+            if prior.end > address {
+                // A provider can reuse an address after a half-completed free.
+                // Neither owner can certify which native allocation is live.
+                prior.fenced = true;
+                self.quarantine.push(m);
+                self.bytes = total;
+                return Err(UNKNOWN);
+            }
         }
         all.insert(
             address,
             Span {
                 fenced: false,
-                end: address.checked_add(n).ok_or(INVALID)?,
+                end,
                 owner: WeakBacking::new(&m),
                 foreign: None,
             },

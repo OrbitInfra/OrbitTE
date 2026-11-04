@@ -98,7 +98,8 @@ out-of-band expected epoch. The Rust API accepts a source-issued epoch.
   `tent_free_memory` succeeds only after the allocation can retire. Borrowed C
   storage must stay allocated, initialized and accessible until every final
   unregister succeeds. Synchronize external CPU and CUDA producers and keep
-  their contexts alive. Concurrent raw access to an in-flight range is unsafe.
+  their contexts alive. A CPU-only build requires borrowed host-accessible
+  storage. Concurrent raw access to an in-flight range is unsafe.
 - Use zero-initialized options and requests. Permission 0 is local read/write,
   1 permits remote READ, and 2 permits both remote READ and WRITE. Local-only
   buffers remain visible in local information. Internal buffers are hidden from
