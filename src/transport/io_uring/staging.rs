@@ -100,11 +100,7 @@ impl Submission<'_> {
         let mut tasks = Vec::with_capacity(self.requests.len());
         let mut piece_count = 0usize;
         for request in self.requests {
-            let backing = if request
-                .parts
-                .iter()
-                .any(|p| p.local.memory_type() == crate::MemoryType::Cuda)
-            {
+            let backing = if request.parts.has_cuda() {
                 let ranges = StagedRanges::new(request, self.proxy)?;
                 piece_count = piece_count.saturating_add(ranges.pieces(self.proxy.chunk_size()));
                 request.lease.io_file(request.offset, request.length)?;

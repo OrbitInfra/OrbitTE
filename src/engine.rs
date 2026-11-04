@@ -76,6 +76,36 @@ pub enum Priority {
     Low = 2,
 }
 
+/// One file-ordered element of a vectored READ or WRITE.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileIoElement {
+    /// A nonempty range in one local host or CUDA registration.
+    Range { address: u64, length: usize },
+    /// Write zeros or read and discard this many bytes. Needs no registration.
+    Padding(usize),
+}
+
+impl From<(u64, usize)> for FileIoElement {
+    fn from((address, length): (u64, usize)) -> Self {
+        Self::Range { address, length }
+    }
+}
+
+impl FileIoElement {
+    fn address(self) -> Option<u64> {
+        match self {
+            Self::Range { address, .. } => Some(address),
+            Self::Padding(_) => None,
+        }
+    }
+
+    fn length(self) -> usize {
+        match self {
+            Self::Range { length, .. } | Self::Padding(length) => length,
+        }
+    }
+}
+
 /// A registered local address and a peer address or zero-based file byte offset.
 /// Submission resolves and retains the local backing before any network I/O.
 #[derive(Clone, Debug)]
@@ -101,7 +131,7 @@ pub struct TransferRequest {
     pub remote_staging: bool,
     pub transport: Transport,
     pub local_address: u64,
-    pub(crate) file_ranges: Option<Arc<[(u64, usize)]>>,
+    pub(crate) file_ranges: Option<Arc<[FileIoElement]>>,
     pub remote_address: u64,
     pub length: usize,
 }
@@ -130,19 +160,28 @@ impl TransferRequest {
     }
 
     /// Gather on WRITE or scatter on READ, in list order, starting at a file byte offset.
-    /// Each pair is a registered local address and a nonzero byte count. At most 1024
-    /// ranges are accepted. Engine batch and transfer byte limits also apply.
+    /// Accepts registered `(address, length)` pairs or [`FileIoElement`]s with explicit
+    /// padding. Every element must be nonempty. All elements, including padding, count
+    /// toward the 1024-element limit, the engine's descriptor budget and the file extent.
     pub fn file_vectored(
         transport: Transport,
         file_offset: u64,
-        ranges: &[(u64, usize)],
+        elements: &[impl Copy + Into<FileIoElement>],
     ) -> Result<Self> {
-        let first = ranges.first().ok_or(Error::InvalidRange)?;
-        if ranges.len() > 1024 {
+        if elements.is_empty() {
+            return Err(Error::InvalidRange);
+        }
+        if elements.len() > 1024 {
             return Err(Error::ResourceExhausted);
         }
-        let length = ranges.iter().try_fold(0usize, |sum, &(address, len)| {
-            if len == 0 || address.checked_add(len as u64).is_none() {
+        let elements: Arc<[FileIoElement]> = elements.iter().copied().map(Into::into).collect();
+        let length = elements.iter().try_fold(0usize, |sum, element| {
+            let len = element.length();
+            if len == 0
+                || element
+                    .address()
+                    .is_some_and(|a| a.checked_add(len as u64).is_none())
+            {
                 return Err(Error::InvalidRange);
             }
             sum.checked_add(len).ok_or(Error::InvalidRange)
@@ -150,8 +189,9 @@ impl TransferRequest {
         file_offset
             .checked_add(length as u64)
             .ok_or(Error::InvalidRange)?;
-        let mut request = Self::new(transport, first.0, file_offset, length);
-        request.file_ranges = Some(Arc::from(ranges));
+        let local = elements.iter().find_map(|e| e.address()).unwrap_or(0);
+        let mut request = Self::new(transport, local, file_offset, length);
+        request.file_ranges = Some(elements);
         Ok(request)
     }
 
@@ -1164,8 +1204,8 @@ impl TransferEngine {
                         "vectored request requires a file target",
                     ));
                 }
-                if r.local_address != parts[0].0
-                    || r.length != parts.iter().map(|p| p.1).sum::<usize>()
+                if r.local_address != parts.iter().find_map(|p| p.address()).unwrap_or(0)
+                    || r.length != parts.iter().map(|p| p.length()).sum::<usize>()
                 {
                     return Err(Error::InvalidRange);
                 }
@@ -2300,7 +2340,8 @@ impl PreparedSubmission {
                     || (max_attempts != 0 && r.selection.includes(Transport::Gds))
                 {
                     match r.parts.as_mut_slice().iter_mut().try_for_each(|part| {
-                        part.buffer = crate::transport::gds::BufferLease::acquire(&part.local)?;
+                        part.buffer =
+                            crate::transport::gds::BufferLease::acquire(part.registered()?)?;
                         Ok(())
                     }) {
                         Ok(()) => (),

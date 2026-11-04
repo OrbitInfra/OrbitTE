@@ -1,20 +1,23 @@
 use super::*;
+use crate::FileIoElement::Padding;
 
 #[test]
-fn vectored_mixed_gpu_layers_and_host_padding_share_chunks_and_one_file_receipt() -> Result<()> {
+fn vectored_mixed_gpu_layers_host_ranges_and_padding_share_chunks_and_one_file_receipt()
+-> Result<()> {
     if !kernel() {
         return Ok(());
     }
     let mut f = fixture(&[0xaf; 256], 32, 2, false)?;
-    let truncate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let truncate = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let armed = truncate.clone();
     let path = f.path.clone();
     let trace = f.observe_ring(false, move |_| {
-        if armed.swap(false, Ordering::AcqRel) {
+        let limit = armed.swap(0, Ordering::AcqRel);
+        if limit != 0 {
             fs::OpenOptions::new()
                 .write(true)
                 .open(&path)?
-                .set_len(3 + 34)?;
+                .set_len(3 + limit as u64)?;
         }
         Ok(())
     });
@@ -25,22 +28,34 @@ fn vectored_mixed_gpu_layers_and_host_padding_share_chunks_and_one_file_receipt(
     let host = f.memory.clone();
     let views = [&gpu, &gpu2, &host];
     let mut images = [[0x7e; 256]; 3];
-    let mut ranges = Vec::new();
+    let mut ranges = vec![Padding(6)];
     let mut layout = Vec::new();
-    let mut packed = Vec::new();
+    let mut packed = vec![0; 6];
     for i in 0..29 {
+        if i == 8 {
+            // This gap crosses the first 32-byte staging chunk.
+            ranges.push(Padding(20));
+            packed.resize(packed.len() + 20, 0);
+        }
         let owner = i % 3;
         let start = 200 - i * 5;
         let len = 1 + i % 4;
-        images[owner][start..start + len].fill(if owner == 2 { 0 } else { i as u8 + 7 });
+        images[owner][start..start + len].fill(i as u8 + 7);
+        layout.push((owner, start, len, packed.len()));
         packed.extend_from_slice(&images[owner][start..start + len]);
-        ranges.push((views[owner].base_address() + start as u64, len));
-        layout.push((owner, start, len));
+        ranges.push((views[owner].base_address() + start as u64, len).into());
     }
+    ranges.push(Padding(7));
+    packed.resize(packed.len() + 7, 0);
+    let req = TransferRequest::file_vectored(Transport::Unspec, 3, &ranges)?;
+    // Dirty both reusable chunks before proving that each WRITE gap is zero.
+    assert!(
+        f.run(TransferOp::Read, std::slice::from_ref(&req))?
+            .is_complete()
+    );
     for (view, image) in views.iter().zip(&images) {
         view.write(0, image)?;
     }
-    let req = TransferRequest::file_vectored(Transport::Unspec, 3, &ranges)?;
     let report = f.run(TransferOp::Write, std::slice::from_ref(&req))?;
     assert!(report.is_complete(), "{report:?}");
     assert_eq!(
@@ -51,12 +66,15 @@ fn vectored_mixed_gpu_layers_and_host_padding_share_chunks_and_one_file_receipt(
     file[3..3 + packed.len()].copy_from_slice(&packed);
     assert_eq!(fs::read(&f.path)?, file);
     assert!(!trace.lock().unwrap().round_widths.is_empty());
-    for limit in [packed.len(), 34] {
+    for limit in [packed.len(), 60, 34] {
         for view in &views {
             view.write(0, &[0xee; 256])?;
         }
         // Truncate only after the valid, full extent has been admitted.
-        truncate.store(limit != packed.len(), Ordering::Release);
+        if limit < packed.len() {
+            fs::write(&f.path, file)?;
+            truncate.store(limit, Ordering::Release);
+        }
         let b = f.engine.submit_async(
             TransferOp::Read,
             &f.segment,
@@ -78,11 +96,9 @@ fn vectored_mixed_gpu_layers_and_host_padding_share_chunks_and_one_file_receipt(
             if limit == packed.len() { limit } else { 0 }
         );
         let mut expected = [[0xee; 256]; 3];
-        let mut cursor = 0;
-        for &(owner, start, len) in &layout {
+        for &(owner, start, len, cursor) in &layout {
             let n = limit.saturating_sub(cursor).min(len);
             expected[owner][start..start + n].copy_from_slice(&packed[cursor..cursor + n]);
-            cursor += len;
         }
         for (view, want) in views.iter().zip(&expected) {
             let mut got = [0; 256];
@@ -105,7 +121,11 @@ fn vectored_cancel_and_close_keep_every_range_until_the_copy_event_drains() -> R
         TransferRequest::file_vectored(
             Transport::IoUring,
             off,
-            &[(v.base_address() + i, 2), (v.base_address() + j, 2)],
+            &[
+                (v.base_address() + i, 2).into(),
+                Padding(2),
+                (v.base_address() + j, 2).into(),
+            ],
         )
     };
     let (entered, wait) = mpsc::sync_channel(1);
@@ -134,7 +154,7 @@ fn vectored_cancel_and_close_keep_every_range_until_the_copy_event_drains() -> R
         Error::Cancelled
     ));
     assert!(running.cancel(0)?);
-    assert_eq!(f.engine.stats()?.inflight_bytes, 4);
+    assert_eq!(f.engine.stats()?.inflight_bytes, 6);
     assert!(v.write(1, &[0]).is_err() && v.write(4, &[0]).is_err());
     assert!(matches!(
         f.engine.close_file_segment(&f.segment, Duration::ZERO),
@@ -144,7 +164,7 @@ fn vectored_cancel_and_close_keep_every_range_until_the_copy_event_drains() -> R
     resume.send(()).unwrap();
     assert_eq!(running.wait(WAIT)?.completed_tasks, 1);
     f.engine.close_file_segment(&f.segment, WAIT)?;
-    assert_eq!(&fs::read(&f.path)?, b".ABCD...........");
+    assert_eq!(&fs::read(&f.path)?, b".AB\0\0CD.........");
     v.write(1, &[0])?;
     v.write(4, &[0])?;
     Ok(())
@@ -162,8 +182,9 @@ fn vectored_uncertain_copy_keeps_sibling_loans_chunk_and_admission() -> Result<(
         Transport::IoUring,
         1,
         &[
-            (gpu.base_address() + 1, 2),
-            (f.memory.base_address() + 3, 2),
+            (gpu.base_address() + 1, 2).into(),
+            Padding(1),
+            (f.memory.base_address() + 3, 2).into(),
         ],
     )?;
     device.event_wait_fail_at.store(1, Ordering::Release);
@@ -175,7 +196,7 @@ fn vectored_uncertain_copy_keeps_sibling_loans_chunk_and_admission() -> Result<(
     let stats = f.engine.stats()?;
     assert_eq!(
         (stats.inflight_bytes, stats.staging.retained_chunks),
-        (4, 1)
+        (5, 1)
     );
     assert!(gpu.read(1, &mut [0]).is_err() && f.memory.write(3, &[0]).is_err());
     assert!(matches!(

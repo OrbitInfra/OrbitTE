@@ -1,8 +1,9 @@
 use super::*;
 
+const PAGE: usize = 4096;
+
 #[test]
 fn vectored_gds_depth_and_short_receipts_preserve_every_later_destination() -> Result<()> {
-    const PAGE: usize = 4096;
     let mock = Mock::new(GdsMode::NativeOnly);
     let f = Fixture::new(
         &mock,
@@ -143,7 +144,6 @@ fn vectored_read_with_a_visible_prefix_cannot_restart_at_zero_after_a_failed_coo
     if !crate::transport::io_uring::tests::kernel() {
         return Ok(());
     }
-    const PAGE: usize = 4096;
     let mock = Mock::new(GdsMode::NativeOnly);
     let f = Fixture::new(&mock, EngineConfig::default(), PAGE * 2)?;
     let file: Vec<_> = (0..PAGE * 2).map(|i| (i % 227) as u8).collect();
@@ -175,5 +175,66 @@ fn vectored_read_with_a_visible_prefix_cannot_restart_at_zero_after_a_failed_coo
     let mut got = vec![0; host.len()];
     host.read(0, &mut got)?;
     assert_eq!(got, expected);
+    Ok(())
+}
+
+#[test]
+fn vectored_page_aligned_padding_avoids_cufile_even_on_a_native_mount() -> Result<()> {
+    let mock = Mock::new(GdsMode::NativeOnly);
+    let selector = crate::TransportSelectorConfig::from_json(
+        r#"{"policy":[{"name":"storage","segment_type":"file","transports":["gds","io_uring"]}]}"#,
+    )?;
+    let f = Fixture::new(
+        &mock,
+        EngineConfig {
+            selector: Some(selector),
+            ..Default::default()
+        },
+        PAGE * 4,
+    )?;
+    let host = f.host(PAGE * 3)?;
+    let aligned = host.base_address().next_multiple_of(PAGE as u64);
+    let pieces = [(aligned, PAGE).into(), crate::FileIoElement::Padding(PAGE)];
+    let req = |transport| TransferRequest::file_vectored(transport, PAGE as u64, &pieces);
+    for op in [TransferOp::Read, TransferOp::Write] {
+        assert!(matches!(
+            f.engine
+                .submit_and_wait(op, &f.segment, &[req(Transport::Gds)?], WAIT),
+            Err(Error::Unavailable(_))
+        ));
+    }
+    assert_eq!(fs::read(&f.path)?, vec![0; 4 * PAGE]);
+    #[cfg(feature = "io-uring")]
+    if crate::transport::io_uring::tests::kernel() {
+        let mut expected = vec![0xf1; 4 * PAGE];
+        fs::write(&f.path, &expected)?;
+        let r = f.engine.submit_and_wait(
+            TransferOp::Write,
+            &f.segment,
+            &[req(Transport::Unspec)?],
+            WAIT,
+        )?;
+        assert!(r.is_complete() && r.locally_drained);
+        assert_eq!(r.transferred_bytes, 2 * PAGE);
+        expected[PAGE..2 * PAGE].fill(0x6b);
+        expected[2 * PAGE..3 * PAGE].fill(0);
+        assert_eq!(fs::read(&f.path)?, expected);
+        host.write(0, &vec![0xad; host.len()])?;
+        let r = f.engine.submit_and_wait(
+            TransferOp::Read,
+            &f.segment,
+            &[req(Transport::Unspec)?],
+            WAIT,
+        )?;
+        assert!(r.is_complete() && r.locally_drained);
+        let mut got = vec![0; host.len()];
+        host.read(0, &mut got)?;
+        let mut want = vec![0xad; host.len()];
+        let off = (aligned - host.base_address()) as usize;
+        want[off..off + PAGE].fill(0x6b);
+        assert_eq!(got, want);
+    }
+    assert_eq!(mock.opens.load(Ordering::Acquire), 0);
+    assert_eq!(mock.submits.load(Ordering::Acquire), 0);
     Ok(())
 }

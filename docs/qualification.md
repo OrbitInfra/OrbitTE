@@ -208,14 +208,14 @@ concurrent close. [Stable job](https://github.com/OrbitInfra/OrbitTE/actions/run
 On main after the storage closeout (`017654d`), the same real-file test passed on
 [stable](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289755) and [Rust 1.85](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289814).
 
-The vectored host control reads and writes disjoint registered ranges on a
-real file and truncates it after admission. The loader audit runs disabled,
+Vectored host controls on ext4 and tmpfs check guarded ranges, zero-filled
+gaps and tails, and the exact prefix after truncation inside a gap. The loader audit runs disabled,
 missing-library and shim-provider cases in separate Linux processes.
 
 **CUDA/file staging is implemented. Its installed GPU/NVMe gate is unrun.**
 The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
 with real files to check multi-chunk bytes, short READs, producer events,
-copy failures, mixed host/device fragments, retained sibling loans and queued cancellation. Build the installed
+copy failures, mixed host/device/padding vectors, retained sibling loans and queued cancellation. Build the installed
 consumer with `python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain stable --output "$ART"`.
 The queued driver checks the selected GPU UUID and local PCIe NVMe ext4 mount,
 holds both existing resource locks and uses a fresh scratch file.
