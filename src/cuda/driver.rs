@@ -110,7 +110,7 @@ macro_rules! symbol {
             $lib,
             concat!(stringify!($field), "\0").as_bytes(),
             concat!("CUDA driver symbol ", stringify!($field)),
-            |api: &sys::Lib| api.$field,
+            sys::$field as _,
         )?
     };
 }
@@ -207,16 +207,37 @@ impl Driver {
     }
 }
 
-// cudarc's generated Lib supplies each function's exact type without invoking
-// its eager loader: missing unrelated CUDA symbols must not panic this backend.
-fn symbol<F: Copy>(
+// cudarc exposes Rust wrappers for the CUDA entry points. Check each signature
+// against its C function pointer at compile time without calling the wrapper.
+trait DriverEntry: Copy {
+    type Wrapper;
+}
+
+macro_rules! driver_entries {
+    ($(($($arg:ident),*)),+) => {
+        $(impl<R, $($arg),*> DriverEntry for unsafe extern "C" fn($($arg),*) -> R {
+            type Wrapper = unsafe fn($($arg),*) -> R;
+        })+
+    };
+}
+driver_entries!(
+    (),
+    (A),
+    (A, B),
+    (A, B, C),
+    (A, B, C, D),
+    (A, B, C, D, E),
+    (A, B, C, D, E, F, G, H)
+);
+
+fn symbol<F: DriverEntry>(
     library: &Library,
     name: &[u8],
     operation: &'static str,
-    _signature: impl FnOnce(&sys::Lib) -> F,
+    _signature: F::Wrapper,
 ) -> Result<F> {
-    // SAFETY: the name and function type come from the same generated field;
-    // Driver retains the library for at least as long as its copied entry points.
+    // SAFETY: the named CUDA symbol and its generated wrapper have matching
+    // arguments and return type. Driver retains the library for every entry.
     unsafe { library.get::<F>(name) }
         .map(|symbol| *symbol)
         .map_err(|_| Error::Unavailable(operation))
@@ -225,11 +246,11 @@ fn symbol<F: Copy>(
 // CUDA 12.8's unversioned batch entry has an extra failIdx argument. Only
 // select the exact CUDA 13 ABI, and make this an optional capability.
 fn batch_copy(library: &Library) -> Option<CopyBatch> {
-    let version = symbol(
+    let version: unsafe extern "C" fn(*mut c_int) -> Status = symbol(
         library,
         b"cuDriverGetVersion\0",
         "cuDriverGetVersion",
-        |api| api.cuDriverGetVersion,
+        sys::cuDriverGetVersion as _,
     )
     .ok()?;
     let mut supported = 0;
@@ -241,7 +262,7 @@ fn batch_copy(library: &Library) -> Option<CopyBatch> {
         library,
         b"cuMemcpyBatchAsync_v2\0",
         "cuMemcpyBatchAsync_v2",
-        |api| api.cuMemcpyBatchAsync_v2,
+        sys::cuMemcpyBatchAsync_v2 as _,
     )
     .ok()
 }

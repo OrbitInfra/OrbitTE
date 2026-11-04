@@ -139,6 +139,12 @@ for backoff, queue wakes, bounded retries and owner retirement.
 
 ## Native providers
 
+The CUDA feature accepts compatible cudarc 0.19 releases. Rust 1.85 builds
+use 0.19.0 in the checked-in lockfile. Consumers resolving a fresh lockfile
+on 1.85 can select it with `cargo update -p cudarc --precise 0.19.0`.
+Consumers using cudarc 0.19.8 share one registry package with OrbitTE on
+Rust 1.88 or newer, as required by that release's libloading dependency.
+
 `transport::rdma::RdmaConfig` selects discovery and pins, host Direct or staged
 memory, progress mode (`Polling` by default, or `EventDriven`) and native budgets.
 The `cuda` module owns device and pinned-host allocations and synchronized copies;

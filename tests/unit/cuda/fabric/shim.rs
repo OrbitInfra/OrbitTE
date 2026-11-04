@@ -406,8 +406,10 @@ unsafe extern "C" fn properties(out: *mut sys::CUmemAllocationProp, handle: u64)
             std::ptr::addr_of_mut!((*out).requestedHandleTypes)
                 .cast::<u32>()
                 .write(
-                    Handle::CU_MEM_HANDLE_TYPE_FABRIC as u32
-                        | Handle::CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR as u32,
+                    crate::cuda::fabric::handle_bits(Handle::CU_MEM_HANDLE_TYPE_FABRIC)
+                        | crate::cuda::fabric::handle_bits(
+                            Handle::CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR,
+                        ),
                 )
         }
     }
