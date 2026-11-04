@@ -157,7 +157,11 @@ impl HostBacking {
         }
     }
     #[cfg(target_os = "linux")]
-    fn shm_lock(&self, range: &Range<usize>, write: bool) -> Result<Option<std::fs::File>> {
+    fn shm_lock(
+        &self,
+        range: &Range<usize>,
+        write: bool,
+    ) -> Result<Option<crate::transport::shm::RangeLock>> {
         self.shared().map(|a| a.access(range, write)).transpose()
     }
     fn address(&self) -> NonNull<u8> {
@@ -499,7 +503,7 @@ impl HostMemory {
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
         backing.prepare_access(&range)?;
         #[cfg(target_os = "linux")]
-        let _shared = backing.bytes.shm_lock(&range, false)?;
+        let shared = backing.bytes.shm_lock(&range, false)?;
         // SAFETY: the validated range has no conflicting DMA lease. The shared
         // lock serializes CPU copies and lease acquisition. External access is
         // coordinated by from_raw_parts' caller. No allocation-wide slice exists.
@@ -510,6 +514,8 @@ impl HostMemory {
                 destination.len(),
             );
         }
+        #[cfg(target_os = "linux")]
+        crate::transport::shm::RangeLock::finish(shared)?;
         Ok(())
     }
 
@@ -523,7 +529,7 @@ impl HostMemory {
             .map_err(|_| Error::Internal("memory lock poisoned"))?;
         backing.prepare_access(&range)?;
         #[cfg(target_os = "linux")]
-        let _shared = backing.bytes.shm_lock(&range, true)?;
+        let shared = backing.bytes.shm_lock(&range, true)?;
         // SAFETY: as for read; only this checked range is accessed under the
         // shared lock. Disjoint native leases do not conflict with this copy.
         unsafe {
@@ -533,6 +539,8 @@ impl HostMemory {
                 source.len(),
             );
         }
+        #[cfg(target_os = "linux")]
+        crate::transport::shm::RangeLock::finish(shared)?;
         Ok(())
     }
 }
@@ -540,7 +548,7 @@ impl HostMemory {
 #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
 pub(crate) struct DmaLease {
     #[cfg(target_os = "linux")]
-    _shared_access: Option<std::fs::File>,
+    _shared_access: Option<crate::transport::shm::RangeLock>,
     _registration: RegisteredMemory,
     allocation: Allocation,
     range: Range<usize>,

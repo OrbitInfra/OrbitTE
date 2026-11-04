@@ -10,7 +10,10 @@ use std::{
     ops::Range,
     os::unix::fs::MetadataExt,
     ptr::NonNull,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicI32, Ordering},
+    },
 };
 
 pub(super) struct Budget {
@@ -65,11 +68,67 @@ pub(super) struct Parts {
     fd: File,
     ns: Arc<Namespace>,
     _charge: Charge,
+    lock_error: AtomicI32,
 }
+// SAFETY: the immutable address is dereferenced only under payload loans with validated bounds.
+unsafe impl Send for Parts {}
+// SAFETY: kernel range locks protect overlapping processes and the owner retains the mapping through use.
+unsafe impl Sync for Parts {}
+impl Parts {
+    fn check_locks(&self) -> Result<()> {
+        match self.lock_error.load(Ordering::Acquire) {
+            0 => Ok(()),
+            code => Err(Error::Unquiesced {
+                operation: "SHM range unlock",
+                code,
+            }),
+        }
+    }
+}
+
+pub(crate) struct RangeLock {
+    sys: &'static Sys,
+    backing: Arc<Parts>,
+    fd: Option<File>,
+    start: i64,
+    length: i64,
+}
+impl RangeLock {
+    pub(super) fn fd(&self) -> Result<&File> {
+        self.fd
+            .as_ref()
+            .ok_or(Error::Internal("released SHM range lock"))
+    }
+    fn unlock(&mut self) -> Result<()> {
+        if let Some(fd) = self.fd.take() {
+            if let Err(e) = (self.sys.unlock)(&fd, self.start, self.length) {
+                let code = e.raw_os_error().filter(|code| *code != 0).unwrap_or(-1);
+                self.backing.lock_error.store(code, Ordering::Release);
+                std::mem::forget((fd, self.backing.clone()));
+                return Err(Error::Unquiesced {
+                    operation: "SHM range unlock",
+                    code,
+                });
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn finish(mut lock: Option<Self>) -> Result<()> {
+        lock.as_mut().map_or(Ok(()), Self::unlock)
+    }
+}
+impl Drop for RangeLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.unlock() {
+            log::error!("retaining SHM range and backing: {error}");
+        }
+    }
+}
+
 pub(super) struct Mapping {
     pub sys: &'static Sys,
     source: bool,
-    parts: ManuallyDrop<Box<Parts>>,
+    parts: ManuallyDrop<Arc<Parts>>,
     closed: Option<Result<()>>,
 }
 impl std::ops::Deref for Mapping {
@@ -78,11 +137,6 @@ impl std::ops::Deref for Mapping {
         &self.parts
     }
 }
-// SAFETY: mapping lifetime is reference counted. Dereferences use checked ranges protected
-// by distinct kernel lock owners, including in other processes. Retirement needs exclusive access.
-unsafe impl Send for Mapping {}
-// SAFETY: the mapping address is immutable. All payload access uses the inode's range locks.
-unsafe impl Sync for Mapping {}
 impl Mapping {
     pub fn fd(&self) -> &File {
         &self.parts.fd
@@ -91,9 +145,11 @@ impl Mapping {
         if let Some(previous) = &self.closed {
             return previous.as_ref().map(|_| ()).map_err(Error::for_report);
         }
-        let extent = (self.sys.unmap)(self.address, self.size).map_err(|e| Error::Unquiesced {
-            operation: "SHM munmap",
-            code: e.raw_os_error().unwrap_or(-1),
+        let extent = self.check_locks().and_then(|()| {
+            (self.sys.unmap)(self.address, self.size).map_err(|e| Error::Unquiesced {
+                operation: "SHM munmap",
+                code: e.raw_os_error().unwrap_or(-1),
+            })
         });
         let result = extent.and_then(|()| {
             let orphan = !self.source
@@ -123,10 +179,20 @@ impl Mapping {
     pub fn retire(mut self) -> Result<()> {
         self.close()
     }
-    pub fn range_lock(&self, offset: usize, len: usize, write: bool) -> Result<File> {
+    pub fn range_lock(&self, offset: usize, len: usize, write: bool) -> Result<RangeLock> {
+        self.lock(offset as i64, len as i64, write)
+    }
+    pub(super) fn lock(&self, start: i64, length: i64, write: bool) -> Result<RangeLock> {
+        self.check_locks()?;
         let fd = (self.sys.reopen)(self.fd(), write)?;
-        (self.sys.lock)(&fd, offset as i64, len as i64, write).map_err(lock_error)?;
-        Ok(fd)
+        (self.sys.lock)(&fd, start, length, write).map_err(lock_error)?;
+        Ok(RangeLock {
+            sys: self.sys,
+            backing: Arc::clone(&self.parts),
+            fd: Some(fd),
+            start,
+            length,
+        })
     }
     pub fn import(
         sys: &'static Sys,
@@ -158,7 +224,7 @@ impl Mapping {
         Ok(Self {
             sys,
             source: false,
-            parts: ManuallyDrop::new(Box::new(Parts {
+            parts: ManuallyDrop::new(Arc::new(Parts {
                 address,
                 size,
                 id: stat,
@@ -166,6 +232,7 @@ impl Mapping {
                 fd,
                 ns: ns.clone(),
                 _charge: charge,
+                lock_error: AtomicI32::new(0),
             })),
             closed: None,
         })
@@ -240,10 +307,11 @@ impl Local {
             let mapping = Mapping {
                 sys,
                 source: true,
-                parts: ManuallyDrop::new(Box::new(Parts {
+                parts: ManuallyDrop::new(Arc::new(Parts {
                     fd,
                     ns: ns.clone(),
                     _charge: charge,
+                    lock_error: AtomicI32::new(0),
                     address,
                     size,
                     id,
@@ -268,7 +336,7 @@ impl Local {
     pub(crate) fn size(&self) -> usize {
         self.mapping.size
     }
-    pub(crate) fn access(&self, range: &Range<usize>, write: bool) -> Result<File> {
+    pub(crate) fn access(&self, range: &Range<usize>, write: bool) -> Result<RangeLock> {
         self.mapping.range_lock(range.start, range.len(), write)
     }
     pub(crate) fn retire(self) -> Result<()> {

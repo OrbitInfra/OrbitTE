@@ -21,7 +21,7 @@ mod sys;
 mod transport;
 pub(crate) mod wire;
 #[cfg(target_os = "linux")]
-pub(crate) use mapping::Local;
+pub(crate) use mapping::{Local, RangeLock};
 #[cfg(target_os = "linux")]
 pub(crate) use transport::{Lease, ShmTransport};
 

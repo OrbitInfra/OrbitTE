@@ -1,6 +1,6 @@
 use super::{
     ShmConfig,
-    mapping::{self, Budget, Local, Mapping},
+    mapping::{self, Budget, Local, Mapping, RangeLock},
     sys::{Namespace, Sys},
     wire::{Descriptor, Manifest, Name},
 };
@@ -289,10 +289,9 @@ impl ShmTransport {
         };
         // A separate open description is the process-death receipt for this physical owner.
         // Enrol before checking the source's live lock so revocation cannot miss an admitted copy.
-        let active = (self.sys.reopen)(m.fd(), false)?;
-        (self.sys.lock)(&active, d.activity(), 1, false)?;
-        if !(self.sys.conflicts)(&active, d.live(write), 1, false)? {
-            if (self.sys.conflicts)(&active, d.live(!write), 1, false)? {
+        let active = m.lock(d.activity(), 1, false)?;
+        if !(self.sys.conflicts)(active.fd()?, d.live(write), 1, false)? {
+            if (self.sys.conflicts)(active.fd()?, d.live(!write), 1, false)? {
                 return Err(Error::PermissionDenied);
             }
             return Err(Error::RegionNotFound);
@@ -367,9 +366,9 @@ impl Drop for ShmTransport {
 }
 
 pub(crate) struct Lease {
+    _active: RangeLock,
     mapping: Arc<Mapping>,
     offset: usize,
-    _active: File,
 }
 impl Lease {
     pub(crate) fn aliases(&self, local: &Local) -> bool {
@@ -392,7 +391,7 @@ impl Lease {
         local.with_shm_access(local_offset, len, |ptr, start, backing| {
             let local_end = start + len;
             let alias = backing.filter(|b| self.aliases(b));
-            let (_local, _peer, remote_ptr) = if let Some(b) = alias {
+            let (local_lock, remote_lock, remote_ptr) = if let Some(b) = alias {
                 let union = start.min(pos)..local_end.max(end);
                 (Some(b.access(&union, true)?), None, b.address())
             } else {
@@ -414,7 +413,7 @@ impl Lease {
                     TransferOp::Write => std::ptr::copy(here, there, len),
                 }
             }
-            Ok(())
+            RangeLock::finish(remote_lock).and(RangeLock::finish(local_lock))
         })
     }
 }

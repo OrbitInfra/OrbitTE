@@ -446,6 +446,83 @@ fn unregister_revokes_even_an_inherited_grant_fd_and_preserves_uncertain_owners(
 }
 
 #[test]
+fn inherited_payload_fd_does_not_extend_a_copy_and_failed_unlock_fences_its_write() -> Result<()> {
+    static INHERITED: std::sync::Mutex<Option<fs::File>> = std::sync::Mutex::new(None);
+    fn duplicate(fd: &fs::File, write: bool) -> io::Result<fs::File> {
+        let f = (NATIVE.reopen)(fd, write)?;
+        if write {
+            *INHERITED.lock().unwrap() = Some(f.try_clone()?);
+        }
+        Ok(f)
+    }
+    static DUP: Sys = Sys {
+        reopen: duplicate,
+        ..NATIVE
+    };
+    let dir = Dir::new();
+    let c = config(&dir.0);
+    let src = engine(c.clone(), &NATIVE)?;
+    let dst = engine(c.clone(), &DUP)?;
+    let host = src.allocate_shm_memory(12)?;
+    let remote = grant(&src, &host, 0, 12, Permission::RemoteReadWrite);
+    let local = dst.register_memory(vec![0xaa; 12].into(), Permission::LocalOnly)?;
+    let peer = dst.open_segment(src.endpoint(), src.source_epoch(), WAIT)?;
+    let q = req(Transport::Shm, &local, &remote, 2, 8);
+    assert!(
+        dst.submit_and_wait(TransferOp::Write, &peer, &[q], WAIT)?
+            .is_complete()
+    );
+    let inherited = INHERITED.lock().unwrap().take().unwrap();
+    let mut want = [0; 12];
+    want[2..10].fill(0xaa);
+    assert_eq!(bytes(&remote), want);
+    drop(inherited);
+
+    fn failed(fd: &fs::File, start: i64, len: i64) -> io::Result<()> {
+        if start < GATES {
+            return Err(io::Error::from_raw_os_error(libc::EIO));
+        }
+        (NATIVE.unlock)(fd, start, len)
+    }
+    static FAIL: Sys = Sys {
+        unlock: failed,
+        ..NATIVE
+    };
+    let other = engine(c, &FAIL)?;
+    let local = other.register_memory(vec![0xcc; 12].into(), Permission::LocalOnly)?;
+    let q = req(Transport::Unspec, &local, &remote, 2, 8);
+    let report = other.submit_and_wait(TransferOp::Write, &peer, &[q], WAIT)?;
+    let failure = report.failure.unwrap();
+    assert!(matches!(
+        failure.error,
+        Error::Unquiesced {
+            operation: "SHM range unlock",
+            code: libc::EIO
+        }
+    ));
+    assert_eq!(
+        (
+            report.completed_requests,
+            report.transferred_bytes,
+            failure.remote_effect
+        ),
+        (0, 0, RemoteEffect::Unknown)
+    );
+    assert!(matches!(
+        other.close_requester(WAIT),
+        Err(Error::Unquiesced {
+            operation: "SHM range unlock",
+            code: libc::EIO
+        })
+    ));
+    want[2..10].fill(0xcc);
+    // The syscall owner completed its CPU copy. Inspect the inode without trying to acquire the retained lock.
+    assert_eq!(fs::read(path(&dir.0, &host.shared().unwrap()))?, want);
+    assert_eq!(bytes(&local), [0xcc; 12]);
+    Ok(())
+}
+
+#[test]
 fn physical_aliases_use_memmove_and_keep_dependent_public_order() -> Result<()> {
     let src = engine(config(Path::new("")), &NATIVE)?;
     let dst = Arc::new(engine(config(Path::new("")), &NATIVE)?);
