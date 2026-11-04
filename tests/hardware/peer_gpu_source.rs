@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("orbitte-peer-gpu-source");
         return Ok(());
     }
-    let gpu = CudaMemory::allocate(0, 12)?;
+    let gpu = std::sync::Arc::new(CudaMemory::allocate(0, 12)?);
     gpu.write(0, &[0xa5, 0xa5, 1, 2, 3, 4, 5, 6, 7, 8, 0xa5, 0xa5])?;
     let engine = TransferEngine::new(EngineConfig::default())?;
     let _regions =

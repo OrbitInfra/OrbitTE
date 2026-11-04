@@ -84,7 +84,9 @@ jobs:
         run: cargo test --locked --features "$ORBITTE_FEATURES"
       - name: Install the offline diagnostics CLI and compile its packaged C and C++ clients
         if: matrix.features == ''
-        run: bash .github/scripts/check-installed-diagnostics.sh "$RUNNER_TEMP/offline-diagnostics"
+        run: |
+          if ! command -v strace >/dev/null; then .github/scripts/install-native-deps.sh strace; fi
+          bash .github/scripts/check-installed-diagnostics.sh "$RUNNER_TEMP/offline-diagnostics"
       - name: Build the peer GPU TCP gate without running it
         if: matrix.features == 'cuda'
         run: |

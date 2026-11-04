@@ -24,10 +24,10 @@ int main(void) {
         orbitte_diagnostics_version(ORBITTE_DIAGNOSTIC_TEXT, reject, NULL) != 4)
         return 1;
     char redacted[] = "[redacted]";
-    char failed[] = "[fail] tool.internal";
+    char failed[] = "[fail] failed.check";
     const char *redact = "{\"mode\":\"strict\",\"fields\":[{\"field\":\"token\",\"value\":\"private\"}],\"text\":\"key\"}";
-    const char *snapshot = "{\"schema_version\":1,\"command\":\"test\",\"build\":{\"version\":\"1\",\"commit\":\"a\",\"compiler\":\"test\",\"build_type\":\"test\",\"features\":{}},\"sections\":[],\"checks\":[{\"id\":\"tool.internal\",\"outcome\":\"fail\",\"summary\":\"fault\",\"evidence\":[],\"remediation\":[]}],\"redaction\":{\"mode\":\"default\",\"fields_redacted\":0}}";
-    if (orbitte_diagnostics_render((const uint8_t *)snapshot, strlen(snapshot), ORBITTE_DIAGNOSTIC_TEXT, false, verify, failed) != 4 ||
+    const char *snapshot = "{\"schema_version\":1,\"command\":\"test\",\"build\":{\"version\":\"1\",\"commit\":\"a\",\"compiler\":\"test\",\"build_type\":\"test\",\"features\":{}},\"sections\":[],\"checks\":[{\"id\":\"failed.check\",\"outcome\":\"fail\",\"summary\":\"fault\",\"evidence\":[],\"remediation\":[]}],\"redaction\":{\"mode\":\"default\",\"fields_redacted\":0}}";
+    if (orbitte_diagnostics_render((const uint8_t *)snapshot, strlen(snapshot), ORBITTE_DIAGNOSTIC_TEXT, false, verify, failed) != 1 ||
         orbitte_diagnostics_redact((const uint8_t *)redact, strlen(redact), verify, redacted) != 0 ||
         orbitte_diagnostics_render(NULL, 0, ORBITTE_DIAGNOSTIC_JSON, false, verify, NULL) != 2)
         return 1;
