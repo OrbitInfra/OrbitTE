@@ -114,24 +114,84 @@ impl Context {
                 code: -1,
             });
         }
+        let caller = self.thread_context()?;
+        if caller == self.raw.as_ptr() {
+            // No stack frame is needed when this exact context is already bound.
+            let result = operation();
+            return if self.thread_context().is_ok_and(|top| top == caller) {
+                result
+            } else {
+                Err(self.restore_failure(caller, -1))
+            };
+        }
         // SAFETY: the retained/borrowed context and driver outlive the stack push.
-        check("cuCtxPushCurrent", unsafe {
-            (self.driver.push)(self.raw.as_ptr())
-        })?;
-        let result = operation();
+        let pushed = unsafe { (self.driver.push)(self.raw.as_ptr()) };
+        if pushed != SUCCESS {
+            match self.thread_context() {
+                Ok(top) if top == caller => {
+                    return Err(Error::Backend {
+                        operation: "cuCtxPushCurrent",
+                        code: pushed as i32,
+                    });
+                }
+                Ok(top) if top == self.raw.as_ptr() => (),
+                _ => return Err(self.restore_failure(caller, pushed as i32)),
+            }
+        }
+        let result = check("cuCtxPushCurrent", pushed).and_then(|()| operation());
         let mut popped = std::ptr::null_mut();
-        // SAFETY: exactly one pop pairs with this push, including operation errors.
+        // SAFETY: pair the successful push, or unwind a switch that changed the
+        // caller even though the driver returned an error.
         let code = unsafe { (self.driver.pop)(&mut popped) };
-        if code != SUCCESS || popped != self.raw.as_ptr() {
-            self.poisoned.store(true, Ordering::Release);
-            RETAINED_CONTEXT.fetch_add(1, Ordering::AcqRel);
-            std::mem::forget(Arc::clone(self));
-            return Err(Error::Unquiesced {
-                operation: "cuCtxPopCurrent restoration",
-                code: if code == SUCCESS { -1 } else { code as i32 },
-            });
+        if code != SUCCESS
+            || popped != self.raw.as_ptr()
+            || !self.thread_context().is_ok_and(|top| top == caller)
+        {
+            return Err(
+                self.restore_failure(caller, if code == SUCCESS { -1 } else { code as i32 })
+            );
         }
         result
+    }
+    fn thread_context(&self) -> Result<driver::Context> {
+        let mut value = std::ptr::null_mut();
+        // SAFETY: the driver writes the current thread’s handle, possibly null.
+        check("cuCtxGetCurrent", unsafe {
+            (self.driver.current)(&mut value)
+        })?;
+        Ok(value)
+    }
+    fn restore_failure(self: &Arc<Self>, caller: driver::Context, code: i32) -> Error {
+        // If our frame is demonstrably still on top of a distinct caller, remove
+        // that frame. Replacing it with the caller would duplicate the caller's frame.
+        let unbound = if caller != self.raw.as_ptr()
+            && self
+                .thread_context()
+                .is_ok_and(|top| top == self.raw.as_ptr())
+        {
+            // SAFETY: the observed top is this thread's retained owner context.
+            unsafe { (self.driver.set_current)(std::ptr::null_mut()) }
+        } else {
+            SUCCESS
+        };
+        let restored = if self.thread_context().is_ok_and(|top| top == caller) {
+            unbound
+        } else {
+            // SAFETY: restore the exact saved binding, even for a null caller.
+            unsafe { (self.driver.set_current)(caller) }
+        };
+        if !self.poisoned.swap(true, Ordering::AcqRel) {
+            RETAINED_CONTEXT.fetch_add(1, Ordering::AcqRel);
+            std::mem::forget(self.clone());
+        }
+        Error::Unquiesced {
+            operation: "cuCtxPopCurrent restoration",
+            code: if restored == SUCCESS {
+                code
+            } else {
+                restored as i32
+            },
+        }
     }
 }
 
@@ -486,7 +546,10 @@ impl CudaMemory {
             staging.bytes_mut().copy_from_slice(bytes);
         }
         if allocation.copy_stream.is_none() {
-            allocation.copy_stream = Some(CopyStream::new(&context)?);
+            match CopyStream::new(&context) {
+                Ok(stream) => allocation.copy_stream = Some(stream),
+                Err(error) => return staging.close().and(Err(error)),
+            }
         }
         let stream = allocation
             .copy_stream
@@ -507,11 +570,12 @@ impl CudaMemory {
             RETAINED_PINNED.fetch_add(1, Ordering::AcqRel);
             std::mem::forget(staging);
         } else {
-            result?;
-            if source.is_none() {
+            if result.is_ok() && source.is_none() {
                 destination.copy_from_slice(staging.bytes());
             }
-            return Ok(());
+            // Cleanup runs under the same exact-context contract as the copy.
+            // A failed final restore must reach the caller, including on a copy error.
+            return staging.close().and(result);
         }
         match result {
             Err(error) => Err(error),

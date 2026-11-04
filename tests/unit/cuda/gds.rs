@@ -137,7 +137,7 @@ fn denied_gds_buffer_keeps_its_rdma_mr_and_selects_staged_file_reads() -> Result
             ..Default::default()
         };
         let mut engine = rdma_fixture_with_config(rdma::tests::gpu_runtime("copy"), config.clone());
-        engine.io_uring = io_uring::IoUringTransport::probe();
+        engine.io_uring = io_uring::IoUringTransport::probe(&config)?;
         let mock = Mock::new(GdsMode::NativeOnly);
         mock.register_error.store(true, Ordering::Release);
         mock.install(&mut engine, &config);

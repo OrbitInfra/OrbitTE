@@ -109,6 +109,12 @@ jobs:
             RUST_TEST_THREADS=$(nproc) "$binary" "${filters[@]}" > "$RUNNER_TEMP/r1b.log" || { cat "$RUNNER_TEMP/r1b.log"; exit 1; }
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
           done
+      - name: Repeat storage and CUDA release controls 50 times
+        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITTE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          bash .github/scripts/repeat-storage-cuda.sh "$binary" "$RUNNER_TEMP/r1c-repeats"
       - name: Repeat MNNVL fabric and EGM shim controls 50 times
         if: matrix.toolchain == 'stable' && (matrix.features == 'cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |

@@ -207,6 +207,11 @@ impl PinnedAllocation {
 }
 
 impl PinnedAllocation {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn file_pool(length: usize) -> Result<Self> {
+        let context = Context::primary(Driver::load()?, 0)?;
+        Self::new(&context, length)
+    }
     pub(crate) fn context_id(&self) -> usize {
         self.context.raw.as_ptr() as usize
     }

@@ -20,7 +20,7 @@ pub(crate) struct IpcCopyCompletion {
 
 /// In-flight group ownership can move between completion polls without memory locks.
 pub(crate) struct IpcCopyGroup {
-    stream: CUDAStreamHandle,
+    stream: Option<CUDAStreamHandle>,
     // Unique whole-allocation loans; the flag distinguishes touched owners.
     loans: Vec<(Allocation, bool)>,
     shared: Vec<crate::transport::shm::RangeLock>,
@@ -32,7 +32,12 @@ pub(crate) struct IpcCopyGroup {
 
 impl IpcCopyGroup {
     pub(crate) fn query(&mut self) -> Result<bool> {
-        let ready = self.stream.stream()?.query()?;
+        let ready = self
+            .stream
+            .as_mut()
+            .ok_or(Error::Internal("polling a synchronous CUDA copy"))?
+            .stream()?
+            .query()?;
         if ready {
             self.pending = false;
         }
@@ -140,13 +145,13 @@ impl IpcMapping {
         &mut self,
         copies: &[IpcCopy],
         to_remote: bool,
-        stream: CUDAStreamHandle,
+        stream: impl Into<Option<CUDAStreamHandle>>,
         deadline: Instant,
         mut begin: impl FnMut(usize) -> Result<()>,
         progress: impl FnOnce(IpcCopyGroup) -> IpcCopyCompletion,
     ) -> IpcCopyCompletion {
         let mut group = IpcCopyGroup {
-            stream,
+            stream: stream.into(),
             loans: Vec::new(),
             shared: Vec::new(),
             pending: false,
@@ -158,8 +163,15 @@ impl IpcMapping {
             if copies.is_empty() {
                 return Err(Error::Internal("empty CUDA IPC group"));
             }
-            let stream = group.stream.stream()?;
-            if stream.context_key() != self.context.raw.as_ptr() as usize {
+            let stream = group
+                .stream
+                .as_mut()
+                .map(CUDAStreamHandle::stream)
+                .transpose()?;
+            if stream
+                .as_ref()
+                .is_some_and(|s| s.context_key() != self.context.raw.as_ptr() as usize)
+            {
                 return Err(Error::Unavailable("CUDA stream belongs to another context"));
             }
             if self.address == 0 || self.pending || self.uncertain {
@@ -254,6 +266,48 @@ impl IpcMapping {
                 }
                 group.loans.push(((*memory).clone(), false));
             }
+            let Some(stream) = stream else {
+                let [copy] = copies else {
+                    return Err(Error::Internal("synchronous CUDA copy group size"));
+                };
+                begin(0)?;
+                self.memories.push(copy.memory.clone());
+                group.loans[0].1 = true;
+                let local = copy.memory.base_address() + copy.local_offset as u64;
+                let remote = self.address + copy.remote_offset as u64;
+                let (dst, src) = if to_remote {
+                    (remote, local)
+                } else {
+                    (local, remote)
+                };
+                let driver = &self.context.driver;
+                let result = self.context.current(|| {
+                    group.attempted = 1;
+                    group.pending = true;
+                    // SAFETY: the checked local loan and remote import cover the copy and drain.
+                    let copy_code = unsafe { (driver.copy_sync)(dst, src, copy.length) };
+                    // cuMemcpy may return before a DtoD finishes. Drain its legacy
+                    // stream before detaching the mapping, also after any failed copy.
+                    if matches!(copy.memory, Allocation::Cuda(_)) || copy_code != SUCCESS {
+                        // SAFETY: the unsuffixed cuMemcpy uses this context's legacy stream.
+                        let code = unsafe { (driver.stream_synchronize)(std::ptr::null_mut()) };
+                        if code != SUCCESS {
+                            return Err(Error::Unquiesced {
+                                operation: "CUDA synchronous IPC copy drain",
+                                code: code as i32,
+                            });
+                        }
+                    }
+                    group.pending = false;
+                    check("cuMemcpy IPC", copy_code)?;
+                    group.submitted = 1;
+                    group.submitted_all = true;
+                    Ok(())
+                });
+                group.pending |= matches!(result, Err(Error::Unquiesced { .. }));
+                self.pending = group.pending;
+                return result;
+            };
             // Preserve native ownership if submission unwinds.
             #[allow(unused_assignments)]
             {
@@ -355,6 +409,7 @@ impl IpcMapping {
             result
         })();
         let completion = match result {
+            Ok(()) if group.stream.is_none() => group.complete(Ok(())),
             Ok(()) => progress(group),
             Err(error) => group.complete(Err(error)),
         };

@@ -64,8 +64,77 @@ fn round_trip(
     Ok(())
 }
 
+// The consumer owns a distinct context on the same GPU. Observe the public
+// platform copy in that context and on a fresh thread with no current context.
+#[allow(unsafe_code)]
+fn caller_context_control(memory: &CudaMemory) -> Result<()> {
+    use std::ffi::c_void;
+    type Ctx = *mut c_void;
+    let missing = |_| Error::Unavailable("installed CUDA context entry");
+    // SAFETY: the real CUDA library owns the checked symbols for this scope.
+    let lib = unsafe { libloading::Library::new("libcuda.so.1") }.map_err(missing)?;
+    // SAFETY: these symbol names and signatures are the CUDA Driver C ABI.
+    let (get, create, destroy, device_get) = unsafe {
+        (
+            *lib.get::<unsafe extern "C" fn(*mut Ctx) -> i32>(b"cuCtxGetCurrent")
+                .map_err(missing)?,
+            *lib.get::<unsafe extern "C" fn(*mut Ctx, u32, i32) -> i32>(b"cuCtxCreate_v2")
+                .map_err(missing)?,
+            *lib.get::<unsafe extern "C" fn(Ctx) -> i32>(b"cuCtxDestroy_v2")
+                .map_err(missing)?,
+            *lib.get::<unsafe extern "C" fn(*mut i32, i32) -> i32>(b"cuDeviceGet")
+                .map_err(missing)?,
+        )
+    };
+    let current = || -> Result<Ctx> {
+        let mut ctx = std::ptr::null_mut();
+        // SAFETY: ctx is writable return storage on this thread.
+        if unsafe { get(&mut ctx) } != 0 {
+            return Err(Error::Internal("read installed caller context"));
+        }
+        Ok(ctx)
+    };
+    let exercise = |expected: Ctx| -> Result<()> {
+        if current()? != expected {
+            return Err(Error::Internal("initial caller binding differs"));
+        }
+        memory.write(0, &[1, 3, 5, 7])?;
+        if current()? != expected {
+            return Err(Error::Internal("WRITE changed caller context"));
+        }
+        let mut bytes = [0; 4];
+        memory.read(0, &mut bytes)?;
+        if current()? != expected || bytes != [1, 3, 5, 7] {
+            return Err(Error::Internal("READ changed caller context or bytes"));
+        }
+        Ok(())
+    };
+    exercise(std::ptr::null_mut())?;
+    let mut device = 0;
+    // SAFETY: the driver writes the device handle of the visible GPU to this slot.
+    if unsafe { device_get(&mut device, 0) } != 0 {
+        return Err(Error::Unavailable("installed CUDA device"));
+    }
+    let mut custom = std::ptr::null_mut();
+    // SAFETY: the installed script exposes just the selected physical GPU as ordinal zero.
+    if unsafe { create(&mut custom, 0, device) } != 0 || custom.is_null() {
+        return Err(Error::Unavailable("create installed caller context"));
+    }
+    exercise(custom)?;
+    // SAFETY: successful guarded copies returned the caller's context; it has no outstanding work.
+    if unsafe { destroy(custom) } != 0 || !current()?.is_null() {
+        return Err(Error::Internal("release installed caller context"));
+    }
+    Ok(())
+}
+
 fn exercise(path: &Path) -> Result<()> {
     let engine = TransferEngine::new(EngineConfig {
+        io_uring: orbit_te::IoUringConfig {
+            pinned_staging: true,
+            staging_slot_kb: 4,
+            staging_slots: 1,
+        },
         staging_chunk_size: CHUNK,
         staging_chunk_count: 2,
         ..Default::default()
@@ -82,6 +151,8 @@ fn exercise(path: &Path) -> Result<()> {
     )?;
     let size = 3 * CHUNK;
     let gpu = Arc::new(CudaMemory::allocate(0, size)?);
+    std::thread::scope(|scope| scope.spawn(|| caller_context_control(&gpu)).join())
+        .map_err(|_| Error::Internal("installed caller context thread"))??;
     let device = engine
         .register_cuda_memory_batch(&[(gpu, 0, size)], Permission::LocalOnly)?
         .remove(0);
@@ -91,6 +162,7 @@ fn exercise(path: &Path) -> Result<()> {
             Permission::LocalOnly,
         )?
         .remove(0);
+    round_trip(&engine, &file, &device, path, &mut image, 4 * CHUNK, CHUNK)?;
     let n = 2 * CHUNK + 37;
     round_trip(&engine, &file, &device, path, &mut image, 0, n)?;
     let staged = engine.stats()?.staging;
@@ -109,6 +181,22 @@ fn exercise(path: &Path) -> Result<()> {
             "installed ext4 direct fd or pinned host path missing",
         ));
     }
+    let slots = engine
+        .stats()?
+        .io_uring
+        .ok_or(Error::Unavailable("installed io_uring"))?;
+    if !slots.pinned
+        || (
+            slots.slot_acquisitions,
+            slots.slot_misses,
+            slots.active_slots,
+            slots.pageable_bytes,
+        ) != (2, 2, 0, 0)
+    {
+        return Err(Error::Internal(
+            "installed file slot acquisition or fallback accounting",
+        ));
+    }
     engine.close_file_segment(&file, TIMEOUT)?;
     engine.unregister_memory(&device)?;
     engine.unregister_memory(&host)?;
@@ -125,7 +213,7 @@ fn exercise(path: &Path) -> Result<()> {
         return Err(Error::Internal("CUDA file gate retained native owners"));
     }
     println!(
-        "STORAGE_CUDA_OK staged_bytes={} chunks={} pinned_bytes={} direct=true retained=0",
+        "STORAGE_CUDA_OK staged_bytes={} chunks={} pinned_bytes={} direct=true retained=0 pooled_transfers=2 pool_misses=2 contexts=absent,custom",
         staged.copied_bytes,
         staged.completed_chunks,
         2 * n

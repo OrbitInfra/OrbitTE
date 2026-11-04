@@ -269,3 +269,133 @@ fn successful_sibling_drain_cannot_clear_failed_range_or_release_actual_owner() 
         "failed copy must retain the actual CudaMemory, not just its address"
     );
 }
+
+#[test]
+fn r1c_merged_staging_submits_one_cross_and_reports_each_alias() -> Result<()> {
+    let t = crate::test_support::EVENTUAL_PROGRESS;
+    for op in [TransferOp::Read, TransferOp::Write] {
+        let source = engine(Transport::Tcp, 32, 2);
+        let requester = Arc::new(engine(Transport::Tcp, 32, 2));
+        let dev = allocation(&[0x71; 32]);
+        let gpu = memory(&dev);
+        let remote = source
+            .register_cuda_memory_batch(&[(gpu.clone(), 0, 32)], Permission::RemoteReadWrite)?
+            .remove(0);
+        let local = requester.register_memory(vec![0xb3; 32].into(), Permission::LocalOnly)?;
+        let peer = requester.open_segment(source.endpoint(), source.source_epoch(), t)?;
+        let reqs = [(4, 6), (10, 7)].map(|(off, len)| {
+            TransferRequest::new(
+                Transport::Tcp,
+                local.base_address() + off,
+                remote.base_address() + off,
+                len,
+            )
+            .with_remote_staging(true)
+        });
+        let batch = requester.submit_async(op, &peer, &reqs, None, t)?;
+        batch.wait(t)?;
+        for (i, n) in [(1, 7), (0, 6)] {
+            let status = batch.task_status(i)?;
+            assert_eq!(
+                (
+                    status.physical_owner,
+                    status.state,
+                    status.transferred_bytes,
+                    status.locally_drained
+                ),
+                (0, crate::TaskState::Completed, n, true)
+            );
+        }
+        let s = source.stats()?.staging;
+        assert_eq!(
+            (
+                s.remote_pins,
+                s.remote_crosses,
+                s.remote_delegates,
+                s.remote_unpins
+            ),
+            (1, 1, 1, 1)
+        );
+        for (memory, background, data) in [
+            (
+                &local,
+                0xb3,
+                if op == TransferOp::Read { 0x71 } else { 0xb3 },
+            ),
+            (
+                &remote,
+                0x71,
+                if op == TransferOp::Write { 0xb3 } else { 0x71 },
+            ),
+        ] {
+            let mut expected = [background; 32];
+            expected[4..17].fill(data);
+            let mut bytes = [0; 32];
+            memory.read(0, &mut bytes)?;
+            assert_eq!(bytes, expected);
+        }
+        requester.close(t)?;
+        source.close(t)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn r1c_failed_merged_staging_write_does_not_resubmit_an_alias() -> Result<()> {
+    let t = crate::test_support::EVENTUAL_PROGRESS;
+    let source = engine(Transport::Tcp, 32, 2);
+    let requester = Arc::new(TransferEngine::new(EngineConfig {
+        max_failover_attempts: 0,
+        remote_staging: true,
+        staging_chunk_size: 32,
+        staging_chunk_count: 2,
+        ..Default::default()
+    })?);
+    let dev = allocation(&[0x71; 32]);
+    let gpu = memory(&dev);
+    let remote = source
+        .register_cuda_memory_batch(&[(gpu.clone(), 0, 32)], Permission::RemoteReadWrite)?
+        .remove(0);
+    let local = requester.register_memory(vec![0x3b; 32].into(), Permission::LocalOnly)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), t)?;
+    let reqs = [(2, 4), (6, 5)].map(|(off, n)| {
+        TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + off,
+            remote.base_address() + off,
+            n,
+        )
+        .with_remote_staging(true)
+    });
+    dev.copy_error.store(700, Ordering::Release);
+    let batch = requester.submit_async(TransferOp::Write, &peer, &reqs, None, t)?;
+    batch.wait(t)?;
+    for i in [1, 0] {
+        let status = batch.task_status(i)?;
+        assert_eq!(
+            (
+                status.physical_owner,
+                status.state,
+                status.transferred_bytes
+            ),
+            (0, crate::TaskState::Failed, 0)
+        );
+        assert_eq!(
+            status.failure.unwrap().remote_effect,
+            crate::RemoteEffect::Unknown
+        );
+    }
+    let s = source.stats()?.staging;
+    assert_eq!((s.remote_pins, s.remote_crosses), (1, 1));
+    dev.copy_error.store(0, Ordering::Release);
+    let mut bytes = [0; 32];
+    gpu.read(0, &mut bytes)?;
+    // The injected HtoD error writes one byte before returning. The following
+    // alias must neither replay that grant nor reach any other byte.
+    let mut expected = [0x71; 32];
+    expected[2] = 0x3b;
+    assert_eq!(bytes, expected);
+    requester.close(t)?;
+    source.close(t)?;
+    Ok(())
+}

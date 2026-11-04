@@ -96,13 +96,16 @@ fn released(engine: &TransferEngine) -> Result<()> {
 }
 
 fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
+    let sync = mode == "sync-healthy";
     let cached = mode.starts_with("cache-");
     let mode = mode
         .strip_prefix("cache-")
         .or_else(|| mode.strip_prefix("batch-"))
+        .or_else(|| mode.strip_prefix("sync-"))
         .unwrap_or(mode);
     let engine = TransferEngine::new(EngineConfig {
         nvlink: true,
+        nvlink_async_memcpy_threshold_kb: if sync { 2048 } else { 0 },
         nvlink_cache_entries: if cached { 2 } else { 0 },
         handler_timeout: TIMEOUT,
         ..EngineConfig::default()
@@ -203,11 +206,13 @@ fn requester(
     mode: &str,
     memory_kind: &str,
 ) -> Result<()> {
+    let sync = mode == "sync-healthy";
     let cached = mode.starts_with("cache-");
     let batched = cached || mode.starts_with("batch-");
     let mode = mode
         .strip_prefix("cache-")
         .or_else(|| mode.strip_prefix("batch-"))
+        .or_else(|| mode.strip_prefix("sync-"))
         .unwrap_or(mode);
     let ready = fs::read_to_string(root.join("ready"))?;
     let fields: Vec<_> = ready.lines().collect();
@@ -223,6 +228,7 @@ fn requester(
         .map_err(|_| Error::Protocol("source address"))?;
     let engine = TransferEngine::new(EngineConfig {
         nvlink: true,
+        nvlink_async_memcpy_threshold_kb: if sync { 2048 } else { 0 },
         nvlink_cache_entries: if cached { 2 } else { 0 },
         ..EngineConfig::default()
     })?;
@@ -392,6 +398,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "graceful",
         "requester-exit",
         "stale",
+        "sync-healthy",
         "batch-healthy",
         "batch-graceful",
         "batch-requester-exit",
@@ -402,6 +409,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     .contains(&mode)
     {
         return Err("unknown mode".into());
+    }
+    if mode == "sync-healthy" && payload >= (2048 << 10) {
+        return Err("sync gate requires a sub-threshold payload".into());
     }
     let grouped = mode.starts_with("batch-") || mode.starts_with("cache-");
     if grouped && payload < 3 {

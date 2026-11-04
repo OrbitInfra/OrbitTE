@@ -236,6 +236,8 @@ pub struct EngineStats {
     pub gds: crate::GdsStats,
     #[cfg(feature = "cuda")]
     pub nvlink: Option<crate::NVLinkStats>,
+    #[cfg(feature = "io-uring")]
+    pub io_uring: Option<crate::IoUringStats>,
     #[cfg(feature = "cuda")]
     pub staging: crate::StagingStats,
     pub allocated_batches: usize,
@@ -325,6 +327,7 @@ impl TransferEngine {
                     config.max_inflight_bytes,
                     config.nvlink_cache_entries,
                     config.nvlink_stream_count,
+                    config.nvlink_async_memcpy_threshold_kb,
                 )
             })
             .transpose()?;
@@ -450,7 +453,7 @@ impl TransferEngine {
             runtime_queue,
             files: FileSegments::default(),
             #[cfg(feature = "io-uring")]
-            io_uring: crate::transport::io_uring::IoUringTransport::probe(),
+            io_uring: crate::transport::io_uring::IoUringTransport::probe(&config)?,
             #[cfg(feature = "gds")]
             gds: crate::transport::gds::GdsTransport::probe(&config).map(Arc::new),
             receiver_credits,
@@ -707,6 +710,8 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
+            #[cfg(feature = "io-uring")]
+            io_uring: self.io_uring.as_ref().map(|io| io.stats()),
             unresolved_policy_devices: self.selector.as_ref().map_or(0, |s| s.unresolved_devices),
             #[cfg(feature = "gds")]
             gds,
@@ -2039,6 +2044,10 @@ impl TransferEngine {
         }
         drop(usage);
         self.files.close_all(deadline)?;
+        #[cfg(feature = "io-uring")]
+        if let Some(io) = &self.io_uring {
+            io.close()?;
+        }
         #[cfg(feature = "cuda")]
         if let Some(transport) = &self.source.nvlink {
             transport.close_requester(self.source.epoch, deadline)?;

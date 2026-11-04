@@ -63,6 +63,8 @@ pub struct EngineConfig {
     /// Enable ordinary TCP payloads. The control service is independent.
     pub tcp: bool,
     pub hp_tcp: crate::HpTcpConfig,
+    #[cfg(feature = "io-uring")]
+    pub io_uring: crate::IoUringConfig,
     pub shm: crate::ShmConfig,
     /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
     #[cfg(feature = "metrics")]
@@ -86,6 +88,10 @@ pub struct EngineConfig {
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
     pub nvlink: bool,
+    /// Single-task legacy NVLink copies strictly below this many KiB use synchronous CUDA copy.
+    /// Zero selects the stream/event path for all sizes.
+    #[cfg(feature = "cuda")]
+    pub nvlink_async_memcpy_threshold_kb: usize,
     #[cfg(feature = "cuda")]
     pub mnnvl: Option<crate::MnnvlConfig>,
     /// Maximum persistent CUDA IPC imports and exports, independently per side.
@@ -173,6 +179,8 @@ impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             tcp: true,
+            #[cfg(feature = "io-uring")]
+            io_uring: Default::default(),
             hp_tcp: Default::default(),
             shm: Default::default(),
             #[cfg(feature = "metrics")]
@@ -185,6 +193,8 @@ impl Default for EngineConfig {
             gds_require_native: false,
             #[cfg(feature = "cuda")]
             nvlink: false,
+            #[cfg(feature = "cuda")]
+            nvlink_async_memcpy_threshold_kb: 2048,
             #[cfg(feature = "cuda")]
             mnnvl: std::env::var_os("MC_ENABLE_MNNVL").map(|_| crate::MnnvlConfig::default()),
             #[cfg(feature = "cuda")]
@@ -236,6 +246,8 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub(crate) fn validate(&self) -> Result<()> {
+        #[cfg(feature = "io-uring")]
+        self.io_uring.slot_size()?;
         self.hp_tcp.validate(self.tcp)?;
         if self.shm.enable
             && !self.shm.cxl_mount_path.as_os_str().is_empty()

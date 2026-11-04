@@ -513,3 +513,98 @@ fn one_available_chunk_runs_more_requests_and_an_overlapping_range_fails_before_
     assert_eq!(rings.load(Ordering::Acquire), 1);
     Ok(())
 }
+
+#[test]
+fn r1c_portable_file_slot_and_charged_proxy_fallback_share_a_real_ring() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let image: Vec<_> = (0..16384).map(|i| (i % 251) as u8).collect();
+    let f = fixture_with_config(
+        &image,
+        EngineConfig {
+            io_uring: crate::IoUringConfig {
+                pinned_staging: true,
+                staging_slot_kb: 4,
+                staging_slots: 1,
+            },
+            staging_chunk_size: 4096,
+            staging_chunk_count: 3,
+            ..Default::default()
+        },
+    )?;
+    let device = allocation(&[0xa3; 16400]);
+    let (_, view) = register(&f, &device)?;
+    let requests = [
+        request(&view, 1, 0, 4096),
+        request(&view, 4100, 4096, 4096),
+        request(&view, 8201, 8192, 8192),
+    ];
+    let mut expected = vec![0xa3; 16400];
+    for (at, src, n) in [(1, 0, 4096), (4100, 4096, 4096), (8201, 8192, 8192)] {
+        expected[at..at + n].copy_from_slice(&image[src..src + n]);
+    }
+    for op in [TransferOp::Read, TransferOp::Write] {
+        if op == TransferOp::Write {
+            fs::write(&f.path, vec![0x54; 16384])?;
+        }
+        let report = f.run(op, &requests)?;
+        assert!(report.is_complete() && report.locally_drained, "{report:?}");
+        let mut bytes = vec![0; 16400];
+        view.read(0, &mut bytes)?;
+        assert_eq!(bytes, expected);
+        assert_eq!(fs::read(&f.path)?, image);
+    }
+    let s = f.engine.stats()?;
+    let file = s.io_uring.unwrap();
+    assert!(file.pinned);
+    assert_eq!(
+        (
+            file.slots,
+            file.active_slots,
+            file.slot_acquisitions,
+            file.slot_misses,
+            file.pageable_bytes
+        ),
+        (1, 0, 2, 4, 0)
+    );
+    assert_eq!(
+        (s.staging.active_chunks, s.staging.copied_bytes),
+        (0, 2 * 12288)
+    );
+    f.engine.close(WAIT)?;
+    assert!(device.pins.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[test]
+fn r1c_unconfirmed_gpu_copy_retains_the_file_slot_loan_and_admission() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let f = fixture_with_config(
+        b"before",
+        EngineConfig {
+            io_uring: crate::IoUringConfig {
+                pinned_staging: true,
+                staging_slot_kb: 4,
+                staging_slots: 1,
+            },
+            ..Default::default()
+        },
+    )?;
+    let device = allocation(&[0x47; 16]);
+    let (_, view) = register(&f, &device)?;
+    device.event_wait_fail_at.store(1, Ordering::Release);
+    let report = f.run(TransferOp::Write, &[request(&view, 2, 1, 3)])?;
+    assert!(
+        !report.locally_drained
+            && matches!(report.failure.unwrap().error, Error::Unquiesced { .. })
+    );
+    let s = f.engine.stats()?;
+    assert_eq!((s.io_uring.unwrap().active_slots, s.inflight_bytes), (1, 3));
+    assert!(view.read(2, &mut [0; 3]).is_err());
+    assert_eq!(fs::read(&f.path)?, b"before");
+    assert_eq!(device.pins.lock().unwrap().len(), 1);
+    Ok(())
+}

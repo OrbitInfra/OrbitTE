@@ -184,6 +184,7 @@ fn engine_with_limit(limit: usize) -> Arc<TransferEngine> {
         TransferEngine::new(EngineConfig {
             max_failover_attempts: 0, // observe this backend in isolation
             nvlink: true,
+            nvlink_async_memcpy_threshold_kb: 0,
             nvlink_cache_entries: limit,
             handler_timeout: Duration::from_millis(500),
             ..EngineConfig::default()
@@ -791,6 +792,7 @@ fn unexposed_cache_rejections_leave_no_requester_close_obligation() {
         let source = TransferEngine::new(EngineConfig {
             max_failover_attempts: 0, // observe this backend in isolation
             nvlink: true,
+            nvlink_async_memcpy_threshold_kb: 0,
             nvlink_cache_entries: if case == "disabled" { 0 } else { 2 },
             ..EngineConfig::default()
         })
@@ -902,3 +904,120 @@ mod reclaim;
 
 #[path = "ipc_cache/progress.rs"]
 mod progress;
+
+#[test]
+fn r1c_legacy_sync_copy_requires_one_task_strictly_below_threshold() -> Result<()> {
+    let config = EngineConfig::default();
+    assert_eq!(config.nvlink_async_memcpy_threshold_kb, 2048);
+    for (threshold, n, grouped, host, sync) in [
+        (2048, 17, false, false, true),
+        (1, 1023, false, false, true),
+        (1, 1024, false, false, false),
+        (1, 1025, false, false, false),
+        (0, 17, false, false, false),
+        (1, 17, true, false, false),
+        (1, 17, false, true, true),
+    ] {
+        let src = allocation(&[0x72; 4096]);
+        let dst = allocation(&[0xac; 4096]);
+        let source = engine();
+        let requester = TransferEngine::new(EngineConfig {
+            nvlink: true,
+            nvlink_cache_entries: 2,
+            nvlink_async_memcpy_threshold_kb: threshold,
+            max_failover_attempts: 0,
+            ..Default::default()
+        })?;
+        let local_gpu = owned(&dst, false);
+        let local = if host {
+            let ctx = local_gpu.allocation.lock().unwrap().context.clone();
+            let mem = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
+                PinnedAllocation::new(&ctx, 4096)?,
+            )));
+            requester.register_host_memory(mem, 0, 4096, Permission::LocalOnly)?
+        } else {
+            register(&requester, &local_gpu)
+        };
+        let remote_gpu = owned(&src, true);
+        let remote = register(&source, &remote_gpu);
+        let relay = Relay::new(source.endpoint());
+        let peer = relay.peer(&source, &remote);
+        let mut reqs = vec![TransferRequest::new(
+            Transport::Nvlink,
+            local.base_address() + 2,
+            remote.base_address() + 5,
+            n,
+        )];
+        if grouped {
+            reqs.push(TransferRequest::new(
+                Transport::Nvlink,
+                local.base_address() + 2000,
+                remote.base_address() + 2004,
+                7,
+            ));
+        }
+        for op in [TransferOp::Read, TransferOp::Write] {
+            local.write(0, &[0xac; 4096])?;
+            let before = event_count(&dst, "sync_copy");
+            let report = requester.submit_and_wait(op, &peer, &reqs, TIMEOUT)?;
+            assert!(report.is_complete() && report.locally_drained, "{report:?}");
+            assert_eq!(event_count(&dst, "sync_copy") - before, usize::from(sync));
+            assert_eq!(
+                requester.stats()?.nvlink.unwrap().stream_slots,
+                usize::from(!sync)
+            );
+            let mut expected = [if op == TransferOp::Read { 0xac } else { 0x72 }; 4096];
+            let (at, other, fill) = if op == TransferOp::Read {
+                (2, 2000, 0x72)
+            } else {
+                (5, 2004, 0xac)
+            };
+            expected[at..at + n].fill(fill);
+            if grouped {
+                expected[other..other + 7].fill(fill);
+            }
+            let mut bytes = [0; 4096];
+            if op == TransferOp::Read {
+                local.read(0, &mut bytes)?;
+            } else {
+                requester.flush_nvlink_cache(TIMEOUT)?;
+                remote_gpu.read(0, &mut bytes)?;
+            }
+            assert_eq!(bytes, expected);
+        }
+        requester.close(TIMEOUT)?;
+        source.close(TIMEOUT)?;
+    }
+    Ok(())
+}
+#[test]
+fn r1c_uncertain_default_stream_cannot_release_or_replay_a_sync_write() -> Result<()> {
+    let a = allocation(&[0x81; 128]);
+    let b = allocation(&[0x12; 128]);
+    let src = engine();
+    let dst = TransferEngine::new(EngineConfig {
+        nvlink: true,
+        nvlink_cache_entries: 2,
+        ..Default::default()
+    })?;
+    let remote = register(&src, &owned(&a, true));
+    let local = register(&dst, &owned(&b, false));
+    let relay = Relay::new(src.endpoint());
+    let peer = relay.peer(&src, &remote);
+    b.sync_error.store(700, Ordering::Release);
+    let r = dst.submit_and_wait(
+        TransferOp::Write,
+        &peer,
+        &[request(&local, &remote)],
+        TIMEOUT,
+    )?;
+    let f = r.failure.unwrap();
+    assert!(!r.locally_drained && matches!(f.error, Error::Unquiesced { .. }));
+    assert_eq!(f.remote_effect, crate::RemoteEffect::Unknown);
+    assert_eq!(event_count(&b, "sync_copy"), 1);
+    assert_eq!(event_count(&b, "ipc-close"), 0);
+    assert!(local.write(7, &[1]).is_err());
+    let s = dst.stats()?;
+    assert!(s.inflight_bytes > 0 && s.nvlink.unwrap().retained_imports > 0);
+    Ok(())
+}

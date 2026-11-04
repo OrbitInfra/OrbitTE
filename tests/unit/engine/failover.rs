@@ -500,3 +500,69 @@ fn foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch() 
     assert_eq!(bytes, [1, 3, 5, 7]);
     Ok(())
 }
+
+#[test]
+fn r1c_poll_and_wake_cannot_publish_a_task_before_its_submission() -> Result<()> {
+    use std::io::{Read, Write};
+    let e = Arc::new(TransferEngine::new(EngineConfig {
+        enable_progress_worker: true,
+        ..Default::default()
+    })?);
+    let source = TransferEngine::new(Default::default())?;
+    let remote = source.register_memory(vec![8, 1, 2, 3, 4, 9].into(), Permission::RemoteRead)?;
+    let local = e.register_memory(vec![0xcc; 6].into(), Permission::LocalOnly)?;
+    let peer = e.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    let req = TransferRequest::new(
+        Transport::Tcp,
+        local.base_address() + 1,
+        remote.base_address() + 1,
+        4,
+    );
+    let mut pending = peer.clone();
+    pending.regions.clear();
+    let barrier = std::net::TcpListener::bind("127.0.0.1:0")?;
+    pending.endpoint = barrier.local_addr()?;
+    let mut batch = e.allocate_batch(1)?;
+    let id = batch.id()?;
+    std::thread::scope(|s| -> Result<()> {
+        let submit = s.spawn(|| {
+            batch.submit(
+                TransferOp::Read,
+                &pending,
+                std::slice::from_ref(&req),
+                None,
+                WAIT,
+            )
+        });
+        let (mut conn, _) = barrier.accept()?;
+        conn.set_read_timeout(Some(WAIT))?;
+        conn.read_exact(&mut [0; crate::runtime::control_plane::REQUEST_SIZE])?;
+        // Preparation is inside descriptor refresh. Polling must observe the
+        // previous group set and leave this future task entirely unpublished.
+        let before = e.progress_batch(id)?;
+        conn.write_all(&[0; crate::runtime::control_plane::REPLY_SIZE])?;
+        assert!(submit.join().unwrap().is_err());
+        assert_eq!(
+            (before.submitted_tasks, before.completed_tasks, before.state),
+            (0, 0, crate::BatchState::Open)
+        );
+        Ok(())
+    })?;
+    assert!(batch.task_status(0).is_err());
+    batch.submit(TransferOp::Read, &peer, &[req], None, WAIT)?;
+    batch.seal()?;
+    let status = batch.wait(WAIT)?;
+    assert_eq!(
+        (
+            status.submitted_tasks,
+            status.completed_tasks,
+            status.transferred_bytes
+        ),
+        (1, 1, 4)
+    );
+    let mut seen = [0; 6];
+    local.read(0, &mut seen)?;
+    assert_eq!(seen, [0xcc, 1, 2, 3, 4, 0xcc]);
+    batch.free()?;
+    Ok(())
+}

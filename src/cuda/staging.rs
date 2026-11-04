@@ -161,6 +161,57 @@ impl CudaMemory {
 }
 
 impl StagingCopy {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn file_slab(&self, size: usize) -> Result<PinnedAllocation> {
+        PinnedAllocation::new(&self.context, size)
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn copy_file_slot(
+        &mut self,
+        slot: &mut crate::transport::io_uring::pool::Slot,
+        offset: usize,
+        length: usize,
+        to_device: bool,
+    ) -> Result<()> {
+        checked_range(offset, length, self.length)?;
+        checked_range(0, length, slot.length)?;
+        let mut allocation = self
+            .memory
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA allocation lock poisoned"))?;
+        if allocation.uncertain {
+            return Err(Error::Unquiesced {
+                operation: "CUDA file staging loan",
+                code: -1,
+            });
+        }
+        if allocation.copy_stream.is_none() {
+            allocation.copy_stream = Some(CopyStream::new(&self.context)?);
+        }
+        let stream = allocation
+            .copy_stream
+            .as_mut()
+            .ok_or(Error::Internal("CUDA file copy stream missing"))?;
+        // SAFETY: the request retains its exclusive GPU range and its unique portable
+        // pinned slot through event completion, context restoration or quarantine.
+        let result =
+            unsafe { stream.copy(self.address + offset as u64, slot.ptr, length, to_device) };
+        if !stream.quiescent() || self.context.poisoned.load(Ordering::Acquire) {
+            self.failed = true;
+            allocation.uncertain = true;
+            return Err(match result {
+                Err(error @ Error::Unquiesced { .. }) => error,
+                _ => Error::Unquiesced {
+                    operation: "CUDA file slot copy",
+                    code: -1,
+                },
+            });
+        }
+        result
+    }
+
     pub(crate) fn pin(
         &self,
         manager: &Arc<crate::runtime::proxy_manager::ProxyManager>,

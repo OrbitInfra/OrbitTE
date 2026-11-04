@@ -9,6 +9,9 @@ typedef struct { char reserved[64]; } ipc_handle;
 static int references, queries;
 int cuMemAlloc_v2(uint64_t *out, size_t size) { assert(size == 2097152); *out = 123; return 0; }
 int cuMemsetD8_v2(uint64_t ptr, unsigned char value, size_t size) { assert(ptr == 123 && !value && size == 2097152); return 0; }
+int cuMemcpy(uint64_t dst, uint64_t src, size_t n) { assert(dst==456 && src==123 && n==17); return 1; }
+int cuStreamSynchronize(void *stream) { assert(stream==NULL); return 700; }
+int cuCtxGetCurrent(void **out) { *out=(void *)42; return 0; }
 int cuCtxSynchronize(void) { return 0; }
 int cuIpcGetMemHandle(ipc_handle *out, uint64_t ptr) { assert(ptr == 123); memset(out, 7, sizeof(*out)); return 0; }
 int cuIpcOpenMemHandle_v2(uint64_t *out, ipc_handle handle, unsigned flags) { assert(handle.reserved[0] == 7 && flags == 1); *out = 456; ++references; return 0; }
@@ -79,6 +82,10 @@ int main(void) {
     uint64_t dsts[] = {456, 556}, srcs[] = {123, 223}; size_t sizes[] = {17, 23}, first = 0;
     copy_attributes attrs = {.source_order = 1};
     assert(cuMemcpyBatchAsync_v2_fn(dsts, srcs, sizes, 2, &attrs, &first, 1, (void *)2) == 700);
+    assert(setenv("ORBITTE_SYNC_OBSERVE","1",1)==0);
+    LOAD(cuMemcpy); LOAD(cuStreamSynchronize); LOAD(cuCtxGetCurrent);
+    assert(cuCtxGetCurrent_fn(&context)==0 && context==(void *)42);
+    assert(cuMemcpy_fn(456,123,17)==1 && cuStreamSynchronize_fn(NULL)==700);
     assert(dlclose(library)==0);
     return 0;
 }

@@ -65,6 +65,8 @@ pub mod transport;
 
 #[cfg(all(target_os = "linux", feature = "gds"))]
 pub use transport::gds::{GdsMode, GdsStats};
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+pub use transport::io_uring::{IoUringConfig, IoUringStats};
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub mod cuda;
 #[cfg(all(target_os = "linux", feature = "rdma"))]

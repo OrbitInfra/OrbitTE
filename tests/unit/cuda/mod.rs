@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod connect_progress;
+mod context_copy;
 pub(super) mod fabric;
 #[cfg(feature = "rdma")]
 mod finish_progress;
@@ -333,13 +334,16 @@ fn cuda_sync_restore_and_unpin_failures_retain_native_backing_and_poison_reuse()
             }
             let mut bytes = [0xcc; 8];
             let result = memory.read(0, &mut bytes);
-            if mode == "unpin" {
-                assert!(result.is_ok());
-                assert_eq!(bytes, [0x7b; 8]);
-            } else {
-                assert!(matches!(result, Err(Error::Unquiesced { .. })));
-                assert_eq!(bytes, [0xcc; 8]);
-            }
+            assert!(matches!(result, Err(Error::Unquiesced { .. })));
+            // A final unpin error follows a completed copy and is still terminal.
+            assert_eq!(
+                bytes,
+                if mode == "unpin" {
+                    [0x7b; 8]
+                } else {
+                    [0xcc; 8]
+                }
+            );
             assert!(!owner.pins.lock().unwrap().is_empty());
             assert!(matches!(
                 memory.read(0, &mut bytes),

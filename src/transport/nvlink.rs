@@ -40,18 +40,27 @@ pub(crate) struct NVLinkTransport {
     budget: Arc<MappingBudget>,
     imports: RelocationCache,
     stream_pool: Arc<CUDAStreamPool>,
+    sync_threshold: usize,
     progress: Progress,
     pub(crate) exports: ExportCache,
 }
 
 impl NVLinkTransport {
-    pub(crate) fn new(max_bytes: usize, cache_entries: usize, stream_count: usize) -> Result<Self> {
+    pub(crate) fn new(
+        max_bytes: usize,
+        cache_entries: usize,
+        stream_count: usize,
+        threshold_kb: usize,
+    ) -> Result<Self> {
         Ok(Self {
             identity: ProcessIdentity::local()?,
             fabric: None,
             budget: MappingBudget::new(max_bytes),
             imports: RelocationCache::new(cache_entries),
             stream_pool: CUDAStreamPool::new(stream_count)?,
+            sync_threshold: threshold_kb.checked_mul(1024).ok_or(Error::InvalidConfig(
+                "NVLink async memcpy threshold overflows",
+            ))?,
             progress: Progress::new(stream_count)?,
             exports: ExportCache::new(cache_entries),
         })
@@ -219,7 +228,14 @@ impl NVLinkTransport {
                             }
                         }
                         let subbatch = NVLinkSubBatch::new(requests, start, remote_offset)?;
-                        let stream = self.stream_pool.acquire(&memory, deadline)?;
+                        let sync = self.fabric.is_none()
+                            && group.1.len() == 1
+                            && requests[0].length < self.sync_threshold;
+                        let stream = if sync {
+                            None
+                        } else {
+                            Some(self.stream_pool.acquire(&memory, deadline)?)
+                        };
                         let completion = batch.mapping.copy_group(
                             &subbatch.copies,
                             operation == TransferOp::Write,

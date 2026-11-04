@@ -107,6 +107,18 @@ explicit `ResourceExhausted` reply **before any grant** permits one retry as a
 single request; nothing else is retried. With the default
 `nvlink_cache_entries: 0`, the import closes at the group boundary.
 
+## Single small copies
+
+`nvlink_async_memcpy_threshold_kb` defaults to 2048. One legacy NVLink task
+strictly below that size uses `cuMemcpy` on the caller or batch worker.
+Pinned-host transfers complete on the calling thread. A device-to-device
+copy can return before DMA completes, so OrbitTE drains the legacy stream
+before releasing its import. A failed drain or context restoration keeps the
+loan, mapping and admission. The stream/event path handles groups and copies
+at or above the threshold. Setting it to zero disables the fast path. MNNVL
+uses its existing async path for every size.
+[CUDA synchronization rules](https://docs.nvidia.com/cuda/cuda-driver-api/api-sync-behavior.html)
+
 ## Native CUDA batch copies
 
 Groups with at least two independent copies can use `cuMemcpyBatchAsync_v2`
@@ -125,7 +137,7 @@ is replayed. TENT's `NVLinkTransport::startTransfer` builds the same arrays for
 
 ## Shared CUDA stream pool
 
-`cuda/stream_pool.rs::CUDAStreamPool` lends each group an exclusive
+`cuda/stream_pool.rs::CUDAStreamPool` lends each asynchronous group an exclusive
 `CUDAStreamHandle` matched to its native context; completed groups return the
 stream and event for reuse, independent of the import cache.
 `nvlink_stream_count` (default 8, 1–4096) bounds slots across all contexts. At

@@ -1,4 +1,6 @@
 //! TENT's single-issuer file sub-batch. The caller or existing Batch worker owns the ring.
+pub(crate) mod pool;
+pub use pool::{IoUringConfig, IoUringStats};
 mod ring;
 #[cfg(feature = "cuda")]
 mod staging;
@@ -26,17 +28,27 @@ use crate::segment::file::FileRequest;
 
 #[derive(Clone)]
 pub(crate) struct IoUringTransport {
+    pool: Arc<pool::Pool>,
     allocate: fn(usize, usize) -> Result<task::Bounce>,
     create: Arc<dyn Fn(u32) -> io::Result<Box<dyn Ring>> + Send + Sync>,
 }
 
 impl IoUringTransport {
-    pub(crate) fn probe() -> Option<Self> {
-        drop(ring::create(2).ok()?);
-        Some(Self {
+    pub(crate) fn probe(config: &crate::EngineConfig) -> Result<Option<Self>> {
+        if ring::create(2).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            pool: pool::Pool::new(config.io_uring, config.max_inflight_bytes)?,
             create: Arc::new(ring::create),
             allocate: task::Bounce::new,
-        })
+        }))
+    }
+    pub(crate) fn stats(&self) -> IoUringStats {
+        self.pool.stats()
+    }
+    pub(crate) fn close(&self) -> Result<()> {
+        self.pool.close()
     }
 
     pub(crate) fn execute(
@@ -70,6 +82,7 @@ impl IoUringTransport {
                 staging::Submission {
                     requests: &requests[..count],
                     proxy,
+                    pool: &self.pool,
                     operation,
                     deadline,
                     progress,
@@ -86,7 +99,7 @@ impl IoUringTransport {
                     .try_reserve_exact(count)
                     .map_err(|_| Error::ResourceExhausted)?;
                 for request in &requests[..count] {
-                    let (task, iov) = Task::new(operation, request, self.allocate)?;
+                    let (task, iov) = Task::new(operation, request, self)?;
                     tasks.push(task);
                     iovecs.push(iov);
                 }
@@ -333,10 +346,25 @@ fn drain(
     drain_deadline: Instant,
     mut observe: impl FnMut(usize, i32) -> bool,
 ) -> std::result::Result<(), i32> {
+    let mut polling = false;
     for _ in 0..consumed {
         let (id, result) = loop {
             if Instant::now() >= drain_deadline {
                 return Err(-libc::ETIMEDOUT);
+            }
+            if polling {
+                match ring.peek() {
+                    Ok(Some(cqe)) => break cqe,
+                    Ok(None) => {
+                        std::thread::sleep(
+                            drain_deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(std::time::Duration::from_millis(1)),
+                        );
+                        continue;
+                    }
+                    Err(e) => return Err(-e.raw_os_error().unwrap_or(libc::EIO)),
+                }
             }
             match ring.reap(drain_deadline) {
                 Ok(cqe) => break cqe,
@@ -348,7 +376,10 @@ fn drain(
                 {
                     continue;
                 }
-                Err(e) => return Err(-e.raw_os_error().unwrap_or(libc::EIO)),
+                Err(e) => {
+                    log::warn!("io_uring completion wait failed ({e}), polling the mapped CQ");
+                    polling = true;
+                }
             }
         };
         let Ok(index) = usize::try_from(id) else {
