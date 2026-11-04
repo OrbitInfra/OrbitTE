@@ -16,8 +16,9 @@ performance parity. See [capabilities](capabilities.md) for support and the
 `EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve
 a bounded document into the typed owners before any engine starts. Metrics
 keeps its file-before-environment precedence. The selector, QoS, QP layout
-and HP-TCP use their existing schemas. A TENT snapshot captures RDMA topology
-file contents and resolves the RPC hostname once. Device discovery still
+and HP-TCP use their existing schemas. Both constructors capture custom RDMA
+topology file contents. The TENT loader also resolves the RPC hostname once.
+Device discovery still
 checks those settings against the host when the engine starts.
 
 TENT installs process-wide glog settings. OrbitTE leaves the log filter with

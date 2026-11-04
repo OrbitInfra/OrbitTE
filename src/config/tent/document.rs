@@ -108,11 +108,18 @@ pub(super) fn parse(text: &str, source: &str) -> Result<Value> {
         check_key(&key)?;
         root[&key] = val;
     }
+    // Decide eligibility against the original nested document. One flat
+    // subtree cannot shadow another, more specific, full-path spelling.
+    let mut missing = Vec::new();
     for (key, val) in flat {
         check_key(&key)?;
         if get(&root, &key).is_none() {
-            set(&mut root, &key, val)?;
+            missing.push((key, val));
         }
+    }
+    missing.sort_by_key(|(key, _)| key.matches('/').count());
+    for (key, val) in missing {
+        set(&mut root, &key, val)?;
     }
     Ok(root)
 }

@@ -1,15 +1,11 @@
 use super::{EngineConfig, Result, document, invalid, typed};
 use crate::transport::rdma::RdmaConfig;
 use serde_json::Value;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 pub(super) struct Settings {
     config: RdmaConfig,
     enabled: bool,
-    custom_file: Option<PathBuf>,
     rail_file: Option<PathBuf>,
 }
 
@@ -52,7 +48,6 @@ impl Settings {
         Ok(Self {
             config,
             enabled: true,
-            custom_file: None,
             rail_file: None,
         })
     }
@@ -123,7 +118,10 @@ impl Settings {
             }
             "numa_penalties" if v.as_array().is_some_and(Vec::is_empty) => (),
             "numa_penalties" => r.scheduling.numa_tier_weights = typed(p, v)?,
-            "topology/custom_json_path" => self.custom_file = Some(typed(p, v)?),
+            "topology/custom_json_path" => {
+                let path: PathBuf = typed(p, v)?;
+                r.custom_json_path = (!path.as_os_str().is_empty()).then_some(path);
+            }
             "topology/priority_matrix" => {
                 if !crate::Topology::check_matrix_shape(&v) {
                     return Err(invalid(p, "expected a topology matrix object"));
@@ -140,20 +138,26 @@ impl Settings {
         if !self.enabled {
             return Ok(());
         }
-        let read = |file: Option<&Path>, key| {
-            file.filter(|p| !p.as_os_str().is_empty())
-                .map(|p| document::read(p, key))
-                .transpose()
-        };
-        if self.config.priority_matrix.is_none() {
-            self.config.custom_topology_json =
-                read(self.custom_file.as_deref(), "topology/custom_json_path")?;
-        }
-        self.config.rail_topology = read(
-            self.rail_file.as_deref(),
-            "transports/rdma/workers/rail_topo_path",
-        )?;
+        self.config.capture_topology_file()?;
+        self.config.rail_topology = self
+            .rail_file
+            .as_deref()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| document::read(p, "transports/rdma/workers/rail_topo_path"))
+            .transpose()?;
         c.rdma = Some(self.config);
+        Ok(())
+    }
+}
+
+impl RdmaConfig {
+    pub(in crate::config) fn capture_topology_file(&mut self) -> Result<()> {
+        if self.priority_matrix.is_none() && self.custom_topology_json.is_none() {
+            if let Some(path) = &self.custom_json_path {
+                self.custom_topology_json =
+                    Some(document::read(path, "topology/custom_json_path")?);
+            }
+        }
         Ok(())
     }
 }

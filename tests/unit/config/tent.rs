@@ -532,3 +532,44 @@ fn pinned_pool_sizes_only_follow_the_active_pool() {
         assert_eq!(gds.gds_batch_depth, 7);
     }
 }
+
+#[test]
+fn full_leaf_wins_over_a_synthesized_flat_subtree() {
+    let base = document::parse(
+        r#"{"transports/rdma":{"enable":true}, "transports/rdma/enable":false}"#,
+        "constructor",
+    )
+    .unwrap();
+    assert_eq!(
+        document::get(&base, "transports/rdma/enable"),
+        Some(&Value::Bool(false))
+    );
+}
+
+#[cfg(feature = "rdma")]
+#[test]
+fn typed_engine_captures_topology_before_lazy_device_discovery() {
+    let temp = Temp::new();
+    let path = temp.0.join("matrix");
+    fs::write(&path, r#"{"*":[[],[]]}"#).unwrap();
+    let rdma = crate::transport::rdma::RdmaConfig {
+        custom_json_path: Some(path.clone()),
+        ..Default::default()
+    };
+    let engine = crate::TransferEngine::new(EngineConfig {
+        rdma: Some(rdma),
+        ..Default::default()
+    })
+    .unwrap();
+    fs::remove_file(path).unwrap();
+    assert_eq!(
+        engine
+            .config()
+            .rdma
+            .as_ref()
+            .unwrap()
+            .custom_topology_json
+            .as_deref(),
+        Some(r#"{"*":[[],[]]}"#)
+    );
+}

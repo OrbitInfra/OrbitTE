@@ -37,9 +37,9 @@ engine. `engine.config()` borrows its effective settings.
 ```rust
 use orbit_te::{EngineConfig, TransferEngine};
 
-let config = EngineConfig::from_tent_env()?;
-let engine = TransferEngine::new(config)?;
-# Ok::<(), orbit_te::Error>(())
+fn open_engine() -> orbit_te::Result<TransferEngine> {
+    TransferEngine::new(EngineConfig::from_tent_env()?)
+}
 ```
 
 Use `EngineConfig::from_tent_json(text)` or `from_tent_file(path)` to supply

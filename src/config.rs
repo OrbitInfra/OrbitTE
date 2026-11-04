@@ -314,6 +314,10 @@ impl EngineConfig {
                 self.metrics = self.metrics.resolve(None, |_| Ok(None))?;
             }
         }
+        #[cfg(feature = "rdma")]
+        if let Some(config) = &mut self.rdma {
+            config.capture_topology_file()?;
+        }
         Ok(self)
     }
 
