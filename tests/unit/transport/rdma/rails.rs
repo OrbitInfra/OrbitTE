@@ -2285,6 +2285,18 @@ fn a_masked_pair_fault_keeps_the_other_nic_live_and_requires_one_recovery_receip
 
 #[test]
 fn r1b_selective_payloads_and_clamped_qps_move_full_guarded_bytes() -> Result<()> {
+    let default = RdmaConfig::default();
+    assert_eq!(default.signal_interval, 1);
+    assert!(matches!(
+        RdmaConfig {
+            signal_interval: 0,
+            ..default
+        }
+        .validate(),
+        Err(Error::InvalidConfig(
+            "RDMA signal_interval must be positive"
+        ))
+    ));
     for (interval, cqes, name, depths) in [
         (1, 8, "copy", (1, 1)),
         (3, 3, "copy_read_caps", (2, 2)),
@@ -2501,5 +2513,90 @@ fn r1b_failed_selective_write_preserves_guards_root_error_and_remote_uncertainty
         assert_eq!(actual, expected);
         requester.close(TIMEOUT)?;
     }
+    Ok(())
+}
+
+#[test]
+fn r1b_freeing_a_batch_with_unreaped_unsignaled_wrs_keeps_its_loan_and_charge() -> Result<()> {
+    let runtime = fixture::runtime_with_config(RdmaConfig {
+        host_memory: RdmaHostMemory::Direct,
+        block_size: 8,
+        max_send_wr: 8,
+        signal_interval: 3,
+        ..RdmaConfig::new("copy_selective_orphan")
+    });
+    let requester = Arc::new(crate::engine::tests::rdma_fixture_with_config(
+        runtime,
+        crate::EngineConfig {
+            enable_progress_worker: true,
+            max_failover_attempts: 0,
+            handler_timeout: TIMEOUT,
+            ..Default::default()
+        },
+    ));
+    let source = rdma_fixture_with_runtime(fixture::runtime_with_config(RdmaConfig {
+        host_memory: RdmaHostMemory::Direct,
+        ..RdmaConfig::new("copy")
+    }));
+    let local = requester.register_memory(vec![0x25; 72].into(), Permission::LocalOnly)?;
+    let remote = source.register_memory(vec![0xbc; 72].into(), Permission::RemoteReadWrite)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
+    let pause = crate::transport::rdma::context::tests::pause(source_runtime(&requester));
+    let mut batch = requester.submit_async(
+        TransferOp::Write,
+        &peer,
+        &[TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 4,
+            remote.base_address() + 4,
+            64,
+        )],
+        None,
+        TIMEOUT,
+    )?;
+    let release = batch.allocation_release_receipt();
+    let (guard, timed) = pause
+        .1
+        .wait_timeout_while(pause.0.lock().unwrap(), EVENTUAL_PROGRESS, |v| !v.0)
+        .unwrap();
+    drop(guard);
+    assert!(!timed.timed_out());
+    let freed = batch.free();
+    let held = requester.stats();
+    let borrowed = local.write(4, &[0]);
+    let premature = release.try_recv().is_ok();
+    pause.0.lock().unwrap().1 = true;
+    pause.1.notify_all();
+    freed?;
+    let held = held?;
+    let native = held.rdma.unwrap();
+    assert_eq!(
+        (
+            held.deferred_batches,
+            held.inflight_bytes,
+            native.work_requests,
+            native.direct_bytes,
+            native.payload_send_cqes
+        ),
+        (1, 64, 8, 64, 0)
+    );
+    assert!(borrowed.is_err() && !premature);
+    release.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+    let end = requester.stats()?;
+    assert_eq!(
+        (
+            end.deferred_batches,
+            end.inflight_bytes,
+            end.rdma.unwrap().work_requests
+        ),
+        (0, 0, 0)
+    );
+    source.close(TIMEOUT)?;
+    let mut actual = [0; 72];
+    remote.read(0, &mut actual)?;
+    assert_eq!(actual, [0xbc; 72]);
+    local.read(0, &mut actual)?;
+    assert_eq!(actual, [0x25; 72]);
+    requester.close(TIMEOUT)?;
     Ok(())
 }

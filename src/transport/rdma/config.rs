@@ -175,6 +175,11 @@ impl RdmaConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.signal_interval == 0 {
+            return Err(Error::InvalidConfig(
+                "RDMA signal_interval must be positive",
+            ));
+        }
         if self.rail_error_threshold == 0
             || self.max_rail_pairs == 0
             || self
@@ -236,7 +241,6 @@ impl RdmaConfig {
             || self.max_staging_bytes == 0
             || self.max_direct_bytes == 0
             || !(1..=64 << 20).contains(&self.block_size)
-            || self.signal_interval == 0
             || !(1..=64).contains(&self.max_send_wr)
         {
             return Err(Error::InvalidConfig(

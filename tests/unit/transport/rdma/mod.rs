@@ -905,7 +905,7 @@ unsafe extern "C" fn post(
         let injected = match mode {
             "copy_selective_error" if i == 2 => 7,
             "copy_selective_error" if i > 2 => sys::FLUSHED,
-            "copy_selective_flush" => sys::FLUSHED,
+            "copy_selective_flush" | "copy_selective_orphan" => sys::FLUSHED,
             _ => 0,
         };
         assert!(request.offset as usize + request.length as usize <= local_length);
@@ -1205,6 +1205,16 @@ unsafe extern "C" fn poll(
         return -1;
     }
     let mut queue = state.completions.lock().unwrap();
+    if device.mode == "copy_selective_orphan"
+        && queue.front().is_some_and(|wc| matches!(wc.opcode, 1 | 2))
+    {
+        let mut paused = device.pause.0.lock().unwrap();
+        if !paused.1 {
+            paused.0 = true;
+            device.pause.1.notify_all();
+            return 0;
+        }
+    }
     let value = if device.mode.starts_with("copy_cross_hold") && !device.pause.0.lock().unwrap().1 {
         let held = device.held_payload.lock().unwrap();
         let failed = *device.failed_payload.lock().unwrap();

@@ -211,7 +211,7 @@ impl RailMonitor {
                         .pairs
                         .get(&Key::new(peer, l, r))
                         .is_some_and(|s| s.resume.is_some()),
-                    !direct.is_some_and(|mapped| mapped.domain == r.domain),
+                    direct.is_none_or(|mapped| mapped.domain != r.domain),
                     l.name != r.name,
                 )
             })

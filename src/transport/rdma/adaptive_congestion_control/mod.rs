@@ -93,6 +93,20 @@ pub struct Rejection {
     pub snapshot: Snapshot,
 }
 
+// One CAS loop for admission, saturating observation and receipt accounting.
+fn update_bytes(counter: &AtomicU64, update: impl Fn(u64) -> Option<u64>) -> bool {
+    let mut current = counter.load(Ordering::Acquire);
+    loop {
+        let Some(next) = update(current) else {
+            return false;
+        };
+        match counter.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 impl DomainState {
     pub fn new(config: Config, generation: u32) -> Result<Arc<Self>> {
         config.validate()?;
@@ -143,25 +157,14 @@ impl DomainState {
         }
         // An empty domain can take one indivisible oversized slice. Independent
         // callers contend on that domain's counter, never a process-wide lock.
-        if self
-            .inflight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                if enforce
-                    && current != 0
-                    && (bytes > epoch.window || current > epoch.window - bytes)
-                {
-                    None
-                } else {
-                    Some(current.saturating_add(bytes))
-                }
-            })
-            .is_err()
-        {
-            let _ = self
-                .deferred
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                    Some(n.saturating_add(bytes))
-                });
+        if !update_bytes(&self.inflight, |current| {
+            if enforce && current != 0 && (bytes > epoch.window || current > epoch.window - bytes) {
+                None
+            } else {
+                Some(current.saturating_add(bytes))
+            }
+        }) {
+            update_bytes(&self.deferred, |n| Some(n.saturating_add(bytes)));
             return Err(Rejection {
                 decision: Decision::Defer,
                 reason: Reason::Window,
@@ -173,11 +176,7 @@ impl DomainState {
     }
     fn release(&self, bytes: u64) {
         if self.config.mode != Mode::Off {
-            let _ = self
-                .inflight
-                .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |n| {
-                    Some(n.saturating_sub(bytes))
-                });
+            update_bytes(&self.inflight, |n| Some(n.saturating_sub(bytes)));
         }
     }
     pub fn record_signals(&self, generation: u32, signals: Signals) {
