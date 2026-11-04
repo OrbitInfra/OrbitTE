@@ -308,12 +308,24 @@ fn a_retired_initial_route_and_a_rejected_retry_preserve_real_attempt_counts() {
 
 #[test]
 fn http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats() {
+    // Reserve both addresses before starting the server. The kernel may have
+    // assigned this port to someone else on the second address independently.
+    #[cfg(target_os = "linux")]
+    let (engine, _other_address) = (0..64)
+        .find_map(|_| {
+            let (listener, _guard) = guarded_port();
+            let port = listener.local_addr().unwrap().port();
+            match TcpListener::bind(("127.0.0.2", port)) {
+                Ok(other) => Some((engine_on(listener), other)),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => None,
+                Err(e) => panic!("reserve second loopback listener: {e}"),
+            }
+        })
+        .expect("a port available on both loopback addresses");
+    #[cfg(not(target_os = "linux"))]
     let engine = engine();
     let m = engine.metrics().unwrap();
     let port = m.http_port();
-    // A listener restricted to 127.0.0.1 leaves the other loopback address free.
-    #[cfg(target_os = "linux")]
-    let _other_address = TcpListener::bind(("127.0.0.2", port)).unwrap();
     for t in [Transport::Unspec, Transport::Tcp] {
         for _ in 0..3 {
             m.recorder().observe(M::QueueWait, schema::slot(t), 0);

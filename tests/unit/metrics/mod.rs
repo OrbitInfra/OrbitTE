@@ -25,6 +25,9 @@ use crate::test_ports::guarded_port;
 
 fn engine() -> TransferEngine {
     let (listener, _guard) = guarded_port();
+    engine_on(listener)
+}
+fn engine_on(listener: TcpListener) -> TransferEngine {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let engine = TransferEngine::new(config(port)).unwrap();
