@@ -68,7 +68,7 @@ impl TaskMap {
                 |p| p.effective_priority(),
             )
         };
-        let partitions = ordered_partitions(requests, operation, may_share_memory);
+        let partitions = ordered_partitions(requests, transfers, operation, may_share_memory);
         let mut indices: Vec<usize> = (0..requests.len()).collect();
         indices.sort_unstable_by_key(|&i| {
             let r = &requests[i];
@@ -183,8 +183,11 @@ impl TaskMap {
 
 // Reordering disjoint writes is safe. A destination touched twice, or a
 // self-transfer that reads another piece's destination, needs public order.
+// A direct alias after a staged owner must wait for the staged completion
+// or failure. Fence CUDA path changes before sorting by hint and address.
 fn ordered_partitions(
     reqs: &[TransferRequest],
+    transfers: &[PreparedTransfer],
     op: TransferOp,
     may_share_memory: bool,
 ) -> Vec<usize> {
@@ -219,9 +222,24 @@ fn ordered_partitions(
         mark_intersections(&dest, &src, &mut hazards);
     }
     let mut partition = 0;
+    let mut previous = None;
     hazards
         .into_iter()
-        .map(|hazard| {
+        .zip(reqs.iter().zip(transfers))
+        .map(|(hazard, (request, transfer))| {
+            let local = transfer.local.memory_type();
+            let remote = transfer.remote.memory_type();
+            let path = (local == crate::MemoryType::Cuda || remote == crate::MemoryType::Cuda)
+                .then_some((
+                    transfer.selection.transport,
+                    request.remote_staging,
+                    local,
+                    remote,
+                ));
+            if previous != path {
+                partition += 1;
+                previous = path;
+            }
             if hazard {
                 partition += 2;
                 partition - 1

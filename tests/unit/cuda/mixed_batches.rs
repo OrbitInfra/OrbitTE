@@ -7,13 +7,14 @@ use crate::runtime::proxy_manager::ProxyManager;
 use crate::transport::rdma::tests::gpu_runtime;
 use crate::{Notification, NotificationStatus, RemoteEffect, TaskState};
 
-fn engine() -> TransferEngine {
+fn engine(selector: Option<crate::TransportSelectorConfig>, retries: usize) -> TransferEngine {
     let mut runtime = gpu_runtime("copy");
     runtime.proxy = ProxyManager::new(7, 2, crate::StagingLocation::Any).unwrap();
     rdma_fixture_with_config(
         runtime,
         EngineConfig {
-            max_failover_attempts: 0, // isolate the staging/native fault under test
+            selector,
+            max_failover_attempts: retries,
             staging_chunk_size: 7,
             staging_chunk_count: 2,
             max_inflight_batches: 1,
@@ -39,14 +40,22 @@ enum Outcome {
 fn mixed_gpu_batches_preserve_completion_handoff_and_failure_prefix() {
     for operation in [TransferOp::Read, TransferOp::Write] {
         for outcome in [Outcome::Complete, Outcome::CopyError, Outcome::Uncertain] {
-            mixed_batch(operation, outcome);
+            mixed_batch(operation, outcome, false);
         }
+        mixed_batch(operation, Outcome::Complete, true);
     }
 }
 
-fn mixed_batch(operation: TransferOp, outcome: Outcome) {
-    let source = engine();
-    let requester = Arc::new(engine());
+fn mixed_batch(operation: TransferOp, outcome: Outcome, named: bool) {
+    let source = engine(None, 0);
+    let selector = named.then(|| crate::TransportSelectorConfig::from_json(
+        r#"{"policy":[{"name":"direct","segment_type":"memory","transports":["rdma"]},{"name":"stage","segment_type":"memory","transports":["tcp"]}]}"#
+    ).unwrap());
+    // Leave a real alternate RDMA candidate for the uncertain staged attempt.
+    let requester = Arc::new(engine(
+        selector,
+        if outcome == Outcome::Uncertain { 3 } else { 0 },
+    ));
     let a_bytes: [u8; 64] = std::array::from_fn(|i| (i * 37 + 11) as u8);
     let b_bytes: [u8; 64] = std::array::from_fn(|i| (i * 19 + 53) as u8);
     let a = allocation(&a_bytes);
@@ -69,21 +78,33 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
             Duration::from_secs(3),
         )
         .unwrap();
-    let spans = [(2, 4, 5), (20, 23, 13), (44, 47, 9)];
+    // The two direct ranges are address-adjacent but straddle a staged
+    // owner. Only the two adjacent public aliases of that owner may merge.
+    let spans = [(2, 4, 5), (20, 23, 6), (26, 29, 7), (7, 9, 9)];
     let requests = spans
         .iter()
         .enumerate()
         .map(|(i, &(local_offset, remote_offset, length))| {
-            TransferRequest::new(
-                if i == 1 {
-                    Transport::Tcp
-                } else {
-                    Transport::Rdma
-                },
+            let staged = i == 1 || i == 2;
+            let hint = if named {
+                Transport::Unspec
+            } else if staged {
+                Transport::Tcp
+            } else {
+                Transport::Rdma
+            };
+            let r = TransferRequest::new(
+                hint,
                 local.base_address() + local_offset,
                 remote.base_address() + remote_offset,
                 length,
-            )
+            );
+            if named {
+                r.with_policy_name(if staged { "stage" } else { "direct" })
+                    .unwrap()
+            } else {
+                r
+            }
         })
         .collect::<Vec<_>>();
     let notification = Notification {
@@ -120,7 +141,21 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
             .iter()
             .map(|t| t.state)
             .collect::<Vec<_>>(),
-        [TaskState::Completed, TaskState::Running, TaskState::Waiting]
+        [
+            TaskState::Completed,
+            TaskState::Running,
+            TaskState::Running,
+            TaskState::Waiting
+        ]
+    );
+    assert_eq!(
+        batch
+            .task_statuses()
+            .unwrap()
+            .iter()
+            .map(|s| s.physical_owner)
+            .collect::<Vec<_>>(),
+        [0, 1, 1, 3]
     );
     let pending = batch.status().unwrap();
     assert_eq!(
@@ -169,16 +204,16 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
                 status.completed_tasks,
                 status.transferred_bytes
             ),
-            (BatchState::Completed, 3, 27)
+            (BatchState::Completed, 4, 27)
         );
-        assert_eq!(submission.completed_requests, 3);
+        assert_eq!(submission.completed_requests, 4);
         assert!(matches!(
             *submission.notification,
             NotificationStatus::Delivered
         ));
         assert_eq!(source.receive_notifications().unwrap(), [notification]);
         apply(&mut expected_a, &mut expected_b, 20, 23, 13);
-        apply(&mut expected_a, &mut expected_b, 44, 47, 9);
+        apply(&mut expected_a, &mut expected_b, 7, 9, 9);
         assert_eq!(
             source_runtime(&requester)
                 .stats()
@@ -203,6 +238,7 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
                 (1, 0, 0)
             );
             assert!(stats.reuses >= 1);
+            assert_eq!(stats.copied_bytes, 26);
         }
     } else {
         assert_eq!(
@@ -220,9 +256,25 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
                 failure.affected_requests,
                 failure.remote_effect
             ),
-            (1, 1, RemoteEffect::None)
+            (1, 2, RemoteEffect::None)
         );
         assert_eq!(matches!(failure.error, Error::Unquiesced { .. }), retained);
+        for id in [1, 2] {
+            let alias = batch.task_status(id).unwrap();
+            assert_eq!(
+                (alias.failover_count, alias.locally_drained),
+                (0, !retained)
+            );
+            let failed = alias.failure.unwrap();
+            assert_eq!(
+                (
+                    failed.request_index,
+                    failed.affected_requests,
+                    failed.remote_effect
+                ),
+                (1, 2, RemoteEffect::None)
+            );
+        }
         assert_eq!(
             batch
                 .task_statuses()
@@ -230,7 +282,12 @@ fn mixed_batch(operation: TransferOp, outcome: Outcome) {
                 .iter()
                 .map(|t| t.state)
                 .collect::<Vec<_>>(),
-            [TaskState::Completed, TaskState::Failed, TaskState::Skipped]
+            [
+                TaskState::Completed,
+                TaskState::Failed,
+                TaskState::Failed,
+                TaskState::Skipped
+            ]
         );
         assert!(matches!(
             *submission.notification,
@@ -307,8 +364,8 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
             let source = build(true);
             // Outgoing selection does not require accepting incoming Pin.
             let requester = Arc::new(build(false));
-            let source_bytes: [u8; 96] = std::array::from_fn(|i| (i * 37 + 11) as u8);
-            let local_bytes: [u8; 96] = std::array::from_fn(|i| (i * 19 + 53) as u8);
+            let mut source_bytes: [u8; 96] = std::array::from_fn(|i| (i * 37 + 11) as u8);
+            let mut local_bytes: [u8; 96] = std::array::from_fn(|i| (i * 19 + 53) as u8);
             let a = allocation(&source_bytes);
             let b = allocation(&local_bytes);
             let source_gpu = memory(&a);
@@ -331,9 +388,23 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                     Duration::from_secs(3),
                 )
                 .unwrap();
+            // Enqueue a producer on the READ source or WRITE requester. Its
+            // generation must be visible to the first Direct access and the
+            // later staged copy, including bytes in the destination guards.
+            let (origin, image, offset) = if operation == TransferOp::Read {
+                (&source_gpu, &mut source_bytes, 3)
+            } else {
+                (&local_gpu, &mut local_bytes, 1)
+            };
+            let producer = super::readiness::Producer::new(origin, 0x63, true);
+            producer.enqueue(origin.base_address() + offset, 27);
+            producer.record(origin).unwrap();
+            let producer_owner = Arc::downgrade(&producer);
+            drop(producer);
+            image[offset as usize..offset as usize + 27].fill(0x63);
             let before_source = source.stats().unwrap().rdma.unwrap();
             let before_requester = requester.stats().unwrap().rdma.unwrap();
-            let spans = [(2, 4, 5), (20, 23, 41), (74, 77, 9)];
+            let spans = [(2, 4, 5), (20, 23, 41), (7, 9, 9)];
             let requests: Vec<_> = spans
                 .iter()
                 .enumerate()
@@ -351,7 +422,10 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                 name: "mixed-remote".into(),
                 message: "done".into(),
             };
-            b.query_hold.store(true, Ordering::Release);
+            b.query_hold_address.store(
+                (local_gpu.base_address() + spans[1].0) as usize,
+                Ordering::Release,
+            );
             let mut batch = requester
                 .submit_async(
                     operation,
@@ -379,12 +453,13 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                     .collect::<Vec<_>>(),
                 [TaskState::Completed, TaskState::Running, TaskState::Waiting]
             );
+            assert!(producer_owner.upgrade().is_none());
             let status = batch.status().unwrap();
             assert_eq!((status.completed_tasks, status.transferred_bytes), (1, 5));
             assert!(!status.locally_drained);
             assert!(matches!(batch.free(), Err(Error::BatchBusy)));
             assert!(source.receive_notifications().unwrap().is_empty());
-            b.query_hold.store(false, Ordering::Release);
+            b.query_hold_address.store(0, Ordering::Release);
             let status = batch.wait(Duration::from_secs(3)).unwrap();
             assert_eq!(
                 status.state,
@@ -432,6 +507,18 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                 (2, 2, 12)
             );
             assert_eq!(requester.stats().unwrap().staging.remote_pins, 0);
+            let native = requester.stats().unwrap().rdma.unwrap();
+            let bytes = 2 * (14 + if transport == Transport::Rdma { 41 } else { 0 });
+            assert_eq!(
+                (native.completed_read_bytes, native.completed_write_bytes),
+                if operation == TransferOp::Read {
+                    (bytes, 0)
+                } else {
+                    (0, bytes)
+                }
+            );
+            let grants = source.stats().unwrap().rdma.unwrap();
+            assert_eq!((grants.opened_grant_pds, grants.closed_grant_pds), (4, 4));
             for (engine, before) in [
                 (&source, before_source),
                 (requester.as_ref(), before_requester),
@@ -445,6 +532,7 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
                     ),
                     (2, 0, 0)
                 );
+                assert_eq!(stats.staging.copied_bytes, 2 * 41);
                 assert!(stats.staging.reuses >= 2);
                 let rdma = stats.rdma.unwrap();
                 assert_eq!(
@@ -462,4 +550,99 @@ fn per_request_staging_mixes_with_gpu_direct_and_reuses_bounded_resources() {
             assert!(a.pins.lock().unwrap().is_empty() && b.pins.lock().unwrap().is_empty());
         }
     }
+}
+
+#[test]
+fn cancelling_a_later_staged_alias_preserves_the_running_stage_and_direct_sibling() -> Result<()> {
+    for op in [TransferOp::Read, TransferOp::Write] {
+        let src = engine(None, 0);
+        let req = Arc::new(engine(None, 0));
+        let mut source: [u8; 64] = std::array::from_fn(|i| (3 * i + 1) as u8);
+        let mut target: [u8; 64] = std::array::from_fn(|i| (5 * i + 9) as u8);
+        let a = allocation(&source);
+        let b = allocation(&target);
+        let remote = src
+            .register_cuda_memory_batch(&[(memory(&a), 0, 64)], Permission::RemoteReadWrite)?
+            .remove(0);
+        let local = req
+            .register_cuda_memory_batch(&[(memory(&b), 0, 64)], Permission::LocalOnly)?
+            .remove(0);
+        let peer = req.open_segment(src.endpoint(), src.source_epoch(), EVENTUAL_PROGRESS)?;
+        let requests = [
+            (Transport::Tcp, 1, 2, 4),
+            (Transport::Rdma, 25, 30, 5),
+            (Transport::Tcp, 5, 6, 3),
+            (Transport::Tcp, 8, 9, 5),
+        ]
+        .map(|(t, l, r, n)| {
+            TransferRequest::new(t, local.base_address() + l, remote.base_address() + r, n)
+        });
+        let note = Notification {
+            name: "mixed".into(),
+            message: "cancel".into(),
+        };
+        let (entered, waiting) = mpsc::sync_channel(1);
+        let (resume, paused) = mpsc::sync_channel(1);
+        *b.event_gate.lock().unwrap() = Some((entered, paused));
+        let mut batch = req.submit_async(op, &peer, &requests, Some(&note), EVENTUAL_PROGRESS)?;
+        waiting.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        assert!(matches!(batch.cancel(0), Err(Error::Unavailable(_))));
+        assert!(batch.cancel(3)?);
+        assert_eq!(batch.task_status(3)?.physical_owner, 2);
+        assert_eq!(batch.task_status(0)?.state, TaskState::Running);
+        assert_eq!(batch.task_status(1)?.state, TaskState::Waiting);
+        assert!(!batch.status()?.locally_drained);
+        assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+        assert_eq!(source_runtime(&req).stats()?.posted_work_requests, 0);
+        assert!(src.receive_notifications()?.is_empty());
+        resume.send(()).unwrap();
+        let done = batch.wait(EVENTUAL_PROGRESS)?;
+        assert!(done.locally_drained);
+        assert_eq!((done.completed_tasks, done.transferred_bytes), (2, 9));
+        for (i, length) in [4, 5].into_iter().enumerate() {
+            let task = batch.task_status(i)?;
+            assert_eq!(
+                (task.state, task.transferred_bytes),
+                (TaskState::Completed, length)
+            );
+        }
+        for i in [2, 3] {
+            let task = batch.task_status(i)?;
+            assert_eq!((task.physical_owner, task.transferred_bytes), (2, 0));
+            assert!(matches!(task.failure.unwrap().error, Error::Cancelled));
+        }
+        let receipt = batch.submissions()?.remove(0);
+        let failure = receipt.failure.as_ref().unwrap();
+        assert_eq!(
+            (receipt.completed_requests, receipt.transferred_bytes),
+            (2, 9)
+        );
+        assert_eq!(
+            (
+                failure.request_index,
+                failure.affected_requests,
+                failure.remote_effect
+            ),
+            (2, 2, RemoteEffect::None)
+        );
+        assert!(matches!(*receipt.notification, NotificationStatus::Skipped));
+        assert!(src.receive_notifications()?.is_empty());
+        for (l, r, n) in [(1, 2, 4), (25, 30, 5)] {
+            match op {
+                TransferOp::Read => target[l..l + n].copy_from_slice(&source[r..r + n]),
+                TransferOp::Write => source[r..r + n].copy_from_slice(&target[l..l + n]),
+            }
+        }
+        for (view, want) in [(&remote, &source), (&local, &target)] {
+            let mut got = [0; 64];
+            view.read(0, &mut got)?;
+            assert_eq!(&got, want);
+        }
+        batch.free()?;
+        assert_eq!(req.stats()?.inflight_bytes, 0);
+        assert_eq!(req.stats()?.staging.active_chunks, 0);
+        req.close(EVENTUAL_PROGRESS)?;
+        src.close(EVENTUAL_PROGRESS)?;
+    }
+    Ok(())
 }

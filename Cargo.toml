@@ -89,6 +89,11 @@ path = "tests/hardware/mnnvl.rs"
 required-features = ["cuda"]
 
 [[example]]
+name = "mixed_gpu"
+path = "tests/hardware/mixed_gpu.rs"
+required-features = ["rdma", "cuda"]
+
+[[example]]
 name = "staging_control"
 path = "tests/hardware/staging_control.rs"
 required-features = ["rdma", "cuda"]

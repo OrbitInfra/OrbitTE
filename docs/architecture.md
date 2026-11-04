@@ -129,7 +129,11 @@ receipt precludes automatic replay. See [notifications](cpu-tcp.md#notification-
 `runtime/request_merge.rs` maps original task IDs to physical owners after
 registration, permission and route resolution. TENT sorts by hint and address.
 OrbitTE also fences overlapping destinations and self-copy dependencies to
-preserve public byte order. One source epoch, target and operation apply to the
+preserve public byte order. When either endpoint is CUDA, a change in the
+selected transport, per-request remote staging or local/remote backing types
+starts a new merge partition. This prevents a later direct alias from writing
+through a pending stage or consuming its dispatch window. Disjoint host-only
+hints can still merge across intervening requests. One source epoch, target and operation apply to the
 whole submit. The peer advertises its transfer limit in Describe so a merge
 cannot create an oversized grant on a smaller receiver.
 

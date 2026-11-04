@@ -15,6 +15,7 @@ import uuid
 import cleanup
 import installed
 import gdr
+import mixed_gpu
 import staging
 
 
@@ -219,6 +220,9 @@ class Controller:
         return [locks[name] for name in rails]
 
     def case(self, index, case):
+        if self.profile.get('runner') == 'orbitte-mixed-gpu':
+            return self.run_case(index, case, lambda node, role, kind, root, readiness=None:
+                                 mixed_gpu.command(self.profile, case, node, role, root, readiness))
         if self.profile.get('runner') == 'orbitte-installed-host':
             installed.validate(case)
             for node in (case['source'], case['requester']):
@@ -508,9 +512,12 @@ class Controller:
             time.sleep(0.3)
         passed = all(record['result.json'] is not None and json.loads(record['result.json'])['status'] == 'passed' and record['maps.txt'] is not None for record in evidence.values())
         validation_error = None
-        if passed and self.profile.get('runner') == 'orbitte-installed-host':
+        if passed and self.profile.get('runner') in ('orbitte-installed-host', 'orbitte-mixed-gpu'):
             try:
-                installed.verify(self.profile, case, evidence)
+                if self.profile['runner'] == 'orbitte-mixed-gpu':
+                    mixed_gpu.verify(case, evidence)
+                else:
+                    installed.verify(self.profile, case, evidence)
             except (ValueError, KeyError, TypeError) as error:
                 passed = False
                 validation_error = str(error)
@@ -571,15 +578,25 @@ def main():
             gdr.validate_profile(profile, require_reuse=args.require_gpu_source_reuse)
             controller.fault_library = args.gdr_observer.resolve()
             manifest['gdr_observer_sha256'] = hashlib.sha256(controller.fault_library.read_bytes()).hexdigest()
-        if profile.get('runner') == 'orbitte-installed-host':
-            installed.validate_nodes(profile)
+        if profile.get('runner') in ('orbitte-installed-host', 'orbitte-mixed-gpu'):
+            if profile['runner'] == 'orbitte-mixed-gpu':
+                mixed_gpu.validate(profile)
+                protocol = mixed_gpu.PROTOCOL
+            else:
+                installed.validate_nodes(profile)
+                protocol = installed.PROTOCOL
             if args.installation is None:
-                raise ValueError('installed host requires its frozen installation manifest')
+                raise ValueError('installed gate requires its frozen installation manifest')
             installation = json.loads(args.installation.read_text())
             if (installation.get('status') != 'passed' or installation.get('dirty')
                     or installation.get('binary_sha256') != controller.sha256
-                    or installation.get('protocol') != installed.PROTOCOL):
+                    or installation.get('protocol') != protocol):
                 raise ValueError('installation is dirty, incomplete or belongs to another binary')
+            if profile['runner'] == 'orbitte-mixed-gpu':
+                for name in ('mixed_gpu.py', 'run.py', 'supervise.py'):
+                    driver = Path(__file__).with_name(name)
+                    if hashlib.sha256(driver.read_bytes()).hexdigest() != installation['fixture_files_sha256']['tests/hardware/' + name]:
+                        raise ValueError('mixed GPU driver differs from its packaged source')
             if any(case.get('mode') in ('installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup', 'installed-rail-accounting') for case in profile['cases']):
                 controller.fault_library = Path(installation['fault_library'])
                 if hashlib.sha256(controller.fault_library.read_bytes()).hexdigest() != installation['fault_library_sha256']:
@@ -590,7 +607,7 @@ def main():
                     raise ValueError('discovery inventory differs from the packaged artifact')
             manifest['installation'] = installation
             manifest['installation_manifest_sha256'] = hashlib.sha256(args.installation.read_bytes()).hexdigest()
-            if controller.command([str(args.binary.resolve()), '--protocol']).strip() != installed.PROTOCOL:
+            if controller.command([str(args.binary.resolve()), '--protocol']).strip() != protocol:
                 raise ValueError('unexpected installed binary protocol')
         elif args.installation is not None:
             installation = json.loads(args.installation.read_text())

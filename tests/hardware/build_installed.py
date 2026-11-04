@@ -30,6 +30,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         "mnnvl": (["cuda"], "orbitte-mnnvl", "orbitte-installed-mnnvl", "tests/hardware/mnnvl.rs"),
         "nvlink": (["cuda"], "orbitte-nvlink", "orbitte-installed-nvlink-v1", "tests/hardware/nvlink.rs"),
         "gds": (["gds"], "orbitte-gds", "orbitte-installed-gds-v1", "tests/hardware/gds.rs"),
+        "mixed-gpu": (["rdma", "cuda"], "orbitte-mixed-gpu", "orbitte-installed-mixed-gpu", "tests/hardware/mixed_gpu.rs"),
         "staging-control": (["rdma", "cuda"], "orbitte-staging-control", "orbitte-installed-staging-control", "tests/hardware/staging_control.rs"),
         "storage-cuda": (["cuda", "io-uring"], "orbitte-storage-cuda", "orbitte-installed-storage-cuda-v1", "tests/hardware/storage_cuda.rs"),
     }[consumer_kind]
@@ -85,6 +86,9 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('packaged consumer differs from the qualified source')
         fixture_modules = library / 'tests/hardware/rdma_host'
         fixture_files = [fixture, *(sorted(fixture_modules.rglob('*.rs')) if consumer_kind == 'host' else [])]
+        if consumer_kind == 'mixed-gpu':
+            fixture_files.extend(library / 'tests/hardware' / name
+                                 for name in ('mixed_gpu.py', 'run.py', 'supervise.py'))
         fixture_hashes = {}
         for path in fixture_files:
             relative = path.relative_to(library)
@@ -115,7 +119,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             run('observer-build', [*compiler, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread',
                                    '-fPIC', '-shared', str(output / 'nvlink_observer.c'), '-ldl', '-o', str(observer)])
             manifest.update(observer=str(observer), observer_sha256=digest(observer))
-        else:
+        elif consumer_kind in ('host', 'gpu'):
             inventory_tool = output / 'discovery_inventory.py'
             inventory_source = library / 'tests/hardware/discovery_inventory.py'
             if inventory_source.read_bytes() != (root / 'tests/hardware/discovery_inventory.py').read_bytes():
@@ -215,6 +219,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

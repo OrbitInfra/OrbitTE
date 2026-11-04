@@ -55,7 +55,8 @@ same local and remote registrations, with matching hint, resolved route, QoS,
 priority, staging mode, intent, named policy and deadline. Both peers’ transfer
 size limits apply. Shuffled slices can share an owner. The payload starts at the
 lowest address and the owner executes at its first public position. Overlapping
-destinations and self-transfer read/write dependencies fence reordering. Set
+destinations and self-transfer read/write dependencies fence reordering.
+CUDA transfers also keep their position across a change of payload path. Set
 `EngineConfig::merge_requests` to false for one physical transfer per request.
 File segments have no remote registered-buffer boundary in TENT and retain
 independent physical requests.
@@ -496,7 +497,10 @@ the [device owner contract](rdma-cuda.md#failure-drain-and-resource-ownership).
 ## Mixed GPU direct and staged submissions
 
 One submission can alternate GPU Direct RDMA requests and GPU-over-TCP staging
-requests, executed in input order. Each RDMA operation releases its range loan
+requests, executed in input order. Address-adjacent GPU ranges on either side
+of a staged request remain separate owners. Within the staged leg, adjacent
+compatible ranges can still share one physical owner. Its aliases observe the
+same completion or failure and keep their individual byte counts. Each RDMA operation releases its range loan
 before the next CUDA copy, and each TCP copy drains its event before the next RDMA
 request. RDMA readiness is checked once per submission as a preflight; actual
 dispatch rechecks context, connection and quota. A failed copy keeps the earlier

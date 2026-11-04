@@ -93,9 +93,12 @@ jobs:
           for role in source requester; do
             python3 tests/hardware/build_installed.py --consumer "peer-gpu-$role" --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-gpu-$role"
           done
-      - name: Build the packaged source staging control gate
+      - name: Build the packaged staging control and mixed GPU gates
         if: matrix.features == 'rdma,cuda'
-        run: python3 tests/hardware/build_installed.py --consumer staging-control --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/staging-control-$RUSTUP_TOOLCHAIN"
+        run: |
+          for consumer in staging-control mixed-gpu; do
+            python3 tests/hardware/build_installed.py --consumer "$consumer" --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/$consumer-$RUSTUP_TOOLCHAIN"
+          done
       - name: Repeat lane, CPU-only requester and accounting controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: bash .github/scripts/repeat-tcp-observability.sh "$RUNNER_TEMP/r1d-iteration.log"

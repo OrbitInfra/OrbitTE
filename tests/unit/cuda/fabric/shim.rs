@@ -18,6 +18,16 @@ struct State {
     gpu: HashMap<i32, Weak<Device>>,
     hooks: HashMap<usize, Arc<Hooks>>,
 }
+impl State {
+    fn fabric_allocation(&self, id: u64) -> Option<&Arc<Physical>> {
+        // A POSIX import identifies its memfd by inode. That integer may
+        // equal an unrelated allocation's driver-issued fabric token.
+        self.reservations
+            .values()
+            .filter_map(|(_, p)| p.as_ref())
+            .find(|p| p.kind == Handle::CU_MEM_HANDLE_TYPE_FABRIC && p.id == id)
+    }
+}
 struct Physical {
     id: u64,
     file: File,
@@ -446,12 +456,10 @@ unsafe extern "C" fn import(out: *mut u64, src: *mut std::ffi::c_void, kind: Han
     let p = if kind == Handle::CU_MEM_HANDLE_TYPE_FABRIC {
         let bytes = read(src.cast::<sys::CUmemFabricHandle>()).data;
         let id = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-        s.reservations
-            .values()
-            .filter_map(|(_, p)| p.as_ref())
-            .find(|p| p.id == id)
-            .unwrap()
-            .clone()
+        let Some(physical) = s.fabric_allocation(id) else {
+            return BAD;
+        };
+        Arc::clone(physical)
     } else {
         use std::os::unix::fs::MetadataExt;
         let fd = i32::try_from(src as usize).unwrap();
@@ -506,4 +514,35 @@ unsafe extern "C" fn zero(addr: u64, value: u8, len: usize) -> Status {
     // SAFETY: the shim just granted writable access to the entire mapped extent.
     unsafe { std::ptr::write_bytes(addr as usize as *mut u8, value, len) };
     SUCCESS
+}
+
+#[test]
+fn fabric_import_cannot_resolve_a_posix_inode_with_the_same_numeric_id() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let file = File::open("/dev/zero")?;
+    let id = file.metadata()?.ino();
+    let allocation = |kind| -> Result<_> {
+        Ok(Arc::new(Physical {
+            id,
+            kind,
+            file: file.try_clone()?,
+            location: sys::CUmemLocation {
+                type_: sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                id: 0,
+            },
+        }))
+    };
+    let mut table = State::default();
+    let posix = allocation(Handle::CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)?;
+    table.reservations.insert(4096, (4096, Some(posix)));
+    assert!(
+        table.fabric_allocation(id).is_none(),
+        "a POSIX inode cannot authorize a fabric import"
+    );
+    let fabric = allocation(Handle::CU_MEM_HANDLE_TYPE_FABRIC)?;
+    table
+        .reservations
+        .insert(8192, (4096, Some(fabric.clone())));
+    assert!(Arc::ptr_eq(table.fabric_allocation(id).unwrap(), &fabric));
+    Ok(())
 }
