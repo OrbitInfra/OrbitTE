@@ -39,8 +39,9 @@ external output directory; failed runs are kept.
 | CUDA↔file through DRAM staging | Implemented, installed profile unqualified | `python3 "$ART/storage_cuda_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | [Shim and real-file controls](#local-file-segments) |
 | Native GDS / NVMe ext4 with nvidia-fs | Implemented, installed profile unqualified | `python3 "$ART/gds_run.py" --artifact "$ART" --gpu "$GPU_UUID" --directory "$NVME_EXT4_DIR" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --output "$RUN"` | cuFile and CUDA shim controls |
 | Engine failover after RDMA bootstrap rejection | Implemented, installed gate unrun | Build `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`. Run `ORBITTE_FAILOVER_NIC="$RNIC" "$ART/installed/bin/orbitte-rdma-host" --failover` | Real RNIC baseline, one rejected grant, TCP bytes and guards |
-| HP-TCP | Implemented for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
-| MNNVL (S14), CXL (S13), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
+| SHM | Qualified on same-host Linux CI for POSIX DRAM | [Physical CXL gate](#shared-memory-and-cxl-verification) | CXL unrun |
+| HP-TCP | Qualified for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
+| MNNVL (S14), EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
@@ -53,9 +54,28 @@ parser, compare JSON histogram counts, exercise a busy port and check shutdown
 with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
-and guarded 64-byte TCP and HP-TCP loopback READs and WRITEs with metrics compiled out, configured
+and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
 off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the host and measurements. Physical
 NIC and GPU performance remains unmeasured.
+
+## Shared memory and CXL verification
+
+The Linux CI step `Install and exercise same-host SHM with POSIX names and a tmpfs directory`
+builds a packaged consumer on stable and Rust 1.85. Two processes perform 1,048,583-byte
+READs and WRITEs, check both guards and read-only denial, and verify the source name
+was removed. The lifetime suite repeats 50 times, including process death with a live
+copy, unregister, unlink, stale handles and failed native retirement. This qualifies
+same-host DRAM SHM. The use of a tmpfs directory exercises the file path.
+
+For the unrun physical gate, choose a mounted fsdax pmem filesystem and the matching
+Linux CXL region. The driver checks the actual mapped inode's DAX flag and verifies
+that its pmem resource range lies inside the selected CXL region.
+
+```bash
+python3 tests/hardware/build_installed.py --consumer shm --output /tmp/orbitte-shm-installed
+python3 /tmp/orbitte-shm-installed/shm_run.py --binary /tmp/orbitte-shm-installed/installed/bin/orbitte-shm \
+  --cxl "$CXL_MOUNT_PATH" --region "$CXL_REGION"
+```
 
 ## HP-TCP rail verification
 

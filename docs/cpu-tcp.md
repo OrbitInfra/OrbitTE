@@ -149,6 +149,17 @@ operation or status and one zero reserved byte.
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
 the capability fields; each transfer still needs a grant.
 
+For an engine with SHM enabled, capability bit 5 announces a trailer immediately
+after the region records, before any HP-TCP endpoint trailer. It starts with
+a 32-bit count, a one-byte backend (0 for POSIX, 1 for a configured directory)
+and three zero bytes. Each 80-byte record starts with seven ordered 64-bit fields for
+registration ID, allocation offset, mapped size, grant slot, device, inode and
+PID namespace inode. A 32-bit creator PID, four zero bytes and a 16-byte name
+nonce follow. The leaf is `orbitte-shm-{namespace:016x}-{pid:08x}-{nonce:032x}`.
+POSIX opens it with a leading slash; the directory backend opens it relative to
+the local mount. Record IDs increase and every range must fit the published
+object. `tests/reference/shm/describe.bin` freezes a sample trailer.
+
 Operations: `0` describe, `1` TCP READ, `2` TCP WRITE, `3` notify, `4` RDMA READ,
 `5` RDMA WRITE, `6` sliced RDMA READ and `7` sliced RDMA WRITE (see
 [RDMA/CUDA](rdma-cuda.md)). Control RPC notify uses operation `22`. Describe requires a zero ID and range. Both notification operations use ID

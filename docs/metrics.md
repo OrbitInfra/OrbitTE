@@ -47,7 +47,6 @@ boundaries. Prometheus uses cumulative buckets through `+Inf`. A sub-microsecond
 sample can have a zero sum and still increments the count. `/metrics/summary`
 returns the summary available via the `log` facade.
 
-HP-TCP records attempts, bytes, failures and latency under the `hp_tcp` transport label.
 A successful 64-byte TCP READ contributes the following samples.
 
 ```text
@@ -58,7 +57,7 @@ tent_transport_attempts_total{transport="tcp",operation="read"} 1
 ## Transfer metrics
 
 Each entry with `{read,write}` denotes two separate families. Supported
-transport values are `tcp`, `rdma`, `nvlink`, `io_uring` and `gds`. Failure
+transport values are `tcp`, `hp_tcp`, `shm`, `rdma`, `nvlink`, `io_uring` and `gds`. Failure
 reasons are `submit`, `poll`, `timeout` and `canceled`.
 
 | Family | Type | Labels and meaning |

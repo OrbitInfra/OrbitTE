@@ -5,6 +5,8 @@ pub(crate) mod file_attempt;
 mod hp_tcp;
 #[cfg(feature = "metrics")]
 mod metrics;
+#[cfg(target_os = "linux")]
+mod shm;
 use admission::OwnerAdmission;
 use std::net::SocketAddr;
 use std::sync::{Arc, Condvar, Mutex};
@@ -47,6 +49,8 @@ pub enum Transport {
     Tcp,
     /// Persistent CPU socket lanes using TENT HP-TCP framing.
     HpTcp,
+    /// Same-host CPU copies through source-granted shared mappings.
+    Shm,
     Rdma,
     Nvlink,
     /// Linux io_uring for local regular files and registered memory.
@@ -160,6 +164,8 @@ impl TransferRequest {
 
 #[derive(Clone)]
 pub(crate) struct PreparedTransfer {
+    #[cfg(target_os = "linux")]
+    pub(crate) shm: Option<Arc<crate::transport::shm::Lease>>,
     pub(crate) hp_cancel: Option<tokio::sync::watch::Sender<bool>>,
     #[cfg(feature = "rdma")]
     pub(crate) priority: Priority,
@@ -328,6 +334,12 @@ impl TransferEngine {
         let mut metadata = SegmentMetadata {
             tcp_disabled: !config.tcp,
             hp: hp_listener.as_ref().map(|(_, end)| Arc::new(*end)),
+            shm: config.shm.enable.then(|| {
+                Arc::new(crate::transport::shm::wire::Manifest {
+                    cxl: !config.shm.cxl_mount_path.as_os_str().is_empty(),
+                    entries: Vec::new(),
+                })
+            }),
             max_transfer_bytes: config.max_transfer_bytes as u64,
             ..Default::default()
         };
@@ -350,7 +362,22 @@ impl TransferEngine {
             #[cfg(feature = "rdma")]
             rdma.as_deref(),
         )?;
+        #[cfg(target_os = "linux")]
+        let shm = config
+            .shm
+            .enable
+            .then(|| {
+                crate::transport::shm::ShmTransport::new(
+                    &config.shm,
+                    epoch,
+                    config.max_registered_regions,
+                    config.max_registered_bytes,
+                )
+            })
+            .transpose()?;
         let source = Arc::new(Source {
+            #[cfg(target_os = "linux")]
+            shm,
             metadata,
             credit_issuer: config.receiver_credit.map(ReceiverCreditIssuer::new),
             #[cfg(feature = "cuda")]
@@ -634,6 +661,10 @@ impl TransferEngine {
     }
 
     pub fn stats(&self) -> Result<EngineStats> {
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
         let (retained_regions, retained_bytes) = self.source.registry.usage()?;
         let (queued_notifications, retained_notifications, retained_notification_bytes) =
             self.source.notifications.usage()?;
@@ -692,6 +723,40 @@ impl TransferEngine {
         })
     }
 
+    /// Allocate named shared host storage. Register one or more ranges with register_host_memory.
+    pub fn allocate_shm_memory(&self, length: usize) -> Result<Arc<HostMemory>> {
+        let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        {
+            self.source
+                .shm
+                .as_ref()
+                .ok_or(Error::Unavailable("SHM is disabled"))?
+                .allocate(length)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = length;
+            Err(Error::Unavailable("SHM requires Linux"))
+        }
+    }
+    /// Release the last allocation handle and report native retirement. Registrations and
+    /// admitted peers keep their owners; dropping the last handle also performs cleanup.
+    pub fn free_shm_memory(&self, memory: Arc<HostMemory>) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            self.source
+                .shm
+                .as_ref()
+                .ok_or(Error::Unavailable("SHM is disabled"))?
+                .free(memory)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = memory;
+            Err(Error::Unavailable("SHM requires Linux"))
+        }
+    }
     /// Registers owned host bytes, preparing configured host Direct RDMA MRs
     /// in every usable context, including paused ports, before exposing the range.
     pub fn register_memory(
@@ -700,6 +765,10 @@ impl TransferEngine {
         permission: Permission,
     ) -> Result<RegisteredMemory> {
         let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
         let length = bytes.len();
         self.source
             .registry
@@ -724,6 +793,10 @@ impl TransferEngine {
         permission: Permission,
     ) -> Result<RegisteredMemory> {
         let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
         self.source
             .registry
             .register_host_batch(&[(allocation, offset, length)], permission, |memory| {
@@ -746,12 +819,23 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
         self.source
             .registry
             .register_host_batch(ranges, permission, |memory| self.register_native(memory))
     }
 
     fn register_native(&self, memory: &[RegisteredMemory]) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        let pending = self
+            .source
+            .shm
+            .as_ref()
+            .map(|s| s.prepare_exports(memory))
+            .transpose()?;
         #[cfg(feature = "gds")]
         let result = self.gds.as_ref().map_or(Ok(()), |gds| {
             memory.iter().try_for_each(|region| gds.register(region))
@@ -766,6 +850,12 @@ impl TransferEngine {
         });
         #[cfg(not(any(feature = "rdma", feature = "gds")))]
         let _ = memory;
+        #[cfg(target_os = "linux")]
+        if result.is_ok() {
+            if let Some((shm, pending)) = self.source.shm.as_ref().zip(pending) {
+                shm.publish(pending);
+            }
+        }
         #[cfg(feature = "gds")]
         if result.is_err() {
             let mut cleanup = Ok(());
@@ -794,6 +884,10 @@ impl TransferEngine {
             return Err(Error::ResourceExhausted);
         }
         let _admission = self.source.admit()?;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.sweep()?;
+        }
         self.source
             .registry
             .register_cuda_batch(ranges, permission, |memory| self.register_native(memory))
@@ -818,6 +912,15 @@ impl TransferEngine {
     /// Call `close_source` to establish source-handler quiescence first.
     pub fn unregister_memory(&self, memory: &RegisteredMemory) -> Result<()> {
         let _last = self.source.registry.unregister(memory)?;
+        #[cfg(target_os = "linux")]
+        let shm_result = if _last {
+            self.source
+                .shm
+                .as_ref()
+                .map_or(Ok(()), |s| s.revoke(memory.id()))
+        } else {
+            Ok(())
+        };
         #[cfg(feature = "gds")]
         let gds_result = if _last {
             crate::transport::gds::BufferLease::retire(memory)
@@ -830,6 +933,8 @@ impl TransferEngine {
         }
         #[cfg(feature = "gds")]
         gds_result?;
+        #[cfg(target_os = "linux")]
+        shm_result?;
         Ok(())
     }
 
@@ -845,14 +950,12 @@ impl TransferEngine {
         let _admission = self.admit_batch(0)?;
         if endpoint == self.endpoint() && expected_epoch == self.source_epoch() {
             let _permit = self.source.admit()?;
+            let (metadata, regions) = self.source.describe()?;
             return Ok(RemoteSegment {
                 endpoint,
                 epoch: expected_epoch,
-                regions: self
-                    .source
-                    .registry
-                    .descriptors(self.source.metadata.hp.is_some())?,
-                metadata: self.source.metadata.clone(),
+                regions,
+                metadata,
             });
         }
         control_plane::open_segment(endpoint, expected_epoch, deadline)
@@ -1169,6 +1272,8 @@ impl TransferEngine {
             let mut selection = selected;
             selection.initial_attempts = used;
             prepared.push(PreparedTransfer {
+                #[cfg(target_os = "linux")]
+                shm: None,
                 hp_cancel: None,
                 #[cfg(feature = "rdma")]
                 priority,
@@ -1189,6 +1294,10 @@ impl TransferEngine {
             gds.cleanup();
         }
         let admission = self.admit_batch(total_bytes)?;
+        let merge = self.config.merge_requests;
+        #[cfg(target_os = "linux")]
+        let merge = merge
+            && !matches!(&payload,PreparedTarget::Memory{peer,requests} if self.shm_aliases(peer,requests));
         let mapping = Arc::new(match &mut payload {
             PreparedTarget::Memory {
                 peer,
@@ -1216,11 +1325,19 @@ impl TransferEngine {
                             usize::try_from(a.max_bytes.min(b.max_bytes)).unwrap_or(usize::MAX)
                         }),
                 ),
-                self.config.merge_requests,
+                merge,
             ),
             #[cfg(any(feature = "io-uring", feature = "gds"))]
             PreparedTarget::File { .. } => TaskMap::identity(requests),
         });
+        #[cfg(target_os = "linux")]
+        match &mut payload {
+            PreparedTarget::Memory { requests, peer } => {
+                self.preflight_shm(peer, operation, requests, deadline)?
+            }
+            #[cfg(any(feature = "io-uring", feature = "gds"))]
+            PreparedTarget::File { .. } => {}
+        }
         if batch.is_some() {
             match &mut payload {
                 PreparedTarget::Memory {
@@ -1788,6 +1905,10 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("source lock poisoned"))?;
         admission.open = false;
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.fence_exports();
+        }
         while admission.active != 0 {
             let remaining = remaining(deadline)?;
             let (guard, _) = self
@@ -1801,6 +1922,10 @@ impl TransferEngine {
         #[cfg(feature = "cuda")]
         if let Some(transport) = &self.source.nvlink {
             transport.exports.wait_empty(deadline)?;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.drain_exports(deadline)?;
         }
         Ok(())
     }
@@ -1870,6 +1995,10 @@ impl TransferEngine {
         if let Some(transport) = &self.source.nvlink {
             transport.close_requester(self.source.epoch, deadline)?;
         }
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.source.shm {
+            shm.close_imports(deadline)?;
+        }
         Ok(())
     }
 
@@ -1897,6 +2026,10 @@ impl TransferEngine {
                 .map_err(|_| Error::Internal("batch lock poisoned"))?;
             source.open = false;
             requester.open = false;
+            #[cfg(target_os = "linux")]
+            if let Some(shm) = &self.source.shm {
+                shm.fence_exports();
+            }
         }
         // Peers may export to each other. Release outgoing imports before
         // waiting for incoming exports, keeping close receipts serviceable.
@@ -1970,6 +2103,8 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
+    #[cfg(target_os = "linux")]
+    pub(crate) shm: Option<crate::transport::shm::ShmTransport>,
     pub(crate) metadata: SegmentMetadata,
     pub(crate) credit_issuer: Option<Arc<ReceiverCreditIssuer>>,
     #[cfg(feature = "cuda")]
@@ -1996,6 +2131,16 @@ struct SourceAdmission {
 }
 
 impl Source {
+    pub(crate) fn describe(&self) -> Result<(SegmentMetadata, Vec<RemoteRegion>)> {
+        let regions = self.registry.descriptors(self.metadata.hp.is_some())?;
+        #[allow(unused_mut)]
+        let mut metadata = self.metadata.clone();
+        #[cfg(target_os = "linux")]
+        if let Some(shm) = &self.shm {
+            metadata.shm = Some(Arc::new(shm.manifest(&regions)?));
+        }
+        Ok((metadata, regions))
+    }
     pub(crate) fn admit(&self) -> Result<SourcePermit<'_>> {
         let mut admission = self
             .admission

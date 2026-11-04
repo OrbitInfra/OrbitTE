@@ -27,8 +27,8 @@ behind every hardware result.
 | DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 I/O and buffered tmpfs I/O with full READ/WRITE byte checks. See [qualification evidence](qualification.md#local-file-segments) |
 | CUDA ↔ local file (io_uring) | Implemented, installed gate unrun | CUDA shim and real files exercise staging through pinned host chunks. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
 | GDS / cuFile | Implemented, installed native gate unrun | Host and CUDA batch I/O, registered buffers, direct file handles, terminal receipts and quarantine. See [GDS](storage.md#gds-with-cufile) |
-| [HP-TCP](hp-tcp.md) | Implemented for host DRAM | Real loopback sockets and multiple local IPv4 rails. Physical rail gate unrun |
-| SHM | Planned (P3) | |
+| [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Real loopback sockets and multiple local IPv4 rails. Physical rail gate unrun |
+| [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | MNNVL / EGM | Planned (P5) | |
 | MPComm, libfabric/EFA | Planned (P8) | Optional network providers |
 

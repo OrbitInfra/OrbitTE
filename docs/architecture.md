@@ -34,6 +34,16 @@ Physical owners retain registration and task/byte admission through the last
 slice receipt. The typed configuration, frame layout, static rail limits and
 generation fence are described in [HP-TCP](hp-tcp.md).
 
+SHM follows the shared allocator and synchronous copy in frozen TENT. Only
+transport-owned backing publishes a name. OrbitTE also publishes the inode,
+allocation offset and registration grant. The source holds Linux OFD locks for
+the permitted directions, and every requester holds a separate activity lock
+through its copy. Those receipts fence a cached mapping across unregister or
+process death. Local/native loans and peer copies coordinate on inode byte
+ranges. Mapping failure precedes payload I/O, and failed unmap quarantines the
+mapping and its charge. POSIX and directory-backed paths use the same owners.
+See [shared memory](shm.md).
+
 ## Local file segment ownership
 
 TENT's `SegmentManager` maps a name to one handle, `makeFileRemote` describes one

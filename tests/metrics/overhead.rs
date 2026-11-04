@@ -1,4 +1,4 @@
-//! Public-API control and release benchmark for CPU-only submission and real loopback TCP.
+//! Guarded release measurements for CPU submission and same-host memory transports.
 use orbit_te::EngineConfig;
 use orbit_te::{Error, Permission, Result, TransferEngine, TransferOp, TransferRequest, Transport};
 use std::time::{Duration, Instant};
@@ -7,6 +7,10 @@ fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
     let hp = transport == Transport::HpTcp;
     let base = EngineConfig {
         tcp: !hp,
+        shm: orbit_te::ShmConfig {
+            enable: transport == Transport::Shm,
+            ..Default::default()
+        },
         hp_tcp: orbit_te::HpTcpConfig {
             enable: hp,
             ..Default::default()
@@ -142,56 +146,76 @@ fn main() -> Result<()> {
     }
     let tcp = measure(|| run(std::slice::from_ref(&req)), 32, 256)?;
     verify()?;
-    let roundtrip = |transport: Transport| -> Result<(f64, f64)> {
+    let roundtrip = |transport: Transport, length: usize| -> Result<(f64, f64)> {
         let source = engine(false, transport)?;
         let requester = engine(enabled, transport)?;
-        let remote = source.register_memory(pattern.clone().into(), Permission::RemoteReadWrite)?;
-        let local = requester.register_memory(vec![0xee; 66].into(), Permission::LocalOnly)?;
+        let pattern: Vec<_> = (0..length + 2).map(|i| (i % 239) as u8).collect();
+        let remote = if transport == Transport::Shm {
+            let host = source.allocate_shm_memory(pattern.len())?;
+            host.write(0, &pattern)?;
+            source.register_host_memory(host, 0, pattern.len(), Permission::RemoteReadWrite)?
+        } else {
+            source.register_memory(pattern.clone().into(), Permission::RemoteReadWrite)?
+        };
+        let local =
+            requester.register_memory(vec![0xee; pattern.len()].into(), Permission::LocalOnly)?;
         let peer = requester.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
         let req = TransferRequest::new(
             transport,
             local.base_address() + 1,
             remote.base_address() + 1,
-            64,
+            length,
         );
         let run = |op| {
             let report =
                 requester.submit_and_wait(op, &peer, std::slice::from_ref(&req), timeout)?;
             if report.completed_requests != 1
-                || report.transferred_bytes != 64
+                || report.transferred_bytes != length
                 || !report.is_complete()
             {
-                return Err(Error::Internal("incomplete loopback transfer"));
+                return Err(Error::Internal("incomplete benchmark transfer"));
             }
             Ok(())
         };
-        let read = measure(|| run(TransferOp::Read), 32, 256)?;
-        let mut got = [0; 66];
+        let (warm, repeats) = if length == 64 { (32, 256) } else { (4, 16) };
+        let read = measure(|| run(TransferOp::Read), warm, repeats)?;
+        let mut got = vec![0; pattern.len()];
         local.read(0, &mut got)?;
-        if got[0] != 0xee || got[65] != 0xee || got[1..65] != pattern[1..65] {
-            return Err(Error::Internal("loopback read data or guards"));
+        if got[0] != 0xee || got[length + 1] != 0xee || got[1..=length] != pattern[1..=length] {
+            return Err(Error::Internal("read data or guards"));
         }
         let mut written = pattern.clone();
-        for b in &mut written[1..65] {
-            *b ^= 0x5a;
+        for byte in &mut written[1..=length] {
+            *byte ^= 0x5a;
         }
-        local.write(1, &written[1..65])?;
-        let write = measure(|| run(TransferOp::Write), 32, 256)?;
+        local.write(1, &written[1..=length])?;
+        let write = measure(|| run(TransferOp::Write), warm, repeats)?;
         remote.read(0, &mut got)?;
-        if got[..] != written {
-            return Err(Error::Internal("loopback write data or guards"));
+        if got != written {
+            return Err(Error::Internal("write data or guards"));
         }
         local.read(0, &mut got)?;
-        if got[0] != 0xee || got[65] != 0xee || got[1..65] != written[1..65] {
-            return Err(Error::Internal("loopback write source guards"));
+        if got[0] != 0xee || got[length + 1] != 0xee || got[1..=length] != written[1..=length] {
+            return Err(Error::Internal("write source guards"));
         }
+        requester.close(timeout)?;
+        source.close(timeout)?;
         Ok((read, write))
     };
-    let (_, tcp_write) = roundtrip(Transport::Tcp)?;
-    let (hp_read, hp_write) = roundtrip(Transport::HpTcp)?;
-    println!(
-        "{}",
-        serde_json::json!({"mode":mode,"empty_batch_ns":cpu,"expired_owner_ns":expired_owner,"tcp_64b_ns":tcp,"tcp_write_64b_ns":tcp_write,"hp_tcp_read_64b_ns":hp_read,"hp_tcp_write_64b_ns":hp_write})
-    );
+    let mut out = serde_json::json!({"mode": mode,"empty_batch_ns":cpu,"expired_owner_ns":expired_owner,"tcp_64b_ns":tcp});
+    for (transport, label) in [
+        (Transport::Tcp, "tcp"),
+        (Transport::HpTcp, "hp_tcp"),
+        (Transport::Shm, "shm"),
+    ] {
+        for (length, size) in [(64, "64b"), (4 << 20, "4mib")] {
+            let (read, write) = roundtrip(transport, length)?;
+            if transport != Transport::Tcp || length != 64 {
+                out[format!("{label}_read_{size}_ns")] = read.into();
+            }
+            out[format!("{label}_write_{size}_ns")] = write.into();
+        }
+    }
+    println!("{out}");
     Ok(())
 }
