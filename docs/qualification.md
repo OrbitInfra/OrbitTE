@@ -55,12 +55,12 @@ with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
 and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
-off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the host and measurements. Physical
+off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbitTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbitTE/pull/145) includes all three transports and both sizes. Physical
 NIC and GPU performance remains unmeasured.
 
 ## Shared memory and CXL verification
 
-The Linux CI step `Install and exercise same-host SHM with POSIX names and a tmpfs directory`
+The [Linux CI runs](https://github.com/OrbitInfra/OrbitTE/pull/145/checks) include `Install and exercise same-host SHM with POSIX names and a tmpfs directory`, which
 builds a packaged consumer on stable and Rust 1.85. Two processes perform 1,048,583-byte
 READs and WRITEs, check both guards and read-only denial, and verify the source name
 was removed. The lifetime suite repeats 50 times, including process death with a live

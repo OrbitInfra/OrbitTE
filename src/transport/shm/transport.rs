@@ -297,7 +297,13 @@ impl ShmTransport {
                 imports.open = false;
                 // Each eviction removes exactly one idle entry before attempting
                 // munmap. Quarantine that entry on failure and drain independent ones.
-                while !matches!(Self::evict(&mut imports), Ok(false)) {}
+                loop {
+                    match Self::evict(&mut imports) {
+                        Ok(true) | Err(Error::Unquiesced { .. }) => continue,
+                        Ok(false) => break,
+                        Err(error) => return Err(error),
+                    }
+                }
                 if imports.entries.is_empty() {
                     return imports
                         .fault

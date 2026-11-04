@@ -215,7 +215,10 @@ impl Local {
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e.into()),
             };
-            let created = (sys.stat)(&fd)?;
+            let created = match (sys.stat)(&fd) {
+                Ok(stat) => stat,
+                Err(e) => return Err(retain_unpublished(fd, ns, charge, e)),
+            };
             let initialized = (|| {
                 (sys.lock)(&fd, GATES, 1, true)?;
                 (sys.resize)(&fd, size)?;
@@ -229,7 +232,7 @@ impl Local {
                 Ok(v) => v,
                 Err(e) => {
                     if let Err(cleanup) = unlink_same(sys, ns, name, created) {
-                        log::error!("SHM allocation rollback: {cleanup}");
+                        return Err(retain_unpublished(fd, ns, charge, cleanup));
                     }
                     return Err(e.into());
                 }
@@ -309,6 +312,16 @@ impl Local {
     }
     pub(super) fn in_namespace(&self, ns: &Namespace) -> bool {
         self.mapping.parts.ns.cxl() == ns.cxl() && self.mapping.parts.ns.path == ns.path
+    }
+}
+// Creation succeeded, but the name could not be retired by checked inode identity.
+// Keep the actual open object and capacity charged even though no mapping was published.
+fn retain_unpublished(fd: File, ns: &Arc<Namespace>, charge: Charge, error: io::Error) -> Error {
+    std::mem::forget((fd, ns.clone(), charge));
+    log::error!("retaining unpublished SHM allocation: {error}");
+    Error::Unquiesced {
+        operation: "SHM allocation rollback",
+        code: error.raw_os_error().unwrap_or(-1),
     }
 }
 impl Descriptor {

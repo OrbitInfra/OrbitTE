@@ -228,6 +228,33 @@ fn missing_short_and_exclusive_create_never_materialize_or_truncate_a_peer_file(
 }
 
 #[test]
+fn allocator_retries_a_real_name_collision_without_truncating_or_unlinking_it() -> Result<()> {
+    static CREATIONS: AtomicUsize = AtomicUsize::new(0);
+    fn collide(ns: &Namespace, name: Name, create: bool, write: bool) -> io::Result<fs::File> {
+        use std::io::Write;
+        if create && CREATIONS.fetch_add(1, Ordering::SeqCst) == 0 {
+            let mut existing = (NATIVE.open)(ns, name, true, true)?;
+            existing.write_all(b"retained bytes")?;
+        }
+        (NATIVE.open)(ns, name, create, write)
+    }
+    static COLLISION: Sys = Sys {
+        open: collide,
+        ..NATIVE
+    };
+    let dir = Dir::new();
+    let src = engine(config(&dir.0), &COLLISION)?;
+    let allocation = src.allocate_shm_memory(32)?;
+    assert_eq!(CREATIONS.load(Ordering::SeqCst), 2);
+    assert_eq!(fs::read_dir(&dir.0)?.count(), 2);
+    src.free_shm_memory(allocation)?;
+    let remaining = fs::read_dir(&dir.0)?.collect::<io::Result<Vec<_>>>()?;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(fs::read(remaining[0].path())?, b"retained bytes");
+    Ok(())
+}
+
+#[test]
 fn rejected_late_relocation_leaves_the_whole_batch_untouched_and_keeps_cached_pages() -> Result<()>
 {
     let dir = Dir::new();
@@ -672,6 +699,33 @@ fn mapping_budgets_and_failed_create_roll_back_before_copy() -> Result<()> {
     let mut want = [0; 16];
     want[1..9].fill(0xbd);
     assert_eq!(bytes(&r2), want);
+    fn full(_: &fs::File, _: usize) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::ENOSPC))
+    }
+    fn uncertain(_: &Namespace, _: Name) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(libc::EIO))
+    }
+    static UNCONFIRMED: Sys = Sys {
+        resize: full,
+        unlink: uncertain,
+        ..NATIVE
+    };
+    let separate = Dir::new();
+    let mut cfg = config(&separate.0);
+    cfg.max_registered_regions = 1;
+    let failed = engine(cfg, &UNCONFIRMED)?;
+    assert!(matches!(
+        failed.allocate_shm_memory(16),
+        Err(Error::Unquiesced {
+            operation: "SHM allocation rollback",
+            code: libc::EIO
+        })
+    ));
+    assert_eq!(fs::read_dir(&separate.0)?.count(), 1);
+    assert!(matches!(
+        failed.allocate_shm_memory(1),
+        Err(Error::ResourceExhausted)
+    ));
     Ok(())
 }
 

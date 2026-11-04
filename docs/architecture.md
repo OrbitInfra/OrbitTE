@@ -34,8 +34,10 @@ Physical owners retain registration and task/byte admission through the last
 slice receipt. The typed configuration, frame layout, static rail limits and
 generation fence are described in [HP-TCP](hp-tcp.md).
 
-SHM follows the shared allocator and synchronous copy in frozen TENT. Only
-transport-owned backing publishes a name. OrbitTE also publishes the inode,
+SHM follows the shared allocator and synchronous copy in frozen TENT. TENT
+can also copy a caller-supplied path from `MemoryOptions`. OrbitTE publishes
+only allocations whose mapping and fd it owns, so an ordinary host buffer
+cannot grant access to an unrelated inode. OrbitTE also publishes the inode,
 allocation offset and registration grant. The source holds Linux OFD locks for
 the permitted directions, and every requester holds a separate activity lock
 through its copy. Those receipts fence a cached mapping across unregister or
