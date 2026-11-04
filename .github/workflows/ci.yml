@@ -152,6 +152,9 @@ jobs:
       - name: Build packaged MNNVL and EGM consumer
         if: matrix.features == 'cuda'
         run: python3 tests/hardware/build_installed.py --consumer mnnvl --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-mnnvl"
+      - name: Build packaged caller-stream copy gate without running the GPU workload
+        if: matrix.features == 'cuda'
+        run: python3 tests/hardware/build_installed.py --consumer local-copy --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbitte-installed-local-copy"
       - name: Check shared cudarc with an independent consumer
         if: matrix.toolchain == 'stable' && matrix.features == 'cuda'
         run: |

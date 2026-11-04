@@ -7,6 +7,8 @@ use std::sync::{OnceLock, Weak};
 
 use super::*;
 use driver::Status;
+mod local;
+pub(super) use local::local_driver;
 
 // The shim owns actual host backing and records Driver API boundaries. These
 // tests prove CPU ownership contracts, not GPU execution or memory ordering.
@@ -44,6 +46,7 @@ pub(super) struct Device {
     pub(super) ordinal: AtomicI32,
     pub(super) pci_device: AtomicI32,
     pub(super) streams: Mutex<BTreeMap<usize, Vec<PendingCopy>>>,
+    pub(super) scratch: Mutex<BTreeMap<u64, Box<[u64]>>>,
     pub(super) submitted_copies: Mutex<Vec<(usize, usize, usize)>>,
     pub(super) completions: Mutex<BTreeMap<usize, Option<(usize, usize)>>>,
     next_command: AtomicUsize,
@@ -99,6 +102,7 @@ pub(super) struct Device {
 }
 pub(super) struct PendingCopy {
     sequence: usize,
+    local: Option<local::Command>,
     pub(super) source: usize,
     pub(super) destination: usize,
     length: usize,
@@ -347,23 +351,7 @@ unsafe extern "C" fn event_record(completion: sys::CUevent, stream: sys::CUstrea
 fn drain(stream: usize, through: usize) -> Status {
     let error = current().sync_error.load(Ordering::Acquire);
     if error == 0 {
-        let mut streams = current().streams.lock().unwrap();
-        let pending = streams.entry(stream).or_default();
-        let count = pending
-            .iter()
-            .take_while(|copy| copy.sequence <= through)
-            .count();
-        for copy in pending.drain(..count) {
-            // SAFETY: The queued copy retains both backing ranges until stream progress;
-            // ptr::copy permits overlap.
-            unsafe {
-                std::ptr::copy(
-                    copy.source as *const u8,
-                    copy.destination as *mut u8,
-                    copy.length,
-                );
-            }
-        }
+        local::drain_prefix(&mut current().streams.lock().unwrap(), stream, through);
     }
     status(error)
 }
@@ -471,6 +459,7 @@ fn enqueue(stream: sys::CUstream, source: usize, destination: usize, length: usi
         .or_default()
         .push(PendingCopy {
             sequence: current().next_command.fetch_add(1, Ordering::AcqRel),
+            local: None,
             source,
             destination,
             length,
@@ -641,6 +630,7 @@ pub(super) fn driver() -> Arc<Driver> {
     Arc::new(Driver {
         _library: None,
         vmm: None,
+        local: Default::default(),
         init,
         device_get: get,
         #[cfg(feature = "rdma")]
@@ -691,6 +681,7 @@ pub(super) fn driver() -> Arc<Driver> {
 pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
     let device = Arc::new(Device {
         copy_gate: Mutex::new(None),
+        scratch: Default::default(),
         event_gate: Mutex::new(None),
         bytes: UnsafeCell::new(bytes.to_vec().into_boxed_slice()),
         pins: Mutex::default(),

@@ -72,7 +72,7 @@ struct HostAccess {
     cuda_inflight: bool,
     #[cfg(feature = "cuda")]
     fabric_pin: std::sync::Weak<crate::cuda::fabric::HostPin>,
-    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+    #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
     dma: Vec<Range<usize>>,
 }
 
@@ -111,6 +111,15 @@ impl CudaHostAccess<'_> {
 
 impl HostAccess {
     fn prepare_access(&self, range: &Range<usize>) -> Result<()> {
+        self.check_access(range)?;
+        #[cfg(feature = "cuda")]
+        if let HostBacking::CudaPinned(allocation) = &self.bytes {
+            allocation.prepare_access()?;
+        }
+        Ok(())
+    }
+
+    fn check_access(&self, range: &Range<usize>) -> Result<()> {
         #[cfg(feature = "cuda")]
         {
             if self.cuda_uncertain {
@@ -123,7 +132,7 @@ impl HostAccess {
                 return Err(Error::Unavailable("host allocation is owned by CUDA IPC"));
             }
         }
-        #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+        #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
         if self
             .dma
             .iter()
@@ -133,12 +142,8 @@ impl HostAccess {
                 "host range has an active native I/O loan",
             ));
         }
-        #[cfg(not(any(feature = "rdma", feature = "io-uring", feature = "gds")))]
+        #[cfg(not(any(feature = "cuda", feature = "rdma", feature = "io-uring")))]
         let _ = range;
-        #[cfg(feature = "cuda")]
-        if let HostBacking::CudaPinned(allocation) = &self.bytes {
-            allocation.prepare_access()?;
-        }
         Ok(())
     }
 }
@@ -153,6 +158,8 @@ enum HostBacking {
         length: usize,
     },
     External {
+        #[cfg(feature = "cuda")]
+        pin: Option<Arc<crate::cuda::local_copy::PinnedHostRegistration>>,
         address: NonNull<u8>,
         _owner: Arc<dyn Send + Sync>,
     },
@@ -206,6 +213,10 @@ impl Drop for HostBacking {
         }
     }
 }
+
+#[cfg(feature = "cuda")]
+#[path = "memory/local_copy.rs"]
+mod local_copy;
 
 impl fmt::Debug for HostMemory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -296,7 +307,7 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         }
@@ -454,7 +465,7 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         }
@@ -498,7 +509,7 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         })
@@ -538,6 +549,8 @@ impl HostMemory {
             ipc_idle: std::sync::Condvar::new(),
             backing: Mutex::new(HostAccess {
                 bytes: HostBacking::External {
+                    #[cfg(feature = "cuda")]
+                    pin: None,
                     address,
                     _owner: owner,
                 },
@@ -547,7 +560,7 @@ impl HostMemory {
                 cuda_inflight: false,
                 #[cfg(feature = "cuda")]
                 fabric_pin: Default::default(),
-                #[cfg(any(feature = "rdma", feature = "io-uring", feature = "gds"))]
+                #[cfg(any(feature = "cuda", feature = "rdma", feature = "io-uring"))]
                 dma: Vec::new(),
             }),
         })

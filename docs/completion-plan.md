@@ -86,10 +86,10 @@ Installed GPU and RNIC profiles remain in the verification queue.
 
 S15 completes the P5 source work for cooperative peers, including opt-in GPU
 source QP/MR reuse, ProxyManager source-session ownership and ordered mixed
-direct/staged batches. The hardware verification queue remains open. S15b is an
-OrbitTE local CUDA copy engine for OrbitKV, with event-completed copies on
-the caller's stream, strided and batched descriptors, and a kernel for
-fragmented batches. Its interface awaits the OrbitKV consumer specification.
+direct/staged batches. S15b implements OrbitKV's local GPU↔pinned DRAM
+copy mechanics on the caller's stream, including strided DMA, batched 1D
+copies and a mapped-host kernel. The [installed comparison](qualification.md#caller-stream-local-cuda-copy)
+and the P5 hardware verification queue remain open.
 S16 freezes the inventory and wire fixtures, followed by S17 configuration.
 S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
 OrbitKV uses the existing P2P control plane. S19–S26 retain their order.
@@ -267,6 +267,7 @@ Done:
 | P5.5a Local staging chunks | Accepted (24 cases) | [local chunks](qualification.md#local-cuda-staging-chunks) |
 | P5.5 Source resource and control boundaries | Implemented; installed profile unqualified. Source session isolation, bounded Pin capacity, drain and quarantine follow the [staging contract](staging.md#remote-delegate-progress). | [Verification queue](qualification.md#verification-queue) |
 | P5.5b Remote staging | Serial (16 cases) and ≤16-slot pipeline (24 cases) accepted; later requester ring, shard, event-loop, concurrent CROSS, Delegate query and pollable setup/finish work source-accepted only | [serial](qualification.md#serial-remote-cuda-staging), [pipeline](qualification.md#bounded-remote-cuda-pipeline) |
+| S15b caller-stream copy extension | Implemented; installed profile unqualified | [API and ownership](local-copy.md), [matched GPU gate](qualification.md#caller-stream-local-cuda-copy) |
 | Mixed direct/staged batches, per-request remote staging, GPU and pinned producer readiness | Implemented; installed profile unqualified | [mixed](qualification.md#mixed-gpu-batches), [remote selection](qualification.md#per-request-remote-staging), [readiness](qualification.md#cuda-producer-readiness) |
 
 P5 is complete at source level for the frozen CPU/NVIDIA cooperative profile.

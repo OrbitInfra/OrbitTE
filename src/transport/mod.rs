@@ -17,4 +17,4 @@ pub(crate) mod tcp;
     feature = "io-uring",
     feature = "gds"
 ))]
-const DESTRUCTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const DESTRUCTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);

@@ -21,6 +21,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     nvlink = consumer_kind == "nvlink"
     storage = consumer_kind in ("storage-cuda", "gds")
     features, binary_name, protocol, fixture_relative = {
+        "local-copy": (["cuda"], "orbitte-local-copy", "orbitte-installed-local-copy", "tests/hardware/local_copy.rs"),
         "peer-gpu-source": (["cuda"], "orbitte-peer-gpu-source", "orbitte-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
         "peer-gpu-requester": ([], "orbitte-peer-gpu-requester", "orbitte-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
         "shm": ([], "orbitte-shm", "orbitte-installed-shm", "tests/hardware/shm.rs"),
@@ -95,8 +96,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        if storage or consumer_kind in ('hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'):
-            drivers = [{'staging-control': 'staging_control_run.py', 'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
+        if storage or consumer_kind in ('local-copy', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'):
+            drivers = [{'local-copy': 'local_copy_run.py', 'staging-control': 'staging_control_run.py', 'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
             if consumer_kind == 'gds':
                 drivers.append('gds_run.py')
             for name in drivers:
@@ -169,6 +170,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             'edition = "2024"\nrust-version = "1.85"\npublish = false\n'
             '[workspace]\n[dependencies]\n'
             'orbit-te = { path = ' + json.dumps(str(library)) + ', features = ' + json.dumps(features) + ' }\n'
+            + ('cudarc = { version = "0.19.0", default-features = false, features = ["std", "driver", "dynamic-loading", "cuda-13000"] }\nserde_json = "1.0.151"\n' if consumer_kind == 'local-copy' else '')
             + ('libloading = "0.8.9"\n' if consumer_kind == 'storage-cuda' else ''))
         shutil.copy2(library / 'Cargo.lock', consumer / 'Cargo.lock')
         metadata = json.loads(run('metadata', ['cargo', 'metadata', '--offline', '--format-version', '1'], cwd=consumer))
@@ -219,6 +221,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu'), default='host')
+    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

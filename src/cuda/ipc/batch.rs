@@ -93,30 +93,15 @@ impl CopyBatch {
         count: usize,
         stream: sys::CUstream,
     ) -> Result<()> {
-        let location = sys::CUmemLocation {
-            type_: sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_INVALID,
-            id: 0,
-        };
-        let mut attrs = sys::CUmemcpyAttributes {
-            srcAccessOrder: sys::CUmemcpySrcAccessOrder::CU_MEMCPY_SRC_ACCESS_ORDER_STREAM,
-            srcLocHint: location,
-            dstLocHint: location,
-            flags: 0,
-        };
-        let mut first = 0;
-        // SAFETY: equal-length descriptor arrays cover the admitted prefix,
-        // one attribute covers every entry, and the stream is non-legacy.
-        check("cuMemcpyBatchAsync_v2", unsafe {
-            call(
-                self.destinations.as_mut_ptr(),
-                self.sources.as_mut_ptr(),
-                self.lengths.as_mut_ptr(),
-                count,
-                &mut attrs,
-                &mut first,
-                1,
+        // SAFETY: prepare validated these equal arrays and the caller retains the owners.
+        unsafe {
+            driver::enqueue_batch(
+                driver::BatchEntry::Current(call),
+                &mut self.destinations[..count],
+                &mut self.sources[..count],
+                &mut self.lengths[..count],
                 stream,
             )
-        })
+        }
     }
 }

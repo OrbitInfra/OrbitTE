@@ -52,7 +52,7 @@ impl PinnedAllocation {
             native_freed: false,
         })
     }
-    pub(crate) fn prepare_access(&self) -> Result<()> {
+    pub(crate) fn check_copy_state(&self) -> Result<()> {
         let stream = self.copy_stream.lock().map_err(|_| Error::Unquiesced {
             operation: "CUDA pinned copy stream",
             code: -1,
@@ -65,7 +65,27 @@ impl PinnedAllocation {
                 code: -1,
             });
         }
-        drop(stream);
+        Ok(())
+    }
+
+    pub(super) fn enqueue_producer(&self, stream: sys::CUstream) -> Result<()> {
+        if let Some(producer) = self.producer.get() {
+            producer
+                .lock()
+                .map_err(|_| Error::Internal("pinned producer lock"))?
+                .enqueue_wait(stream)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_producer(&self) {
+        if let Some(p) = self.producer.get() {
+            p.lock().unwrap_or_else(|e| e.into_inner()).retire_wait();
+        }
+    }
+
+    pub(crate) fn prepare_access(&self) -> Result<()> {
+        self.check_copy_state()?;
         if let Some(producer) = self.producer.get() {
             producer
                 .lock()

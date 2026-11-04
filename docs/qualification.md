@@ -29,6 +29,7 @@ external output directory; failed runs are kept.
 
 | Profile | Current state | Gate | Earlier evidence |
 | --- | --- | --- | --- |
+| Caller-stream local CUDA copy | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
 | CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbitte-peer-gpu-source" --requester "$ART/requester/installed/bin/orbitte-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
 | Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbitte-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
 | Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
@@ -55,6 +56,30 @@ external output directory; failed runs are kept.
 
 Paths that need no special hardware, such as io_uring on Linux runners, are
 qualified in CI and do not wait here.
+
+## Caller-stream local CUDA copy
+
+The Linux CUDA shim exercises coalesced and strided DMA, both native batch
+signatures, a kernel upload with non-identical host and device aliases, and
+partial submission. It checks exact restoration and retains the actual
+payload, scratch and charges after an uncertain event. These are CPU controls.
+
+On an exclusively allocated NVIDIA GPU, use an external artifact directory,
+a fresh output directory and the GPU's pre-existing reservation lock. Provide
+a read-only OrbitKV checkout containing `93541a21` and its native benchmark's
+CUDA, NVRTC and Mooncake build prerequisites.
+
+```bash
+python3 tests/hardware/build_installed.py --consumer local-copy --toolchain stable --output "$ART"
+python3 "$ART/local_copy_run.py" --artifact "$ART" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --orbitkv "$ORBITKV_CHECKOUT" --output "$RUN"
+```
+
+The driver builds the frozen OrbitKV benchmark in a separate clone. Both
+executables report the physical UUID and check every source byte, destination
+byte and guard for H2D and D2H. Four matched reverse-order layouts cover
+1, 16, 257 and 1,024 fragments. After five warmups the driver records 30
+submit-to-drain wall times per direction and backend and their medians. The
+unrun gate reserves qualification and timing claims for the named GPU.
 
 ## Metrics
 

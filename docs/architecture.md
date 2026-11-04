@@ -431,6 +431,16 @@ TENT's [transport header][transport], [endpoint][endpoint] and [workers][workers
 
 ## CUDA copy stream ownership
 
+The caller-stream local copy engine is an OrbitTE extension beyond TENT. It
+takes the DMA compiler and grid-strided copy from OrbitKV. The caller supplies
+layout and allocator leases. OrbitTE resolves physical registration identities,
+bounds each flight, and records an event after its final enqueue, including
+partial failures. An event receipt retires loans only after exact context
+restoration. Separate pinned and device descriptor slots let outstanding kernel
+launches retain their own upload. `pending_events_own_distinct_kernel_slots_payloads_and_abandoned_work`
+and `query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners`
+exercise those boundaries. [Caller-stream API](local-copy.md)
+
 | Owner | Responsibility |
 | --- | --- |
 | `cuda::CudaMemory` | Allocation lock and primary-context reference |
