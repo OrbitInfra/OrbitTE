@@ -75,6 +75,7 @@ metrics
 diagnostics
 rdma-cuda
 cuda-ipc
+local-copy
 staging
 :::
 

@@ -108,6 +108,43 @@ impl CallerSyncEvent {
         }
     }
 
+    /// Called with the consuming stream's context current. Retain the original
+    /// generation for other consumers until the owning allocation observes it.
+    pub(super) fn enqueue_wait(&self, stream: sys::CUstream) -> Result<()> {
+        if self.uncertain {
+            return Err(Error::Unquiesced {
+                operation: "CUDA producer event",
+                code: -1,
+            });
+        }
+        if self.pending {
+            let wait = self
+                .context
+                .driver
+                .local
+                .wait_event
+                .ok_or(Error::Unavailable("cuStreamWaitEvent"))?;
+            let event = self
+                .event
+                .ok_or(Error::Internal("missing producer event"))?;
+            // SAFETY: the allocation lock protects the recorded generation. CUDA
+            // binds the wait to its current record even if it is later re-recorded.
+            check("cuStreamWaitEvent producer", unsafe {
+                wait(stream, event.as_ptr(), 0)
+            })?;
+        }
+        Ok(())
+    }
+
+    // A later event on a stream which waited for this generation is a receipt.
+    // The consuming range loan excludes a new record until this observation.
+    pub(super) fn retire_wait(&mut self) {
+        if !self.uncertain {
+            self.pending = false;
+            self.owner = None;
+        }
+    }
+
     pub(super) fn wait(&mut self) -> Result<()> {
         if self.uncertain || self.context.poisoned.load(Ordering::Acquire) {
             return Err(Error::Unquiesced {

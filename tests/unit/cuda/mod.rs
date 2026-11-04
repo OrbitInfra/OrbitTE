@@ -22,6 +22,7 @@ mod ipc;
 mod ipc_batch;
 mod ipc_cache;
 mod ipc_host;
+mod local_copy;
 #[cfg(feature = "rdma")]
 mod mixed_batches;
 mod pinned_readiness;

@@ -9,7 +9,7 @@ proxy=(source_session_ proxy_close_fences_new_pins proxy_first_pins_and_unpin
   source_destruction_joins_an_abandoned_delegate concurrent_first_stage_leases_charge_exactly_the_pool_capacity)
 test "$("$binary" "${proxy[@]}" --list | awk '/: test$/ {n++} END {print n+0}')" -eq 6
 test "$("$binary" 'cuda::tests::mixed_batches::' --list | awk '/: test$/ {n++} END {print n+0}')" -eq 3
-filters=("${proxy[@]}" 'cuda::tests::mixed_batches::' vectored_ r1c_ pipeline_failed_query_is_sticky_but_every_other_slot_is_drained
+filters=(cuda::tests::local_copy:: "${proxy[@]}" 'cuda::tests::mixed_batches::' vectored_ r1c_ pipeline_failed_query_is_sticky_but_every_other_slot_is_drained
   abandoned_remote_delegate_releases_only_after_a_confirmed_event
   failed_second_cross_drains_first_or_retains_every_uncertain_owner
   failed_new_publication_preserves_published_mrs_lookup_and_reference_counts_on_every_context

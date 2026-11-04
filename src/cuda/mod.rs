@@ -16,6 +16,7 @@ use crate::{Error, HostMemory, Result};
 mod driver;
 pub(crate) mod fabric;
 pub(crate) mod ipc;
+pub mod local_copy;
 mod pinned;
 mod probe;
 #[cfg(feature = "rdma")]
@@ -229,6 +230,11 @@ struct DeviceAllocation {
 
 impl DeviceAllocation {
     pub(super) fn prepare_access(&mut self, range: &Range<usize>) -> Result<()> {
+        self.check_access(range)?;
+        self.wait_producer()
+    }
+
+    fn check_access(&self, range: &Range<usize>) -> Result<()> {
         if self.uncertain
             || self
                 .context
@@ -247,7 +253,7 @@ impl DeviceAllocation {
         {
             return Err(Error::Unavailable("CUDA range has an active transfer loan"));
         }
-        self.wait_producer()
+        Ok(())
     }
 }
 

@@ -229,6 +229,14 @@ scheduling, rail failover and transparent replay of ambiguous WRITEs. Its large
 READ slicing is not dynamic RDMA-style spraying. These omissions are explicit
 reference boundaries, not missing parity work disguised as implemented support.
 
+## OrbitTE local CUDA copy extension
+
+S15b implements the consumer's local GPU↔pinned DRAM copy mechanics beyond
+TENT's transport surface. The DMA geometry and mapped-memory kernel follow
+OrbitKV's transfer module at `93541a21`. Stream-bound completions own each
+registered range and descriptor upload. This extension adds no transport,
+peer capability or wire record. [Local CUDA copies](local-copy.md)
+
 ## Local SSD paths and module boundary
 
 The frozen TENT source implements both READ and WRITE for local file segments:

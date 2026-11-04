@@ -24,6 +24,24 @@ pub(super) type CopyBatch = unsafe extern "C" fn(
     sys::CUstream,
 ) -> Status;
 
+// The CUDA 12.8 entry reports a failure index. It is not ABI-compatible with v2.
+pub(super) type CopyBatch128 = unsafe extern "C" fn(
+    *mut u64,
+    *mut u64,
+    *mut usize,
+    usize,
+    *mut sys::CUmemcpyAttributes,
+    *mut usize,
+    usize,
+    *mut usize,
+    sys::CUstream,
+) -> Status;
+#[derive(Clone, Copy)]
+pub(super) enum BatchEntry {
+    Current(CopyBatch),
+    WithFailIndex(CopyBatch128),
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct VmmApi {
     pub count: unsafe extern "C" fn(*mut c_int) -> Status,
@@ -51,7 +69,42 @@ pub(super) struct VmmApi {
         unsafe extern "C" fn(*mut u64, *mut c_void, sys::CUmemAllocationHandleType) -> Status,
 }
 
+pub(super) type LaunchKernel = unsafe extern "C" fn(
+    sys::CUfunction,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    sys::CUstream,
+    *mut *mut c_void,
+    *mut *mut c_void,
+) -> Status;
+
+#[derive(Clone, Copy)]
+pub(super) struct KernelApi {
+    pub load: unsafe extern "C" fn(*mut sys::CUmodule, *const c_void) -> Status,
+    pub function: unsafe extern "C" fn(
+        *mut sys::CUfunction,
+        sys::CUmodule,
+        *const std::ffi::c_char,
+    ) -> Status,
+    pub unload: unsafe extern "C" fn(sys::CUmodule) -> Status,
+    pub launch: LaunchKernel,
+    pub mapped: unsafe extern "C" fn(*mut u64, *mut c_void, u32) -> Status,
+}
+#[derive(Clone, Copy, Default)]
+pub(super) struct LocalApi {
+    pub batch_with_fail_index: Option<CopyBatch128>,
+    pub attribute: Option<unsafe extern "C" fn(*mut i32, sys::CUdevice_attribute, i32) -> Status>,
+    pub copy_2d: Option<unsafe extern "C" fn(*const sys::CUDA_MEMCPY2D, sys::CUstream) -> Status>,
+    pub wait_event: Option<unsafe extern "C" fn(sys::CUstream, sys::CUevent, u32) -> Status>,
+    pub kernel: Option<KernelApi>,
+}
 pub(super) struct Driver {
+    pub(super) local: LocalApi,
     pub(super) vmm: Option<VmmApi>,
     pub(super) _library: Option<Library>,
     pub init: unsafe extern "C" fn(c_uint) -> Status,
@@ -159,6 +212,46 @@ impl Driver {
     fn from_library(library: Library, fabric: bool) -> Result<Arc<Self>> {
         let vmm = fabric.then(|| VmmApi::load(&library)).transpose()?;
         let driver = Self {
+            local: LocalApi {
+                // SAFETY: the unversioned Driver API symbol has the nine-argument CUDA
+                // 12.8 signature above. The owning Driver retains the loaded library.
+                batch_with_fail_index: unsafe {
+                    library.get::<CopyBatch128>(b"cuMemcpyBatchAsync\0")
+                }
+                .ok()
+                .map(|s| *s),
+                attribute: symbol(
+                    &library,
+                    b"cuDeviceGetAttribute\0",
+                    "cuDeviceGetAttribute",
+                    sys::cuDeviceGetAttribute as _,
+                )
+                .ok(),
+                copy_2d: symbol(
+                    &library,
+                    b"cuMemcpy2DAsync_v2\0",
+                    "cuMemcpy2DAsync_v2",
+                    sys::cuMemcpy2DAsync_v2 as _,
+                )
+                .ok(),
+                wait_event: symbol(
+                    &library,
+                    b"cuStreamWaitEvent\0",
+                    "cuStreamWaitEvent",
+                    sys::cuStreamWaitEvent as _,
+                )
+                .ok(),
+                kernel: (|| -> Result<_> {
+                    Ok(KernelApi {
+                        load: symbol!(&library, cuModuleLoadData),
+                        function: symbol!(&library, cuModuleGetFunction),
+                        unload: symbol!(&library, cuModuleUnload),
+                        launch: symbol!(&library, cuLaunchKernel),
+                        mapped: symbol!(&library, cuMemHostGetDevicePointer_v2),
+                    })
+                })()
+                .ok(),
+            },
             vmm,
             init: symbol!(&library, cuInit),
             device_get: symbol!(&library, cuDeviceGet),
@@ -233,7 +326,8 @@ driver_entries!(
     (A, B, C),
     (A, B, C, D),
     (A, B, C, D, E),
-    (A, B, C, D, E, F, G, H)
+    (A, B, C, D, E, F, G, H),
+    (A, B, C, D, E, F, G, H, I, J, K)
 );
 
 fn symbol<F: DriverEntry>(
@@ -271,6 +365,63 @@ fn batch_copy(library: &Library) -> Option<CopyBatch> {
         sys::cuMemcpyBatchAsync_v2 as _,
     )
     .ok()
+}
+
+pub(super) unsafe fn enqueue_batch(
+    call: BatchEntry,
+    destinations: &mut [u64],
+    sources: &mut [u64],
+    lengths: &mut [usize],
+    stream: sys::CUstream,
+) -> Result<()> {
+    if destinations.len() != lengths.len() || sources.len() != lengths.len() {
+        return Err(Error::InvalidRange);
+    }
+    let location = sys::CUmemLocation {
+        type_: sys::CUmemLocationType::CU_MEM_LOCATION_TYPE_INVALID,
+        id: 0,
+    };
+    let mut attrs = sys::CUmemcpyAttributes {
+        srcAccessOrder: sys::CUmemcpySrcAccessOrder::CU_MEMCPY_SRC_ACCESS_ORDER_STREAM,
+        srcLocHint: location,
+        dstLocHint: location,
+        flags: 0,
+    };
+    let mut first = 0;
+    let (dst, src, sizes, n) = (
+        destinations.as_mut_ptr(),
+        sources.as_mut_ptr(),
+        lengths.as_mut_ptr(),
+        lengths.len(),
+    );
+    // SAFETY: equal-length arrays cover all admitted descriptors, one attribute
+    // covers every entry, and the flight retains the storage through completion.
+    // A reported failing index never proves any part of the batch is quiescent.
+    unsafe {
+        match call {
+            BatchEntry::Current(call) => check(
+                "cuMemcpyBatchAsync_v2",
+                call(dst, src, sizes, n, &mut attrs, &mut first, 1, stream),
+            ),
+            BatchEntry::WithFailIndex(call) => {
+                let mut failed = usize::MAX;
+                check(
+                    "cuMemcpyBatchAsync",
+                    call(
+                        dst,
+                        src,
+                        sizes,
+                        n,
+                        &mut attrs,
+                        &mut first,
+                        1,
+                        &mut failed,
+                        stream,
+                    ),
+                )
+            }
+        }
+    }
 }
 
 pub(super) fn check(operation: &'static str, code: Status) -> Result<()> {
