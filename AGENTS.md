@@ -481,8 +481,9 @@ unqualified pending installed runs.
 
 ### S15b — Local CUDA copy engine [GPU]
 
-This is an OrbitTE extension for OrbitKV. The consuming OrbitKV session will
-supply the interface. Keep the public descriptor and API shape open until then.
+This is an OrbitTE extension for OrbitKV. Own local GPU↔pinned DRAM byte
+movement. OrbitKV supplies block and layer layouts, cache tier policy and
+codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
 
 - Submit in order on the caller's CUDA stream. Complete through a CUDA event
   and retain backing and descriptor owners until the event proves completion.

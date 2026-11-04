@@ -105,7 +105,9 @@ or `progress()` polls abandoned slots. `close(timeout)` stops admission and
 drains, and can be called again after a timeout. A failed payload enqueue may
 already have scheduled a subset. Its marker must complete before the handle
 reports the enqueue error. An uncertain record, query, destroy or context
-restoration fences the slot with `Error::Unquiesced`. The worker retains its
+restoration returns `Error::Unquiesced` from the completion, progress and
+subsequent submission on this stream. Other pending markers can still drain.
+`stats()` inspects the charges without calling CUDA. The worker retains its
 loans, stream, scratch and charges. Final drop bounds its drain and retains
 unconfirmed owners for process lifetime.
 

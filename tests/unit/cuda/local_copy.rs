@@ -315,8 +315,13 @@ fn query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners() {
                 Err(Error::Unquiesced { .. })
             ));
         }
+        assert!(matches!(w.progress(), Err(Error::Unquiesced { .. })));
+        assert!(matches!(
+            w.submit(HostToDevice, &[f.desc(64, 64, 8)], None),
+            Err(Error::Unquiesced { .. })
+        ));
         assert_eq!(
-            w.progress().unwrap(),
+            w.stats().unwrap(),
             LocalCopyStats {
                 active: 1,
                 retained: 1,
@@ -622,4 +627,42 @@ fn legacy_batch_abi_uses_failure_index_only_as_a_diagnostic() {
     let mut want = vec![GUARD; SIZE];
     want[12..15].copy_from_slice(b"xyz");
     assert_eq!(got, want);
+}
+
+#[test]
+fn terminal_kernel_load_or_unload_is_never_a_dma_fallback_or_a_destroy_retry() {
+    unsafe extern "C" fn fatal(
+        _: *mut sys::CUmodule,
+        _: *const std::ffi::c_void,
+    ) -> driver::Status {
+        driver::Status::CUDA_ERROR_ILLEGAL_ADDRESS
+    }
+    unsafe extern "C" fn fail_unload(_: sys::CUmodule) -> driver::Status {
+        current().events.lock().unwrap().push("failed-unload");
+        driver::Status::CUDA_ERROR_INVALID_HANDLE
+    }
+    let mut api = local_driver();
+    api.local.kernel.as_mut().unwrap().load = fatal;
+    let f = Fixture::new(api);
+    assert!(matches!(
+        f.bind(config(Auto)),
+        Err(Error::Backend { code: 700, .. })
+    ));
+    assert!(f.device.submitted_copies.lock().unwrap().is_empty());
+    let mut api = local_driver();
+    api.local.kernel.as_mut().unwrap().unload = fail_unload;
+    let f = Fixture::new(api);
+    let w = f.bind(config(Kernel)).unwrap();
+    assert!(matches!(
+        w.close(EVENTUAL_PROGRESS),
+        Err(Error::Unquiesced { .. })
+    ));
+    assert!(matches!(w.progress(), Err(Error::Unquiesced { .. })));
+    assert_eq!(w.stats().unwrap().descriptor_bytes, 320 * 2 * 48);
+    assert!(matches!(
+        w.close(Duration::ZERO),
+        Err(Error::Unquiesced { .. })
+    ));
+    drop(w);
+    assert_eq!(f.calls("failed-unload"), 1);
 }

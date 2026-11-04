@@ -87,10 +87,18 @@ impl Pool {
         }
         s
     }
-    pub fn progress(&mut self) {
+    pub fn progress(&mut self) -> Result<()> {
+        if let Some(e) = &self.close_error {
+            return Err(e.for_report());
+        }
         for i in 0..self.slots.len() {
             self.poll(i);
         }
+        // Drive other outstanding markers even if one slot on this stream is fenced.
+        for flight in self.slots.iter().flatten().filter(|f| f.retained) {
+            flight.signal.status()?;
+        }
+        Ok(())
     }
     pub fn poll(&mut self, i: usize) {
         let Some(f) = &mut self.slots[i] else {
@@ -207,7 +215,7 @@ impl Pool {
                 "per-thread CUDA stream used on another thread",
             ));
         }
-        self.progress();
+        self.progress()?;
         let i = self
             .slots
             .iter()
@@ -303,15 +311,7 @@ impl Pool {
 
     fn close_step(&mut self) -> Result<bool> {
         self.closed = true;
-        if let Some(e) = &self.close_error {
-            return Err(e.for_report());
-        }
-        self.progress();
-        for f in self.slots.iter().flatten() {
-            if f.retained {
-                f.signal.status()?;
-            }
-        }
+        self.progress()?;
         if self.slots.iter().any(Option::is_some) {
             return Ok(false);
         }

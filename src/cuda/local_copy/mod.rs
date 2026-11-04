@@ -278,7 +278,16 @@ impl LocalCopyEngine {
             .0
             .lock()
             .map_err(|_| Error::Internal("local copy pool lock"))?;
-        pool.progress();
+        pool.progress()?;
+        Ok(pool.stats())
+    }
+    /// Inspect live and quarantined charges without advancing a CUDA event.
+    pub fn stats(&self) -> Result<LocalCopyStats> {
+        let pool = self
+            .inner
+            .0
+            .lock()
+            .map_err(|_| Error::Internal("local copy pool lock"))?;
         Ok(pool.stats())
     }
     /// Stop admission and wait up to the timeout for event receipts. A timeout
