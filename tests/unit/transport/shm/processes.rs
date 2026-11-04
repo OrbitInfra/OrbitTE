@@ -77,6 +77,16 @@ static PAUSED: Sys = Sys {
     lock: paused,
     ..NATIVE
 };
+fn lose_unlock(fd: &fs::File, start: i64, len: i64) -> io::Result<()> {
+    if start < GATES {
+        return Err(io::Error::from_raw_os_error(libc::EIO));
+    }
+    (NATIVE.unlock)(fd, start, len)
+}
+static UNCERTAIN: Sys = Sys {
+    unlock: lose_unlock,
+    ..NATIVE
+};
 
 #[test]
 #[ignore = "spawned by the cross-process SHM lifetime controls"]
@@ -106,13 +116,19 @@ fn shm_child() -> Result<()> {
         wait(&dir.join("stop"));
         return Ok(());
     }
-    let dst = engine(cfg, &PAUSED)?;
+    let uncertain = role == "uncertain";
+    cfg.tcp = uncertain;
+    let dst = engine(cfg, if uncertain { &UNCERTAIN } else { &PAUSED })?;
     let line = fs::read_to_string(dir.join("peer"))?;
     let p: Vec<_> = line.split_whitespace().collect();
     let peer = dst.open_segment(p[0].parse().unwrap(), p[1].parse()?, WAIT)?;
     let local = dst.register_memory(vec![0xee; 16].into(), Permission::LocalOnly)?;
     let req = TransferRequest::new(
-        Transport::Shm,
+        if uncertain {
+            Transport::Unspec
+        } else {
+            Transport::Shm
+        },
         local.base_address() + 2,
         p[2].parse::<u64>().unwrap() + 5,
         8,
@@ -123,6 +139,35 @@ fn shm_child() -> Result<()> {
         TransferOp::Write
     };
     let report = dst.submit_and_wait(op, &peer, std::slice::from_ref(&req), WAIT)?;
+    if uncertain {
+        let failure = report.failure.unwrap();
+        assert!(matches!(
+            failure.error,
+            Error::Unquiesced {
+                operation: "SHM range unlock",
+                code: libc::EIO
+            }
+        ));
+        assert_eq!(
+            (
+                report.completed_requests,
+                report.transferred_bytes,
+                failure.remote_effect
+            ),
+            (0, 0, RemoteEffect::Unknown)
+        );
+        assert!(!report.locally_drained);
+        let stats = dst.stats()?;
+        assert_eq!((stats.inflight_batches, stats.inflight_bytes), (1, 8));
+        assert!(matches!(
+            dst.close_requester(Duration::ZERO),
+            Err(Error::Timeout)
+        ));
+        assert_eq!(bytes(&local), [0xee; 16]);
+        put(&dir.join("inside"), b"");
+        wait(&dir.join("resume"));
+        return Ok(());
+    }
     assert!(report.is_complete(), "{report:?}");
     assert_eq!(report.transferred_bytes, 8);
     let mut want = [0xee; 16];
@@ -137,6 +182,47 @@ fn shm_child() -> Result<()> {
     ));
     dst.close(WAIT)?;
     Ok(())
+}
+
+#[test]
+fn failed_range_release_quarantines_the_write_and_its_grant_until_requester_exit() -> Result<()> {
+    let dir = Dir::new();
+    let src = engine(config(Path::new("")), &NATIVE)?;
+    let host = src.allocate_shm_memory(32)?;
+    host.write(0, &[0x5a; 32])?;
+    let r = grant(&src, &host, 3, 22, Permission::RemoteReadWrite);
+    put(
+        &dir.0.join("peer"),
+        format!(
+            "{} {} {}",
+            src.endpoint(),
+            src.source_epoch(),
+            r.base_address()
+        ),
+    );
+    let mut child = Process::start("uncertain", &dir.0, Path::new(""));
+    child.at(&dir.0.join("inside"));
+    src.unregister_memory(&r)?;
+    drop(r);
+    assert!(matches!(
+        src.close_source(Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    assert_eq!(src.stats()?.retained_bytes, 22);
+    assert!(matches!(
+        host.read(8, &mut [0u8]),
+        Err(Error::Unavailable(_))
+    ));
+    put(&dir.0.join("resume"), b"");
+    child.finish();
+    src.close_source(WAIT)?;
+    assert_eq!(src.stats()?.retained_bytes, 0);
+    let mut want = [0x5a; 32];
+    want[8..16].fill(0xee);
+    let mut got = [0; 32];
+    host.read(0, &mut got)?;
+    assert_eq!(got, want);
+    src.free_shm_memory(host)
 }
 
 #[test]
