@@ -23,6 +23,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
     BatchID batch_ = 0;
     Status outcome_;
     bool uncertain_ = false;
+    bool submitted_ = false;
     void remember(const Status &s) {
         if (outcome_.ok() && !s.ok())
             outcome_ = s;
@@ -40,7 +41,13 @@ class TransferEngine::ScatterTransferOperation::Impl {
         for (auto &peer : peers_)
             if (!engine_->closeSegment(peer.second).ok())
                 remember(Status::Context("close scatter segment"));
-        peers_.clear();
+        decltype(peers_){}.swap(peers_);
+        decltype(callbacks_){}.swap(callbacks_);
+        decltype(tasks_){}.swap(tasks_);
+        decltype(snapshot_){}.swap(snapshot_);
+        decltype(delivered_){}.swap(delivered_);
+        engine_.reset();
+        handle_ = nullptr;
     }
     void reject(const Status &s) {
         remember(s);
@@ -70,6 +77,31 @@ class TransferEngine::ScatterTransferOperation::Impl {
                 return;
             }
             count += r.local_offsets.size();
+        }
+        if (!count) {
+            for (const auto &r : ranges)
+                if (!r.remote_offsets.empty() || !r.lengths.empty() || !r.local_buffer ||
+                    r.remote_segment.empty())
+                    remember(Status::InvalidArgument("invalid empty scatter range"));
+            close();
+            return;
+        }
+        // Charge the callback and descriptor lifetime before retaining either.
+        {
+            batch_ = engine_->allocateBatch(count);
+            if (!batch_) {
+                auto full = Status::TooManyRequests("allocate scatter batch");
+                remember(full);
+                for (const auto &r : ranges)
+                    if (r.on_fragment_complete) {
+                        for (size_t i = 0; i < r.local_offsets.size(); ++i)
+                            try {
+                                r.on_fragment_complete(i, full);
+                            } catch (...) {
+                            }
+                    }
+                return;
+            }
         }
         std::vector<TransferRequest> requests;
         requests.reserve(count);
@@ -129,16 +161,14 @@ class TransferEngine::ScatterTransferOperation::Impl {
             }
         }
         if (requests.empty()) {
+            if (batch_)
+                (void)orbitte_abandon_v1(handle_, batch_);
+            batch_ = 0;
             close();
             return;
         }
         snapshot_.resize(requests.size());
         delivered_.resize(requests.size());
-        batch_ = engine_->allocateBatch(requests.size());
-        if (!batch_) {
-            reject(Status::TooManyRequests("allocate scatter batch"));
-            return;
-        }
         Status s;
         try {
             s = TransferEngine::submit(engine_, batch_, requests, nullptr, true);
@@ -157,10 +187,16 @@ class TransferEngine::ScatterTransferOperation::Impl {
             }
             batch_ = 0;
             reject(s);
+        } else {
+            submitted_ = true;
         }
     }
     bool uncertain() const { return uncertain_; }
     Status wait(std::chrono::steady_clock::time_point end) {
+        if (!submitted_ && batch_ && !uncertain_) {
+            (void)orbitte_abandon_v1(handle_, batch_);
+            batch_ = 0;
+        }
         if (uncertain_ || !batch_)
             return outcome_;
         unsigned polls = 0;

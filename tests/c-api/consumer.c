@@ -266,7 +266,8 @@ static void source(void) {
     OK(tent_unregister_memory(e, hidden, sizeof hidden));
     tent_destroy_engine(e);
 }
-static void transfer(const char *source_name, const char *relay, const char *refused) {
+static void transfer(const char *source_name, const char *relay, const char *refused,
+                     const char *prepost) {
     tent_engine_t e = engine();
     tent_segment_id_t s, proxy, down;
     OK(tent_open_segment(e, &down, refused));
@@ -338,6 +339,17 @@ static void transfer(const char *source_name, const char *relay, const char *ref
     assert(code == TENT_ERROR_RPC_UNKNOWN_EFFECT && !known);
     free_batch(e, id);
     assert(tent_terminal_result(e, id, 0, &code, &known) == -1 && code == 135 && !known);
+    tent_segment_id_t off;
+    OK(tent_open_segment(e, &off, prepost));
+    id = tent_allocate_batch(e, 1);
+    requests[1].target_id = off;
+    requests[1].target_offset = dst + 17;
+    OK(tent_submit(e, id, &requests[1], 1));
+    assert(wait_batch(e, id).status == STATUS_FAILED);
+    OK(tent_terminal_result(e, id, TENT_ALL_TASKS, &code, &known));
+    assert(code == TENT_ERROR_RPC_CONNECTION && known == 1);
+    free_batch(e, id);
+    OK(tent_close_segment(e, off));
     /* The relay consumes the real source's final enqueue receipt and drops it. */
     assert(tent_send_notifs(e, proxy, "lost-ack", "delivered") == -135);
     OK(tent_unregister_memory(e, local, sizeof local));
@@ -368,7 +380,8 @@ static void held(const char *name, int entered, int resume, int cut_read) {
     tent_batch_id_t id = tent_allocate_batch(e, 2);
     OK(tent_submit(e, id, reqs, 2));
     int code = -1, known = -1;
-    assert(tent_terminal_result(e, id, TENT_ALL_TASKS, &code, &known) == -TENT_ERROR_TOO_MANY_REQUESTS);
+    assert(tent_terminal_result(e, id, TENT_ALL_TASKS, &code, &known) ==
+           -TENT_ERROR_TOO_MANY_REQUESTS);
     assert(code == TENT_ERROR_RPC_UNKNOWN_EFFECT && !known);
     assert(tent_terminal_result(e, id, 2, &code, &known) == -1);
     assert(tent_terminal_result(e, id, 0, NULL, &known) == -1 && !known);
@@ -475,8 +488,8 @@ int main(int argc, char **argv) {
         source();
     else if (argc == 4 && !strcmp(argv[1], "local"))
         local_contracts(argv[2], argv[3]);
-    else if (argc == 5 && !strcmp(argv[1], "transfer"))
-        transfer(argv[2], argv[3], argv[4]);
+    else if (argc == 6 && !strcmp(argv[1], "transfer"))
+        transfer(argv[2], argv[3], argv[4], argv[5]);
     else if (argc == 5 && (!strcmp(argv[1], "held") || !strcmp(argv[1], "cut-read")))
         held(argv[2], atoi(argv[3]), atoi(argv[4]), !strcmp(argv[1], "cut-read"));
     else if (argc == 3 && !strcmp(argv[1], "epoch"))

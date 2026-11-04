@@ -1540,20 +1540,20 @@ impl TransferEngine {
                         "scatter requires a direct cancellable route",
                     ));
                 }
-                if selected.transport == Transport::Rdma {
-                    if remote.memory_type() == crate::MemoryType::Cuda
-                        && !peer.metadata.rdma_direct_gpu
-                    {
-                        return Err(Error::Unavailable("scatter peer requires CUDA staging"));
-                    }
-                    #[cfg(feature = "rdma")]
-                    if local.memory_type() == crate::MemoryType::Cuda
-                        && !self.source.rdma.as_ref().is_some_and(|r| r.direct(&local))
-                    {
-                        return Err(Error::Unavailable(
-                            "scatter requester requires CUDA staging",
-                        ));
-                    }
+                if selected.transport == Transport::Rdma
+                    && remote.memory_type() == crate::MemoryType::Cuda
+                    && !peer.metadata.rdma_direct_gpu
+                {
+                    return Err(Error::Unavailable("scatter peer requires CUDA staging"));
+                }
+                #[cfg(feature = "rdma")]
+                if selected.transport == Transport::Rdma
+                    && local.memory_type() == crate::MemoryType::Cuda
+                    && !self.source.rdma.as_ref().is_some_and(|r| r.direct(&local))
+                {
+                    return Err(Error::Unavailable(
+                        "scatter requester requires CUDA staging",
+                    ));
                 }
                 selected.pin_cancellable();
             }

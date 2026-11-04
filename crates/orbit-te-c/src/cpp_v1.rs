@@ -58,6 +58,28 @@ fn clock_pair() -> Result<(Instant, u64)> {
     Ok((now, ns))
 }
 
+fn request_rows<'a>(rows: *const RequestV1, count: usize) -> Result<&'a [RequestV1]> {
+    if count == 0 {
+        return Ok(&[]);
+    }
+    checked(rows.cast_mut(), count)?;
+    for i in 0..count {
+        // Do not form a full Rust reference until each C record reports the
+        // installed size. Older or truncated headers can stop at the size word.
+        let header = rows.wrapping_add(i).cast::<u32>();
+        // SAFETY: the caller supplies the size word, then the storage it declares.
+        // Prior records have the expected stride and checked() bounded the extent.
+        if unsafe { header.read() } as usize != size_of::<RequestV1>() {
+            return Err(INVALID);
+        }
+        // SAFETY: the verified record includes an initialized second header word.
+        if unsafe { header.add(1).read() } != 1 {
+            return Err(INVALID);
+        }
+    }
+    input(rows, count)
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn orbitte_submit_v1(
     h: Handle,
@@ -75,7 +97,7 @@ unsafe extern "C" fn orbitte_submit_v1(
             if flags > 1 {
                 return Err(INVALID);
             }
-            let rows = if count == 0 { &[] } else { input(rows, count)? };
+            let rows = request_rows(rows, count)?;
             let notify = if note.is_null() {
                 None
             } else {
@@ -87,10 +109,7 @@ unsafe extern "C" fn orbitte_submit_v1(
                 .then(clock_pair)
                 .transpose()?;
             e.submit_rows(id, rows, notify, |r| {
-                if r.struct_size as usize != size_of::<RequestV1>()
-                    || r.abi_version != 1
-                    || r.reserved != 0
-                {
+                if r.reserved != 0 {
                     return Err(INVALID);
                 }
                 let intent = match r.intent_type {
@@ -408,3 +427,7 @@ extern "C" fn orbitte_abandon_v1(h: Handle, id: u64) -> c_int {
         })
     })
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/cpp_v1.rs"]
+mod tests;

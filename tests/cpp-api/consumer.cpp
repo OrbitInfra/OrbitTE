@@ -13,6 +13,14 @@
 #include <thread>
 #include <type_traits>
 
+static_assert(sizeof(orbitte_request_v1) == 88 && alignof(orbitte_request_v1) == 8);
+static_assert(offsetof(orbitte_request_v1, request) == 8 &&
+              offsetof(orbitte_request_v1, policy_name) == 56 &&
+              offsetof(orbitte_request_v1, policy_name_len) == 64 &&
+              offsetof(orbitte_request_v1, deadline_ns) == 72 &&
+              offsetof(orbitte_request_v1, intent_type) == 80 &&
+              offsetof(orbitte_request_v1, reserved) == 84);
+static_assert(sizeof(orbitte_notification_v1) == 32 && sizeof(orbitte_task_v1) == 24);
 namespace native = mooncake::tent;
 namespace classic = mooncake;
 using Bytes = std::array<unsigned char, 32>;
@@ -328,6 +336,9 @@ static void contracts(const std::string &path) {
     auto b = tent_allocate_batch(raw, 2);
     Bytes v{};
     assert(!tent_register_memory(raw, v.data(), v.size()));
+    alignas(orbitte_request_v1) uint32_t short_header = sizeof(uint32_t);
+    assert(orbitte_submit_v1(raw, b, reinterpret_cast<const orbitte_request_v1 *>(&short_header), 1,
+                             nullptr, 0) == -1);
     orbitte_request_v1 row{};
     row.struct_size = sizeof row;
     row.abi_version = 1;

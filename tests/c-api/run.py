@@ -70,6 +70,26 @@ def relay(listener, peer, effects, gate=None, truncate=False):
         effects.append(str(e))
 
 
+def refuse_after_describe(listener, peer, events):
+    try:
+        for status in (1, 0):
+            client, _ = listener.accept()
+            with client, socket.create_connection(peer, timeout=15) as upstream:
+                client.settimeout(15)
+                header = exact(client, 52)
+                assert header[10] == 0
+                upstream.sendall(header)
+                reply = exact(upstream, 36)
+                assert reply[10] == status
+                data = exact(upstream, int.from_bytes(reply[-8:], "big"))
+                if not status:
+                    listener.close()
+                client.sendall(reply + data)
+        events.append("closed before payload")
+    except Exception as error:
+        events.append(repr(error))
+
+
 def cases(exe, tmp, env, features):
     constructor = tmp / "constructor.json"
     constructor.write_text('{"rpc_server_hostname":"127.0.0.3"}')
@@ -136,11 +156,26 @@ def cases(exe, tmp, env, features):
                     finally:
                         for fd in (entered, signal, resume, release):
                             os.close(fd)
-            with socket.socket() as listener, socket.socket() as refused:
+            with (
+                socket.socket() as listener,
+                socket.socket() as refused,
+                socket.socket() as prepost,
+            ):
                 listener.bind(("127.0.0.1", 0))
                 listener.listen(2)
                 listener.settimeout(30)
                 refused.bind(("127.0.0.1", 0))  # held, never listened on
+                prepost.bind(("127.0.0.1", 0))
+                prepost.listen(2)
+                prepost.settimeout(30)
+                prepost_name = f"127.0.0.1:{prepost.getsockname()[1]}"
+                receipts = []
+                preflight = Thread(
+                    target=refuse_after_describe,
+                    args=(prepost, (host, int(port)), receipts),
+                    daemon=True,
+                )
+                preflight.start()
                 effects = []
                 reader = Thread(
                     target=relay,
@@ -155,11 +190,14 @@ def cases(exe, tmp, env, features):
                         name,
                         f"127.0.0.1:{listener.getsockname()[1]}",
                         f"127.0.0.1:{refused.getsockname()[1]}",
+                        prepost_name,
                     ],
                     check=True,
                     timeout=60,
                     env=env,
                 )
+                preflight.join(30)
+                assert receipts == ["closed before payload"], receipts
                 reader.join(30)
                 assert effects == ["write committed", "committed"], effects
             source.communicate("v\n", timeout=30)
@@ -234,7 +272,9 @@ def main():
         with (INVENTORY / "c-api.tsv").open() as f:
             symbols = {r["symbol"] for r in csv.DictReader(f, delimiter="\t")}
         assert len(symbols) == 33
-        symbols.add("tent_terminal_result")  # fork extension outside the frozen inventory
+        symbols.add(
+            "tent_terminal_result"
+        )  # fork extension outside the frozen inventory
         exercised = set(
             re.findall(r"\b(tent_\w+)\s*\(", (HERE / "consumer.c").read_text())
         )
@@ -297,7 +337,7 @@ def main():
                 cases(exe, tmp, fixture_env, args.features.split(","))
                 restart(exe, fixture_env)
     print(
-        "33 installed C exports, LP64 layout, both link modes, two-process TCP and lost-ack controls passed"
+        "33 frozen C exports and the terminal-result extension, LP64 layout, both link modes, two-process TCP and fault controls passed"
     )
 
 

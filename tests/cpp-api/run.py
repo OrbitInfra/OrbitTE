@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,22 +23,26 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         tmp = Path(directory)
         binary = tmp / "cpp-client"
+        pc_env = dict(os.environ, PKG_CONFIG_PATH=str(prefix / "lib/pkgconfig"))
+
+        def flags(option):
+            return shlex.split(
+                subprocess.check_output(
+                    ["pkg-config", option, "tent-cpp"], env=pc_env, text=True
+                )
+            )
+
         subprocess.run(
             [
                 os.environ.get("CXX", "c++"),
-                "-std=c++20",
                 "-DENABLE_MULTI_PROTOCOL",
                 "-Wall",
                 "-Wextra",
                 "-Werror",
-                "-I",
-                prefix / "include",
+                *flags("--cflags"),
                 HERE / "consumer.cpp",
-                "-L",
-                prefix / "lib",
+                *flags("--libs"),
                 "-Wl,-rpath," + str(prefix / "lib"),
-                "-ltent_cpp",
-                "-ltent",
                 "-pthread",
                 "-o",
                 binary,
