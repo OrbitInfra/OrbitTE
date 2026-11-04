@@ -82,6 +82,14 @@ def check_c_api(tent):
         raise ValueError("frozen C signature or symbol count changed")
 
 
+def gtest_filters(text):
+    suites = set(re.findall(r"\bTEST(?:_F)?\s*\(\s*(\w+)\s*,", text))
+    params = set(re.findall(r"\bTEST_P\s*\(\s*(\w+)\s*,", text))
+    instances = re.findall(r"\bINSTANTIATE_TEST_SUITE_P\s*\(\s*(\w+)\s*,\s*(\w+)", text)
+    equal("parameterized GTest instantiations", {suite for _, suite in instances}, params)
+    return {s + ".*" for s in suites} | {f"{prefix}/{suite}.*" for prefix, suite in instances}
+
+
 def check_tests(tent):
     tests = index("tests", "source")
     equal(
@@ -92,8 +100,7 @@ def check_tests(tent):
     if len(tests) != 88:
         raise ValueError("unexpected reference test source count")
     for name, row in tests.items():
-        suites = set(re.findall(r"\bTEST(?:_F|_P)?\s*\(\s*(\w+)\s*,", (tent / name).read_text()))
-        equal(name, set(row["gtest_filter"].split(":")), {s + ".*" for s in suites})
+        equal(name, set(row["gtest_filter"].split(":")), gtest_filters((tent / name).read_text()))
         path_at(REPO, row["orbitte_owner_or_control"])
 
 
@@ -257,7 +264,19 @@ def main():
     revision = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
     if revision != contract["tent_revision"]:
         raise ValueError("wrong TENT revision")
-    subprocess.run([*git, "diff", "--quiet", revision, "--", TENT], check=True)
+    subprocess.run(
+        [
+            *git,
+            "diff",
+            "--quiet",
+            revision,
+            "--",
+            TENT,
+            "mooncake-transfer-engine/src/transfer_engine.cpp",
+            "mooncake-common/src/rpc_client_io_context.cpp",
+        ],
+        check=True,
+    )
     for check in (
         check_links,
         check_c_api,
