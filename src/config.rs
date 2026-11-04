@@ -3,6 +3,17 @@ use std::time::Duration;
 
 use crate::{Error, Result};
 
+pub(crate) fn legacy_bool(s: &str) -> Option<bool> {
+    match s.to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" | "yes" => Some(true),
+        "false" | "0" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+mod tent;
+pub use tent::TentSettings;
+
 /// Host staging location, resolved independently by each GPU owner.
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -60,11 +71,16 @@ impl Default for RuntimeQueueConfig {
 /// Immutable per-engine budgets and optional provider configuration.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// Present for a configuration resolved by the TENT loader. Provider overrides
+    /// have already been consumed and must not be read again at startup.
+    pub tent: Option<TentSettings>,
     /// Enable ordinary TCP payloads. The control service is independent.
     pub tcp: bool,
     pub hp_tcp: crate::HpTcpConfig,
     #[cfg(feature = "io-uring")]
     pub io_uring: crate::IoUringConfig,
+    #[cfg(feature = "io-uring")]
+    pub io_uring_enabled: bool,
     pub shm: crate::ShmConfig,
     /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
     #[cfg(feature = "metrics")]
@@ -183,8 +199,23 @@ pub struct EngineConfig {
 
 impl Default for EngineConfig {
     fn default() -> Self {
+        let config = Self::defaults();
+        #[cfg(feature = "cuda")]
+        let config = Self {
+            mnnvl: std::env::var_os("MC_ENABLE_MNNVL").map(|_| crate::MnnvlConfig::default()),
+            ..config
+        };
+        config
+    }
+}
+
+impl EngineConfig {
+    fn defaults() -> Self {
         Self {
+            tent: None,
             tcp: true,
+            #[cfg(feature = "io-uring")]
+            io_uring_enabled: true,
             #[cfg(feature = "io-uring")]
             io_uring: Default::default(),
             hp_tcp: Default::default(),
@@ -204,7 +235,7 @@ impl Default for EngineConfig {
             #[cfg(feature = "cuda")]
             nvlink_async_memcpy_threshold_kb: 2048,
             #[cfg(feature = "cuda")]
-            mnnvl: std::env::var_os("MC_ENABLE_MNNVL").map(|_| crate::MnnvlConfig::default()),
+            mnnvl: None,
             #[cfg(feature = "cuda")]
             nvlink_cache_entries: 0,
             #[cfg(feature = "cuda")]
@@ -253,6 +284,43 @@ impl Default for EngineConfig {
 }
 
 impl EngineConfig {
+    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "metrics"))]
+    pub(crate) fn resolve_subsystems(mut self) -> Result<Self> {
+        if self.tent.is_none() {
+            #[cfg(feature = "rdma")]
+            {
+                self.rdma = self
+                    .rdma
+                    .map(|r| r.resolve_switches(|key| std::env::var_os(key)));
+            }
+            #[cfg(feature = "io-uring")]
+            {
+                self.io_uring = self.io_uring.with_environment()?;
+            }
+            #[cfg(feature = "metrics")]
+            {
+                self.metrics = self
+                    .metrics
+                    .load(self.metrics_config_file.take().as_deref())?;
+            }
+        } else {
+            #[cfg(feature = "metrics")]
+            {
+                if self.metrics_config_file.is_some() {
+                    return Err(Error::InvalidConfig(
+                        "load the metrics section with the TENT constructor document",
+                    ));
+                }
+                self.metrics = self.metrics.resolve(None, |_| Ok(None))?;
+            }
+        }
+        #[cfg(feature = "rdma")]
+        if let Some(config) = &mut self.rdma {
+            config.capture_topology_file()?;
+        }
+        Ok(self)
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         #[cfg(feature = "io-uring")]
         self.io_uring.slot_size()?;

@@ -51,6 +51,8 @@ pub struct RdmaConfig {
     /// TENT priority matrix or native nics/mems JSON file (at most 1 MiB).
     /// Overrides ranks, preserving discovered NIC IDs and physical metadata.
     pub custom_json_path: Option<PathBuf>,
+    /// Contents captured from a TENT custom topology file before engine construction.
+    pub custom_topology_json: Option<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
     /// TENT strict_local_numa: exclude only known cross-NUMA NICs. Unknown
@@ -131,6 +133,7 @@ impl Default for RdmaConfig {
             rdma_blacklist: Vec::new(),
             priority_matrix: None,
             custom_json_path: None,
+            custom_topology_json: None,
             preferred_numa_node: None,
             strict_local_numa: false,
             device_mask: u64::MAX,
@@ -196,9 +199,8 @@ impl RdmaConfig {
             ("MC_LOG_RDMA_SLICE_AFFINITY", &mut self.log_slice_affinity),
         ] {
             if let Some(value) = get(name) {
-                match value.to_str().map(str::to_ascii_lowercase).as_deref() {
-                    Some("1" | "true" | "yes" | "on") => *flag = true,
-                    Some("0" | "false" | "no" | "off") => *flag = false,
+                match value.to_str().and_then(crate::config::legacy_bool) {
+                    Some(enabled) => *flag = enabled,
                     _ => log::warn!("invalid {name}, retaining configured value"),
                 }
             }

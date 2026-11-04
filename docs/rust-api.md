@@ -30,7 +30,38 @@ order.
 
 `TransferEngine::new(EngineConfig)` starts a source control service (loopback by
 default) and owns requester and source admission. Configuration is immutable per
-engine.
+engine. `engine.config()` borrows its effective settings.
+
+### Loading TENT configuration
+
+```rust
+use orbit_te::{EngineConfig, TransferEngine};
+
+fn open_engine() -> orbit_te::Result<TransferEngine> {
+    TransferEngine::new(EngineConfig::from_tent_env()?)
+}
+```
+
+Use `EngineConfig::from_tent_json(text)` or `from_tent_file(path)` to supply
+constructor settings. A nonempty `MC_TENT_CONF` replaces that document with
+the contents of an existing file or with inline JSON. Legacy environment
+aliases then override individual leaves. Explicit constructor metadata type,
+servers, segment name, RPC hostname and port, and RDMA whitelist win over
+both sources. An explicit true `transports/force_tcp` also survives
+replacement. The presence of `MC_FORCE_TCP` forces memory traffic onto TCP,
+including when its value is empty or `0`. `NCCL_IB_GID_INDEX` wins over
+`MC_GID_INDEX`. NIC filters accept trimmed comma-separated names. Boolean
+aliases accept `1/0`, `true/false`, `yes/no` and `on/off` without regard to
+case. An invalid legacy boolean retains the configured leaf and logs a warning.
+For metrics, a JSON leaf wins over its environment alias.
+
+Nested objects take precedence over full slash keys at the root. The loader
+rejects malformed roots, duplicate keys, unsupported fields and out-of-range
+values before starting an engine. Each input document is limited to 1 MiB.
+You can reuse the returned configuration after deleting the file. Ordinary
+typed construction retains the existing subsystem environment switches.
+The [configuration inventory](https://github.com/OrbitInfra/OrbitTE/blob/main/tests/reference/inventory/config.tsv)
+lists the owner or rejection for each field.
 
 | API | Contract |
 | --- | --- |

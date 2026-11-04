@@ -58,7 +58,7 @@ impl MetricsConfig {
         })
     }
 
-    pub(super) fn resolve(
+    pub(crate) fn resolve(
         &self,
         file: Option<&Value>,
         env: impl Fn(&str) -> Result<Option<String>>,
