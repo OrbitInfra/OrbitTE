@@ -185,14 +185,9 @@ fn source_session_panic_fences_the_slot_and_preserves_the_control_worker() {
         submit().failure.unwrap().error,
         Error::ResourceExhausted
     ));
-    assert_eq!(
-        requester
-            .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
-            .unwrap()
-            .regions()
-            .len(),
-        1
-    );
+    // A rejected Pin drops its source permit before replying. Sample the
+    // retained debt here; a successful Describe owns a separate permit through
+    // its socket write and may still be retiring when the peer reads it.
     let stats = source.stats().unwrap();
     assert_eq!(
         (
@@ -201,6 +196,14 @@ fn source_session_panic_fences_the_slot_and_preserves_the_control_worker() {
             stats.staging.allocations
         ),
         (1, 0, 0)
+    );
+    assert_eq!(
+        requester
+            .open_segment(source.endpoint(), source.source_epoch(), EVENTUAL_PROGRESS)
+            .unwrap()
+            .regions()
+            .len(),
+        1
     );
     let mut bytes = [0; 64];
     gpu.read(0, &mut bytes).unwrap();
