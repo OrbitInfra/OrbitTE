@@ -797,17 +797,35 @@ impl TransferEngine {
         self.source.epoch
     }
 
-    /// Memory-bearing NUMA nodes permitted to this process. A platform that
-    /// cannot establish placement returns an empty inventory.
-    pub fn local_numa_nodes(&self) -> Vec<u32> {
-        #[cfg(target_os = "linux")]
-        {
-            (crate::platform::numa::NATIVE.nodes)().unwrap_or_default()
+    /// Snapshot for native consumers without starting a verbs worker or creating
+    /// a CUDA context. Prefer the ranked live provider topology when installed.
+    #[cfg(target_os = "linux")]
+    pub fn local_topology_snapshot(&self) -> Result<crate::Topology> {
+        #[cfg(feature = "rdma")]
+        if let Some(topology) = self.topology()? {
+            return Ok(topology);
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Vec::new()
-        }
+        let nodes = (crate::platform::numa::NATIVE.nodes)().unwrap_or_default();
+        let topology = crate::Topology {
+            nic_list: Vec::new(),
+            mem_list: nodes
+                .into_iter()
+                .map(|node| crate::MemEntry {
+                    name: format!("cpu:{node}"),
+                    pci_bus_id: None,
+                    kind: crate::MemType::Host,
+                    numa_node: Some(node),
+                    device_list: Default::default(),
+                })
+                .collect(),
+        };
+        #[cfg(feature = "cuda")]
+        let topology = {
+            let mut visible = topology;
+            crate::cuda::discover_topology(&mut visible, std::path::Path::new("/sys"))?;
+            visible
+        };
+        Ok(topology)
     }
 
     /// Snapshot of the selected RDMA topology; None before lazy RDMA initialization.

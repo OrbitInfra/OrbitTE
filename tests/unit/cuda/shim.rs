@@ -153,7 +153,6 @@ fn status(code: c_int) -> Status {
 unsafe extern "C" fn init(_: c_uint) -> Status {
     SUCCESS
 }
-#[cfg(feature = "rdma")]
 unsafe extern "C" fn count(output: *mut c_int) -> Status {
     // SAFETY: The driver caller supplies a writable count slot.
     unsafe {
@@ -633,7 +632,6 @@ pub(super) fn driver() -> Arc<Driver> {
         local: Default::default(),
         init,
         device_get: get,
-        #[cfg(feature = "rdma")]
         device_count: count,
         #[cfg(feature = "rdma")]
         device_attribute,

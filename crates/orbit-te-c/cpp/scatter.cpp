@@ -1,6 +1,7 @@
 // The operation owns its C++ callbacks and its private segment leases until drain.
 #include "transfer_engine.h"
 #include "tent/cpp_v1.h"
+#include "tent/runtime/transfer_engine_impl.h"
 #include <algorithm>
 #include <limits>
 #include <thread>
@@ -254,9 +255,7 @@ class TransferEngine::ScatterTransferOperation::Impl {
             }
             if (std::chrono::steady_clock::now() >= end)
                 return Status::Clock("scatter wait timed out");
-            if (polls >= 128)
-                std::this_thread::sleep_for(
-                    std::chrono::microseconds(std::min(200u, 1u << std::min(polls - 128, 8u))));
+            tent::waitBeforeNextPoll(polls);
             if (polls < 136)
                 ++polls;
         }

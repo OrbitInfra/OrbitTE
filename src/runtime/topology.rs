@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "rdma")]
 mod config;
 
 /// TENT's three NIC priority ranks, ordered from preferred to fallback.
@@ -45,6 +46,7 @@ pub struct Topology {
     pub mem_list: Vec<MemEntry>,
 }
 
+#[cfg(feature = "rdma")]
 impl Topology {
     pub(crate) fn rank(&mut self) {
         for memory in self

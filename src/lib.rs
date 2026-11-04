@@ -71,7 +71,7 @@ pub use transport::gds::{GdsMode, GdsStats};
 pub use transport::io_uring::{IoUringConfig, IoUringStats};
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub mod cuda;
-#[cfg(all(target_os = "linux", feature = "rdma"))]
+#[cfg(all(target_os = "linux", not(unsupported_native_target)))]
 pub use runtime::topology::{
     DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
 };

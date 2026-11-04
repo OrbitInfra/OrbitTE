@@ -3,6 +3,7 @@
 #include <tent/transfer_engine.h>
 #include <tent/common/config.h>
 #include <tent/runtime/topology.h>
+#include <tent/runtime/transfer_engine_impl.h>
 #include <concepts>
 #include <type_traits>
 using Native = mooncake::tent::TransferEngine;
@@ -44,4 +45,10 @@ static_assert(requires(Classic &e, mooncake::BatchID b, mooncake::SegmentID p,
     e.sendNotifyByID(p, {});
     e.getLocalTopologyString();
     e.freeBatchID(b);
+});
+
+static_assert(requires(t::TransferEngineImpl &e, t::BatchID b, std::vector<t::Request> &requests) {
+    { e.waitTransferCompletion(b) } -> std::same_as<t::Status>;
+    { e.transferSync(requests) } -> std::same_as<t::Status>;
+    { t::nextPollDelay(UINT64_MAX) } -> std::same_as<std::chrono::microseconds>;
 });

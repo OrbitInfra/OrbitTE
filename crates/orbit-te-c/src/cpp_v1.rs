@@ -279,12 +279,10 @@ unsafe extern "C" fn orbitte_limits_v1(h: Handle, out: *mut usize) -> c_int {
     call(|| engine::with(h, |e| put(out, e.core.config().max_batch_requests)))
 }
 
-#[cfg(feature = "rdma")]
-fn rdma_topology(e: &engine::Engine) -> Result<String> {
+#[cfg(target_os = "linux")]
+fn local_topology(e: &engine::Engine) -> Result<String> {
     use serde_json::json;
-    let Some(t) = e.core.topology()? else {
-        return Ok("{}".into());
-    };
+    let t = e.core.local_topology_snapshot()?;
     if t.nic_list.is_empty() && t.mem_list.is_empty() {
         return Ok("{}".into());
     }
@@ -297,28 +295,9 @@ fn rdma_topology(e: &engine::Engine) -> Result<String> {
     Ok(json!({"nics":nics,"mems":mems}).to_string())
 }
 
-fn local_topology(e: &engine::Engine) -> Result<String> {
-    #[cfg(feature = "rdma")]
-    {
-        let selected = rdma_topology(e)?;
-        if selected != "{}" {
-            return Ok(selected);
-        }
-    }
-    let nodes = e.core.local_numa_nodes();
-    if nodes.is_empty() {
-        return Ok("{}".into());
-    }
-    let mems: Vec<_> = nodes
-        .into_iter()
-        .map(|id| {
-            serde_json::json!({
-                "name":format!("cpu:{id}"),"type":0,"numa_node":id,"pci_bus_id":"",
-                "device_list":{"rank0":[],"rank1":[],"rank2":[]}
-            })
-        })
-        .collect();
-    Ok(serde_json::json!({"mems":mems,"nics":[]}).to_string())
+#[cfg(not(target_os = "linux"))]
+fn local_topology(_e: &engine::Engine) -> Result<String> {
+    Ok("{}".into())
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn orbitte_topology_v1(h: Handle, buf: *mut c_char, size: *mut usize) -> c_int {

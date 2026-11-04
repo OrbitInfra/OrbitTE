@@ -64,14 +64,17 @@ publication. `progressBatch` advances one bounded owner step. Scalar, list
 and overall `getTransferStatus` overloads retain their ordinary poll
 semantics. `waitTransferCompletion` takes over the batch and frees it after
 physical drain. `transferSync` allocates, submits, waits and retires the batch.
-Both helpers use capped backoff. Inspect terminal evidence separately when
+Both helpers use capped backoff and are also available on
+`mooncake::tent::TransferEngineImpl` through
+`<tent/runtime/transfer_engine_impl.h>`. Inspect terminal evidence separately when
 deciding what to do with a failed logical operation.
 
 Both peers must run the same OrbitTE build. The first metadata lookup binds a
 P2P handle to a source epoch. `probePeerAliveByID` checks the live peer at
 that epoch. Topology queries snapshot the registered RDMA runtime and its
-ranked NICs or report verified host NUMA nodes when no RDMA inventory exists.
-Unknown placement stays unknown. C++ notifications use length-delimited UTF-8
+ranked NICs. Before verbs initialization they report verified host NUMA nodes
+and, in CUDA builds, enumerate visible devices without creating a context.
+Editing a returned topology snapshot affects only that copy. Unknown placement stays unknown. C++ notifications use length-delimited UTF-8
 and preserve embedded NULs and strings larger than the C output arrays.
 Native segment export and import return `NotImplemented`, as in v0.3.14.
 

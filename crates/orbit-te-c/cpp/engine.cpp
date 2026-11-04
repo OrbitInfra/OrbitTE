@@ -3,6 +3,7 @@
 #include "tent/cpp_v1.h"
 #include "tent/common/config.h"
 #include "tent/runtime/topology.h"
+#include "tent/runtime/transfer_engine_impl.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -62,13 +63,7 @@ struct ConsumedBatch {
             (void)orbitte_abandon_v1(engine, id);
     }
 };
-void pause(unsigned &polls) {
-    if (polls >= 128)
-        std::this_thread::sleep_for(
-            std::chrono::microseconds(std::min(200u, 1u << std::min(polls - 128, 8u))));
-    if (polls < 136)
-        ++polls;
-}
+
 } // namespace
 
 TransferEngine::TransferEngine() : owner_(orbitte_create_v1(0, nullptr)) {}
@@ -319,7 +314,9 @@ Status TransferEngine::waitTransferCompletion(BatchID b) {
                 return s.s == COMPLETED ? Status::OK() : Status::InternalError("transfer failed");
             }
         }
-        pause(polls);
+        waitBeforeNextPoll(polls);
+        if (polls < 136)
+            ++polls;
     }
 }
 Status TransferEngine::transferSync(const std::vector<Request> &requests) {

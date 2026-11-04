@@ -4,6 +4,7 @@
 #include <tent/cpp_v1.h>
 #include <tent/common/config.h>
 #include <tent/runtime/topology.h>
+#include <tent/runtime/transfer_engine_impl.h>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -306,6 +307,18 @@ static void contracts(const std::string &path) {
     native::TransferEngine second(conf);
     assert(first.getRpcServerAddress() == "127.0.0.2" &&
            second.getRpcServerAddress() == "127.0.0.4");
+    native::TransferEngineImpl helpers(conf), invalid(conf, false);
+    assert(helpers.available() && !invalid.available());
+    auto owned_batch = helpers.allocateBatch(1);
+    ok(helpers.waitTransferCompletion(owned_batch));
+    assert(!helpers.freeBatch(owned_batch).ok());
+    ok(helpers.transferSync({}));
+    assert(native::nextPollDelay(127).count() == 0 && native::nextPollDelay(128).count() == 1 &&
+           native::nextPollDelay(UINT64_MAX).count() == 200);
+    const auto before = first.getLocalTopologyString();
+    auto copy = first.getLocalTopology();
+    copy->clear();
+    assert(first.getLocalTopologyString() == before);
     native::TransferEngine defaults;
     assert(defaults.available() && defaults.getRpcServerAddress() != "127.0.0.9");
     native::SegmentID id = 734;

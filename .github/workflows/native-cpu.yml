@@ -40,7 +40,7 @@ jobs:
         run: |
           native="$RUNNER_TEMP/orbitte-native-cpu"
           python3 tests/reference/inventory/check.py --source "$native/reference"
-          cmake -DREFERENCE="$native/reference" -DOUTPUT="$RUNNER_TEMP/cpp-contract" -P tests/cpp-api/frozen.cmake
+          cmake -DREFERENCE="$native/reference" -DDEPS="$native/deps" -DOUTPUT="$RUNNER_TEMP/cpp-contract" -P tests/cpp-api/frozen.cmake
           python3 tests/reference/wire/check.py --source "$native/reference" --build "$native/tent-build" --output "$RUNNER_TEMP/orbitte-wire"
       - name: Compare frozen RDMA slice geometry and controls
         run: python3 tests/reference/rdma_geometry.py --tent-source "$RUNNER_TEMP/orbitte-native-cpu/reference" --output "$RUNNER_TEMP/orbitte-rdma-geometry"

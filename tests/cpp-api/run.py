@@ -74,7 +74,12 @@ def main():
         }
         file = tmp / "constructor.json"
         file.write_text(json.dumps(dict(cfg, rpc_server_hostname="127.0.0.3")))
-        subprocess.run([binary, "contracts", file], env=env, timeout=45, check=True)
+        subprocess.run(
+            [binary, "contracts", file],
+            env=dict(env, MC_TENT_CONF=json.dumps(cfg)),
+            timeout=45,
+            check=True,
+        )
         subprocess.run([binary, "policy"], env=env, timeout=45, check=True)
         env["MC_TENT_CONF"] = json.dumps(cfg)
         shutdown(binary, env)
