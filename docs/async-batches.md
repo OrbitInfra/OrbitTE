@@ -79,7 +79,9 @@ Completion-stage retry requires a backend release receipt. A READ can retry
 after its last possible write to the destination has drained. A WRITE that
 might have posted reports `RemoteEffect::Unknown`. An expired deadline,
 accepted cancel or uncertain teardown ends retry. A short file completion
-keeps its own byte prefix. Within a native file batch, only eligible failed
+keeps its own byte prefix. A vectored file READ can retry only before it
+exposes its first byte. A vectored WRITE has one attempt. Within a native
+file batch, only eligible failed
 owners can retry after the group drains. If unregister closes a cuFile
 registration during preparation, an eligible io_uring route keeps its file lease.
 

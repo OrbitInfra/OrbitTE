@@ -27,18 +27,22 @@ fn storage_runtime_isolation() -> Result<()> {
     let audit = temp.dir.join("audit.so");
     build("storage_audit.c", &audit)?;
     let shim = temp.dir.join("libcufile.so.0");
-    let mut providers = vec![None];
+    let mut providers = vec![(None, "enabled")];
     if cfg!(feature = "gds") {
         build("cufile_shim.c", &shim)?;
-        providers.push(Some(&shim));
+        providers.extend([(Some(&shim), "enabled"), (Some(&shim), "disabled")]);
+        if cfg!(feature = "io-uring") {
+            providers.push((Some(&shim), "io-only"));
+        }
     }
-    for provider in providers {
+    for (provider, profile) in providers {
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.args([
             "--exact",
+            "--nocapture",
             "segment::file::tests::isolation::storage_runtime_isolation",
         ])
-        .env(CHILD, "1")
+        .env(CHILD, profile)
         .env("LD_AUDIT", &audit)
         .env_remove("ORBITTE_TEST_CUFILE");
         if let Some(provider) = provider {
@@ -55,9 +59,17 @@ fn storage_runtime_isolation() -> Result<()> {
         assert!(stderr.contains("storage audit active"), "{stderr}");
         assert_eq!(
             stderr.contains("cuFile lookup"),
-            cfg!(feature = "gds"),
+            cfg!(feature = "gds") && profile == "enabled",
             "{stderr}"
         );
+        if let Some(index) = stderr.find("cuFile lookup") {
+            assert!(
+                stderr
+                    .find("first file submission")
+                    .is_some_and(|start| start < index),
+                "{stderr}"
+            );
+        }
         assert!(!stderr.contains("liburing lookup"), "{stderr}");
     }
     Ok(())
@@ -75,8 +87,18 @@ fn live_rings() -> Result<usize> {
 fn exercise() -> Result<()> {
     let temp = TempFile::new(b"file");
     let threads = fs::read_dir("/proc/self/task")?.count();
+    let profile = std::env::var("ORBITTE_TEST_STORAGE_AUDIT").unwrap();
     let engine = TransferEngine::new(EngineConfig {
+        selector: (profile == "io-only")
+            .then(|| {
+                crate::TransportSelectorConfig::from_json(
+                    r#"{"policy":[{"segment_type":"file","transports":["io_uring"]}]}"#,
+                )
+            })
+            .transpose()?,
         handler_threads: 1,
+        #[cfg(feature = "gds")]
+        gds_enabled: profile != "disabled",
         // Count only the control and storage owners in this isolation profile.
         #[cfg(feature = "metrics")]
         metrics: crate::metrics::MetricsConfig {
@@ -98,40 +120,44 @@ fn exercise() -> Result<()> {
     check_idle()?;
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     assert_eq!(info.direct_io, None);
+    let has_gds = cfg!(feature = "gds")
+        && std::env::var_os("ORBITTE_TEST_CUFILE").is_some()
+        && profile == "enabled";
     #[cfg(feature = "gds")]
     {
-        let gds = engine.stats()?.gds;
-        assert_eq!(
-            gds.available,
-            std::env::var_os("ORBITTE_TEST_CUFILE").is_some()
-        );
-        assert_eq!((gds.submitted_batches, info.gds_mode), (0, None));
-        if gds.available {
-            return Ok(());
-        }
+        assert_eq!(engine.stats()?.gds, crate::GdsStats::default());
+        assert_eq!(info.gds_mode, None);
     }
+    let memory = engine.register_memory(b"host".to_vec().into(), Permission::LocalOnly)?;
     #[cfg(feature = "io-uring")]
-    let has_ring = engine.io_uring.is_some();
+    assert_eq!(
+        crate::transport::io_uring::tests::RING_SETUPS.load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    eprintln!("first file submission");
+    #[cfg(feature = "io-uring")]
+    let has_ring = crate::transport::io_uring::tests::kernel();
     #[cfg(not(feature = "io-uring"))]
     let has_ring = false;
-    let memory = engine.register_memory(b"host".to_vec().into(), Permission::LocalOnly)?;
     for hint in [Transport::Gds, Transport::Unspec] {
         let request = [TransferRequest::new(hint, memory.base_address(), 0, 4)];
         for op in [TransferOp::Read, TransferOp::Write] {
             memory.write(0, b"host")?;
             let report = engine.submit_and_wait(op, &file, &request, Duration::from_secs(5));
-            if hint == Transport::Unspec && has_ring {
+            if has_gds || (hint == Transport::Unspec && has_ring) {
                 assert!(report?.is_complete());
                 let mut bytes = [0; 4];
                 memory.read(0, &mut bytes)?;
                 assert_eq!(
                     &bytes,
-                    if op == TransferOp::Read {
+                    if op == TransferOp::Read && !(has_gds && hint == Transport::Unspec) {
                         b"file"
                     } else {
                         b"host"
                     }
                 );
+            } else if profile == "io-only" {
+                assert!(matches!(report, Err(Error::TransportPolicy { .. })));
             } else {
                 assert!(matches!(report, Err(Error::Unavailable(_))));
             }
@@ -139,7 +165,11 @@ fn exercise() -> Result<()> {
     }
     assert_eq!(
         fs::read(&temp.path)?,
-        if has_ring { b"host" } else { b"file" }
+        if has_ring || has_gds {
+            b"host"
+        } else {
+            b"file"
+        }
     );
     assert_eq!(live_rings()?, 0);
     #[cfg(feature = "io-uring")]

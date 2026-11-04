@@ -661,3 +661,6 @@ fn r1c_file_slot_respects_gpu_numa_placement_across_devices() -> Result<()> {
     );
     Ok(())
 }
+
+#[path = "file/vectored.rs"]
+mod vectored;

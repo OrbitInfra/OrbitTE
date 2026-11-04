@@ -96,6 +96,31 @@ impl Driver {
     }
 }
 
+type Loader = dyn Fn(&crate::EngineConfig) -> Option<GdsTransport> + Send + Sync;
+
+/// Observation and teardown only consult an already initialized provider.
+pub(crate) struct Provider {
+    transport: OnceLock<Option<GdsTransport>>,
+    load: Box<Loader>,
+}
+
+impl Provider {
+    pub(crate) fn new(
+        load: impl Fn(&crate::EngineConfig) -> Option<GdsTransport> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            transport: OnceLock::new(),
+            load: Box::new(load),
+        })
+    }
+    pub(crate) fn resolve(&self, config: &crate::EngineConfig) -> Option<&GdsTransport> {
+        self.transport.get_or_init(|| (self.load)(config)).as_ref()
+    }
+    pub(crate) fn get(&self) -> Option<&GdsTransport> {
+        self.transport.get().and_then(Option::as_ref)
+    }
+}
+
 pub(crate) struct GdsTransport {
     driver: Arc<Driver>,
     depth: u32,

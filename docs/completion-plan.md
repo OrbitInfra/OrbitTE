@@ -350,7 +350,8 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
   file handles, sliced READ/WRITE, cancellation and drain. The installed
   native-route profile is unqualified.
 - [x] **P7.5 — build isolation and BufIo audit (Implemented).** File handles
-  stay core. CI checks the dependency graph, unavailable hints and idle
+  stay core. File vectors share a logical receipt across registered local ranges.
+  Runtime-disabled GDS skips cuFile discovery. CI checks the dependency graph, unavailable hints and idle
   storage resources. BufIo is unreachable through the frozen loader.
 
 The [qualification record](qualification.md#local-file-segments) links the

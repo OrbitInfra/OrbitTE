@@ -10,20 +10,30 @@ fn consecutive_poll_errors_quarantine_once_and_pending_resets_the_streak() -> Re
     let local = f.host(8)?;
     let (lease, offset) = f.engine.files.admit(&f.segment, TransferOp::Write, 0, 8)?;
     let request = FileRequest {
-        local: local.clone(),
+        parts: crate::segment::file::FileParts::One(crate::segment::file::FilePart {
+            local: local.clone(),
+            buffer: None,
+            local_offset: 0,
+            length: 8,
+        }),
         selection: SelectionResult::plain(Transport::Gds),
-        buffer: None,
-        local_offset: 0,
         lease,
         offset,
         length: 8,
     };
-    let provider = f.engine.gds.as_ref().unwrap();
+    let provider = f
+        .engine
+        .gds
+        .as_ref()
+        .unwrap()
+        .resolve(&EngineConfig::default())
+        .unwrap();
     let mut live = LiveBatch::prepare(provider, TransferOp::Write, std::slice::from_ref(&request))?;
     // Enter deferred polling at the real shim boundary with an accepted IO,
     // bypassing only the original caller's elapsed destruction window.
     let handle = mock.setup(1)?;
     live.handle = Some(handle);
+    live.active = 0..1;
     live.submitted = true;
     mock.submit(handle, &mut live.params)?;
     mock.held.store(true, Ordering::Release);

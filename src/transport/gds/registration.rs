@@ -66,6 +66,7 @@ struct NativeBuffer {
 pub(crate) struct BufferSlot {
     native: Option<NativeBuffer>,
     users: usize,
+    rejected_pid: Option<u32>,
     retired: bool,
     failed: bool,
 }
@@ -122,6 +123,16 @@ impl GdsTransport {
             .gds
             .lock()
             .map_err(|_| Error::Internal("GDS buffer slot poisoned"))?;
+        let pid = self.driver.api.pid();
+        if slot.failed {
+            return Err(Error::Unquiesced {
+                operation: "cuFile buffer registration",
+                code: -1,
+            });
+        }
+        if slot.retired || slot.registered() || slot.rejected_pid == Some(pid) {
+            return Ok(());
+        }
         let mut attempted = false;
         let result = gpu.gds_current(|| {
             attempted = true;
@@ -130,6 +141,7 @@ impl GdsTransport {
         if let Err(error) = result {
             if attempted {
                 if !matches!(error, Error::Unquiesced { .. }) {
+                    slot.rejected_pid = Some(pid);
                     self.buffer_registration_failures
                         .fetch_add(1, Ordering::Relaxed);
                     return Ok(());
@@ -140,6 +152,11 @@ impl GdsTransport {
             }
             return Err(error);
         }
+        #[cfg(feature = "metrics")]
+        memory.0.metric_transports.fetch_or(
+            crate::metrics::transport_bit(crate::Transport::Gds),
+            Ordering::Relaxed,
+        );
         slot.native = Some(NativeBuffer {
             driver: self.driver.clone(),
             memory: gpu,

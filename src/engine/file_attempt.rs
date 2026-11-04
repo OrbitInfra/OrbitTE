@@ -147,7 +147,7 @@ impl TransferEngine {
                 )
             }),
             #[cfg(feature = "gds")]
-            Transport::Gds => self.gds.as_ref().map(|gds| {
+            Transport::Gds => self.loaded_gds().map(|gds| {
                 gds.execute(
                     op,
                     group,
@@ -249,6 +249,9 @@ impl TransferEngine {
                     || Instant::now() >= deadline
                     || !retryable_file(e)
                     || (op == TransferOp::Write && task.posted)
+                    // A second vector READ could produce a shorter prefix than the
+                    // bytes already exposed to its destinations. Never rewind it.
+                    || (r.parts.vectored() && (op == TransferOp::Write || task.bytes != 0))
                     || task.effect == Some(RemoteEffect::Unknown)
                 {
                     break;

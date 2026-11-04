@@ -18,8 +18,8 @@ CI runs `cargo tree --locked --features "$FEATURES" -e normal,build` for
 builds without `io-uring` and checks that the io-uring crate is absent.
 The GNU/Linux runtime control checks shared-library lookups, threads and live
 ring fds after engine construction and file inspection. An idle engine has no
-storage worker or live ring. The io_uring install probe drops its temporary
-ring before construction returns.
+storage worker or ring. File submission probes the kernel when a policy first
+considers io_uring. File inspection and memory registration do not load cuFile.
 
 ## File segments
 
@@ -58,6 +58,50 @@ unlink. Close and reopen the name to bind a replacement file.
 closed to new operations. Retry with the same handle after admitted users
 finish. A successful close frees the slot and invalidates the old handle.
 Requester and whole-engine shutdown also drain file entries.
+
+## Gather and scatter across registrations
+
+Use one vectored request when the file extent is contiguous but its local
+bytes occupy several registered ranges. The list is in file order. Each
+`(address, length)` names bytes in one host or CUDA registration. WRITE
+gathers them, and READ scatters them in the same order. A vector with any
+CUDA range matches the selector's CUDA local-memory filter.
+
+```rust
+let ranges = [
+    (layer_1.base_address() + offset_1, layer_bytes),
+    (padding.base_address(), padding_bytes),
+    (layer_2.base_address() + offset_2, layer_bytes),
+];
+let request = TransferRequest::file_vectored(Transport::Unspec, file_offset, &ranges)?;
+let batch = engine.submit_async(TransferOp::Read, &segment, &[request], None, timeout)?;
+batch.wait(timeout)?;
+let receipt = batch.task_status(0)?;
+```
+
+For a padded disk format, register zero-filled host bytes for WRITE gaps and
+writable scratch for READ gaps. Include trailing padding when it belongs to
+the extent. A range may recur. Overlapping spans within a registration share
+a loan. Empty lists and zero-length spans are invalid. The limit is 1024 ranges
+per vector, `max_batch_requests` descriptors per submission and
+`max_transfer_bytes` per logical request.
+
+One vector takes one admission charge and produces one task receipt.
+`receipt.transferred_bytes` counts its contiguous prefix, including bytes
+from a short final fragment. READ leaves the rest of the destinations
+untouched. Once a vector READ has exposed any bytes, a later error terminates
+that attempt with its prefix. A failed vector contributes zero bytes to the synchronous batch
+report. A vectored WRITE is never replayed. An unconfirmed drain retains
+the registration and loan for every fragment, the file, staging memory and
+the admission charge.
+
+Host io_uring submits one `readv` or `writev` for the list. With CUDA, the
+worker packs each charged pinned chunk in file order and confirms each
+device copy. Aligned GDS vectors use a cuFile entry per range or slice.
+WRITEs use bounded batches. Direct READ issues the next entry only after a
+full receipt, so a later entry cannot modify memory past EOF. Unaligned
+vectors use io_uring when the file policy permits it. An explicit GDS hint
+on such a vector returns an availability error before payload I/O.
 
 ## DRAM transfers with io_uring
 
@@ -150,8 +194,12 @@ otherwise. The installed GPU and local NVMe profile is [queued for verification]
 ## GDS with cuFile
 
 Enable the Linux `gds` feature and pass a file segment to the existing batch
-APIs. `Transport::Gds` supports both host and CUDA READ/WRITE. CUDA ranges
-register with cuFile in their owning context and consume producer readiness
+APIs. `EngineConfig::gds_enabled` defaults to true in a GDS build. Set it
+to false to prevent all cuFile loading and registration by that engine.
+When enabled, the first file submission whose policy considers eligible GDS
+probes cuFile. Before discovery, `stats()?.gds.mode` is `None`.
+`Transport::Gds` supports host and CUDA READ/WRITE. CUDA ranges register
+on first GDS use in their owning context and consume producer readiness
 before I/O. A clean cuFile buffer registration failure increments
 `EngineStats::gds.buffer_registration_failures` and leaves the region available
 to other transports. An explicit GDS hint for that region returns `Unavailable`.
@@ -163,7 +211,7 @@ A failure after GDS selection is returned to the caller.
 
 The caller or batch worker sets up one native batch at `gds_batch_depth`
 (default 32). Requests split at 16 MiB. A group exceeding the configured
-slice count fails before submission. Each terminal cookie identifies one
+slice count fails before submission for scalar requests. Vectors span bounded batches. Each terminal cookie identifies one
 slice. The group reports the completed request prefix. Each async task's byte
 count advances as contiguous receipts arrive. Its final status also accounts
 for cleanup of its registration. Cancel requests native batch cancellation
@@ -172,7 +220,7 @@ An ambiguous submit drains without replay. After the deadline plus the
 30-second destruction window, unresolved I/O returns `Unquiesced` and keeps
 its registrations, loans and admission. A later submission or close polls
 quarantined batches. A failed destroy or deregister retains its owners and
-is never retried. OrbitTE uses a fresh batch handle per submission.
+is never retried. Each native batch has its own handle.
 
 `EngineStats::gds.mode` reports whether the driver disables, permits or
 forces compatibility I/O. `FileSegmentInfo::gds_mode` records that policy

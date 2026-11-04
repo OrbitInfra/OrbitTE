@@ -11,6 +11,9 @@ use crate::{
     Transport, TransportSelectorConfig,
 };
 
+pub(crate) static RING_SETUPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(feature = "cuda")]
@@ -79,6 +82,7 @@ impl Fixture {
         let observed = Arc::clone(&trace);
         let pool = self.engine.io_uring.as_ref().unwrap().pool.clone();
         Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
+            available: Arc::new(true.into()),
             pool,
             allocate: task::Bounce::new,
             create: Arc::new(move |size| {
@@ -214,6 +218,7 @@ fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     )?;
     let path = f.path.clone();
     Arc::get_mut(&mut f.engine).unwrap().io_uring = Some(IoUringTransport {
+        available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
@@ -473,6 +478,7 @@ impl Ring for FaultRing {
 fn fault_fixture(fault: Fault) -> Result<Fixture> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
@@ -627,6 +633,7 @@ fn held_file(
         .pool
         .clone();
     engine.io_uring = Some(IoUringTransport {
+        available: Arc::new(true.into()),
         pool,
         allocate: task::Bounce::new,
         create: Arc::new(move |n| {
@@ -935,6 +942,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
 fn failed_second_bounce_releases_first_loan_before_any_ring_is_created() -> Result<()> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         create: Arc::new(|_| panic!("incomplete preflight touched the ring")),
         allocate: |length, alignment| {
@@ -1133,6 +1141,7 @@ fn r1c_aligned_slots_and_pageable_fallback_are_bounded_before_ring_creation() ->
         .io_uring
         .as_mut()
         .unwrap();
+    assert!(io.available());
     let observed = io.pool.clone();
     io.create = Arc::new(move |width| {
         let s = observed.stats();
@@ -1288,3 +1297,6 @@ fn r1c_storage_environment_overrides_only_the_enabled_file_pool() -> Result<()> 
     assert!(status.success());
     Ok(())
 }
+
+#[path = "io_uring/vectored.rs"]
+mod vectored;

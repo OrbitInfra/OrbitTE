@@ -583,7 +583,7 @@ pub(crate) struct BatchProgress {
     auto_failover: bool,
     wakes: Option<Arc<crate::runtime::progress_worker::Wakes>>,
     #[cfg(feature = "gds")]
-    gds: Option<Weak<crate::transport::gds::GdsTransport>>,
+    gds: Option<Weak<crate::transport::gds::Provider>>,
     reservation: Reservation,
     state: Mutex<ProgressState>,
     changed: Condvar,
@@ -972,7 +972,10 @@ impl BatchProgress {
         drop(state);
         #[cfg(feature = "gds")]
         if let Some(gds) = self.gds.as_ref().and_then(Weak::upgrade) {
-            if gds.try_collect_for(self.reservation.id) {
+            if gds
+                .get()
+                .is_some_and(|g| g.try_collect_for(self.reservation.id))
+            {
                 return;
             }
         }

@@ -20,12 +20,6 @@ fn exercise(path: &Path) -> Result<()> {
         gds_require_native: true,
         ..Default::default()
     })?;
-    let gds = engine.stats()?.gds;
-    if !gds.available || gds.mode != Some(GdsMode::NativeOnly) {
-        return Err(Error::Unavailable(
-            "installed GDS requires compatibility disabled",
-        ));
-    }
     let total = LENGTH + 2 * GUARD;
     let mut file_bytes = vec![0x37; total];
     let mut file = OpenOptions::new().create_new(true).write(true).open(path)?;
@@ -41,42 +35,63 @@ fn exercise(path: &Path) -> Result<()> {
         .register_cuda_memory_batch(&[(gpu, 0, total)], Permission::LocalOnly)?
         .remove(0);
     let source: Vec<_> = (0..total).map(|i| ((43 * i + 19) % 251) as u8).collect();
-    view.write(0, &source)?;
-    let request = [TransferRequest::new(
+    let scalar = TransferRequest::new(
         Transport::Gds,
         view.base_address() + GUARD as u64,
         GUARD as u64,
         LENGTH,
-    )];
-    for op in [TransferOp::Write, TransferOp::Read] {
-        let report = engine.submit_and_wait(op, &segment, &request, WAIT)?;
-        if !report.is_complete()
-            || !report.locally_drained
-            || report.completed_requests != 1
-            || report.transferred_bytes != LENGTH
-        {
-            return Err(Error::Internal("incomplete GDS transfer"));
-        }
-        if op == TransferOp::Write {
-            file_bytes[GUARD..GUARD + LENGTH].copy_from_slice(&source[GUARD..GUARD + LENGTH]);
-            if fs::read(path)? != file_bytes {
-                return Err(Error::Internal("GDS WRITE bytes or guards changed"));
+    );
+    let half = LENGTH / 2;
+    let vector = TransferRequest::file_vectored(
+        Transport::Gds,
+        GUARD as u64,
+        &[
+            (view.base_address() + (GUARD + half) as u64, half),
+            (view.base_address() + GUARD as u64, half),
+        ],
+    )?;
+    for (request, vectored) in [(scalar, false), (vector, true)] {
+        view.write(0, &source)?;
+        for op in [TransferOp::Write, TransferOp::Read] {
+            let report =
+                engine.submit_and_wait(op, &segment, std::slice::from_ref(&request), WAIT)?;
+            if !report.is_complete()
+                || !report.locally_drained
+                || report.completed_requests != 1
+                || report.transferred_bytes != LENGTH
+            {
+                return Err(Error::Internal("incomplete GDS transfer"));
             }
-            view.write(0, &vec![0xac; total])?;
+            if op == TransferOp::Write {
+                file_bytes[GUARD..GUARD + LENGTH].copy_from_slice(&source[GUARD..GUARD + LENGTH]);
+                if vectored {
+                    file_bytes[GUARD..GUARD + LENGTH].rotate_left(half);
+                }
+                if fs::read(path)? != file_bytes {
+                    return Err(Error::Internal("GDS WRITE bytes or guards changed"));
+                }
+                view.write(0, &vec![0xac; total])?;
+            }
         }
-    }
-    let mut actual = vec![0; total];
-    view.read(0, &mut actual)?;
-    let mut expected = vec![0xac; total];
-    expected[GUARD..GUARD + LENGTH].copy_from_slice(&source[GUARD..GUARD + LENGTH]);
-    if actual != expected {
-        return Err(Error::Internal("GDS READ bytes or guards changed"));
+        let mut actual = vec![0; total];
+        view.read(0, &mut actual)?;
+        let mut expected = vec![0xac; total];
+        expected[GUARD..GUARD + LENGTH].copy_from_slice(&source[GUARD..GUARD + LENGTH]);
+        if actual != expected {
+            return Err(Error::Internal("GDS READ bytes or guards changed"));
+        }
     }
     let info = engine.file_segment_info(&segment)?;
     let stats = engine.stats()?.gds;
+    if !stats.available || stats.mode != Some(GdsMode::NativeOnly) {
+        return Err(Error::Unavailable(
+            "installed GDS requires compatibility disabled",
+        ));
+    }
+
     if info.direct_io != Some(true)
         || info.gds_mode != Some(GdsMode::NativeOnly)
-        || stats.submitted_batches != 2
+        || stats.submitted_batches != 5
         || stats.quarantined_batches != 0
     {
         return Err(Error::Internal(
@@ -97,7 +112,10 @@ fn exercise(path: &Path) -> Result<()> {
     {
         return Err(Error::Internal("GDS gate retained CUDA owners"));
     }
-    println!("GDS_NATIVE_OK read_bytes={LENGTH} write_bytes={LENGTH} batches=2");
+    println!(
+        "GDS_NATIVE_OK read_bytes={0} write_bytes={0} batches=5",
+        2 * LENGTH
+    );
     Ok(())
 }
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {

@@ -16,6 +16,8 @@ pub(super) trait Ring {
 }
 
 pub(super) fn create(count: u32) -> io::Result<Box<dyn Ring>> {
+    #[cfg(test)]
+    super::tests::RING_SETUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(Box::new(IoUring::new(count)?))
 }
 

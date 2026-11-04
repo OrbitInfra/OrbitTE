@@ -24,7 +24,7 @@ def route_deltas(before, after):
     deltas = {direction: {k: value - first[direction][k] for k, value in row.items()}
               for direction, row in last.items()}
     for direction, mib in [('Reads', 'readMiB'), ('Writes', 'writeMiB')]:
-        if deltas[direction][mib] != 2 or deltas[direction]['ok'] < 1 or deltas[direction]['err'] != 0:
+        if deltas[direction][mib] != 4 or deltas[direction]['ok'] < 1 or deltas[direction]['err'] != 0:
             raise RuntimeError('native nvidia-fs byte evidence does not match the exclusive exercise')
     return deltas
 
@@ -47,7 +47,7 @@ def run(args):
                 (args.output / 'nvidia-fs.after').write_text(after)
         evidence['config'] = str(config)
         evidence['nvidia_fs_deltas'] = route_deltas(before, after)
-        if result.returncode or (args.output / 'stdout').read_text().strip() != 'GDS_NATIVE_OK read_bytes=2097152 write_bytes=2097152 batches=2':
+        if result.returncode or (args.output / 'stdout').read_text().strip() != 'GDS_NATIVE_OK read_bytes=4194304 write_bytes=4194304 batches=5':
             raise RuntimeError('installed GDS exercise failed')
 
 

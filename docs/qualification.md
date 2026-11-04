@@ -171,10 +171,14 @@ concurrent close. [Stable job](https://github.com/OrbitInfra/OrbitTE/actions/run
 On main after the storage closeout (`017654d`), the same real-file test passed on
 [stable](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289755) and [Rust 1.85](https://github.com/OrbitInfra/OrbitTE/actions/runs/41671078266/job/126039289814).
 
+The vectored host control reads and writes disjoint registered ranges on a
+real file and truncates it after admission. The loader audit runs disabled,
+missing-library and shim-provider cases in separate Linux processes.
+
 **CUDA/file staging is implemented. Its installed GPU/NVMe gate is unrun.**
 The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
 with real files to check multi-chunk bytes, short READs, producer events,
-copy failures, retained owners and queued cancellation. Build the installed
+copy failures, mixed host/device fragments, retained sibling loans and queued cancellation. Build the installed
 consumer with `python3 tests/hardware/build_installed.py --consumer storage-cuda --toolchain stable --output "$ART"`.
 The queued driver checks the selected GPU UUID and local PCIe NVMe ext4 mount,
 holds both existing resource locks and uses a fresh scratch file.
@@ -185,7 +189,7 @@ On an otherwise idle GDS host the queued driver disables compatibility I/O,
 checks GPU and file guards, and requires nvidia-fs successful read/write counts
 and byte deltas matching the exercise. CI uses simulated cuFile receipts and
 real temporary files for registration, partial submit, short I/O, cancel,
-fork reopen, late quarantine cleanup and failed teardown.
+fork reopen, late quarantine cleanup, failed teardown and ordered vectored READ after a short cookie.
 
 ## Per-request remote staging
 

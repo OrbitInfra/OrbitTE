@@ -245,7 +245,7 @@ impl PreparedSubmission {
                 let mut i = 0;
                 requests.retain(|_r| {
                     #[cfg(feature = "gds")]
-                    if !keep[i] && _r.buffer.as_ref().is_some_and(|b| b.release().is_err()) {
+                    if !keep[i] && _r.parts.release_buffers().is_err() {
                         keep[i] = true;
                     }
                     let keep = keep[i];

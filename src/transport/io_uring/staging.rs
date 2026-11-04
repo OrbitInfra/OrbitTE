@@ -3,9 +3,11 @@
 
 use std::fs::File;
 
+mod ranges;
 use super::*;
 use crate::cuda::StagingCopy;
 use crate::runtime::proxy_manager::{ProxyManager, StageBufferLease};
+use ranges::StagedRanges;
 
 // Linux io_uring_setup caps the submission queue at IORING_MAX_ENTRIES.
 const MAX_SQ_ENTRIES: usize = 32_768;
@@ -21,7 +23,7 @@ pub(super) struct Submission<'a> {
 
 enum Backing {
     Host(Task, libc::iovec),
-    Device(StagingCopy),
+    Device(StagedRanges),
 }
 
 struct Request {
@@ -49,13 +51,17 @@ impl DeviceStage {
     fn copy(
         &mut self,
         owner: &mut StagingCopy,
+        slot_offset: usize,
         offset: usize,
         length: usize,
         to_device: bool,
     ) -> Result<()> {
         match self {
-            Self::Slot(s) => owner.copy_file_slot(s, offset, length, to_device),
-            Self::Proxy(s) => owner.copy(s, offset, length, to_device),
+            Self::Slot(s) => owner.copy_file_slot(s, slot_offset, offset, length, to_device),
+            Self::Proxy(s) => {
+                owner.begin_at(s, slot_offset, offset, length, to_device)?;
+                owner.complete(s, length)
+            }
         }
     }
 }
@@ -94,16 +100,15 @@ impl Submission<'_> {
         let mut tasks = Vec::with_capacity(self.requests.len());
         let mut piece_count = 0usize;
         for request in self.requests {
-            let backing = if request.local.memory_type() == crate::MemoryType::Cuda {
-                piece_count =
-                    piece_count.saturating_add(request.length.div_ceil(self.proxy.chunk_size()));
-                let (gpu, offset) = request
-                    .local
-                    .cuda_range(request.local_offset, request.length)?;
-                // Open/check the inode and consume producer readiness for every range
-                // before touching the SQ. The same loan protects every subsequent round.
+            let backing = if request
+                .parts
+                .iter()
+                .any(|p| p.local.memory_type() == crate::MemoryType::Cuda)
+            {
+                let ranges = StagedRanges::new(request, self.proxy)?;
+                piece_count = piece_count.saturating_add(ranges.pieces(self.proxy.chunk_size()));
                 request.lease.io_file(request.offset, request.length)?;
-                Backing::Device(gpu.staging_loan(offset, request.length, self.proxy)?)
+                Backing::Device(ranges)
             } else {
                 piece_count = piece_count.saturating_add(1);
                 let (task, iov) = Task::new(self.operation, request, transport)?;
@@ -237,7 +242,8 @@ impl Submission<'_> {
                 let file_offset = request.offset + offset as u64;
                 let (stage, iov) = match backing {
                     Backing::Host(_, iov) => (None, *iov),
-                    Backing::Device(copy) => {
+                    Backing::Device(ranges) => {
+                        let (copy, run_length) = ranges.lender(offset)?;
                         let slot = if offset == 0 {
                             self.pool.acquire(
                                 request.length,
@@ -265,7 +271,7 @@ impl Submission<'_> {
                                 "CUDA file staging requires a page-aligned chunk",
                             ));
                         }
-                        let length = capacity.min(request.length - offset);
+                        let length = capacity.min(run_length);
                         let file =
                             request
                                 .lease
@@ -304,15 +310,22 @@ impl Submission<'_> {
             let entry = match (&mut task.backing, &mut piece.stage) {
                 (Some(Backing::Host(host, _)), None) => host.entry(self.operation, iov, i),
                 (Some(Backing::Device(copy)), Some((stage, file))) => {
-                    copy.check_access()?;
                     if self.operation == TransferOp::Write {
                         remaining(self.deadline)?;
-                        if let Err(e) = stage.copy(copy, piece.offset, piece.length, false) {
+                        if let Err(e) =
+                            copy.transfer(stage, piece.offset, piece.length, false, &mut task.bytes)
+                        {
                             task.error = Some(e.for_report());
                             return Err(e);
                         }
                     }
-                    task::entry(file, piece.file_offset, self.operation, iov, i)
+                    task::entry(
+                        file,
+                        piece.file_offset,
+                        self.operation,
+                        std::slice::from_ref(iov),
+                        i,
+                    )
                 }
                 _ => return Err(Error::Internal("file chunk without its backing")),
             };
@@ -342,13 +355,14 @@ impl Submission<'_> {
                         // A missing SQE prevents starting the post-I/O CUDA phase.
                         return Err(unquiesced(code));
                     }
-                    copy.check_access()?;
-                    stage.copy(copy, piece.offset, bytes, true)?;
+                    copy.transfer(stage, piece.offset, bytes, true, &mut task.bytes)?;
                 }
             }
             _ => return Err(Error::Internal("file receipt without its backing")),
         }
-        task.bytes += bytes;
+        if self.operation == TransferOp::Write || piece.stage.is_none() {
+            task.bytes += bytes;
+        }
         match task::cqe_error(
             self.operation,
             n,
