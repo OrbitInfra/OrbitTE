@@ -5,9 +5,18 @@ fn vectored_host_iovecs_gather_scatter_and_stop_in_the_middle_of_a_range() -> Re
     if !kernel() {
         return Ok(());
     }
-    let dir = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let ext4 = std::env::var_os("ORBITTE_EXT4_DIR").map_or_else(std::env::temp_dir, Into::into);
+    let tmpfs =
+        std::env::var_os("ORBITTE_TMPFS_DIR").map_or_else(|| PathBuf::from("/dev/shm"), Into::into);
+    for dir in [ext4, tmpfs] {
+        host_vector(&dir)?;
+    }
+    Ok(())
+}
+
+fn host_vector(dir: &Path) -> Result<()> {
     let mut f = Fixture::new(
-        &dir,
+        dir,
         &[0xab; 256],
         TransferEngine::new(EngineConfig::default())?,
     )?;

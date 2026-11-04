@@ -156,11 +156,10 @@ fn exercise() -> Result<()> {
                         b"host"
                     }
                 );
+            } else if profile == "io-only" {
+                assert!(matches!(report, Err(Error::TransportPolicy { .. })));
             } else {
-                assert!(matches!(
-                    report,
-                    Err(Error::Unavailable(_) | Error::TransportPolicy { .. })
-                ));
+                assert!(matches!(report, Err(Error::Unavailable(_))));
             }
         }
     }

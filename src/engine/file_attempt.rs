@@ -248,7 +248,10 @@ impl TransferEngine {
                     || !report.locally_drained
                     || Instant::now() >= deadline
                     || !retryable_file(e)
-                    || (op == TransferOp::Write && (task.posted || r.parts.vectored()))
+                    || (op == TransferOp::Write && task.posted)
+                    // A second vector READ could produce a shorter prefix than the
+                    // bytes already exposed to its destinations. Never rewind it.
+                    || (r.parts.vectored() && (op == TransferOp::Write || task.bytes != 0))
                     || task.effect == Some(RemoteEffect::Unknown)
                 {
                     break;

@@ -89,7 +89,8 @@ per vector, `max_batch_requests` descriptors per submission and
 One vector takes one admission charge and produces one task receipt.
 `receipt.transferred_bytes` counts its contiguous prefix, including bytes
 from a short final fragment. READ leaves the rest of the destinations
-untouched. A failed vector contributes zero bytes to the synchronous batch
+untouched. Once a vector READ has exposed any bytes, a later error terminates
+that attempt with its prefix. A failed vector contributes zero bytes to the synchronous batch
 report. A vectored WRITE is never replayed. An unconfirmed drain retains
 the registration and loan for every fragment, the file, staging memory and
 the admission charge.
