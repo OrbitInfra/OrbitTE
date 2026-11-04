@@ -295,12 +295,17 @@ impl ProxyManager {
     }
 
     pub(crate) fn close(&self, deadline: Instant) -> Result<()> {
+        // Fence new leases before waiting on a shard. A timed-out close can
+        // resume the drain, but must never reopen even a vacant pool slot.
+        self.buffers
+            .lock()
+            .map_err(|_| Error::Internal("staging lock poisoned"))?
+            .open = false;
         self.workers.close(deadline)?;
         let mut state = self
             .buffers
             .lock()
             .map_err(|_| Error::Internal("staging lock poisoned"))?;
-        state.open = false;
         loop {
             if let Some(index) = state
                 .slots

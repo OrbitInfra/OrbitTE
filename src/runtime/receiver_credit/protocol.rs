@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::Source;
@@ -192,7 +193,11 @@ pub(super) fn synchronize(
     CreditSnapshot::decode(&bytes, receiver)
 }
 
-pub(crate) fn serve(channel: &mut ControlChannel<'_>, source: &Source, close: bool) -> Result<()> {
+pub(crate) fn serve(
+    channel: &mut ControlChannel<'_>,
+    source: &Arc<Source>,
+    close: bool,
+) -> Result<()> {
     let issuer = source
         .credit_issuer
         .as_ref()

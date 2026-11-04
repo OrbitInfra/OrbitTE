@@ -171,6 +171,8 @@ pub struct EngineConfig {
     pub max_pending_notification_bytes: usize,
     /// Combined UTF-8 bytes of a single notification name and message.
     pub max_notification_bytes: usize,
+    /// Control workers. With incoming remote staging enabled, the source also owns
+    /// up to min(handler_threads, staging_chunk_count) session workers.
     pub handler_threads: usize,
     pub handler_timeout: Duration,
 }

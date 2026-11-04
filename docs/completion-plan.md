@@ -264,6 +264,7 @@ Done:
 | P5.4e–h Grouped completion, shared stream pool, event progress, native batch copy | Implemented | [group](qualification.md#cuda-ipc-group-completion), [streams](qualification.md#cuda-ipc-stream-pool), [events](qualification.md#cuda-ipc-event-progress), [batch](qualification.md#cuda-ipc-native-batch-copy) |
 | P5 MNNVL and EGM (B06) | Implemented; installed profile unqualified | [Fabric and host-NUMA verification](qualification.md#multi-node-nvlink-fabric) |
 | P5.5a Local staging chunks | Accepted (24 cases) | [local chunks](qualification.md#local-cuda-staging-chunks) |
+| P5.5 Source resource and control boundaries | Implemented; installed profile unqualified. Source session isolation, bounded Pin capacity, drain and quarantine follow the [staging contract](staging.md#remote-delegate-progress). | [Verification queue](qualification.md#verification-queue) |
 | P5.5b Remote staging | Serial (16 cases) and ≤16-slot pipeline (24 cases) accepted; later requester ring, shard, event-loop, concurrent CROSS, Delegate query and pollable setup/finish work source-accepted only | [serial](qualification.md#serial-remote-cuda-staging), [pipeline](qualification.md#bounded-remote-cuda-pipeline) |
 | Mixed direct/staged batches, per-request remote staging, GPU and pinned producer readiness | Implemented | [mixed](qualification.md#mixed-gpu-batches), [remote selection](qualification.md#per-request-remote-staging), [readiness](qualification.md#cuda-producer-readiness) |
 
@@ -272,8 +273,7 @@ Open:
 - [x] GPU source QP/MR reuse with per-grant hardware revocation (B04). Implemented; installed profile unqualified.
 - [ ] Legacy IPC remote host exports; exporter-crash
   safety (currently unqualified).
-- [ ] Reconcile the remaining ProxyManager resource and control boundaries with
-  TENT before claiming full ProxyManager parity.
+- [ ] Reconcile mixed direct/staged batches for the P5 source exit.
 - [ ] Installed qualification of the current build for every implemented-only
   row above, plus native GPU fault injection.
 

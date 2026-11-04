@@ -89,6 +89,11 @@ path = "tests/hardware/mnnvl.rs"
 required-features = ["cuda"]
 
 [[example]]
+name = "staging_control"
+path = "tests/hardware/staging_control.rs"
+required-features = ["rdma", "cuda"]
+
+[[example]]
 name = "storage_cuda"
 path = "tests/hardware/storage_cuda.rs"
 required-features = ["cuda", "io-uring"]

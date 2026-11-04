@@ -183,9 +183,17 @@ fn pin(
     memory: &RegisteredMemory,
     depth: u8,
 ) -> (ControlChannel<'static>, SourceEpoch) {
+    pin_on(source, memory, depth, Transport::Tcp)
+}
+
+fn pin_on(
+    source: &TransferEngine,
+    memory: &RegisteredMemory,
+    depth: u8,
+    transport: Transport,
+) -> (ControlChannel<'static>, SourceEpoch) {
     let mut channel =
-        ControlChannel::connect(source.endpoint(), Instant::now() + Duration::from_secs(3))
-            .unwrap();
+        ControlChannel::connect(source.endpoint(), Instant::now() + EVENTUAL_PROGRESS).unwrap();
     channel
         .write_all(
             &Request {
@@ -198,7 +206,9 @@ fn pin(
             .encode(),
         )
         .unwrap();
-    channel.write_all(&[0, depth]).unwrap();
+    channel
+        .write_all(&[u8::from(transport == Transport::Rdma), depth])
+        .unwrap();
     channel.write_all(&3u64.to_be_bytes()).unwrap();
     channel.write_all(&[1]).unwrap();
     channel.write_all(&[0; 24]).unwrap();
@@ -819,3 +829,6 @@ fn only_a_validated_proxy_session_can_take_internal_owner_and_byte_reserves() {
     assert_eq!(got, [0xcc, 0xcc, 0x57, 0x57, 0x57, 0x57, 0xcc, 0xcc]);
     drop(held);
 }
+
+#[path = "source_controls.rs"]
+mod source_controls;

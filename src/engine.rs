@@ -2218,7 +2218,7 @@ impl Source {
         }
         Ok((metadata, regions))
     }
-    pub(crate) fn admit(&self) -> Result<SourcePermit<'_>> {
+    pub(crate) fn admit(self: &Arc<Self>) -> Result<SourcePermit> {
         let mut admission = self
             .admission
             .lock()
@@ -2227,13 +2227,14 @@ impl Source {
             return Err(Error::SourceClosed);
         }
         admission.active += 1;
-        Ok(SourcePermit(self))
+        Ok(SourcePermit(Arc::clone(self)))
     }
 }
 
-pub(crate) struct SourcePermit<'a>(&'a Source);
+/// Admission travels with the accepted socket when a source session is dispatched.
+pub(crate) struct SourcePermit(Arc<Source>);
 
-impl Drop for SourcePermit<'_> {
+impl Drop for SourcePermit {
     fn drop(&mut self) {
         let mut admission = self
             .0
