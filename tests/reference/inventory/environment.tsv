@@ -1,68 +1,68 @@
-variable	target	precedence	case	source
-ASCEND_BASE_PORT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:253
-ASCEND_ENABLE_USE_FABRIC_MEM	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/platform/ascend/ascend_allocator.cpp:51
-ASCEND_GLOBAL_RESOURCE_CONFIG	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:295
-ASCEND_LOCAL_COMM_RES	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:283
-ASCEND_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:277
-ASCEND_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:271
-ASCEND_TRANSFER_TIMEOUT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:248
-FI_HMEM	libfabric EFA profile	upstream sets system only if absent; existing setting wins; OrbitTE keeps process environment immutable	config.optional	src/transport/fabric/fabric_transport.cpp:162
-HCCL_INTRA_ROCE_ENABLE	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:312
-HCCL_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:280
-HCCL_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:274
-MC_CUSTOM_TOPO_JSON	topology/custom_json_path	setFromString over loaded config	config.rdma	src/common/config.cpp:258
-MC_DISABLE_GPU_DIRECT_RDMA	transports/rdma/disable_gpu_direct_rdma	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:241
-MC_ENABLE_MNNVL	transports/mnnvl/enable	presence selects MNNVL loader branch instead of legacy NVLink	config.cuda	src/runtime/transport_loader.cpp:113
-MC_FORCE_TCP	transports/force_tcp	presence, even empty; set force_tcp and tcp enable, clear RDMA, HP-TCP and fabric enable	config.network	src/common/config.cpp:205
-MC_GID_INDEX	transports/rdma/device/gid_index	setFromString over loaded config; NCCL_IB_GID_INDEX is applied after MC_GID_INDEX	config.rdma	src/common/config.cpp:217
-MC_HYLINK_USE_VMM	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/hylink/hylink_transport.cpp:39
-MC_IB_PCI_RELAXED_ORDERING	transports/rdma/pci_relaxed_ordering	setFromString over loaded config	config.rdma	src/common/config.cpp:234
-MC_IB_PORT	transports/rdma/device/port	setFromString over loaded config	config.rdma	src/common/config.cpp:216
-MC_IB_SL	transports/rdma/endpoint/service_level	setFromString over loaded config	config.rdma	src/common/config.cpp:233
-MC_IB_TC	transports/rdma/endpoint/traffic_class	setFromString over loaded config	config.rdma	src/common/config.cpp:232
-MC_IOURING_PINNED_STAGING	transports/io_uring/pinned_staging	parseBool (incl numeric) over loaded config	config.storage	src/common/config.cpp:268
-MC_IOURING_STAGING_SLOTS	transports/io_uring/staging_slots	setFromString over loaded config	config.storage	src/common/config.cpp:272
-MC_IOURING_STAGING_SLOT_KB	transports/io_uring/staging_slot_kb	setFromString over loaded config	config.storage	src/common/config.cpp:270
-MC_LOG_RDMA_SLICE_AFFINITY	transports/rdma/log_slice_affinity	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:243
-MC_MAX_CQE_PER_CTX	transports/rdma/device/max_cqe	setFromString over loaded config	config.rdma	src/common/config.cpp:219
-MC_MAX_EP_PER_CTX	transports/rdma/endpoint/endpoint_store_cap	setFromString over loaded config	config.rdma	src/common/config.cpp:220
-MC_MAX_INLINE	transports/rdma/endpoint/max_inline_bytes	setFromString over loaded config	config.rdma	src/common/config.cpp:228
-MC_MAX_SGE	transports/rdma/endpoint/max_sge	setFromString over loaded config	config.rdma	src/common/config.cpp:224
-MC_MAX_WR	transports/rdma/endpoint/max_qp_wr	setFromString over loaded config	config.rdma	src/common/config.cpp:225
-MC_MNNVL_EGM	transports/mnnvl/egm	parseBool (incl numeric) over loaded config	config.cuda	src/common/config.cpp:210
-MC_MTU	transports/rdma/endpoint/path_mtu	setFromString over loaded config	config.rdma	src/common/config.cpp:231
-MC_NUM_COMP_CHANNELS_PER_CTX	transports/rdma/device/num_comp_channels	setFromString over loaded config	config.rdma	src/common/config.cpp:214
-MC_NUM_CQ_PER_CTX	transports/rdma/device/num_cq_list	setFromString over loaded config	config.rdma	src/common/config.cpp:212
-MC_NUM_QP_PER_EP	transports/rdma/endpoint/qp_mul_factor	setFromString over loaded config	config.rdma	src/common/config.cpp:222
-MC_PKEY_INDEX	transports/rdma/endpoint/pkey_index	setFromString over loaded config	config.rdma	src/common/config.cpp:230
-MC_RDMA_BIND_ADDRESS	transports/rdma/bind_address	setFromString over loaded config	config.rdma	src/common/config.cpp:211
-MC_REDIS_DB_INDEX	Redis database	environment selects database, otherwise default database	config.engine	src/runtime/metastore.cpp:56
-MC_REDIS_PASSWORD	Redis authentication	optional environment credential, no password by default	config.engine	src/runtime/metastore.cpp:43
-MC_REDIS_USERNAME	Redis authentication	optional environment credential, no username by default	config.engine	src/runtime/metastore.cpp:49
-MC_RETRY_CNT	transports/rdma/workers/max_retry_count	setFromString over loaded config	config.rdma	src/common/config.cpp:239
-MC_RPC_CLIENT_IO_THREADS	shared RPC client pool	positive integer; otherwise min(16,max(1,hardware_concurrency)); per-process snapshot	config.network	../../mooncake-common/src/rpc_client_io_context.cpp:34
-MC_SLICE_SIZE	transports/rdma/workers/block_size	setFromString over loaded config	config.rdma	src/common/config.cpp:238
-MC_STRICT_LOCAL_NUMA	transports/rdma/strict_local_numa	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:245
-MC_TANGRT_LIB_ARCH	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:58
-MC_TANGRT_LIB_DIR	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:48
-MC_TANGRT_ROOT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:54
-MC_TENT_CONF	whole configuration	existing path loads file; otherwise parse inline JSON, replace root before legacy env; invalid input fails construction	config.engine	src/common/config.cpp:174
-MC_TENT_RDMA_SIGNAL_INTERVAL	transports/rdma/endpoint/signal_interval	setFromString over loaded config	config.rdma	src/common/config.cpp:226
-MC_TENT_RPC_THREADS	rpc_server_threads	setFromString over loaded config	config.engine	src/common/config.cpp:264
-MC_TE_FILTERS	topology/rdma_whitelist	comma-separated trimmed list over loaded config; explicit constructor field is restored last	config.rdma	src/common/config.cpp:253
-MC_TE_FILTERS_EXCLUDE	topology/rdma_blacklist	comma-separated trimmed list over loaded config	config.rdma	src/common/config.cpp:254
-MC_TE_RPC_CLIENT_IO_THREADS	TE RPC client pool	positive integer overrides MC_RPC_CLIENT_IO_THREADS; otherwise inherit common count	config.network	../../mooncake-common/src/rpc_client_io_context.cpp:38
-MC_TPU_PJRT_LIB	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/platform/tpu/tpu_pjrt_shim.cpp:29
-MC_WORKERS_PER_CTX	transports/rdma/workers/num_workers	setFromString over loaded config	config.rdma	src/common/config.cpp:236
-MF_PROTOCOL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_allocator.cpp:11
-MF_STORE_PROTOCOL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_allocator.cpp:10
-MF_TRANSFER_TIMEOUT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_transport.cpp:99
-MOONCAKE_LOCAL_HOSTNAME	rpc_server_hostname	setFromString over loaded config; explicit constructor field is restored last	config.engine	src/common/config.cpp:204
-MPCOMM_REMOTE_TCP_PORT	MPComm peer address	only if peer published no endpoint; malformed or absent fallback fails	config.optional	src/transport/mpcomm/mpcomm_transport.cpp:419
-MPCOMM_TCP_PORT	MPComm listener	default 13579; strict decimal listener override	config.optional	src/transport/mpcomm/mpcomm_transport.cpp:86
-NCCL_IB_GID_INDEX	transports/rdma/device/gid_index	setFromString over loaded config; NCCL_IB_GID_INDEX is applied after MC_GID_INDEX	config.rdma	src/common/config.cpp:218
-TENT_METRICS_ENABLED	metrics/enabled	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:72
-TENT_METRICS_HTTP_HOST	metrics/http_host	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:74
-TENT_METRICS_HTTP_PORT	metrics/http_port	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:73
-TENT_METRICS_HTTP_SERVER_THREADS	metrics/http_server_threads	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:75
-TENT_METRICS_REPORT_INTERVAL	metrics/report_interval_seconds	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:77
+variable	target	precedence	case	source	s17
+ASCEND_BASE_PORT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:253	excluded:vendor backend
+ASCEND_ENABLE_USE_FABRIC_MEM	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/platform/ascend/ascend_allocator.cpp:51	excluded:vendor backend
+ASCEND_GLOBAL_RESOURCE_CONFIG	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:295	excluded:vendor backend
+ASCEND_LOCAL_COMM_RES	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:283	excluded:vendor backend
+ASCEND_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:277	excluded:vendor backend
+ASCEND_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:271	excluded:vendor backend
+ASCEND_TRANSFER_TIMEOUT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:248	excluded:vendor backend
+FI_HMEM	libfabric EFA profile	upstream sets system only if absent; existing setting wins; OrbitTE keeps process environment immutable	config.optional	src/transport/fabric/fabric_transport.cpp:162	inactive:provider is absent
+HCCL_INTRA_ROCE_ENABLE	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:312	excluded:vendor backend
+HCCL_RDMA_SL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:280	excluded:vendor backend
+HCCL_RDMA_TC	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/ascend/resource_config.cpp:274	excluded:vendor backend
+MC_CUSTOM_TOPO_JSON	topology/custom_json_path	setFromString over loaded config	config.rdma	src/common/config.cpp:258	alias:topology/custom_json_path
+MC_DISABLE_GPU_DIRECT_RDMA	transports/rdma/disable_gpu_direct_rdma	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:241	alias:transports/rdma/disable_gpu_direct_rdma
+MC_ENABLE_MNNVL	transports/mnnvl/enable	presence selects MNNVL loader branch instead of legacy NVLink	config.cuda	src/runtime/transport_loader.cpp:113	branch
+MC_FORCE_TCP	transports/force_tcp	presence, even empty; set force_tcp and tcp enable, clear RDMA, HP-TCP and fabric enable	config.network	src/common/config.cpp:205	presence
+MC_GID_INDEX	transports/rdma/device/gid_index	setFromString over loaded config; NCCL_IB_GID_INDEX is applied after MC_GID_INDEX	config.rdma	src/common/config.cpp:217	alias:transports/rdma/device/gid_index
+MC_HYLINK_USE_VMM	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/hylink/hylink_transport.cpp:39	excluded:vendor backend
+MC_IB_PCI_RELAXED_ORDERING	transports/rdma/pci_relaxed_ordering	setFromString over loaded config	config.rdma	src/common/config.cpp:234	unsupported:transports/rdma/pci_relaxed_ordering
+MC_IB_PORT	transports/rdma/device/port	setFromString over loaded config	config.rdma	src/common/config.cpp:216	alias:transports/rdma/device/port
+MC_IB_SL	transports/rdma/endpoint/service_level	setFromString over loaded config	config.rdma	src/common/config.cpp:233	alias:transports/rdma/endpoint/service_level
+MC_IB_TC	transports/rdma/endpoint/traffic_class	setFromString over loaded config	config.rdma	src/common/config.cpp:232	alias:transports/rdma/endpoint/traffic_class
+MC_IOURING_PINNED_STAGING	transports/io_uring/pinned_staging	parseBool (incl numeric) over loaded config	config.storage	src/common/config.cpp:268	alias:transports/io_uring/pinned_staging
+MC_IOURING_STAGING_SLOTS	transports/io_uring/staging_slots	setFromString over loaded config	config.storage	src/common/config.cpp:272	alias:transports/io_uring/staging_slots
+MC_IOURING_STAGING_SLOT_KB	transports/io_uring/staging_slot_kb	setFromString over loaded config	config.storage	src/common/config.cpp:270	alias:transports/io_uring/staging_slot_kb
+MC_LOG_RDMA_SLICE_AFFINITY	transports/rdma/log_slice_affinity	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:243	alias:transports/rdma/log_slice_affinity
+MC_MAX_CQE_PER_CTX	transports/rdma/device/max_cqe	setFromString over loaded config	config.rdma	src/common/config.cpp:219	alias:transports/rdma/device/max_cqe
+MC_MAX_EP_PER_CTX	transports/rdma/endpoint/endpoint_store_cap	setFromString over loaded config	config.rdma	src/common/config.cpp:220	alias:transports/rdma/endpoint/endpoint_store_cap
+MC_MAX_INLINE	transports/rdma/endpoint/max_inline_bytes	setFromString over loaded config	config.rdma	src/common/config.cpp:228	unsupported:transports/rdma/endpoint/max_inline_bytes
+MC_MAX_SGE	transports/rdma/endpoint/max_sge	setFromString over loaded config	config.rdma	src/common/config.cpp:224	unsupported:transports/rdma/endpoint/max_sge
+MC_MAX_WR	transports/rdma/endpoint/max_qp_wr	setFromString over loaded config	config.rdma	src/common/config.cpp:225	alias:transports/rdma/endpoint/max_qp_wr
+MC_MNNVL_EGM	transports/mnnvl/egm	parseBool (incl numeric) over loaded config	config.cuda	src/common/config.cpp:210	alias:transports/mnnvl/egm
+MC_MTU	transports/rdma/endpoint/path_mtu	setFromString over loaded config	config.rdma	src/common/config.cpp:231	unsupported:transports/rdma/endpoint/path_mtu
+MC_NUM_COMP_CHANNELS_PER_CTX	transports/rdma/device/num_comp_channels	setFromString over loaded config	config.rdma	src/common/config.cpp:214	unsupported:transports/rdma/device/num_comp_channels
+MC_NUM_CQ_PER_CTX	transports/rdma/device/num_cq_list	setFromString over loaded config	config.rdma	src/common/config.cpp:212	alias:transports/rdma/device/num_cq_list
+MC_NUM_QP_PER_EP	transports/rdma/endpoint/qp_mul_factor	setFromString over loaded config	config.rdma	src/common/config.cpp:222	alias:transports/rdma/endpoint/qp_mul_factor
+MC_PKEY_INDEX	transports/rdma/endpoint/pkey_index	setFromString over loaded config	config.rdma	src/common/config.cpp:230	unsupported:transports/rdma/endpoint/pkey_index
+MC_RDMA_BIND_ADDRESS	transports/rdma/bind_address	setFromString over loaded config	config.rdma	src/common/config.cpp:211	unsupported:transports/rdma/bind_address
+MC_REDIS_DB_INDEX	Redis database	environment selects database, otherwise default database	config.engine	src/runtime/metastore.cpp:56	inactive:provider is absent
+MC_REDIS_PASSWORD	Redis authentication	optional environment credential, no password by default	config.engine	src/runtime/metastore.cpp:43	inactive:provider is absent
+MC_REDIS_USERNAME	Redis authentication	optional environment credential, no username by default	config.engine	src/runtime/metastore.cpp:49	inactive:provider is absent
+MC_RETRY_CNT	transports/rdma/workers/max_retry_count	setFromString over loaded config	config.rdma	src/common/config.cpp:239	unsupported:transports/rdma/workers/max_retry_count
+MC_RPC_CLIENT_IO_THREADS	shared RPC client pool	positive integer; otherwise min(16,max(1,hardware_concurrency)); per-process snapshot	config.network	../../mooncake-common/src/rpc_client_io_context.cpp:34	unsupported:no shared RPC client pool
+MC_SLICE_SIZE	transports/rdma/workers/block_size	setFromString over loaded config	config.rdma	src/common/config.cpp:238	alias:transports/rdma/workers/block_size
+MC_STRICT_LOCAL_NUMA	transports/rdma/strict_local_numa	parseBool (incl numeric) over loaded config	config.rdma	src/common/config.cpp:245	alias:transports/rdma/strict_local_numa
+MC_TANGRT_LIB_ARCH	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:58	excluded:vendor backend
+MC_TANGRT_LIB_DIR	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:48	excluded:vendor backend
+MC_TANGRT_ROOT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/sunrise_link/sunrise_link_transport.cpp:54	excluded:vendor backend
+MC_TENT_CONF	whole configuration	existing path loads file; otherwise parse inline JSON, replace root before legacy env; invalid input fails construction	config.engine	src/common/config.cpp:174	root
+MC_TENT_RDMA_SIGNAL_INTERVAL	transports/rdma/endpoint/signal_interval	setFromString over loaded config	config.rdma	src/common/config.cpp:226	alias:transports/rdma/endpoint/signal_interval
+MC_TENT_RPC_THREADS	rpc_server_threads	setFromString over loaded config	config.engine	src/common/config.cpp:264	alias:rpc_server_threads
+MC_TE_FILTERS	topology/rdma_whitelist	comma-separated trimmed list over loaded config; explicit constructor field is restored last	config.rdma	src/common/config.cpp:253	alias:topology/rdma_whitelist
+MC_TE_FILTERS_EXCLUDE	topology/rdma_blacklist	comma-separated trimmed list over loaded config	config.rdma	src/common/config.cpp:254	alias:topology/rdma_blacklist
+MC_TE_RPC_CLIENT_IO_THREADS	TE RPC client pool	positive integer overrides MC_RPC_CLIENT_IO_THREADS; otherwise inherit common count	config.network	../../mooncake-common/src/rpc_client_io_context.cpp:38	unsupported:no shared RPC client pool
+MC_TPU_PJRT_LIB	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/platform/tpu/tpu_pjrt_shim.cpp:29	excluded:vendor backend
+MC_WORKERS_PER_CTX	transports/rdma/workers/num_workers	setFromString over loaded config	config.rdma	src/common/config.cpp:236	alias:transports/rdma/workers/num_workers
+MF_PROTOCOL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_allocator.cpp:11	excluded:vendor backend
+MF_STORE_PROTOCOL	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_allocator.cpp:10	excluded:vendor backend
+MF_TRANSFER_TIMEOUT	excluded provider	provider-specific native access; unsupported platform returns unavailable	config.excluded	src/transport/memfabric/memfabric_transport.cpp:99	excluded:vendor backend
+MOONCAKE_LOCAL_HOSTNAME	rpc_server_hostname	setFromString over loaded config; explicit constructor field is restored last	config.engine	src/common/config.cpp:204	alias:rpc_server_hostname
+MPCOMM_REMOTE_TCP_PORT	MPComm peer address	only if peer published no endpoint; malformed or absent fallback fails	config.optional	src/transport/mpcomm/mpcomm_transport.cpp:419	inactive:provider is absent
+MPCOMM_TCP_PORT	MPComm listener	default 13579; strict decimal listener override	config.optional	src/transport/mpcomm/mpcomm_transport.cpp:86	inactive:provider is absent
+NCCL_IB_GID_INDEX	transports/rdma/device/gid_index	setFromString over loaded config; NCCL_IB_GID_INDEX is applied after MC_GID_INDEX	config.rdma	src/common/config.cpp:218	alias:transports/rdma/device/gid_index
+TENT_METRICS_ENABLED	metrics/enabled	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:72	metrics:missing leaf
+TENT_METRICS_HTTP_HOST	metrics/http_host	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:74	metrics:missing leaf
+TENT_METRICS_HTTP_PORT	metrics/http_port	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:73	metrics:missing leaf
+TENT_METRICS_HTTP_SERVER_THREADS	metrics/http_server_threads	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:75	metrics:missing leaf
+TENT_METRICS_REPORT_INTERVAL	metrics/report_interval_seconds	explicit metrics config overrides this environment value; environment overrides MetricsConfig default	config.metrics	include/tent/metrics/config_loader.h:77	metrics:missing leaf

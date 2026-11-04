@@ -86,10 +86,17 @@ impl<'de> Deserialize<'de> for PriorityMatrix {
 }
 
 impl Topology {
+    pub(crate) fn check_matrix_shape(value: &serde_json::Value) -> bool {
+        serde_json::from_value::<PriorityMatrix>(value.clone()).is_ok()
+    }
+
     pub(crate) fn load_from_config(&mut self, config: &RdmaConfig) -> Result<()> {
         let rows = if let Some(json) = &config.priority_matrix {
             check_size(json)?;
             self.parse_priority_matrix(json)?
+        } else if let Some(json) = &config.custom_topology_json {
+            check_size(json)?;
+            self.parse_custom_topology(json)?
         } else if let Some(path) = &config.custom_json_path {
             let mut json = String::new();
             File::open(path)?

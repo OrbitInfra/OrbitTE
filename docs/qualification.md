@@ -26,6 +26,12 @@ native request/reply bytes on Linux. TCP data fixtures also run against a real
 registered TENT source with guard bytes. These checks supply inputs for S23's
 future directional mixed-peer gate.
 
+The S17 Rust controls read the same 223 configuration rows, 67 environment
+rows and 12 precedence vectors. They check feature selection, error paths,
+producer configuration and snapshot isolation in a child process. These CPU
+checks cover configuration loading. Installed transfer profiles are tracked
+separately below.
+
 ## Verification queue
 
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below

@@ -11,6 +11,24 @@ performance parity. See [capabilities](capabilities.md) for support and the
 :class: dark-light
 :::
 
+## Configuration ownership
+
+`EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve
+a bounded document into the typed owners before any engine starts. Metrics
+keeps its file-before-environment precedence. The selector, QoS, QP layout
+and HP-TCP use their existing schemas. A TENT snapshot captures RDMA topology
+file contents and resolves the RPC hostname once. Device discovery still
+checks those settings against the host when the engine starts.
+
+TENT installs process-wide glog settings. OrbitTE leaves the log filter with
+the application and rejects `log_level`. Legacy CUDA IPC still requires an
+explicit opt-in for cooperative peers. RPC workers are capped at 128 and
+RDMA send queues at 64 work requests. The endpoint budget counts OrbitTE's
+retained native owners and has a ceiling of 4096. Unsupported verbs
+parameters and TCP retry knobs return configuration errors. The CPU controls
+exercise these differences and the captured environment without changing a
+process variable.
+
 ## Engine and transport boundary
 
 S16 keeps the upstream serializer and headers inside the frozen CPU oracle.

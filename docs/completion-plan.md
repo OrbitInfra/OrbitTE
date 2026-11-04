@@ -91,7 +91,8 @@ copy mechanics on the caller's stream, including strided DMA, batched 1D
 copies and a mapped-host kernel. The [installed comparison](qualification.md#caller-stream-local-cuda-copy)
 and the P5 hardware verification queue remain open.
 S16 freezes the reference acceptance inventory and native wire fixtures. S17
-uses its per-key configuration defaults and precedence cases.
+implements F01 against its configuration, environment and precedence cases.
+The next required step is S19, the C ABI.
 S18's etcd/Redis/HTTP stores are optional until another consumer needs them.
 OrbitKV uses the existing P2P control plane. S19–S26 retain their order.
 
@@ -166,7 +167,7 @@ Open:
 - [ ] Explicit separation of logical outcome and physical quiescence for every
   remaining owner, with unregister retry and documented unsafe raw-pointer APIs.
 - [ ] CPU allocation, copy and probing. P6 covers merge/alias ownership.
-- [ ] Config precedence, effective defaults and diagnostics (F01, see P9).
+- [x] TENT file, inline and constructor precedence, effective per-engine settings and path diagnostics (F01, S17).
 
 Exit: CPU property and negative tests, concurrent registration and shutdown
 controls, and allocator failure and partial-construction tests pass on
@@ -383,6 +384,7 @@ drain and applicable mixed-peer interoperability.
 
 Requirements: F01/F06/F20–F22 and the complete language inventory.
 
+- [x] Immutable F01 configuration snapshots and per-key dispositions in the S16 inventory.
 - [ ] Every C symbol, constant, layout and output allocation/free contract; no
   panic crosses FFI.
 - [ ] Native C++ source adapters and the classic-TE surface, including explicit

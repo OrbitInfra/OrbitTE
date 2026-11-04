@@ -313,21 +313,9 @@ pub struct TransferEngine {
 
 impl TransferEngine {
     pub fn new(config: EngineConfig) -> Result<Self> {
-        #[cfg(feature = "io-uring")]
-        let config = EngineConfig {
-            io_uring: config.io_uring.with_environment()?,
-            ..config
-        };
-        #[cfg(feature = "rdma")]
-        let config = EngineConfig {
-            rdma: config
-                .rdma
-                .map(|r| r.resolve_switches(|key| std::env::var_os(key))),
-            ..config
-        };
+        #[cfg(any(feature = "rdma", feature = "io-uring", feature = "metrics"))]
+        let config = config.resolve_subsystems()?;
         config.validate()?;
-        #[cfg(feature = "metrics")]
-        let metrics_config = config.metrics.load(config.metrics_config_file.as_deref())?;
 
         let runtime_queue = config.runtime_queue.map(LocalTransferAdmissionQueue::new);
         let qos = config
@@ -361,6 +349,12 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
+        // The TENT loader installs RDMA only for an eligible discovered NIC.
+        #[cfg(feature = "rdma")]
+        let rdma = match rdma {
+            Some(owner) if config.tent.is_some() && owner.policy_devices()?.is_empty() => None,
+            owner => owner,
+        };
         #[cfg(feature = "cuda")]
         let mut nvlink = config
             .nvlink
@@ -495,7 +489,11 @@ impl TransferEngine {
             runtime_queue,
             files: FileSegments::default(),
             #[cfg(feature = "io-uring")]
-            io_uring: crate::transport::io_uring::IoUringTransport::probe(&config)?,
+            io_uring: if config.io_uring_enabled {
+                crate::transport::io_uring::IoUringTransport::probe(&config)?
+            } else {
+                None
+            },
             #[cfg(feature = "gds")]
             gds: config.gds_enabled.then(|| {
                 crate::transport::gds::Provider::new(crate::transport::gds::GdsTransport::probe)
@@ -512,8 +510,19 @@ impl TransferEngine {
             progress_worker,
         };
         #[cfg(feature = "metrics")]
-        let engine = engine.install_metrics(&metrics_config)?;
+        let engine = {
+            let metrics = engine.config.metrics.clone();
+            engine.install_metrics(&metrics)?
+        };
+        if let Some(settings) = &engine.config.tent {
+            settings.log_startup(&engine.config);
+        }
         Ok(engine)
+    }
+
+    /// Effective configuration captured by this engine at construction.
+    pub fn config(&self) -> &EngineConfig {
+        &self.config
     }
 
     fn start_progress(
@@ -569,7 +578,7 @@ impl TransferEngine {
         batch.progress_public()
     }
 
-    fn qp_layout(config: &EngineConfig) -> Result<QpLayout> {
+    pub(crate) fn qp_layout(config: &EngineConfig) -> Result<QpLayout> {
         #[cfg(feature = "rdma")]
         let flat = config.rdma.as_ref().map_or(1, |rdma| rdma.num_lanes);
         #[cfg(not(feature = "rdma"))]

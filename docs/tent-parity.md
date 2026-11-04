@@ -265,7 +265,7 @@ the modules needed to compare with TENT's effective configuration.
 
 ## C and language binding inventory
 
-The [acceptance inventory][inventory] is the shared input to S17–S23. Each
+The [acceptance inventory][inventory] is the shared input to S17–S23. Its F01 rows identify each supported setting, unsupported field or excluded provider. The Rust loader exercises them in the CPU matrix. Each
 public C declaration has a call/ownership case. The companion C probe checks
 the frozen public and plugin layouts on Linux LP64. The index also identifies
 reference tests by source and GTest filter, and maps config, environment,

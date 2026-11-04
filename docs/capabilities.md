@@ -81,7 +81,7 @@ fixtures and CPU codec checks are available for the future mixed-peer profile.
 | --- | --- | --- |
 | Rust API | Implemented | See [Rust API](rust-api.md) |
 | TENT C, C++ and Python APIs | Planned (P9) | |
-| TENT configuration and metadata stores | Planned (P9) | S17 covers `MC_TENT_CONF`. OrbitKV uses P2P. Optional S18 covers etcd, Redis and HTTP for other consumers |
+| TENT configuration and metadata stores | Configuration implemented (F01), P2P available | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Optional S18 covers etcd, Redis and HTTP |
 | TENT wire interoperability | Planned (P9) | OrbitTE peers use a pre-release protocol and must run the same build. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection

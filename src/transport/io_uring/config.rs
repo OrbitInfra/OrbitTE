@@ -26,9 +26,8 @@ impl IoUringConfig {
         mut get: impl FnMut(&str) -> Option<std::ffi::OsString>,
     ) -> Result<Self> {
         if let Some(value) = get("MC_IOURING_PINNED_STAGING") {
-            match value.to_str().map(str::to_ascii_lowercase).as_deref() {
-                Some("1" | "true" | "on" | "yes") => self.pinned_staging = true,
-                Some("0" | "false" | "off" | "no") => self.pinned_staging = false,
+            match value.to_str().and_then(crate::config::legacy_bool) {
+                Some(enabled) => self.pinned_staging = enabled,
                 _ => log::warn!("invalid MC_IOURING_PINNED_STAGING, retaining configured value"),
             }
         }

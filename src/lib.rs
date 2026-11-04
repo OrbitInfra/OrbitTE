@@ -89,7 +89,7 @@ pub use {
 #[cfg(not(unsupported_native_target))]
 pub use {
     batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus},
-    config::{EngineConfig, RuntimeQueueConfig},
+    config::{EngineConfig, RuntimeQueueConfig, TentSettings},
     engine::{
         BatchReport, EngineStats, Priority, RemoteEffect, TransferEngine, TransferFailure,
         TransferOp, TransferRequest, Transport,
