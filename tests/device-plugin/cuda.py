@@ -12,11 +12,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='orbite-plugin-cuda-') as tmp:
         tmp=Path(tmp);exe=tmp/'consumer'
         subprocess.run([cc,'-std=c11','-Wall','-Wextra','-Werror','-I',prefix/'include',ROOT/'tests/hardware/device_plugin.c','-L',prefix/'lib','-Wl,-rpath,'+str(prefix/'lib'),'-ltent','-ldl','-o',exe],check=True)
-        env=dict(os.environ,LD_LIBRARY_PATH=str(tmp),MC_TENT_CONF='{"transports/tcp/enable":true,"transports/rdma/enable":false,"transports/nvlink/enable":false,"metrics/enabled":false}',MOONCAKE_LOCAL_HOSTNAME='127.0.0.1')
+        env=dict(os.environ,LD_LIBRARY_PATH=str(tmp),MC_TENT_CONF='{"transports/tcp/enable":true,"transports/shm/enable":true,"transports/rdma/enable":false,"transports/nvlink/enable":false,"metrics/enabled":false}',MOONCAKE_LOCAL_HOSTNAME='127.0.0.1')
         shim=[cc,'-std=c11','-D_POSIX_C_SOURCE=200809L','-shared','-fPIC','-pthread',ROOT/'tests/python/cuda_shim.c','-o',tmp/'libcuda.so.1']
         subprocess.run(shim,check=True)
         for i in range(a.repeat):
-            for fault in (0,20,21,26,3,6,7,8,9):
+            for fault in (0,20,21,22,26,3,6,7,8,9):
                 subprocess.run([exe,prefix/'lib/libtent.so',str(fault)],env=env,check=True,timeout=60,stdout=subprocess.DEVNULL)
             print(f'CUDA plugin shim {i+1}/{a.repeat}: passed',flush=True)
         subprocess.run([*shim,'-DORBITE_PLUGIN_MISSING_COPY'],check=True)

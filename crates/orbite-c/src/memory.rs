@@ -1123,6 +1123,11 @@ impl Memory {
             if let Some(e) = a.error {
                 return Err(e);
             }
+            // SHM/fabric allocations have their own cross-process access and
+            // retirement protocols; a raw plugin callback cannot bypass them.
+            if !matches!(a.kind, Kind::Ordinary | Kind::Plugin(_)) {
+                return Err(UNSUPPORTED);
+            }
             let memory = a.memory.as_ref().ok_or(INTERNAL)?;
             let (count, host) = match memory {
                 MemoryBacking::Host(v) => (Arc::strong_count(v), true),

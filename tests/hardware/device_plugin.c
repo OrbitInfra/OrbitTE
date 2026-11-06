@@ -38,6 +38,12 @@ int main(int argc,char **argv) {
     assert(!tent_allocate_memory(a,&host,N,"*"));assert(!tent_allocate_memory(a,&gpu,N,"cuda:0"));
     void *after=NULL;assert(!get(&after));assert(after==caller);
     for(int i=0;i<N;i++)((unsigned char*)host)[i]=(unsigned char)(i*31+7);
+    if(inject && fault==22){
+        tent_memory_options_t options={0};options.transport_type=TRANSPORT_SHM;options.permission=PERM_GLOBAL_READ_WRITE;
+        void *shared=NULL;assert(!tent_allocate_memory_ex(a,&shared,N,&options));memset(shared,0x77,N);
+        assert(orbite_plugin_memcpy_sync(a,shared,host,N)==-200);for(int i=0;i<N;i++)assert(((unsigned char*)shared)[i]==0x77);
+        assert(!tent_free_memory(a,shared));assert(!tent_free_memory(a,gpu));assert(!tent_free_memory(a,host));assert(!orbite_close_device_plugins(a));tent_destroy_engine(a);tent_destroy_engine(b);dlclose(driver);return 0;
+    }
     if(inject && fault==21){
         tent_register_device_plugin_fn registration=dlsym(dlopen(argv[1],RTLD_NOW|RTLD_LOCAL),TENT_DEVICE_PLUGIN_REGISTER_SYMBOL);assert(registration);
         device_plugin_t table={0};assert(registration(NULL)==-1);assert(!registration(&table));void *ctx=table.create_plugin();assert(ctx);assert(table.memcpy_sync(NULL,host,host,N)==TENT_DEVICE_PLUGIN_ERROR);
