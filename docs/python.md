@@ -175,8 +175,9 @@ interchange capsule and keep the exported allocation and context stable.
 
 Each retained export lease, including duplicate registrations, counts against
 `max_registered_regions`; aliases cannot create an unbounded capsule list. Idle
-staging buffers are released before unregister acknowledges a foreign export,
-so their context cache cannot indefinitely pin a retired tensor. Active copies
+staging buffers and idle private copy/producer events are released before
+unregister acknowledges a foreign export, while its registration charge remains
+held. Their context cache cannot indefinitely pin a retired tensor. Active copies
 and uncertain cleanup still keep the exporter and charges. Unregister can report
 resource exhaustion while another alias or admitted operation is draining; this
 is not permission to reuse the memory. CPU objects that also implement DLPack

@@ -11,6 +11,7 @@ pub(super) struct CallerSyncEvent {
     owner: Option<Arc<dyn Send + Sync>>,
     pending: bool,
     uncertain: bool,
+    cleanup_attempted: bool,
 }
 
 // SAFETY: the allocation mutex serializes event record, consumption and reuse.
@@ -25,6 +26,7 @@ impl CallerSyncEvent {
             owner: None,
             pending: false,
             uncertain: false,
+            cleanup_attempted: false,
         }
     }
 
@@ -175,8 +177,19 @@ impl CallerSyncEvent {
     }
 }
 
-impl Drop for CallerSyncEvent {
-    fn drop(&mut self) {
+impl CallerSyncEvent {
+    fn close(&mut self) -> Result<()> {
+        if self.cleanup_attempted {
+            return if self.uncertain {
+                Err(Error::Unquiesced {
+                    operation: "CUDA producer event cleanup",
+                    code: -1,
+                })
+            } else {
+                Ok(())
+            };
+        }
+        self.cleanup_attempted = true;
         let mut retained =
             self.pending || self.uncertain || self.context.poisoned.load(Ordering::Acquire);
         if let Some(event) = self.event.take() {
@@ -196,11 +209,26 @@ impl Drop for CallerSyncEvent {
             }
         }
         if retained {
+            self.uncertain = true;
             std::mem::forget(Arc::clone(&self.context));
             if let Some(owner) = self.owner.take() {
                 std::mem::forget(owner);
             }
         }
+        if retained {
+            Err(Error::Unquiesced {
+                operation: "CUDA producer event cleanup",
+                code: -1,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for CallerSyncEvent {
+    fn drop(&mut self) {
+        let _ = self.close();
     }
 }
 
@@ -228,6 +256,38 @@ impl DeviceAllocation {
 }
 
 impl CudaMemory {
+    /// Close idle private copy/producer events before returning a foreign
+    /// allocation to its exporter. Outstanding DMA loans return `BatchBusy`.
+    /// A failed destroy fences the allocation, retains its owner and is never
+    /// retried. This does not free device memory or close the caller's stream.
+    pub fn trim_idle_copy_resources(&self) -> Result<()> {
+        let mut allocation = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        if !allocation.dma.is_empty() {
+            return Err(Error::BatchBusy);
+        }
+        allocation.prepare_access(&(0..self.length))?;
+        let closed = allocation
+            .copy_stream
+            .as_mut()
+            .map_or(Ok(()), CopyStream::close)
+            .and_then(|()| {
+                allocation
+                    .producer
+                    .as_mut()
+                    .map_or(Ok(()), CallerSyncEvent::close)
+            });
+        if let Err(error) = closed {
+            allocation.uncertain = true;
+            return Err(unquiesced(error));
+        }
+        allocation.copy_stream = None;
+        allocation.producer = None;
+        Ok(())
+    }
+
     /// Capture an interchange export's producer stream in the allocation's
     /// driver-validated context, restoring the caller's exact binding afterwards.
     /// Legacy/per-thread default streams refer to this allocation's device.

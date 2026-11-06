@@ -81,9 +81,10 @@ restoration, a blocked copy and failed pinned cleanup through a fallible driver
 shim. Export leases are bounded by the registration budget, including duplicates.
 `trim_idle_staging_buffers` reclaims only idle ProxyManager slots, with a bounded
 single pass and one-shot cleanup; active slots are untouched. The ABI adapter
-uses it before acknowledging foreign backing release, avoiding an idle context
-cache pinning a Python tensor indefinitely. Failure keeps the slot charge and
-exporter (`test_failed_staging_cleanup_keeps_exporter_and_never_retries`).
+uses it together with `CudaMemory::trim_idle_copy_resources` before releasing
+foreign registrations, avoiding an idle context cache pinning a Python tensor
+indefinitely. Checked event/stream destruction reports `Unquiesced` before Drop;
+failed cleanup keeps the registration, slot charge and exporter (`test_failed_staging_cleanup_keeps_exporter_and_never_retries`).
 This retained interchange contract is an extension beyond TENT's raw integers.
 If interpreter finalization prevents a safe detach, the bounded
 ABI slot remains retained. The [guide](python.md) records these deliberate

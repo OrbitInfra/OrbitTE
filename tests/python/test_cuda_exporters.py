@@ -199,6 +199,19 @@ class Base(unittest.TestCase):
                 self.fail('native owner boundary was not reached')
             time.sleep(.001)
 
+    def unregister(self, engine, address):
+        # A requester completion can precede the source handler's final loan
+        # release. Wait for that receipt, never accept a failed native cleanup.
+        end = time.monotonic() + BOUND
+        while True:
+            try:
+                engine.unregister_local_memory(address)
+                return
+            except te.InternalError as error:
+                if not str(error).endswith('native status 2') or time.monotonic() >= end:
+                    raise
+                time.sleep(.001)
+
 
 class Cpu(Base):
     def test_cuda_owner_reports_feature_unavailable_before_export(self):
@@ -328,7 +341,7 @@ class Cuda(Base):
                 self.assertEqual(client.wait(batch, BOUND).state, te.COMPLETED)
             self.assertEqual(C.string_at(address, 80), b'q' * 8 + bytes(reversed(range(64))) + b'q' * 8)
             client.unregister_local_memory(local)
-            source.unregister_local_memory(address)
+            self.unregister(source, address)
 
     def transfer(self, owner):
         source, client = self.engine(), self.engine()
@@ -358,20 +371,13 @@ class Cuda(Base):
             gc.collect()
             self.assertIsNotNone(witness())
             SHIM.orbite_test_hold(0)
-            end = time.monotonic() + BOUND
-            while True:
-                try:
-                    client.unregister_local_memory(address)
-                    break
-                except te.InternalError:
-                    if time.monotonic() > end: raise
-                    time.sleep(.001)
+            self.unregister(client, address)
             gc.collect()
             self.assertIsNone(witness())
             self.assertEqual(host, b'L' * 8 + bytes(range(64)) + b'R' * 8)
 
     def test_failed_staging_cleanup_keeps_exporter_and_never_retries(self):
-        for factory in (CAI, DLPack):
+        for factory, fault in ((CAI, 4), (DLPack, 4), (CAI, 5), (DLPack, 5)):
             owner = factory()
             _, client, _, address, guard, req = self.transfer(owner)
             client.submit_transfer(guard.id(), [req])
@@ -379,18 +385,18 @@ class Cuda(Base):
             guard.release()
             witness = weakref.ref(owner)
             del owner
-            SHIM.orbite_test_fault(5)  # checked pinned-host free fails during idle-cache trim
+            SHIM.orbite_test_fault(fault)  # checked event destroy or pinned-host free
             with self.assertRaisesRegex(te.InternalError, '135'):
                 client.unregister_local_memory(address)
             self.uncertain.append(client)
-            before = SHIM.orbite_test_count(6)
+            before = (SHIM.orbite_test_count(1), SHIM.orbite_test_count(6))
             SHIM.orbite_test_fault(0)
             for _ in range(2):
                 with self.assertRaisesRegex(te.InternalError, '135'):
                     client.unregister_local_memory(address)
             gc.collect()
             self.assertIsNotNone(witness())
-            self.assertEqual(SHIM.orbite_test_count(6), before)
+            self.assertEqual((SHIM.orbite_test_count(1), SHIM.orbite_test_count(6)), before)
 
     def test_failed_native_restore_keeps_owner_and_cleanup_is_sticky(self):
         for factory in (CAI, DLPack):

@@ -279,13 +279,15 @@ fn resolve(
                         span.fenced = true;
                     }
                 }
-                all.entry(*address).or_insert(Span {
-                    fenced: true,
-                    end: export_end,
-                    owner: WeakBacking::Cuda(Weak::new()),
-                    foreign: Some(receipt.clone()),
-                    retained: true,
-                });
+                all.entry(*address)
+                    .and_modify(|span| span.end = span.end.max(export_end))
+                    .or_insert(Span {
+                        fenced: true,
+                        end: export_end,
+                        owner: WeakBacking::Cuda(Weak::new()),
+                        foreign: Some(receipt.clone()),
+                        retained: true,
+                    });
                 return Err(error.into());
             }
             Err(error) => return Err(error.into()),
@@ -842,6 +844,29 @@ impl Memory {
                     if r.memory.as_ref().is_some_and(|m| !m.exclusively_held()) {
                         return Err(FULL);
                     }
+                    #[cfg(feature = "cuda")]
+                    if r.foreign.is_some() {
+                        let backing = lock(spans())?
+                            .get(&r.backing_base)
+                            .and_then(|s| s.owner.upgrade());
+                        if let Some(MemoryBacking::Cuda(gpu)) = backing {
+                            // Do checked native cleanup while the registration
+                            // and its charge still exist. Drop is not a receipt.
+                            let closed = gpu
+                                .trim_idle_copy_resources()
+                                .and_then(|()| e.trim_idle_staging_buffers());
+                            if let Err(error) = closed {
+                                let code = Code::from(error);
+                                if code == UNKNOWN {
+                                    r.error = Some(code);
+                                    if let Some(span) = lock(spans())?.get_mut(&r.backing_base) {
+                                        span.fenced = true;
+                                    }
+                                }
+                                return Err(code);
+                            }
+                        }
+                    }
                     r.memory.take();
                 }
                 Ok(())
@@ -852,22 +877,6 @@ impl Memory {
         }
         if let Some(code) = first {
             return Err(code);
-        }
-        #[cfg(feature = "cuda")]
-        if uses.keys().any(|key| {
-            let r = &self.regs[key];
-            r.removed == r.refs && r.foreign.as_ref().is_some_and(|w| w.strong_count() != 0)
-        }) {
-            if let Err(error) = e.trim_idle_staging_buffers() {
-                for key in uses.keys() {
-                    let r = self.regs.get_mut(key).ok_or(INTERNAL)?;
-                    r.error = Some(UNKNOWN);
-                    if let Some(span) = lock(spans())?.get_mut(&r.backing_base) {
-                        span.fenced = true;
-                    }
-                }
-                return Err(error.into());
-            }
         }
         for key in uses.keys() {
             let r = &self.regs[key];
