@@ -10,6 +10,7 @@ import sys
 import time
 
 CONTROLS = [
+    "engine::failover::tests::native::mixed_send_receive_debt_keeps_unposted_constructors_fail_stop",
     "engine::failover::tests::native::submit_rejection_walks_the_pinned_policy_once_per_physical_owner",
     "engine::failover::tests::native::source_receive_retirement_keeps_owners_and_allows_unposted_policy_fallback",
     "transport::rdma::cq_lane::tests::retirement::receive_debt_retirement_rejects_new_grants_until_the_native_receipt",

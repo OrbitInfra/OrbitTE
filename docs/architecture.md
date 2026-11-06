@@ -391,7 +391,9 @@ barrier still owns every pending receive, backing and charge. The
 holds destruction and probes this interleaving; the real-control-socket
 `source_receive_retirement_keeps_owners_and_allows_unposted_policy_fallback`
 control checks merged aliases, one fallback, bytes and guards while the old
-source owner remains charged. SQ-only retirement and internal invariant failures remain non-retryable;
+source owner remains charged. Any SQ or pending-work debt remains fail-stop even with a posted receive, as
+`mixed_send_receive_debt_keeps_unposted_constructors_fail_stop` verifies.
+Internal invariant failures remain non-retryable;
 this is OrbiTE's drain-based admission behavior, not TENT's ambiguous replay.
 
 ## Metrics ownership

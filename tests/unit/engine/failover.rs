@@ -122,6 +122,19 @@ mod native {
         p.bytes(false)
     }
     #[test]
+    fn mixed_send_receive_debt_keeps_unposted_constructors_fail_stop() {
+        let error = verbs::mixed_debt_constructor_error();
+        assert!(
+            matches!(error, Error::Internal("RDMA close with unresolved work")),
+            "{error:?}"
+        );
+        assert!(
+            !retryable(&error),
+            "an unposted constructor must not replay this anomaly"
+        );
+    }
+
+    #[test]
     fn submit_rejection_walks_the_pinned_policy_once_per_physical_owner() -> Result<()> {
         for (budget, queued) in [(0, false), (1, false), (3, true)] {
             let p = Pair::new("direct:connect", budget, false, queued)?;

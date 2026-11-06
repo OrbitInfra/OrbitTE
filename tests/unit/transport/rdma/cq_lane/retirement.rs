@@ -220,3 +220,53 @@ fn retained_record_poll_waits_for_the_whole_lane_receipt() {
     drop((grant, other));
     let _ = runtime.close(deadline());
 }
+
+// Exercise the real lane and SQ ledger, returning the constructor error to
+// the engine's retry gate. No native payload is posted by this constructor.
+pub(crate) fn mixed_debt_constructor_error() -> Error {
+    let runtime = configured("copy_qp_pause", 3);
+    let mut grant = runtime.staging_endpoint(8, 2).unwrap();
+    let hold = NativeHold(pause(&runtime));
+    grant.connect(&grant.descriptor()).unwrap();
+    grant.bind_window().unwrap();
+    post_receive(&mut grant, &[0x42; COMPLETION_MESSAGE_SIZE]).unwrap();
+    let mut constructor = unopened(&runtime);
+    let lane = Arc::clone(&grant.progress);
+    // Reservation is outstanding SQ debt even before a provider post receipt.
+    let mut work = [sys::WorkRequest {
+        id: u64::MAX - 1,
+        offset: 0,
+        length: 1,
+        signaled: true,
+    }];
+    assert_eq!(grant.record.send_queue.reserve(&mut work, 3, 1).unwrap(), 1);
+    let posts = runtime.stats().unwrap().post_calls;
+    wait_until(|| {
+        assert!(!grant.poll_close().unwrap());
+        hold.0.0.lock().unwrap().0
+    });
+    let rejected = lane
+        .handle(false)
+        .expect_err("retiring lane must reject constructor");
+    assert!(constructor.open(0, 1).is_err());
+    let held = runtime.stats().unwrap();
+    assert_eq!((held.work_requests, held.receive_work_requests), (1, 1));
+    assert_eq!(held.post_calls, posts, "constructor posted after the fence");
+    drop(hold);
+    wait_until(|| lane.recoverable().unwrap());
+    let _ = grant.close();
+    let _ = constructor.close();
+    drop((grant, constructor));
+    runtime.close(deadline()).unwrap();
+    let after = runtime.stats().unwrap();
+    assert_eq!(
+        (
+            after.work_requests,
+            after.receive_work_requests,
+            after.active_grants
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(after.post_calls, posts);
+    rejected
+}

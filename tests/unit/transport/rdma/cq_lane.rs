@@ -1698,3 +1698,5 @@ pub(in crate::transport::rdma) fn before_staging_abort(
 
 #[path = "cq_lane/retirement.rs"]
 mod retirement;
+
+pub(crate) use retirement::mixed_debt_constructor_error;
