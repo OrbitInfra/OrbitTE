@@ -166,15 +166,29 @@ This applies to file/inline `MC_TENT_CONF`, legacy overrides, the public
 `from_tent_*` loaders and the C/C++ constructors. No Redis credentials are
 read. External stores are out of scope, not deferred providers.
 
-When membership says a peer left, stop scheduling its endpoint/epoch and
-drain admitted work before releasing resources. Per-peer physical retirement
-is an open owner change. Today, `close_requester(timeout)` closes and drains
-the requester as a whole; it can isolate one peer only if that peer has a
-dedicated requester engine. `Unquiesced` retains the owners and is not a
-release receipt. Dropping a Rust descriptor or calling C/C++ `closeSegment`
-does not fence or drain that peer. Never replace an old descriptor's epoch
-with a newly observed value; obtain the replacement from its authoritative
-owner and explicitly open the new peer.
+When membership says a peer left, call
+`engine.close_segment(endpoint, expected_epoch, timeout)`. It immediately fences
+new requester admissions to that identity, drains already admitted transfers
+and notifications, then retires its transport cache entries. Existing
+`RemoteSegment` snapshots return `Error::PeerClosed` on submit or refresh.
+Other peers remain usable. Obtain a replacement epoch from its authoritative
+owner and call `open_segment` again; never edit an old descriptor's epoch.
+This is outgoing retirement, not an authenticated ban on inbound clients.
+
+A drain timeout returns `Unquiesced` and retains backing and budget charges.
+You may wait again while admitted work drains. Once native cleanup starts,
+its result is sticky: an uncertain destroy is never repeated. The timeout
+bounds waits, not a native call that cannot be preempted. Automatic receiver
+windows close with a receiver receipt; unresolved credit charges remain held.
+`EngineConfig::max_peer_segments` bounds all contacted endpoint/epoch identities,
+including permanent tombstones (default 1024, maximum 4096). Exhaustion returns
+`ResourceExhausted`; closing a peer does not reclaim its tombstone slot.
+
+`EngineStats::{peer_segments, retired_peer_segments, active_peer_operations}`
+exposes the charged identities and outstanding permits. These counters are
+observations, not release receipts. Dropping a descriptor or calling the
+frozen C/C++ `closeSegment` still only closes a handle: TENT permits reopening
+the same live source. The stronger Rust operation deliberately remains separate.
 
 For a local file, `open_file_segment` takes a `file://` name and a permission;
 `file_segment_info` returns the cached descriptor, `refresh_file_segment` re-reads

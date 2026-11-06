@@ -195,6 +195,10 @@ static void native_client(const std::string &name) {
     ok(e.unregisterLocalMemory(local.data()));
     ok(e.closeSegment(peer));
     assert(!e.probePeerAliveByID(peer).ok());
+    // TENT permits reopening the same live source after closing its handle.
+    ok(e.openSegment(peer, name));
+    ok(e.probePeerAliveByID(peer));
+    ok(e.closeSegment(peer));
 }
 
 static void classic_client(const std::string &name) {

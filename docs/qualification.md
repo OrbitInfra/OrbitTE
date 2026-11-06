@@ -42,8 +42,13 @@ URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides,
 C setters and native/classic C++ constructors. The installed consumers check
 `InvalidMetadataType` (`-6`) and classic `ERR_METADATA`, unchanged output
 guards and migration guidance. No external store or discovery service is
-part of this profile. Per-peer physical retirement remains unimplemented;
-the existing segment-handle close is not a drain receipt.
+part of this profile. Rust per-peer retirement is implemented with real TCP,
+HP-TCP and SHM controls on Linux, and CUDA/verbs table controls. The
+`peer_retirement_*` tests check held ownership, submit/close races, permanent
+stale-epoch rejection, selective cleanup and one-shot native failures. RNIC,
+NVLink and MNNVL retirement remain **Implemented; installed profile unqualified**.
+The C/C++ same-epoch reopen controls preserve frozen segment-handle close;
+it is not a drain receipt.
 
 ## Installed C ABI on Linux
 
@@ -100,6 +105,9 @@ external output directory; failed runs are kept.
 | [SHM]{#queue-shm-cxl} | Qualified on same-host Linux CI for POSIX DRAM | [Physical CXL gate](#shared-memory-and-cxl-verification) | CXL unrun |
 | [HP-TCP]{#queue-physical-rails} | Qualified for DRAM on IPv4 loopback | [Physical two-rail gate](#hp-tcp-rail-verification) | Physical profile unrun |
 | MNNVL fabric and EGM | Implemented; installed profile unqualified | [Two-node fabric gate](#multi-node-nvlink-fabric) | VMM table and stream/event shims |
+| Per-peer RDMA retirement | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain stable --output "$ART"`, install the identical artifact on both hosts, then run `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile rdma --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --device "$RNIC" --source-device "$SOURCE_RNIC" --output "$RUN/rdma"`. Repeat with Rust 1.85.0 and a fresh output. | Guarded READ/WRITE, matching QP retirement, unaffected second peer and same-endpoint restart; no device faults injected |
+| Per-peer NVLink IPC retirement | Implemented; installed profile unqualified | With the same packaged consumer on a reserved NVLink host: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile nvlink --source-bind 127.0.0.1:19091 --other-bind 127.0.0.1:19092 --bind 127.0.0.1:0 --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --output "$RUN/nvlink"` | Import/export release and guards; shim controls supply delayed-event and failed-close evidence |
+| Per-peer MNNVL retirement | Implemented; installed profile unqualified | On a reserved fabric pair: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile mnnvl --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --domain "$FABRIC_DOMAIN" --output "$RUN/mnnvl"` | Native VMM import release, guarded bytes and fresh epoch; actual fabric domain comes from the platform owner |
 | EFA (S24), MPComm (S25) | Planned | Written with each step | None |
 | [P10 fault matrix, P11 matched performance against TENT and installed OrbitKV integration]{#queue-release} | Planned | [Completion plan](completion-plan.md#p11--consumers-performance-and-release) | None |
 

@@ -12,6 +12,42 @@ pub(super) struct EndpointStore {
 }
 
 impl EndpointStore {
+    pub(super) fn peer(
+        &self,
+        peer: crate::runtime::segment_manager::PeerKey,
+    ) -> Vec<Arc<RdmaEndpoint>> {
+        self.endpoints
+            .iter()
+            .filter(|e| {
+                !e.key.source && e.key.route == Some(peer.endpoint) && e.key.epoch == peer.epoch
+            })
+            .map(|e| {
+                e.fence();
+                e.clone()
+            })
+            .collect()
+    }
+
+    pub(super) fn remove_peer(
+        &mut self,
+        peer: crate::runtime::segment_manager::PeerKey,
+    ) -> Result<()> {
+        let mut index = 0;
+        while index < self.endpoints.len() {
+            let e = &self.endpoints[index];
+            if !e.key.source
+                && e.key.route == Some(peer.endpoint)
+                && e.key.epoch == peer.epoch
+                && e.prune()?
+            {
+                self.endpoints.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn prune(&mut self) -> Result<()> {
         let mut index = 0;
         while index < self.endpoints.len() {

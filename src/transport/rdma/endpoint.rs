@@ -216,6 +216,53 @@ impl RdmaEndpoint {
         Ok(qps.iter().all(Option::is_none))
     }
 
+    pub(super) fn close(&self, deadline: Instant) -> Result<()> {
+        self.fence();
+        let records = {
+            let mut qps = self.lock()?;
+            Self::reclaim(&mut qps)?;
+            qps.iter()
+                .flatten()
+                .map(|qp| match (qp.lane.upgrade(), qp.record.as_ref()) {
+                    (Some(lane), Some(record)) => Ok((lane, record.clone())),
+                    _ => Err(Error::Unquiesced {
+                        operation: "RDMA peer unpublished QP",
+                        code: libc::EIO,
+                    }),
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+        let mut failure = None;
+        for (lane, record) in records {
+            let result = (|| {
+                let claim = loop {
+                    if let Some(state) = record.try_lock()? {
+                        break state.claim;
+                    }
+                    crate::engine::remaining(deadline).map_err(|_| Error::Unquiesced {
+                        operation: "RDMA peer retirement lock",
+                        code: libc::ETIMEDOUT,
+                    })?;
+                    std::thread::park_timeout(Duration::from_micros(100));
+                };
+                lane.close_record(&record, claim, deadline)
+            })();
+            if let Err(e) = result {
+                failure.get_or_insert(e);
+            }
+        }
+        if let Some(e) = failure {
+            return Err(e);
+        }
+        if !self.prune()? {
+            return Err(Error::Unquiesced {
+                operation: "RDMA peer QPs retained",
+                code: libc::EBUSY,
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn candidates(
         &self,
         slot: Option<usize>,

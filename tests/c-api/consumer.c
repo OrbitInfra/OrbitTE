@@ -292,6 +292,12 @@ static void transfer(const char *source_name, const char *relay, const char *ref
     OK(tent_open_segment(e, &s, source_name));
     OK(tent_get_segment_info(e, s, &info));
     assert(info.num_buffers == 2);
+    /* Frozen close is reversible handle invalidation, not Rust peer retirement. */
+    tent_free_segment_info(&info);
+    OK(tent_close_segment(e, s));
+    OK(tent_open_segment(e, &s, source_name));
+    OK(tent_get_segment_info(e, s, &info));
+    assert(info.num_buffers == 2);
     uint64_t dst = 0, read_only = 0;
     for (int i = 0; i < info.num_buffers; i++) {
         if (info.buffers[i].length == sizeof rw)

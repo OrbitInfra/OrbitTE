@@ -326,9 +326,29 @@ impl NVLinkTransport {
         self.stream_pool.close(deadline)
     }
 
+    pub(crate) fn close_peer(
+        &self,
+        peer: crate::runtime::segment_manager::PeerKey,
+        requester: SourceEpoch,
+        deadline: Instant,
+    ) -> Result<()> {
+        self.close_matching_imports(requester, deadline, |key| {
+            key.endpoint == peer.endpoint && key.epoch == peer.epoch
+        })
+    }
+
     pub(crate) fn close_imports(&self, requester: SourceEpoch, deadline: Instant) -> Result<()> {
+        self.close_matching_imports(requester, deadline, |_| true)
+    }
+
+    fn close_matching_imports(
+        &self,
+        requester: SourceEpoch,
+        deadline: Instant,
+        matches: impl Fn(&RelocationKey) -> bool,
+    ) -> Result<()> {
         let mut failure = None;
-        for key in self.imports.keys()? {
+        for key in self.imports.keys()?.into_iter().filter(matches) {
             let Some(mut lease) = self.imports.existing(key, deadline)? else {
                 continue;
             };

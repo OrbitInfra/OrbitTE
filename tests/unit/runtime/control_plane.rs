@@ -1848,3 +1848,6 @@ fn accept_readiness_preserves_bounded_handoff_and_serves_the_next_connection() {
     memory.read(0, &mut got).unwrap();
     assert_eq!(got, expected);
 }
+
+#[path = "control_plane/peer_retirement.rs"]
+mod peer_retirement;

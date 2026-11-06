@@ -261,7 +261,7 @@ impl Batch {
             }
         }
         let engine = Arc::clone(self.engine.as_ref().ok_or(Error::BatchClosed)?);
-        let hook = match (notification, targets) {
+        let mut hook = match (notification, targets) {
             (Some(message), Some(peers)) if !requests.is_empty() => {
                 Some(engine.notification_routes.hook(
                     engine.local_target(),
@@ -271,6 +271,9 @@ impl Batch {
             }
             _ => None,
         };
+        if let Some(hook) = &mut hook {
+            hook.admit(&engine)?;
+        }
         let prepared = engine.prepare(
             operation,
             peer,
@@ -324,7 +327,7 @@ impl Batch {
         if groups.iter().any(|g| g.2.is_empty()) {
             return Err(Error::InvalidRange);
         }
-        let hook = if let Some(message) = notification {
+        let mut hook = if let Some(message) = notification {
             let mut targets = Vec::with_capacity(groups.len());
             for g in groups {
                 match g.1 {
@@ -342,6 +345,9 @@ impl Batch {
         } else {
             None
         };
+        if let Some(hook) = &mut hook {
+            hook.admit(&engine)?;
+        }
         let end = deadline(timeout)?;
         let mut prepared: Vec<PreparedSubmission> = Vec::with_capacity(groups.len());
         let prepare = (|| {

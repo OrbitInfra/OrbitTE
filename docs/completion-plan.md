@@ -97,8 +97,9 @@ LP64 fixtures. S20 implements the [native and classic C++ source adapters](cpp-a
 including versioned requests, explicit progress and physically drained waits.
 The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
 cluster membership and KV indexes belong to the consumer; S18 is out of scope
-by design. Per-peer admission fencing and physical retirement remain a separate
-owner change before S21. S21–S26 retain their order.
+by design. Per-peer admission fencing, drain and selective transport retirement
+are implemented; native cleanup is shim-tested and awaits the installed gate.
+S21–S26 retain their order.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -398,7 +399,7 @@ Requirements: F01/F06/F20–F22 and the complete language inventory.
 - [ ] Python classes, properties, overloads, context managers, error
   translation, GIL release and buffer lifetime.
 - [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
-- [ ] Per-peer close: fence admissions and drain transport owners without closing other peers. Current C/C++ segment close removes a handle, not native owners.
+- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. C/C++ segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
 - [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
 - [ ] Device plugin ABI registration and real CUDA plugin loading.
 

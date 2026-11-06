@@ -23,6 +23,8 @@ pub enum Error {
     BatchClosed,
     BatchOpen,
     RequesterClosed,
+    /// This endpoint/source epoch was permanently retired on this engine.
+    PeerClosed,
     InvalidTask,
     Cancelled,
     /// Native work or teardown has no proven quiescence; owners stay charged.
@@ -61,6 +63,7 @@ impl Error {
             Self::BatchClosed => Self::BatchClosed,
             Self::BatchOpen => Self::BatchOpen,
             Self::RequesterClosed => Self::RequesterClosed,
+            Self::PeerClosed => Self::PeerClosed,
             Self::InvalidTask => Self::InvalidTask,
             Self::Cancelled => Self::Cancelled,
             Self::InvalidRange => Self::InvalidRange,
@@ -125,6 +128,7 @@ impl fmt::Display for Error {
                 f.write_str("seal the batch before waiting for a stable terminal result")
             }
             Self::RequesterClosed => f.write_str("requester admission is closed"),
+            Self::PeerClosed => f.write_str("peer endpoint and source epoch are retired"),
             Self::InvalidTask => f.write_str("task is outside the submitted batch"),
             Self::Cancelled => f.write_str("transfer cancelled"),
             Self::Unquiesced { operation, code } => write!(

@@ -900,3 +900,5 @@ fn shm_counts_bytes_on_its_own_transport_label() -> Result<()> {
     assert_eq!(bytes(&remote), [0, 3, 3, 3, 3, 3, 3, 3, 3, 0]);
     Ok(())
 }
+
+mod peer_retirement;

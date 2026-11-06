@@ -241,6 +241,7 @@ impl NotificationRoutes {
         Ok(NotificationHook {
             targets,
             permanent: None,
+            peers: Vec::new(),
             charge: self.outbox.clone(),
             count,
             bytes,
@@ -250,12 +251,26 @@ impl NotificationRoutes {
 
 pub(crate) struct NotificationHook {
     targets: Vec<Target>,
+    peers: Vec<Arc<crate::runtime::segment_manager::PeerPermit>>,
     permanent: Option<Arc<NotificationStatus>>,
     charge: Arc<Mutex<(usize, usize)>>,
     count: usize,
     bytes: usize,
 }
 impl NotificationHook {
+    pub(crate) fn admit(&mut self, engine: &TransferEngine) -> Result<()> {
+        self.peers
+            .try_reserve_exact(self.targets.len())
+            .map_err(|_| Error::ResourceExhausted)?;
+        for target in &self.targets {
+            self.peers
+                .push(engine.admit_peer(crate::runtime::segment_manager::PeerKey {
+                    endpoint: target.endpoint,
+                    epoch: target.epoch,
+                })?);
+        }
+        Ok(())
+    }
     pub(crate) fn pending(&self) -> bool {
         !self.targets.is_empty()
     }

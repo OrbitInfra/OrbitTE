@@ -23,6 +23,7 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
     features, binary_name, protocol, fixture_relative = {
         "cpp-abi": (["rdma", "cuda"], "orbite-cpp-hardware", "libtent-cpp", "tests/hardware/cpp_abi.cpp"),
         "c-abi": (["rdma", "cuda"], "orbite-c-hardware", "libtent", "tests/hardware/c_abi.c"),
+        "peer-retirement": (["rdma", "cuda"], "orbite-peer-retirement", "orbite-installed-peer-retirement", "tests/hardware/peer_retirement.rs"),
         "local-copy": (["cuda"], "orbite-local-copy", "orbite-installed-local-copy", "tests/hardware/local_copy.rs"),
         "peer-gpu-source": (["cuda"], "orbite-peer-gpu-source", "orbite-peer-gpu-source", "tests/hardware/peer_gpu_source.rs"),
         "peer-gpu-requester": ([], "orbite-peer-gpu-requester", "orbite-peer-gpu-requester", "tests/hardware/peer_gpu_requester.rs"),
@@ -119,8 +120,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             if path.read_bytes() != (root / relative).read_bytes():
                 raise ValueError('packaged consumer module differs from source')
             fixture_hashes[str(relative)] = digest(path)
-        if storage or consumer_kind in ('local-copy', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'):
-            drivers = [{'local-copy': 'local_copy_run.py', 'staging-control': 'staging_control_run.py', 'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
+        if storage or consumer_kind in ('peer-retirement', 'local-copy', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control'):
+            drivers = [{'peer-retirement': 'peer_retirement_run.py', 'local-copy': 'local_copy_run.py', 'staging-control': 'staging_control_run.py', 'peer-gpu-source': 'peer_gpu_tcp_run.py', 'peer-gpu-requester': 'peer_gpu_tcp_run.py', 'hp-tcp': 'hp_tcp_run.py', 'shm': 'shm_run.py', 'mnnvl': 'mnnvl_run.py'}.get(consumer_kind, 'storage_cuda_run.py')]
             if consumer_kind == 'gds':
                 drivers.append('gds_run.py')
             for name in drivers:
@@ -244,6 +245,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--toolchain', default='stable')
     parser.add_argument('--allow-dirty', action='store_true')
-    parser.add_argument('--consumer', choices=('host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
+    parser.add_argument('--consumer', choices=('peer-retirement', 'host', 'gpu', 'nvlink', 'storage-cuda', 'gds', 'hp-tcp', 'shm', 'mnnvl', 'peer-gpu-source', 'peer-gpu-requester', 'staging-control', 'mixed-gpu', 'local-copy', 'c-abi', 'cpp-abi'), default='host')
     arguments = parser.parse_args()
     build(Path(__file__).resolve().parents[2], arguments.output, arguments.toolchain, arguments.allow_dirty, arguments.consumer)

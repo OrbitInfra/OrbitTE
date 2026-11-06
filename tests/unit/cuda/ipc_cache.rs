@@ -1022,3 +1022,6 @@ fn r1c_uncertain_default_stream_cannot_release_or_replay_a_sync_write() -> Resul
     assert!(s.inflight_bytes > 0 && s.nvlink.unwrap().retained_imports > 0);
     Ok(())
 }
+
+#[path = "ipc_cache/peer_retirement.rs"]
+mod peer_retirement;

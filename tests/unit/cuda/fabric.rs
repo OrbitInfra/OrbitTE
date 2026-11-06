@@ -560,3 +560,5 @@ sys.stdin.buffer.read(1)";
     assert!(crate::cuda::fabric::duplicate_fd(pid, fd, handle[8..24].try_into().unwrap()).is_err());
     Ok(())
 }
+
+mod peer_retirement;

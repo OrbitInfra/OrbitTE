@@ -4,7 +4,8 @@ use super::{
     task::{self, STEP},
     workers::Workers,
 };
-use crate::{Error, RegisteredMemory, RemoteEffect, Result, SourceEpoch, TransferOp};
+use crate::runtime::segment_manager::PeerKey;
+use crate::{Error, RegisteredMemory, RemoteEffect, Result, TransferOp};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -17,7 +18,7 @@ use tokio::{
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, Debug)]
 struct Key {
-    peer: SourceEpoch,
+    peer: PeerKey,
     id: usize,
     remote: SocketAddrV4,
 }
@@ -44,7 +45,7 @@ impl Drop for LaneSlot {
 #[derive(Default)]
 struct State {
     next: u64,
-    rotation: HashMap<SourceEpoch, u64>,
+    rotation: HashMap<PeerKey, u64>,
     lanes: HashMap<Key, Arc<Lane>>,
 }
 pub(super) struct Client {
@@ -59,7 +60,7 @@ struct Slice {
 }
 fn slices(
     sequence: u64,
-    peer: SourceEpoch,
+    peer: PeerKey,
     end: Endpoint,
     op: TransferOp,
     len: usize,
@@ -133,11 +134,27 @@ impl Client {
             config,
         }
     }
+    pub(super) fn close_peer(&self, peer: PeerKey) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state
+            .lanes
+            .iter()
+            .any(|(k, l)| k.peer == peer && Arc::strong_count(l) != 1)
+        {
+            return Err(Error::Unquiesced {
+                operation: "HP-TCP peer lanes borrowed",
+                code: libc::EBUSY,
+            });
+        }
+        state.lanes.retain(|key, _| key.peer != peer);
+        state.rotation.remove(&peer);
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn submit(
         &self,
         workers: &Workers,
-        peer: SourceEpoch,
+        peer: PeerKey,
         end: Endpoint,
         frame: Request,
         mem: &RegisteredMemory,
@@ -187,7 +204,7 @@ impl Client {
         // All lanes and the owner's task/byte reservation are admitted before publishing its slices.
         for piece in pieces {
             let key = piece.key;
-            let worker = key.id.wrapping_add(usize::from(peer.0[0]));
+            let worker = key.id.wrapping_add(usize::from(peer.epoch.0[0]));
             let registry = self.state.clone();
             let idle = Duration::from_millis(self.config.idle_connection_timeout_ms);
             let entry = state.lanes.entry(key).or_insert_with(|| {

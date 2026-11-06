@@ -31,6 +31,47 @@ impl Entry {
 }
 
 impl SenderCreditLedger {
+    pub(crate) fn close_peer(
+        &self,
+        peer: crate::runtime::segment_manager::PeerKey,
+        deadline: Instant,
+    ) -> Result<()> {
+        let key = CreditKey {
+            endpoint: peer.endpoint,
+            receiver_session: peer.epoch,
+        };
+        let mut state = self.lock();
+        let Some(entry) = state.entries.get_mut(&key) else {
+            return Ok(());
+        };
+        entry.open = false;
+        let automatic = entry.automatic.is_some();
+        if entry.automatic.as_ref().is_some_and(|a| a.closed) {
+            return Ok(());
+        }
+        let busy = entry.undrained()
+            || entry
+                .automatic
+                .as_ref()
+                .is_some_and(|a| a.syncing || entry.epoch == 0);
+        if !busy && !automatic {
+            state.entries.remove(&key);
+        }
+        drop(state);
+        self.notify();
+        // A membership timeout is not a receiver receipt. Preserve uncertain
+        // cumulative charges, including a connect whose reply was lost.
+        if busy || (automatic && !self.synchronize(key, true, deadline, &|| false)?) {
+            return Err(Error::Unquiesced {
+                operation: "peer receiver credit retirement",
+                code: libc::EBUSY,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl SenderCreditLedger {
     pub(crate) fn connect_automatic(
         &self,
         peer: &RemoteSegment,

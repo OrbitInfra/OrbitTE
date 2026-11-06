@@ -688,3 +688,26 @@ fn credit_metrics_scrape_the_real_sender_and_receiver_owners() {
     assert_eq!(closed["orbite_receiver_active_senders"], 0);
     assert_eq!(closed["orbite_receiver_retired_senders_total"], 1);
 }
+
+#[test]
+fn peer_retirement_never_returns_unconfirmed_credit_charges() {
+    let p = peer();
+    let ledger = SenderCreditLedger::new(1, None);
+    ledger.activate(&p, 1, 7).unwrap();
+    ledger.apply_update(&p, &update(&p, 1, 5, 1)).unwrap();
+    let permit = ledger.prepare(&p, 5, 1).unwrap();
+    assert!(permit.reservation.try_reserve().unwrap());
+    permit.reservation.commit().unwrap();
+    drop(permit); // No completion receipt.
+    assert!(matches!(
+        ledger.close_peer(
+            (&p).into(),
+            Instant::now() + crate::test_support::EVENTUAL_PROGRESS
+        ),
+        Err(Error::Unquiesced { .. })
+    ));
+    let held = ledger.stats(&p).unwrap();
+    assert_eq!(held.consumed_bytes, 5);
+    assert_eq!(held.active_owners, 0);
+    assert!(matches!(ledger.prepare(&p, 1, 1), Err(Error::Cancelled)));
+}

@@ -562,3 +562,6 @@ mod rails;
 
 #[path = "cold_connections.rs"]
 mod cold_connections;
+
+#[path = "peer_retirement.rs"]
+mod peer_retirement;

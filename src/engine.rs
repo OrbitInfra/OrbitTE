@@ -9,6 +9,7 @@ mod hp_tcp;
 mod metrics;
 #[cfg(feature = "cuda")]
 mod mnnvl;
+mod segment;
 #[cfg(target_os = "linux")]
 mod shm;
 use admission::OwnerAdmission;
@@ -26,6 +27,7 @@ use crate::runtime::control_plane::{self, ControlService};
 use crate::runtime::qos_contract::QosContractResolver;
 use crate::runtime::receiver_credit::{ReceiverCreditIssuer, SenderCreditLedger};
 use crate::runtime::request_merge::TaskMap;
+use crate::runtime::segment_manager::{PeerKey, PeerPermit, SegmentManager};
 #[cfg(any(feature = "io-uring", feature = "gds"))]
 use crate::runtime::transport_selector::Filters;
 use crate::runtime::transport_selector::{
@@ -361,6 +363,11 @@ pub struct EngineStats {
     pub active_source_operations: usize,
     /// Whole-submission dispatch reservations; None when the queue is disabled.
     pub runtime_queue: Option<RuntimeQueueStats>,
+    /// Charged endpoint/epoch identities, including permanent tombstones.
+    pub peer_segments: usize,
+    pub retired_peer_segments: usize,
+    /// Submission, Describe and notification owners that have not drained.
+    pub active_peer_operations: usize,
     pub inflight_batches: usize,
     pub inflight_bytes: usize,
     pub queued_notifications: usize,
@@ -380,6 +387,7 @@ pub struct TransferEngine {
     control: ControlService,
     pub(crate) notification_routes: NotificationRoutes,
     batches: Arc<RequesterAdmission>,
+    peers: SegmentManager,
     allocations: Arc<AllocationBudget>,
     runtime_queue: Option<Arc<LocalTransferAdmissionQueue>>,
     receiver_credits: Option<Arc<SenderCreditLedger>>,
@@ -584,6 +592,7 @@ impl TransferEngine {
             qos,
             selector,
             notification_routes: NotificationRoutes::new(&config),
+            peers: SegmentManager::new(config.max_peer_segments),
             config,
             source,
             control,
@@ -711,6 +720,7 @@ impl TransferEngine {
         epoch: u64,
         qos_class: u32,
     ) -> Result<()> {
+        let _peer = self.admit_peer(peer.into())?;
         self.receiver_credits
             .as_ref()
             .ok_or(Error::Unavailable("receiver credits are disabled"))?
@@ -757,6 +767,7 @@ impl TransferEngine {
         timeout: Duration,
     ) -> Result<()> {
         let deadline = deadline(timeout)?;
+        let _peer = self.admit_peer(peer.into())?;
         let ledger = self
             .receiver_credits
             .as_ref()
@@ -864,6 +875,7 @@ impl TransferEngine {
             .map_err(|_| Error::Internal("source lock poisoned"))?
             .active;
         let allocated = self.allocations.usage()?;
+        let (peer_segments, retired_peer_segments, active_peer_operations) = self.peers.stats();
         // Quarantine cleanup drops admission permits. Sample it before locking usage.
         #[cfg(feature = "gds")]
         let gds = self
@@ -905,6 +917,9 @@ impl TransferEngine {
             retained_bytes,
             active_source_operations,
             runtime_queue: self.runtime_queue.as_ref().map(|queue| queue.stats()),
+            peer_segments,
+            retired_peer_segments,
+            active_peer_operations,
             inflight_batches: batches.count,
             inflight_bytes: batches.bytes,
             queued_notifications,
@@ -1244,7 +1259,9 @@ impl TransferEngine {
             return Ok(self.source_epoch());
         }
         let _permit = self.admit_batch(0)?;
-        control_plane::discover_epoch(endpoint, deadline(timeout)?)
+        let epoch = control_plane::discover_epoch(endpoint, deadline(timeout)?)?;
+        let _peer = self.admit_peer(PeerKey { endpoint, epoch })?;
+        Ok(epoch)
     }
 
     /// Open/refresh using an epoch supplied by the authoritative source owner.
@@ -1257,6 +1274,10 @@ impl TransferEngine {
     ) -> Result<RemoteSegment> {
         let deadline = deadline(timeout)?;
         let _admission = self.admit_batch(0)?;
+        let _peer = self.admit_peer(PeerKey {
+            endpoint,
+            epoch: expected_epoch,
+        })?;
         if endpoint == self.endpoint() && expected_epoch == self.source_epoch() {
             let _permit = self.source.admit()?;
             let (metadata, regions) = self.source.describe()?;
@@ -1373,6 +1394,10 @@ impl TransferEngine {
             .as_ref()
             .and_then(crate::metrics::Metrics::timestamp);
         let target = peer.into();
+        let peer_permit = match target {
+            TransferTarget::Memory(peer) => Some(self.admit_peer(peer.into())?),
+            TransferTarget::File(_) => None,
+        };
         let scatter = requests.first().is_some_and(|r| r.require_cancellation);
         if requests.iter().any(|r| r.require_cancellation != scatter) {
             return Err(Error::InvalidConfig("mixed scatter admission modes"));
@@ -1622,7 +1647,8 @@ impl TransferEngine {
         if let (TransferTarget::File(_), Some(gds)) = (target, self.loaded_gds()) {
             gds.cleanup();
         }
-        let admission = self.admit_batch(total_bytes)?;
+        let mut admission = self.admit_batch(total_bytes)?;
+        admission.peer = peer_permit;
         let merge = self.config.merge_requests;
         #[cfg(target_os = "linux")]
         let merge = merge
@@ -2181,6 +2207,7 @@ impl TransferEngine {
         let deadline = deadline(timeout)?;
         let bytes = self.validate_notification(notification)?;
         let _admission = self.admit_batch(bytes)?;
+        let _peer = self.admit_peer(peer.into())?;
         self.notify(peer, notification, deadline)
     }
 
@@ -2333,6 +2360,7 @@ impl TransferEngine {
                 .0;
         }
         drop(usage);
+        self.peers.close_cleanup(deadline)?;
         self.files.close_all(deadline)?;
         #[cfg(feature = "io-uring")]
         if let Some(io) = &self.io_uring {
@@ -2428,6 +2456,7 @@ impl TransferEngine {
         Ok(BatchPermit {
             batches: Arc::clone(&self.batches),
             bytes,
+            peer: None,
         })
     }
 }
@@ -2702,6 +2731,8 @@ struct RequesterAdmission {
 pub(crate) struct BatchPermit {
     batches: Arc<RequesterAdmission>,
     bytes: usize,
+    // Dropped after the payload and owner permits, or retained with quarantine.
+    peer: Option<Arc<PeerPermit>>,
 }
 impl BatchPermit {
     fn retain_bytes(&mut self, bytes: usize) {
